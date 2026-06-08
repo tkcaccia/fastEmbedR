@@ -17,7 +17,7 @@ remotes::install_github("tkcaccia/fastEmbedR")
 load("/Users/stefano/Documents/GPUPLS/Data/metref_remote_task.RData")
 
 data <- scale(out$Xtrain)
-nn <- Rnanoflann::nn(data, data, 30)
+nn <- fastknnumap::nn(data, data, 30, parallel = TRUE)
 
 layout <- fastknnumap::fast_knn_umap(
   nn$indices[, -1],

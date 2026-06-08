@@ -18,7 +18,7 @@ benchmark_metref(data_path = "/Users/stefano/Documents/GPUPLS/Data/metref_remote
 \value{A list with timings, silhouette scores, labels, and layouts.}
 \description{
 Loads the metref example data, computes nearest neighbors with
-\code{Rnanoflann::nn}, embeds with \code{fast_knn_umap}, and compares speed and
+\code{nn}, embeds with \code{fast_knn_umap}, and compares speed and
 label-based silhouette against \code{umap}'s precomputed-KNN path when
 available.
 }

@@ -21,7 +21,7 @@ benchmark_singlecell(data_path = "/Users/stefano/Documents/GPUPLS/Data/singlecel
 \value{A list with timings, silhouette scores, labels, and layouts.}
 \description{
 Loads the single-cell example data, uses the first \code{n_features} columns,
-computes nearest neighbors with \code{Rnanoflann::nn}, embeds with
+computes nearest neighbors with \code{nn}, embeds with
 \code{fast_knn_umap}, and optionally compares against \code{umap}'s
 precomputed-KNN path.
 }

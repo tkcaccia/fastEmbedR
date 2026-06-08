@@ -63,10 +63,30 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// nn_cpp
+List nn_cpp(NumericMatrix data, NumericMatrix points, int k, std::string method, bool square, bool sorted, double p, bool parallel, int cores);
+RcppExport SEXP _fastknnumap_nn_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP squareSEXP, SEXP sortedSEXP, SEXP pSEXP, SEXP parallelSEXP, SEXP coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type points(pointsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
+    Rcpp::traits::input_parameter< bool >::type square(squareSEXP);
+    Rcpp::traits::input_parameter< bool >::type sorted(sortedSEXP);
+    Rcpp::traits::input_parameter< double >::type p(pSEXP);
+    Rcpp::traits::input_parameter< bool >::type parallel(parallelSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(nn_cpp(data, points, k, method, square, sorted, p, parallel, cores));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_fastknnumap_fast_knn_umap_cpp", (DL_FUNC) &_fastknnumap_fast_knn_umap_cpp, 21},
     {"_fastknnumap_knn_objective_embed_cpp", (DL_FUNC) &_fastknnumap_knn_objective_embed_cpp, 12},
+    {"_fastknnumap_nn_cpp", (DL_FUNC) &_fastknnumap_nn_cpp, 9},
     {NULL, NULL, 0}
 };
 

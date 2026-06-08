@@ -41,7 +41,7 @@ run_dataset <- function(dataset, x, labels, max_k=100, sample_n=3000, out_file) 
   set.seed(4)
   keep <- sort(sample.int(nrow(x), min(sample_n, nrow(x))))
   message("KNN ", dataset)
-  tknn <- system.time(nn <- Rnanoflann::nn(x, x, max_k))
+  tknn <- system.time(nn <- fastknnumap::nn(x, x, max_k, parallel = TRUE))
   rows <- list(data.frame(dataset=dataset, method="KNN", k=max_k, n_epochs=NA, min_dist=NA, neg=NA, lr=NA, elapsed=tknn[["elapsed"]], silhouette=NA, knn_preservation=NA))
   saveRDS(list(results=do.call(rbind, rows), nn=nn), out_file)
 

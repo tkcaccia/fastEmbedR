@@ -6,7 +6,8 @@ Author: Stefano User
 Maintainer: Stefano User <stefano@example.com>
 Description: A compact UMAP implementation focused on fast embeddings from
     precomputed nearest-neighbor index and distance matrices. The graph
-    construction and stochastic layout optimization are implemented in C++.
+    construction, exact nearest-neighbor search, and stochastic layout
+    optimization are implemented in C++.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Imports:

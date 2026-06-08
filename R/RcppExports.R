@@ -9,3 +9,7 @@ knn_objective_embed_cpp <- function(indices, distances, objective, init_embeddin
     .Call(`_fastknnumap_knn_objective_embed_cpp`, indices, distances, objective, init_embedding, use_init, n_components, n_epochs, negative_sample_rate, learning_rate, n_threads, seed, verbose)
 }
 
+nn_cpp <- function(data, points, k, method, square, sorted, p, parallel, cores) {
+    .Call(`_fastknnumap_nn_cpp`, data, points, k, method, square, sorted, p, parallel, cores)
+}
+

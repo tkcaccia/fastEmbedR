@@ -17,7 +17,7 @@ benchmark_knn_umap(data, labels = NULL, k = 30L, nn = NULL,
 \arguments{
 \item{data}{Numeric matrix used to compute KNN once and to satisfy reference implementation APIs.}
 \item{labels}{Optional labels for silhouette scoring.}
-\item{k}{Number of neighbors requested from \code{Rnanoflann::nn}, including self.}
+\item{k}{Number of neighbors requested from \code{nn}, including self.}
 \item{nn}{Optional precomputed KNN list with \code{indices} and \code{distances}, including self in the first column.}
 \item{implementations}{Character vector of implementations to run.}
 \item{n_epochs}{Number of optimization epochs for SGD-style methods.}

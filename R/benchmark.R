@@ -1,7 +1,7 @@
 #' Benchmark fastknnumap on the metref example data
 #'
 #' @param data_path Path to `metref_remote_task.RData`.
-#' @param k Number of neighbors requested from `Rnanoflann::nn`, including self.
+#' @param k Number of neighbors requested from `nn`, including self.
 #' @param n_epochs Number of UMAP optimization epochs.
 #' @param seed Random seed.
 #' @return A list containing timings, silhouettes, and embeddings.
@@ -13,9 +13,6 @@ benchmark_metref <- function(data_path = "/Users/stefano/Documents/GPUPLS/Data/m
                              negative_sample_rate = 10L,
                              learning_rate = 1.5,
                              seed = 4L) {
-  if (!requireNamespace("Rnanoflann", quietly = TRUE)) {
-    stop("Package `Rnanoflann` is required for this benchmark.", call. = FALSE)
-  }
   if (!requireNamespace("cluster", quietly = TRUE)) {
     stop("Package `cluster` is required for silhouette scoring.", call. = FALSE)
   }
@@ -27,7 +24,7 @@ benchmark_metref <- function(data_path = "/Users/stefano/Documents/GPUPLS/Data/m
   labels <- as.integer(as.factor(out$Ytrain))
 
   t_knn <- system.time({
-    nn <- Rnanoflann::nn(data, data, k)
+    nn <- fastknnumap::nn(data, data, k, parallel = TRUE)
   })
 
   indices <- nn$indices[, -1L, drop = FALSE]
@@ -75,7 +72,7 @@ benchmark_metref <- function(data_path = "/Users/stefano/Documents/GPUPLS/Data/m
 #' Benchmark fastknnumap on the single-cell example data
 #'
 #' @param data_path Path to `singlecell.RData`.
-#' @param k Number of neighbors requested from `Rnanoflann::nn`, including self.
+#' @param k Number of neighbors requested from `nn`, including self.
 #' @param n_features Number of leading feature columns to use.
 #' @param mode Embedding mode passed to `fast_knn_umap`.
 #' @param n_epochs Number of optimization epochs for `"sgd"` or `"hybrid"` modes.
@@ -96,9 +93,6 @@ benchmark_singlecell <- function(data_path = "/Users/stefano/Documents/GPUPLS/Da
                                  seed = 4L,
                                  run_umap = TRUE) {
   mode <- match.arg(mode)
-  if (!requireNamespace("Rnanoflann", quietly = TRUE)) {
-    stop("Package `Rnanoflann` is required for this benchmark.", call. = FALSE)
-  }
   if (!requireNamespace("cluster", quietly = TRUE)) {
     stop("Package `cluster` is required for silhouette scoring.", call. = FALSE)
   }
@@ -109,7 +103,7 @@ benchmark_singlecell <- function(data_path = "/Users/stefano/Documents/GPUPLS/Da
   labels <- as.integer(as.factor(env$labels))
 
   t_knn <- system.time({
-    nn <- Rnanoflann::nn(data, data, k)
+    nn <- fastknnumap::nn(data, data, k, parallel = TRUE)
   })
   indices <- nn$indices[, -1L, drop = FALSE]
   distances <- nn$distances[, -1L, drop = FALSE]
@@ -165,9 +159,9 @@ benchmark_singlecell <- function(data_path = "/Users/stefano/Documents/GPUPLS/Da
 #'   to satisfy reference implementation APIs. The benchmarked layouts all use
 #'   the same KNN output.
 #' @param labels Optional labels for silhouette accuracy.
-#' @param k Number of neighbors requested from `Rnanoflann::nn`, including self.
+#' @param k Number of neighbors requested from `nn`, including self.
 #' @param nn Optional precomputed KNN list with `indices` and `distances`,
-#'   including self in the first column as returned by `Rnanoflann::nn`.
+#'   including self in the first column as returned by `nn`.
 #' @param implementations Character vector of implementations to run.
 #' @param n_epochs Number of optimization epochs for SGD-style methods.
 #' @param hybrid_epochs Number of optimization epochs for `fastknnumap_hybrid`.
@@ -217,10 +211,6 @@ benchmark_knn_umap <- function(data,
                                preserve_k = NULL,
                                seed = 4L,
                                verbose = TRUE) {
-  if (!requireNamespace("Rnanoflann", quietly = TRUE) && is.null(nn)) {
-    stop("Package `Rnanoflann` is required when `nn` is not supplied.", call. = FALSE)
-  }
-
   data <- as.matrix(data)
   n <- nrow(data)
   if (n < 2L) {
@@ -232,9 +222,9 @@ benchmark_knn_umap <- function(data,
 
   t_knn <- NULL
   if (is.null(nn)) {
-    if (isTRUE(verbose)) message("Computing KNN once with Rnanoflann::nn()")
+    if (isTRUE(verbose)) message("Computing KNN once with fastknnumap::nn()")
     t_knn <- system.time({
-      nn <- Rnanoflann::nn(data, data, k)
+      nn <- fastknnumap::nn(data, data, k, parallel = TRUE, cores = n_threads)
     })
   } else {
     if (!all(c("indices", "distances") %in% names(nn))) {
