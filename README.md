@@ -30,12 +30,25 @@ layout <- fastknnumap::fast_knn_umap(
 plot(layout, pch = 21, bg = out$Ytrain)
 ```
 
-On macOS, exact Euclidean KNN can use the native Metal GPU backend:
+Exact Euclidean KNN can use native GPU backends. On NVIDIA systems, build with
+the CUDA toolkit available and request CUDA explicitly:
+
+```r
+fastknnumap::cuda_available()
+nn <- fastknnumap::nn(data, data, 30, backend = "cuda")
+```
+
+Set `CUDA_HOME` if the toolkit is not under the `nvcc` prefix; set
+`FASTEMBEDR_USE_CUDA=0` to force a non-CUDA build.
+
+On macOS, the package can use the native Metal backend:
 
 ```r
 fastknnumap::metal_available()
-nn <- fastknnumap::nn(data, data, 30, backend = "gpu")
+nn <- fastknnumap::nn(data, data, 30, backend = "metal")
 ```
+
+Use `backend = "gpu"` to request any available native GPU backend.
 
 The SGD optimizer exposes UMAP-style controls such as `a`, `b`,
 `repulsion_strength`, `negative_sample_rate`, `init_sdev`, and epoch-based edge

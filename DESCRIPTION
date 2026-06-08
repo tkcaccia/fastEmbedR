@@ -16,5 +16,5 @@ Suggests:
     testthat
 LinkingTo:
     Rcpp
-SystemRequirements: C++17, Metal framework on macOS for the optional GPU backend
+SystemRequirements: C++17, Metal framework on macOS for the optional Metal backend, CUDA toolkit for the optional CUDA backend
 RoxygenNote: 7.3.2

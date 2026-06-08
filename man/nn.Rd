@@ -5,7 +5,7 @@
 nn(data, points = data, k = nrow(data), method = "euclidean",
   search = "standard", eps = 0, square = FALSE, sorted = FALSE,
   radius = 0, trans = TRUE, leafs = 10L, p = 0, parallel = FALSE,
-  cores = 0L, backend = c("auto", "cpu", "gpu"))
+  cores = 0L, backend = c("auto", "cpu", "gpu", "cuda", "metal"))
 }
 \arguments{
 \item{data}{Numeric matrix of reference observations in rows.}
@@ -22,7 +22,7 @@ nn(data, points = data, k = nrow(data), method = "euclidean",
 \item{p}{Minkowski exponent when \code{method = "minkowski"}.}
 \item{parallel}{Use multiple CPU threads over query points.}
 \item{cores}{Number of CPU threads when \code{parallel = TRUE}. Values \code{<= 0} use hardware concurrency.}
-\item{backend}{Execution backend. \code{"auto"} uses the Metal GPU for sufficiently large Euclidean searches when available and otherwise uses CPU. \code{"gpu"} requests the Metal backend explicitly. \code{"cpu"} always uses the C++ CPU path.}
+\item{backend}{Execution backend. \code{"auto"} uses an available native GPU for sufficiently large Euclidean searches and otherwise uses CPU. \code{"gpu"} requests CUDA when available and otherwise Metal. \code{"cuda"} and \code{"metal"} request those GPU backends explicitly. \code{"cpu"} always uses the C++ CPU path.}
 }
 \value{
 A list with integer matrix \code{indices} and numeric matrix \code{distances}.
@@ -31,6 +31,6 @@ Indices are 1-based.
 \description{
 Package-native exact nearest-neighbor search compatible with the common
 \code{nn(data, points, k)} use case. It is implemented in C++ and
-can parallelize over query points. On macOS it can also use a native Metal GPU
-backend for exact Euclidean search.
+can parallelize over query points. It can also use native CUDA or Metal GPU
+backends for exact Euclidean search.
 }

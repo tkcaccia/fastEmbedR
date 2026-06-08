@@ -70,6 +70,11 @@ test_that("metal availability helper returns a logical scalar", {
   expect_length(metal_available(), 1L)
 })
 
+test_that("cuda availability helper returns a logical scalar", {
+  expect_type(cuda_available(), "logical")
+  expect_length(cuda_available(), 1L)
+})
+
 test_that("Metal nn backend matches CPU euclidean results", {
   skip_if_not(metal_available())
 
@@ -78,7 +83,7 @@ test_that("Metal nn backend matches CPU euclidean results", {
   points <- matrix(rnorm(230), ncol = 10)
 
   cpu <- nn(data, points, k = 6, backend = "cpu", parallel = TRUE, cores = 2)
-  gpu <- nn(data, points, k = 6, backend = "gpu")
+  gpu <- nn(data, points, k = 6, backend = "metal")
 
   expect_equal(attr(gpu, "backend"), "metal")
   expect_equal(gpu$indices, cpu$indices)
@@ -89,5 +94,27 @@ test_that("Metal backend rejects unsupported metrics", {
   skip_if_not(metal_available())
 
   x <- matrix(rnorm(30), ncol = 3)
-  expect_error(nn(x, x, k = 2, method = "manhattan", backend = "gpu"), "euclidean")
+  expect_error(nn(x, x, k = 2, method = "manhattan", backend = "metal"), "euclidean")
+})
+
+test_that("CUDA nn backend matches CPU euclidean results", {
+  skip_if_not(cuda_available())
+
+  set.seed(15)
+  data <- matrix(rnorm(500), ncol = 10)
+  points <- matrix(rnorm(230), ncol = 10)
+
+  cpu <- nn(data, points, k = 6, backend = "cpu", parallel = TRUE, cores = 2)
+  gpu <- nn(data, points, k = 6, backend = "cuda")
+
+  expect_equal(attr(gpu, "backend"), "cuda")
+  expect_equal(gpu$indices, cpu$indices)
+  expect_equal(gpu$distances, cpu$distances, tolerance = 1e-9)
+})
+
+test_that("CUDA backend reports unavailable runtime clearly", {
+  skip_if(cuda_available())
+
+  x <- matrix(rnorm(30), ncol = 3)
+  expect_error(nn(x, x, k = 2, backend = "cuda"), "No CUDA")
 })

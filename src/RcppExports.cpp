@@ -82,6 +82,30 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// cuda_available_cpp
+bool cuda_available_cpp();
+RcppExport SEXP _fastknnumap_cuda_available_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(cuda_available_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
+// nn_cuda_cpp
+List nn_cuda_cpp(NumericMatrix data, NumericMatrix points, int k, bool square);
+RcppExport SEXP _fastknnumap_nn_cuda_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP squareSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type points(pointsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< bool >::type square(squareSEXP);
+    rcpp_result_gen = Rcpp::wrap(nn_cuda_cpp(data, points, k, square));
+    return rcpp_result_gen;
+END_RCPP
+}
 // metal_available_cpp
 bool metal_available_cpp();
 RcppExport SEXP _fastknnumap_metal_available_cpp() {
@@ -111,6 +135,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastknnumap_fast_knn_umap_cpp", (DL_FUNC) &_fastknnumap_fast_knn_umap_cpp, 21},
     {"_fastknnumap_knn_objective_embed_cpp", (DL_FUNC) &_fastknnumap_knn_objective_embed_cpp, 12},
     {"_fastknnumap_nn_cpp", (DL_FUNC) &_fastknnumap_nn_cpp, 9},
+    {"_fastknnumap_cuda_available_cpp", (DL_FUNC) &_fastknnumap_cuda_available_cpp, 0},
+    {"_fastknnumap_nn_cuda_cpp", (DL_FUNC) &_fastknnumap_nn_cuda_cpp, 4},
     {"_fastknnumap_metal_available_cpp", (DL_FUNC) &_fastknnumap_metal_available_cpp, 0},
     {"_fastknnumap_nn_metal_cpp", (DL_FUNC) &_fastknnumap_nn_metal_cpp, 4},
     {NULL, NULL, 0}

@@ -8,5 +8,5 @@ metal_available()
 \description{
 Checks whether the package can see a native macOS Metal device. The current
 Metal backend accelerates exact Euclidean nearest-neighbor search through
-\code{nn(..., backend = "gpu")}.
+\code{nn(..., backend = "metal")} or \code{nn(..., backend = "gpu")}.
 }

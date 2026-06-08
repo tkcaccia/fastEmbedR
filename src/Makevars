@@ -3,12 +3,30 @@ PKG_CXXFLAGS = -pthread
 PKG_OBJCXXFLAGS = -std=gnu++17 -fobjc-exceptions
 
 UNAME_S := $(shell uname -s)
+FASTEMBEDR_USE_CUDA ?= auto
+NVCC ?= $(shell command -v nvcc 2>/dev/null)
+CUDA_HOME ?= $(patsubst %/bin/nvcc,%,$(NVCC))
+
+CUDA_OBJECTS = nn_cuda_stub.o
+ifneq ($(FASTEMBEDR_USE_CUDA),0)
+ifneq ($(NVCC),)
+PKG_CPPFLAGS += -DFASTEMBEDR_HAS_CUDA -I$(CUDA_HOME)/include
+PKG_LIBS += -L$(CUDA_HOME)/lib64 -L$(CUDA_HOME)/lib -lcudart
+CUDA_OBJECTS = nn_cuda_impl.o nn_cuda_kernels.o
+CUDA_NVCCFLAGS = -std=c++17 -x cu -Xcompiler -fPIC
+
+nn_cuda_kernels.o: nn_cuda_kernels.cpp
+	$(NVCC) $(CUDA_NVCCFLAGS) -c $< -o $@
+endif
+endif
 
 ifeq ($(UNAME_S),Darwin)
-PKG_CPPFLAGS = -DHAVE_METAL=1
-PKG_LIBS = -pthread -framework Foundation -framework Metal
-OBJECTS = RcppExports.o fast_knn_umap.o knn_objectives.o nn.o nn_metal_bridge.o nn_metal_impl.o
+PKG_CPPFLAGS += -DHAVE_METAL=1
+PKG_LIBS += -pthread -framework Foundation -framework Metal
+METAL_OBJECTS = nn_metal_bridge.o nn_metal_impl.o
 else
-PKG_LIBS = -pthread
-OBJECTS = RcppExports.o fast_knn_umap.o knn_objectives.o nn.o nn_metal_bridge.o nn_metal_stub.o
+PKG_LIBS += -pthread
+METAL_OBJECTS = nn_metal_bridge.o nn_metal_stub.o
 endif
+
+OBJECTS = RcppExports.o fast_knn_umap.o knn_objectives.o nn.o $(METAL_OBJECTS) nn_cuda_bridge.o $(CUDA_OBJECTS)
