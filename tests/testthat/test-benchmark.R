@@ -30,14 +30,14 @@ test_that("benchmark_knn_umap can compare umap and Rtsne references", {
     as.matrix(iris[, 1:4]),
     iris$Species,
     k = 10,
-    implementations = c("umap", "rtsne"),
+    implementations = c("umap", "rtsne", "rtsne_neighbors"),
     n_epochs = 250,
     silhouette_sample = NULL,
     preserve_sample = NULL,
     verbose = FALSE
   )
 
-  expect_equal(sort(result$metrics$implementation), c("rtsne", "umap"))
+  expect_equal(sort(result$metrics$implementation), c("rtsne", "rtsne_neighbors", "umap"))
   expect_true(all(result$metrics$status == "ok"))
   expect_true(all(is.finite(result$metrics$elapsed)))
   expect_true(all(is.finite(result$metrics$silhouette)))
@@ -50,6 +50,7 @@ test_that("benchmark_embedding_datasets combines dataset results", {
     datasets = "iris",
     subsets = c(iris = NA),
     implementations = c("fastknnumap_spectral", "rtsne"),
+    repeats = 2,
     n_epochs = 250,
     spectral_n_iter = 3,
     silhouette_sample = NULL,
@@ -58,9 +59,10 @@ test_that("benchmark_embedding_datasets combines dataset results", {
   )
 
   expect_equal(unique(result$metrics$dataset), "iris")
-  expect_equal(nrow(result$metrics), 2L)
+  expect_equal(nrow(result$metrics), 4L)
   expect_true(all(result$metrics$status == "ok"))
   expect_true(all(is.finite(result$metrics$elapsed)))
+  expect_true(any(is.finite(result$metrics$stability)))
 })
 
 test_that("benchmark_embed exposes a minimal benchmark interface", {
@@ -69,12 +71,30 @@ test_that("benchmark_embed exposes a minimal benchmark interface", {
   result <- benchmark_embed(
     datasets = "iris",
     methods = c("fast", "rtsne"),
+    preset = "quick",
     output_csv = NULL
   )
 
   expect_equal(unique(result$metrics$dataset), "iris")
   expect_equal(sort(result$metrics$implementation), c("fastknnumap_sgd", "rtsne"))
   expect_true(all(result$metrics$status == "ok"))
+})
+
+test_that("benchmark_embed writes plots when output_csv is set", {
+  skip_if_not_installed("Rtsne")
+  skip_if_not_installed("ggplot2")
+
+  out <- tempfile(fileext = ".csv")
+  result <- benchmark_embed(
+    datasets = "iris",
+    methods = c("fast", "rtsne_neighbors"),
+    preset = "quick",
+    output_csv = out
+  )
+
+  expect_true(file.exists(out))
+  expect_true(length(result$plot_paths) >= 1L)
+  expect_true(all(file.exists(result$plot_paths)))
 })
 
 test_that("landmark_knn_umap embeds from a reduced KNN graph", {

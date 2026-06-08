@@ -24,6 +24,23 @@ pca_if_requested <- function(x, pca_dims = NULL, seed = 4L) {
   scale(pc$x)
 }
 
+procrustes_stability <- function(reference, candidate) {
+  reference <- as.matrix(reference)
+  candidate <- as.matrix(candidate)
+  if (!identical(dim(reference), dim(candidate))) return(NA_real_)
+  reference <- scale(reference, center = TRUE, scale = FALSE)
+  candidate <- scale(candidate, center = TRUE, scale = FALSE)
+  ref_norm <- sqrt(sum(reference * reference))
+  cand_norm <- sqrt(sum(candidate * candidate))
+  if (ref_norm == 0 || cand_norm == 0) return(NA_real_)
+  reference <- reference / ref_norm
+  candidate <- candidate / cand_norm
+  sv <- svd(t(candidate) %*% reference)
+  rotation <- sv$u %*% t(sv$v)
+  aligned <- candidate %*% rotation
+  1 / (1 + mean((reference - aligned)^2))
+}
+
 #' Download and load MNIST
 #'
 #' @param dir Directory for cached IDX gzip files.
@@ -149,11 +166,13 @@ benchmark_embedding_datasets <- function(datasets = c("iris", "pendigits", "fash
                                          subsets = c(iris = NA, pendigits = NA, fashion_mnist = 2000),
                                          implementations = c("fastknnumap_sgd", "umap", "rtsne"),
                                          pca_dims = 50L,
+                                         repeats = 1L,
                                          cache_dir = file.path(tempdir(), "fastembedr-data"),
                                          output_csv = NULL,
                                          ...) {
   results <- list()
   metric_rows <- list()
+  repeats <- max(1L, as.integer(repeats))
   for (dataset_name in datasets) {
     subset <- subsets[[dataset_name]]
     if (is.null(subset) || is.na(subset)) subset <- NULL
@@ -163,27 +182,85 @@ benchmark_embedding_datasets <- function(datasets = c("iris", "pendigits", "fash
       pca_dims = if (dataset_name %in% c("mnist", "fashion_mnist")) pca_dims else NULL,
       cache_dir = cache_dir
     )
-    bench <- benchmark_knn_umap(
-      data$x,
-      data$y,
-      implementations = implementations,
-      ...
-    )
-    metrics <- bench$metrics
-    metrics$dataset <- dataset_name
-    metrics$n <- nrow(data$x)
-    metrics$p <- ncol(data$x)
-    metrics$subset <- if (is.null(subset)) NA_integer_ else as.integer(subset)
+    dataset_results <- vector("list", repeats)
+    reference_layouts <- list()
+    dataset_metrics <- vector("list", repeats)
+    for (run in seq_len(repeats)) {
+      bench <- benchmark_knn_umap(
+        data$x,
+        data$y,
+        implementations = implementations,
+        seed = 4L + run - 1L,
+        ...
+      )
+      metrics <- bench$metrics
+      metrics$dataset <- dataset_name
+      metrics$n <- nrow(data$x)
+      metrics$p <- ncol(data$x)
+      metrics$subset <- if (is.null(subset)) NA_integer_ else as.integer(subset)
+      metrics[["repeat"]] <- run
+      metrics$stability <- NA_real_
+      if (run == 1L) {
+        reference_layouts <- bench$layouts
+      } else {
+        metrics$stability <- vapply(metrics$implementation, function(implementation) {
+          ref <- reference_layouts[[implementation]]
+          cur <- bench$layouts[[implementation]]
+          if (is.null(ref) || is.null(cur)) return(NA_real_)
+          procrustes_stability(ref, cur)
+        }, numeric(1))
+      }
+      dataset_metrics[[run]] <- metrics
+      dataset_results[[run]] <- bench
+    }
+    metrics <- do.call(rbind, dataset_metrics)
     metric_rows[[dataset_name]] <- metrics
-    results[[dataset_name]] <- bench
+    results[[dataset_name]] <- if (repeats == 1L) dataset_results[[1L]] else dataset_results
   }
   combined <- do.call(rbind, metric_rows)
   rownames(combined) <- NULL
-  combined <- combined[, c("dataset", "n", "p", "subset", setdiff(names(combined), c("dataset", "n", "p", "subset")))]
+  combined <- combined[, c("dataset", "n", "p", "subset", "repeat", setdiff(names(combined), c("dataset", "n", "p", "subset", "repeat")))]
   if (!is.null(output_csv)) {
+    dir.create(dirname(output_csv), recursive = TRUE, showWarnings = FALSE)
     utils::write.csv(combined, output_csv, row.names = FALSE)
   }
   list(metrics = combined, results = results)
+}
+
+plot_embedding_benchmark <- function(benchmark, output_dir) {
+  if (!requireNamespace("ggplot2", quietly = TRUE)) {
+    warning("Package `ggplot2` is required for benchmark plots.", call. = FALSE)
+    return(character())
+  }
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  metrics <- benchmark$metrics
+  ok <- metrics[metrics$status == "ok", , drop = FALSE]
+  paths <- character()
+  if (nrow(ok) == 0L) return(paths)
+
+  p1 <- ggplot2::ggplot(ok, ggplot2::aes(elapsed, knn_preservation, color = implementation)) +
+    ggplot2::geom_point(size = 2) +
+    ggplot2::facet_wrap(~ dataset, scales = "free") +
+    ggplot2::labs(x = "Elapsed seconds", y = "KNN preservation")
+  paths["speed_quality"] <- file.path(output_dir, "speed_quality.png")
+  ggplot2::ggsave(paths["speed_quality"], p1, width = 8, height = 5, dpi = 140)
+
+  long <- rbind(
+    data.frame(ok[, c("dataset", "implementation", "repeat")], metric = "silhouette", value = ok$silhouette),
+    data.frame(ok[, c("dataset", "implementation", "repeat")], metric = "knn_preservation", value = ok$knn_preservation),
+    data.frame(ok[, c("dataset", "implementation", "repeat")], metric = "stability", value = ok$stability)
+  )
+  long <- long[is.finite(long$value), , drop = FALSE]
+  if (nrow(long) > 0L) {
+    p2 <- ggplot2::ggplot(long, ggplot2::aes(implementation, value, fill = implementation)) +
+      ggplot2::geom_col(show.legend = FALSE) +
+      ggplot2::facet_grid(metric ~ dataset, scales = "free_y") +
+      ggplot2::labs(x = NULL, y = "Score") +
+      ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 30, hjust = 1))
+    paths["metrics"] <- file.path(output_dir, "metrics.png")
+    ggplot2::ggsave(paths["metrics"], p2, width = 9, height = 7, dpi = 140)
+  }
+  paths
 }
 
 method_aliases <- function(methods) {
@@ -194,6 +271,7 @@ method_aliases <- function(methods) {
     landmark = "fastknnumap_landmark",
     umap = "umap",
     rtsne = "rtsne",
+    rtsne_neighbors = "rtsne_neighbors",
     uwot = "uwot",
     tsne = "knn_tsne",
     pacmap = "knn_pacmap",
@@ -201,7 +279,7 @@ method_aliases <- function(methods) {
     localmap = "knn_localmap"
   )
   if (any(methods == "all")) {
-    return(unname(aliases[c("fast", "umap", "rtsne", "uwot")]))
+    return(unname(aliases[c("fast", "umap", "rtsne", "rtsne_neighbors", "uwot")]))
   }
   unknown <- setdiff(methods, c(names(aliases), aliases))
   if (length(unknown) > 0L) {
@@ -223,7 +301,9 @@ method_aliases <- function(methods) {
 benchmark_embed <- function(datasets = c("iris", "pendigits", "fashion_mnist"),
                             n = 2000L,
                             methods = c("fast", "umap", "rtsne"),
-                            output_csv = NULL) {
+                            output_csv = NULL,
+                            preset = c("balanced", "quick", "accuracy")) {
+  preset <- match.arg(preset)
   datasets <- match.arg(
     datasets,
     c("iris", "mnist", "fashion_mnist", "pendigits", "shuttle"),
@@ -234,18 +314,30 @@ benchmark_embed <- function(datasets = c("iris", "pendigits", "fashion_mnist"),
     subsets[] <- as.numeric(n)
     subsets[datasets == "iris"] <- NA_real_
   }
-  benchmark_embedding_datasets(
+  settings <- switch(
+    preset,
+    quick = list(n_epochs = 150L, repeats = 1L, preserve_sample = 2000L),
+    balanced = list(n_epochs = 250L, repeats = 1L, preserve_sample = 5000L),
+    accuracy = list(n_epochs = 500L, repeats = 3L, preserve_sample = 5000L)
+  )
+  result <- benchmark_embedding_datasets(
     datasets = datasets,
     subsets = subsets,
     implementations = method_aliases(methods),
     pca_dims = 50L,
+    repeats = settings$repeats,
     output_csv = output_csv,
     k = 30L,
-    n_epochs = 250L,
+    n_epochs = settings$n_epochs,
     hybrid_epochs = 100L,
     n_threads = max(1L, parallel::detectCores(logical = FALSE) - 1L),
     silhouette_sample = 5000L,
-    preserve_sample = 5000L,
+    preserve_sample = settings$preserve_sample,
     verbose = FALSE
   )
+  if (!is.null(output_csv)) {
+    plot_dir <- paste0(tools::file_path_sans_ext(output_csv), "_plots")
+    result$plot_paths <- plot_embedding_benchmark(result, plot_dir)
+  }
+  result
 }

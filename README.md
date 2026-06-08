@@ -90,8 +90,10 @@ suite$metrics
 ```
 
 The compact method names are `"fast"`, `"umap"`, `"rtsne"`, `"uwot"`, and
-`"all"`. Advanced controls are available through `benchmark_embedding_datasets()`
-and `benchmark_knn_umap()`.
+`"all"`. Use `preset = "quick"`, `"balanced"`, or `"accuracy"` to trade speed
+for repeat-based stability estimates. When `output_csv` is set, benchmark plots
+are written next to the CSV. Advanced controls are available through
+`benchmark_embedding_datasets()` and `benchmark_knn_umap()`.
 
 The benchmark also supports a landmark approximation inspired by bipartite
 landmark UMAP methods. It selects hub-like landmarks from the KNN graph, keeps

@@ -23,6 +23,7 @@ venv/
 data/
 cache/
 benchmark/*.rds
+benchmark/*_plots/
 benchmark/python_*/
 benchmark/plots/
 

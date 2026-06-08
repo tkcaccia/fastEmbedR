@@ -189,6 +189,7 @@ benchmark_knn_umap <- function(data,
                                  "fastknnumap_spectral",
                                  "umap",
                                  "rtsne",
+                                 "rtsne_neighbors",
                                  "uwot",
                                  "uwot_fast_sgd",
                                  "knn_tsne",
@@ -394,6 +395,23 @@ benchmark_knn_umap <- function(data,
               theta = 0.5,
               check_duplicates = FALSE,
               pca = FALSE,
+              max_iter = max(250L, as.integer(n_epochs)),
+              verbose = FALSE,
+              num_threads = max(1L, as.integer(n_threads))
+            )$Y
+          },
+          rtsne_neighbors = {
+            if (!requireNamespace("Rtsne", quietly = TRUE)) {
+              stop("Package `Rtsne` is not installed.", call. = FALSE)
+            }
+            set.seed(seed)
+            perplexity <- min(30, max(2, floor(ncol(indices) / 3L)))
+            Rtsne::Rtsne_neighbors(
+              indices,
+              distances,
+              dims = 2L,
+              perplexity = perplexity,
+              theta = 0.5,
               max_iter = max(250L, as.integer(n_epochs)),
               verbose = FALSE,
               num_threads = max(1L, as.integer(n_threads))
