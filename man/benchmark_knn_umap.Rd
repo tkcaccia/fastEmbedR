@@ -6,7 +6,7 @@ benchmark_knn_umap(data, labels = NULL, k = 30L, nn = NULL,
   implementations = c("fastknnumap_hybrid", "fastknnumap_landmark",
   "fastknnumap_sgd", "fastknnumap_spectral", "knn_tsne", "knn_pacmap",
   "knn_trimap", "knn_localmap"),
-  n_epochs = 200L, hybrid_epochs = 100L, min_dist = 0.01,
+  n_epochs = 200L, hybrid_epochs = NULL, min_dist = 0.01,
   negative_sample_rate = 10L, learning_rate = 1.5,
   spectral_n_iter = 25L, landmark_ratio = 0.1, n_landmarks = NULL,
   landmark_k = 10L, landmark_local_k = 5L, n_threads = 1L,
@@ -21,7 +21,7 @@ benchmark_knn_umap(data, labels = NULL, k = 30L, nn = NULL,
 \item{nn}{Optional precomputed KNN list with \code{indices} and \code{distances}, including self in the first column.}
 \item{implementations}{Character vector of implementations to run.}
 \item{n_epochs}{Number of optimization epochs for SGD-style methods.}
-\item{hybrid_epochs}{Number of optimization epochs for \code{fastknnumap_hybrid}.}
+\item{hybrid_epochs}{Deprecated optional override for hybrid/landmark epochs. The default \code{NULL} uses \code{n_epochs} so methods are compared with the same epoch budget. If multiple implementations are compared, a different value is rejected.}
 \item{min_dist}{UMAP minimum distance.}
 \item{negative_sample_rate}{Negative sample rate.}
 \item{learning_rate}{Initial learning rate.}
@@ -42,5 +42,6 @@ benchmark_knn_umap(data, labels = NULL, k = 30L, nn = NULL,
 Computes or accepts one KNN output and feeds the same neighbor index and
 distance matrices to several native embedding implementations. Accuracy is reported as
 label silhouette when labels are supplied and as KNN preservation against the
-input neighbor graph.
+input neighbor graph. All implementations in one run share the same KNN graph,
+epoch budget, learning rate, negative sampling rate, and scoring samples.
 }

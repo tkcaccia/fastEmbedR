@@ -86,6 +86,11 @@ bench$knn_time
 bench$metrics
 ```
 
+Every row in a method comparison uses the same KNN graph and the same shared
+settings (`k`, `n_epochs`, `learning_rate`, `negative_sample_rate`, scoring
+samples). Hyperparameter sweeps should be read within each parameter row, not by
+mixing the best row from each method.
+
 Compare the native implementations across public datasets:
 
 ```r

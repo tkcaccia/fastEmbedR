@@ -8,7 +8,7 @@ test_that("benchmark_knn_umap compares native KNN-based implementations", {
     labels,
     k = 6,
     implementations = c("fastknnumap_spectral", "fastknnumap_hybrid"),
-    hybrid_epochs = 5,
+    n_epochs = 5,
     spectral_n_iter = 3,
     silhouette_sample = 20,
     preserve_sample = 20,
@@ -20,6 +20,27 @@ test_that("benchmark_knn_umap compares native KNN-based implementations", {
   expect_true(all(is.finite(result$metrics$elapsed)))
   expect_true(all(is.finite(result$metrics$silhouette)))
   expect_true(all(is.finite(result$metrics$knn_preservation)))
+  expect_equal(unique(result$metrics$k), 6L)
+  expect_equal(unique(result$metrics$n_epochs), 5L)
+})
+
+test_that("benchmark_knn_umap rejects unfair epoch overrides across methods", {
+  set.seed(3)
+  x <- rbind(matrix(rnorm(60), 20, 3), matrix(rnorm(60, 3), 20, 3))
+  labels <- rep(1:2, each = 20)
+
+  expect_error(
+    benchmark_knn_umap(
+      x,
+      labels,
+      k = 6,
+      implementations = c("fastknnumap_sgd", "fastknnumap_hybrid"),
+      n_epochs = 10,
+      hybrid_epochs = 5,
+      verbose = FALSE
+    ),
+    "must equal `n_epochs`"
+  )
 })
 
 test_that("benchmark_knn_umap maps compact method aliases to native implementations", {

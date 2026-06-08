@@ -19,7 +19,7 @@ preserve_score <- function(layout, indices, keep, preserve_k = min(29, ncol(indi
 
 trunc_nn <- function(nn, k) list(indices = nn$indices[, seq_len(k), drop=FALSE], distances = nn$distances[, seq_len(k), drop=FALSE])
 
-run_one <- function(dataset, x, labels, nn, method, k, n_epochs, min_dist, neg, lr, keep, n_threads = 8) {
+run_one <- function(dataset, x, labels, nn, method, config_id, k, n_epochs, min_dist, neg, lr, keep, n_threads = 8) {
   nnk <- trunc_nn(nn, k)
   idx <- nnk$indices[, -1, drop=FALSE]
   dst <- nnk$distances[, -1, drop=FALSE]
@@ -30,14 +30,14 @@ run_one <- function(dataset, x, labels, nn, method, k, n_epochs, min_dist, neg, 
       native_spectral = fast_knn_umap(idx, dst, mode="spectral", min_dist=min_dist, negative_sample_rate=neg, learning_rate=lr, spectral_n_iter=25, seed=4),
       native_random = fast_knn_umap(idx, dst, mode="hybrid", init="random", n_epochs=n_epochs, min_dist=min_dist, negative_sample_rate=neg, learning_rate=lr, spectral_n_iter=25, seed=4),
       native_landmark = landmark_knn_umap(idx, dst, landmark_ratio=0.1, landmark_k=10, local_k=10, mode="hybrid", n_epochs=n_epochs, min_dist=min_dist, negative_sample_rate=neg, learning_rate=lr, spectral_n_iter=25, seed=4),
-      knn_tsne = knn_tsne(idx, dst, n_epochs=n_epochs, negative_sample_rate=neg, n_threads=n_threads, seed=4),
-      knn_pacmap = knn_pacmap(idx, dst, n_epochs=n_epochs, negative_sample_rate=neg, n_threads=n_threads, seed=4),
-      knn_trimap = knn_trimap(idx, dst, n_epochs=n_epochs, negative_sample_rate=neg, n_threads=n_threads, seed=4),
-      knn_localmap = knn_localmap(idx, dst, n_epochs=n_epochs, negative_sample_rate=neg, n_threads=n_threads, seed=4),
+      knn_tsne = knn_tsne(idx, dst, n_epochs=n_epochs, negative_sample_rate=neg, learning_rate=lr, n_threads=n_threads, seed=4),
+      knn_pacmap = knn_pacmap(idx, dst, n_epochs=n_epochs, negative_sample_rate=neg, learning_rate=lr, n_threads=n_threads, seed=4),
+      knn_trimap = knn_trimap(idx, dst, n_epochs=n_epochs, negative_sample_rate=neg, learning_rate=lr, n_threads=n_threads, seed=4),
+      knn_localmap = knn_localmap(idx, dst, n_epochs=n_epochs, negative_sample_rate=neg, learning_rate=lr, n_threads=n_threads, seed=4),
       stop("unknown method")
     )
   })
-  data.frame(dataset=dataset, method=method, k=k, n_epochs=n_epochs, min_dist=min_dist, neg=neg, lr=lr, elapsed=t[["elapsed"]], silhouette=score_layout(layout, labels, keep), knn_preservation=preserve_score(layout, idx, keep), error="", stringsAsFactors=FALSE)
+  data.frame(dataset=dataset, config_id=config_id, method=method, k=k, n_epochs=n_epochs, min_dist=min_dist, neg=neg, lr=lr, elapsed=t[["elapsed"]], silhouette=score_layout(layout, labels, keep), knn_preservation=preserve_score(layout, idx, keep), error="", stringsAsFactors=FALSE)
 }
 
 run_dataset <- function(dataset, x, labels, max_k=100, sample_n=3000, out_file) {
@@ -45,23 +45,32 @@ run_dataset <- function(dataset, x, labels, max_k=100, sample_n=3000, out_file) 
   keep <- sort(sample.int(nrow(x), min(sample_n, nrow(x))))
   message("KNN ", dataset)
   tknn <- system.time(nn <- fastknnumap::nn(x, x, max_k, parallel = TRUE))
-  rows <- list(data.frame(dataset=dataset, method="KNN", k=max_k, n_epochs=NA, min_dist=NA, neg=NA, lr=NA, elapsed=tknn[["elapsed"]], silhouette=NA, knn_preservation=NA, error=""))
+  rows <- list(data.frame(dataset=dataset, config_id=0L, method="KNN", k=max_k, n_epochs=NA, min_dist=NA, neg=NA, lr=NA, elapsed=tknn[["elapsed"]], silhouette=NA, knn_preservation=NA, error=""))
   saveRDS(list(results=do.call(rbind, rows), nn=nn), out_file)
 
-  # Accuracy target: native KNN-based objectives at useful k values.
-  params <- rbind(
-    expand.grid(method="native", k=c(30,50,100), n_epochs=c(200,500,800), min_dist=c(0.001,0.01,0.1), neg=c(5,10), lr=c(1.0,1.5), stringsAsFactors=FALSE),
-    expand.grid(method="native_sgd", k=c(30,50,100), n_epochs=c(200,500), min_dist=c(0.01,0.1), neg=c(5,10), lr=c(1.0,1.5), stringsAsFactors=FALSE),
-    expand.grid(method="native_spectral", k=c(30,50,100), n_epochs=0, min_dist=c(0.01,0.1), neg=5, lr=1.0, stringsAsFactors=FALSE),
-    expand.grid(method="native_landmark", k=c(50,100), n_epochs=c(200,500), min_dist=c(0.01,0.1), neg=5, lr=1.0, stringsAsFactors=FALSE),
-    expand.grid(method=c("knn_tsne","knn_pacmap","knn_trimap","knn_localmap"), k=c(30,100), n_epochs=c(100,300), min_dist=NA, neg=5, lr=NA, stringsAsFactors=FALSE)
+  # Every method is run for every parameter row. Do not compare methods across
+  # different k, epoch, min_dist, negative-sampling, or learning-rate settings.
+  methods <- c("native", "native_sgd", "native_random", "native_landmark", "knn_tsne", "knn_pacmap", "knn_trimap", "knn_localmap")
+  params <- expand.grid(
+    k = c(30, 50, 100),
+    n_epochs = c(200, 500),
+    min_dist = c(0.01, 0.1),
+    neg = c(5, 10),
+    lr = c(1.0, 1.5),
+    stringsAsFactors = FALSE
   )
+  params$config_id <- seq_len(nrow(params))
   for (i in seq_len(nrow(params))) {
-    p <- params[i,]
-    r <- tryCatch(run_one(dataset, x, labels, nn, p$method, p$k, p$n_epochs, ifelse(is.na(p$min_dist), 0.01, p$min_dist), p$neg, ifelse(is.na(p$lr), 1.0, p$lr), keep), error=function(e) data.frame(dataset=dataset, method=p$method, k=p$k, n_epochs=p$n_epochs, min_dist=p$min_dist, neg=p$neg, lr=p$lr, elapsed=NA, silhouette=NA, knn_preservation=NA, error=conditionMessage(e)))
-    print(r)
-    rows[[length(rows)+1]] <- r
-    saveRDS(list(results=rbind.fill(lapply(rows, function(z) { if (!"error" %in% names(z)) z$error <- ""; z })), nn=nn), out_file)
+    p <- params[i, ]
+    for (method in methods) {
+      r <- tryCatch(
+        run_one(dataset, x, labels, nn, method, p$config_id, p$k, p$n_epochs, p$min_dist, p$neg, p$lr, keep),
+        error=function(e) data.frame(dataset=dataset, config_id=p$config_id, method=method, k=p$k, n_epochs=p$n_epochs, min_dist=p$min_dist, neg=p$neg, lr=p$lr, elapsed=NA, silhouette=NA, knn_preservation=NA, error=conditionMessage(e))
+      )
+      print(r)
+      rows[[length(rows)+1]] <- r
+      saveRDS(list(results=rbind.fill(lapply(rows, function(z) { if (!"error" %in% names(z)) z$error <- ""; z })), nn=nn), out_file)
+    }
   }
   invisible(do.call(rbind.fill, rows))
 }

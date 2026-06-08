@@ -126,7 +126,10 @@ benchmark_singlecell <- function(data_path = "/Users/stefano/Documents/GPUPLS/Da
 #'   including self in the first column as returned by `nn`.
 #' @param implementations Character vector of implementations to run.
 #' @param n_epochs Number of optimization epochs for SGD-style methods.
-#' @param hybrid_epochs Number of optimization epochs for `fastknnumap_hybrid`.
+#' @param hybrid_epochs Deprecated optional override for hybrid/landmark epochs.
+#'   The default `NULL` uses `n_epochs` so methods are compared with the same
+#'   epoch budget. If multiple implementations are compared, a different value
+#'   is rejected.
 #' @param min_dist UMAP minimum distance.
 #' @param negative_sample_rate Negative sample rate.
 #' @param learning_rate Initial learning rate.
@@ -155,7 +158,7 @@ benchmark_knn_umap <- function(data,
                                  "knn_localmap"
                                ),
                                n_epochs = 200L,
-                               hybrid_epochs = 100L,
+                               hybrid_epochs = NULL,
                                min_dist = 0.01,
                                negative_sample_rate = 10L,
                                learning_rate = 1.5,
@@ -194,6 +197,15 @@ benchmark_knn_umap <- function(data,
     implementations
   ))
   implementations <- unique(implementations)
+  if (is.null(hybrid_epochs)) {
+    hybrid_epochs <- n_epochs
+  }
+  if (length(implementations) > 1L && as.integer(hybrid_epochs) != as.integer(n_epochs)) {
+    stop(
+      "`hybrid_epochs` must equal `n_epochs` when comparing multiple implementations.",
+      call. = FALSE
+    )
+  }
 
   t_knn <- NULL
   if (is.null(nn)) {
@@ -225,6 +237,8 @@ benchmark_knn_umap <- function(data,
 
   indices <- nn_indices_self[, -1L, drop = FALSE]
   distances <- nn_distances_self[, -1L, drop = FALSE]
+  effective_k <- ncol(nn_indices_self)
+  effective_n_neighbors <- ncol(indices)
   preserve_k <- if (is.null(preserve_k)) ncol(indices) else min(as.integer(preserve_k), ncol(indices))
 
   labels_int <- if (is.null(labels)) NULL else as.integer(as.factor(labels))
@@ -309,7 +323,7 @@ benchmark_knn_umap <- function(data,
             indices, distances,
             n_epochs = n_epochs,
             negative_sample_rate = negative_sample_rate,
-            learning_rate = 0.05,
+            learning_rate = learning_rate,
             n_threads = n_threads,
             seed = seed
           ),
@@ -317,7 +331,7 @@ benchmark_knn_umap <- function(data,
             indices, distances,
             n_epochs = n_epochs,
             negative_sample_rate = negative_sample_rate,
-            learning_rate = 0.1,
+            learning_rate = learning_rate,
             n_threads = n_threads,
             seed = seed
           ),
@@ -325,7 +339,7 @@ benchmark_knn_umap <- function(data,
             indices, distances,
             n_epochs = n_epochs,
             negative_sample_rate = negative_sample_rate,
-            learning_rate = 0.05,
+            learning_rate = learning_rate,
             n_threads = n_threads,
             seed = seed
           ),
@@ -333,7 +347,7 @@ benchmark_knn_umap <- function(data,
             indices, distances,
             n_epochs = n_epochs,
             negative_sample_rate = negative_sample_rate,
-            learning_rate = 0.05,
+            learning_rate = learning_rate,
             n_threads = n_threads,
             seed = seed
           ),
@@ -349,6 +363,12 @@ benchmark_knn_umap <- function(data,
       return(list(
         metrics = data.frame(
           implementation = name,
+          k = effective_k,
+          n_neighbors = effective_n_neighbors,
+          n_epochs = as.integer(n_epochs),
+          min_dist = min_dist,
+          negative_sample_rate = as.integer(negative_sample_rate),
+          learning_rate = learning_rate,
           elapsed = timing["elapsed"],
           user = timing["user.self"],
           system = timing["sys.self"],
@@ -365,6 +385,12 @@ benchmark_knn_umap <- function(data,
     list(
       metrics = data.frame(
         implementation = name,
+        k = effective_k,
+        n_neighbors = effective_n_neighbors,
+        n_epochs = as.integer(n_epochs),
+        min_dist = min_dist,
+        negative_sample_rate = as.integer(negative_sample_rate),
+        learning_rate = learning_rate,
         elapsed = timing["elapsed"],
         user = timing["user.self"],
         system = timing["sys.self"],
@@ -391,6 +417,15 @@ benchmark_knn_umap <- function(data,
     labels = labels,
     knn = list(indices = indices, distances = distances),
     knn_with_self = list(indices = nn_indices_self, distances = nn_distances_self),
+    parameters = list(
+      k = effective_k,
+      n_neighbors = effective_n_neighbors,
+      n_epochs = as.integer(n_epochs),
+      min_dist = min_dist,
+      negative_sample_rate = as.integer(negative_sample_rate),
+      learning_rate = learning_rate,
+      seed = as.integer(seed)
+    ),
     silhouette_sample = silhouette_keep,
     preservation_sample = preserve_keep
   )
