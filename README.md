@@ -83,17 +83,15 @@ bench$metrics
 Compare against the R `umap` and `Rtsne` packages across public datasets:
 
 ```r
-suite <- fastknnumap::benchmark_embedding_datasets(
-  datasets = c("iris", "pendigits", "fashion_mnist"),
-  subsets = c(iris = NA, pendigits = NA, fashion_mnist = 2000),
-  implementations = c("fastknnumap_sgd", "umap", "rtsne"),
-  n_epochs = 250,
-  pca_dims = 50,
-  n_threads = 4,
+suite <- fastknnumap::benchmark_embed(
   output_csv = "benchmark/r_reference_suite.csv"
 )
 suite$metrics
 ```
+
+The compact method names are `"fast"`, `"umap"`, `"rtsne"`, `"uwot"`, and
+`"all"`. Advanced controls are available through `benchmark_embedding_datasets()`
+and `benchmark_knn_umap()`.
 
 The benchmark also supports a landmark approximation inspired by bipartite
 landmark UMAP methods. It selects hub-like landmarks from the KNN graph, keeps

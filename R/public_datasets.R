@@ -185,3 +185,67 @@ benchmark_embedding_datasets <- function(datasets = c("iris", "pendigits", "fash
   }
   list(metrics = combined, results = results)
 }
+
+method_aliases <- function(methods) {
+  aliases <- c(
+    fast = "fastknnumap_sgd",
+    spectral = "fastknnumap_spectral",
+    hybrid = "fastknnumap_hybrid",
+    landmark = "fastknnumap_landmark",
+    umap = "umap",
+    rtsne = "rtsne",
+    uwot = "uwot",
+    tsne = "knn_tsne",
+    pacmap = "knn_pacmap",
+    trimap = "knn_trimap",
+    localmap = "knn_localmap"
+  )
+  if (any(methods == "all")) {
+    return(unname(aliases[c("fast", "umap", "rtsne", "uwot")]))
+  }
+  unknown <- setdiff(methods, c(names(aliases), aliases))
+  if (length(unknown) > 0L) {
+    stop("Unknown methods: ", paste(unknown, collapse = ", "), call. = FALSE)
+  }
+  unname(ifelse(methods %in% names(aliases), aliases[methods], methods))
+}
+
+#' Benchmark embeddings with a minimal user interface
+#'
+#' @param datasets Public datasets to run. Defaults to a small practical suite.
+#' @param n Row subset for datasets larger than Iris. Use `NULL` for each
+#'   dataset's default.
+#' @param methods Methods to compare. Use simple names such as `"fast"`,
+#'   `"umap"`, `"rtsne"`, `"uwot"`, or `"all"`.
+#' @param output_csv Optional path to save the combined metrics table.
+#' @return A list with combined `metrics` and per-dataset `results`.
+#' @export
+benchmark_embed <- function(datasets = c("iris", "pendigits", "fashion_mnist"),
+                            n = 2000L,
+                            methods = c("fast", "umap", "rtsne"),
+                            output_csv = NULL) {
+  datasets <- match.arg(
+    datasets,
+    c("iris", "mnist", "fashion_mnist", "pendigits", "shuttle"),
+    several.ok = TRUE
+  )
+  subsets <- stats::setNames(rep(NA_real_, length(datasets)), datasets)
+  if (!is.null(n)) {
+    subsets[] <- as.numeric(n)
+    subsets[datasets == "iris"] <- NA_real_
+  }
+  benchmark_embedding_datasets(
+    datasets = datasets,
+    subsets = subsets,
+    implementations = method_aliases(methods),
+    pca_dims = 50L,
+    output_csv = output_csv,
+    k = 30L,
+    n_epochs = 250L,
+    hybrid_epochs = 100L,
+    n_threads = max(1L, parallel::detectCores(logical = FALSE) - 1L),
+    silhouette_sample = 5000L,
+    preserve_sample = 5000L,
+    verbose = FALSE
+  )
+}

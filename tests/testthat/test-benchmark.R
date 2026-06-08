@@ -63,6 +63,20 @@ test_that("benchmark_embedding_datasets combines dataset results", {
   expect_true(all(is.finite(result$metrics$elapsed)))
 })
 
+test_that("benchmark_embed exposes a minimal benchmark interface", {
+  skip_if_not_installed("Rtsne")
+
+  result <- benchmark_embed(
+    datasets = "iris",
+    methods = c("fast", "rtsne"),
+    output_csv = NULL
+  )
+
+  expect_equal(unique(result$metrics$dataset), "iris")
+  expect_equal(sort(result$metrics$implementation), c("fastknnumap_sgd", "rtsne"))
+  expect_true(all(result$metrics$status == "ok"))
+})
+
 test_that("landmark_knn_umap embeds from a reduced KNN graph", {
   set.seed(4)
   x <- matrix(rnorm(90), ncol = 3)
