@@ -22,36 +22,31 @@ test_that("benchmark_knn_umap compares native KNN-based implementations", {
   expect_true(all(is.finite(result$metrics$knn_preservation)))
 })
 
-test_that("benchmark_knn_umap can compare umap and Rtsne references", {
-  skip_if_not_installed("umap")
-  skip_if_not_installed("Rtsne")
-
+test_that("benchmark_knn_umap maps compact method aliases to native implementations", {
   result <- benchmark_knn_umap(
     as.matrix(iris[, 1:4]),
     iris$Species,
     k = 10,
-    implementations = c("umap", "rtsne", "rtsne_neighbors"),
-    n_epochs = 250,
+    implementations = c("umap", "tsne", "pacmap"),
+    n_epochs = 20,
     silhouette_sample = NULL,
     preserve_sample = NULL,
     verbose = FALSE
   )
 
-  expect_equal(sort(result$metrics$implementation), c("rtsne", "rtsne_neighbors", "umap"))
+  expect_equal(sort(result$metrics$implementation), c("fastknnumap_sgd", "knn_pacmap", "knn_tsne"))
   expect_true(all(result$metrics$status == "ok"))
   expect_true(all(is.finite(result$metrics$elapsed)))
   expect_true(all(is.finite(result$metrics$silhouette)))
 })
 
 test_that("benchmark_embedding_datasets combines dataset results", {
-  skip_if_not_installed("Rtsne")
-
   result <- benchmark_embedding_datasets(
     datasets = "iris",
     subsets = c(iris = NA),
-    implementations = c("fastknnumap_spectral", "rtsne"),
+    implementations = c("fastknnumap_spectral", "knn_tsne"),
     repeats = 2,
-    n_epochs = 250,
+    n_epochs = 20,
     spectral_n_iter = 3,
     silhouette_sample = NULL,
     preserve_sample = 50,
@@ -66,28 +61,23 @@ test_that("benchmark_embedding_datasets combines dataset results", {
 })
 
 test_that("benchmark_embed exposes a minimal benchmark interface", {
-  skip_if_not_installed("Rtsne")
-
   result <- benchmark_embed(
     datasets = "iris",
-    methods = c("fast", "rtsne"),
+    methods = c("fast", "tsne"),
     preset = "quick",
     output_csv = NULL
   )
 
   expect_equal(unique(result$metrics$dataset), "iris")
-  expect_equal(sort(result$metrics$implementation), c("fastknnumap_sgd", "rtsne"))
+  expect_equal(sort(result$metrics$implementation), c("fastknnumap_sgd", "knn_tsne"))
   expect_true(all(result$metrics$status == "ok"))
 })
 
 test_that("benchmark_embed writes plots when output_csv is set", {
-  skip_if_not_installed("Rtsne")
-  skip_if_not_installed("ggplot2")
-
   out <- tempfile(fileext = ".csv")
   result <- benchmark_embed(
     datasets = "iris",
-    methods = c("fast", "rtsne_neighbors"),
+    methods = c("fast", "tsne"),
     preset = "quick",
     output_csv = out
   )

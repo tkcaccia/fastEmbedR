@@ -13,13 +13,7 @@ Encoding: UTF-8
 Imports:
     Rcpp
 Suggests:
-    Rnanoflann,
-    cluster,
-    ggplot2,
-    Rtsne,
-    testthat,
-    umap,
-    uwot
+    testthat
 LinkingTo:
     Rcpp
 SystemRequirements: C++17, Metal framework on macOS for the optional GPU backend

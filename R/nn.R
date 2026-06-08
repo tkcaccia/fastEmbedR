@@ -1,7 +1,7 @@
 #' Exact nearest neighbors from row-wise matrices
 #'
 #' `nn()` provides a package-native nearest-neighbor entry point compatible with
-#' the common `Rnanoflann::nn(data, points, k)` use case. It currently performs
+#' the common exact `nn(data, points, k)` use case. It currently performs
 #' exact brute-force search in C++ with optional multi-CPU parallelism over query
 #' points. On macOS, exact Euclidean search can also use a native Metal GPU
 #' backend.

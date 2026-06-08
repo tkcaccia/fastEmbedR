@@ -4,7 +4,7 @@
 #' @param k Number of neighbors requested from `nn`, including self.
 #' @param n_epochs Number of UMAP optimization epochs.
 #' @param seed Random seed.
-#' @return A list containing timings, silhouettes, and embeddings.
+#' @return A list containing timings, silhouette scores, and embeddings.
 #' @export
 benchmark_metref <- function(data_path = "/Users/stefano/Documents/GPUPLS/Data/metref_remote_task.RData",
                              k = 30L,
@@ -13,10 +13,6 @@ benchmark_metref <- function(data_path = "/Users/stefano/Documents/GPUPLS/Data/m
                              negative_sample_rate = 10L,
                              learning_rate = 1.5,
                              seed = 4L) {
-  if (!requireNamespace("cluster", quietly = TRUE)) {
-    stop("Package `cluster` is required for silhouette scoring.", call. = FALSE)
-  }
-
   env <- new.env(parent = emptyenv())
   load(data_path, envir = env)
   out <- env$out
@@ -42,30 +38,12 @@ benchmark_metref <- function(data_path = "/Users/stefano/Documents/GPUPLS/Data/m
     )
   })
 
-  fast_sil <- mean(cluster::silhouette(labels, dist(fast))[, "sil_width"])
-
   result <- list(
     timings = rbind(knn = t_knn, fastknnumap = t_fast),
-    silhouette = c(fastknnumap = fast_sil),
+    silhouette = c(fastknnumap = silhouette_score(labels, fast)),
     layout = fast,
     labels = out$Ytrain
   )
-
-  if (requireNamespace("umap", quietly = TRUE)) {
-    t_umap <- system.time({
-      uknn <- umap::umap.knn(indices, distances)
-      config <- umap::umap.defaults
-      config$knn <- uknn
-      reference <- umap::umap(data, knn = uknn, config = config)$layout
-    })
-    result$timings <- rbind(result$timings, umap_knn = t_umap)
-    result$silhouette <- c(
-      result$silhouette,
-      umap_knn = mean(cluster::silhouette(labels, dist(reference))[, "sil_width"])
-    )
-    result$reference_layout <- reference
-  }
-
   result
 }
 
@@ -80,7 +58,7 @@ benchmark_metref <- function(data_path = "/Users/stefano/Documents/GPUPLS/Data/m
 #' @param silhouette_sample Optional sample size for silhouette scoring. Use `NULL`
 #'   for a full silhouette.
 #' @param seed Random seed.
-#' @param run_umap Compare against `umap`'s precomputed-KNN path.
+#' @param run_umap Deprecated and ignored. Benchmarks are fully native.
 #' @return A list containing timings, silhouettes, and embeddings.
 #' @export
 benchmark_singlecell <- function(data_path = "/Users/stefano/Documents/GPUPLS/Data/singlecell.RData",
@@ -91,10 +69,10 @@ benchmark_singlecell <- function(data_path = "/Users/stefano/Documents/GPUPLS/Da
                                  spectral_n_iter = 25L,
                                  silhouette_sample = NULL,
                                  seed = 4L,
-                                 run_umap = TRUE) {
+                                 run_umap = FALSE) {
   mode <- match.arg(mode)
-  if (!requireNamespace("cluster", quietly = TRUE)) {
-    stop("Package `cluster` is required for silhouette scoring.", call. = FALSE)
+  if (isTRUE(run_umap)) {
+    warning("`run_umap` is deprecated; benchmarks now use only native implementations.", call. = FALSE)
   }
 
   env <- new.env(parent = emptyenv())
@@ -123,12 +101,8 @@ benchmark_singlecell <- function(data_path = "/Users/stefano/Documents/GPUPLS/Da
   })
 
   score <- function(layout) {
-    if (is.null(silhouette_sample) || silhouette_sample >= nrow(layout)) {
-      return(mean(cluster::silhouette(labels, stats::dist(layout))[, "sil_width"]))
-    }
-    set.seed(seed)
-    keep <- sort(sample.int(nrow(layout), silhouette_sample))
-    mean(cluster::silhouette(labels[keep], stats::dist(layout[keep, , drop = FALSE]))[, "sil_width"])
+    keep <- sample_indices(nrow(layout), silhouette_sample, seed)
+    silhouette_score(labels[keep], layout[keep, , drop = FALSE])
   }
 
   result <- list(
@@ -137,18 +111,6 @@ benchmark_singlecell <- function(data_path = "/Users/stefano/Documents/GPUPLS/Da
     layout = fast,
     labels = env$labels
   )
-
-  if (isTRUE(run_umap) && requireNamespace("umap", quietly = TRUE)) {
-    t_umap <- system.time({
-      uknn <- umap::umap.knn(indices, distances)
-      config <- umap::umap.defaults
-      config$knn <- uknn
-      reference <- umap::umap(data, knn = uknn, config = config)$layout
-    })
-    result$timings <- rbind(result$timings, umap_knn = t_umap)
-    result$silhouette <- c(result$silhouette, umap_knn = score(reference))
-    result$reference_layout <- reference
-  }
 
   result
 }
@@ -187,11 +149,6 @@ benchmark_knn_umap <- function(data,
                                  "fastknnumap_landmark",
                                  "fastknnumap_sgd",
                                  "fastknnumap_spectral",
-                                 "umap",
-                                 "rtsne",
-                                 "rtsne_neighbors",
-                                 "uwot",
-                                 "uwot_fast_sgd",
                                  "knn_tsne",
                                  "knn_pacmap",
                                  "knn_trimap",
@@ -221,6 +178,22 @@ benchmark_knn_umap <- function(data,
   if (!is.null(labels) && length(labels) != n) {
     stop("`labels` must have one entry per row of `data`.", call. = FALSE)
   }
+  implementation_aliases <- c(
+    umap = "fastknnumap_sgd",
+    native_umap = "fastknnumap_sgd",
+    tsne = "knn_tsne",
+    rtsne = "knn_tsne",
+    rtsne_neighbors = "knn_tsne",
+    pacmap = "knn_pacmap",
+    trimap = "knn_trimap",
+    localmap = "knn_localmap"
+  )
+  implementations <- unname(ifelse(
+    implementations %in% names(implementation_aliases),
+    implementation_aliases[implementations],
+    implementations
+  ))
+  implementations <- unique(implementations)
 
   t_knn <- NULL
   if (is.null(nn)) {
@@ -255,21 +228,15 @@ benchmark_knn_umap <- function(data,
   preserve_k <- if (is.null(preserve_k)) ncol(indices) else min(as.integer(preserve_k), ncol(indices))
 
   labels_int <- if (is.null(labels)) NULL else as.integer(as.factor(labels))
-  sample_indices <- function(sample_size) {
-    if (is.null(sample_size) || sample_size >= n) return(seq_len(n))
-    set.seed(seed)
-    sort(sample.int(n, sample_size))
-  }
-  silhouette_keep <- sample_indices(silhouette_sample)
-  preserve_keep <- sample_indices(preserve_sample)
+  silhouette_keep <- sample_indices(n, silhouette_sample, seed)
+  preserve_keep <- sample_indices(n, preserve_sample, seed)
 
   score_silhouette <- function(layout) {
     if (is.null(labels_int)) return(NA_real_)
-    if (!requireNamespace("cluster", quietly = TRUE)) return(NA_real_)
-    mean(cluster::silhouette(
+    silhouette_score(
       labels_int[silhouette_keep],
-      stats::dist(layout[silhouette_keep, , drop = FALSE])
-    )[, "sil_width"])
+      layout[silhouette_keep, , drop = FALSE]
+    )
   }
 
   score_preservation <- function(layout) {
@@ -370,88 +337,6 @@ benchmark_knn_umap <- function(data,
             n_threads = n_threads,
             seed = seed
           ),
-          umap = {
-            if (!requireNamespace("umap", quietly = TRUE)) {
-              stop("Package `umap` is not installed.", call. = FALSE)
-            }
-            uknn <- umap::umap.knn(indices, distances)
-            config <- umap::umap.defaults
-            config$knn <- uknn
-            config$n_neighbors <- ncol(indices)
-            config$n_epochs <- n_epochs
-            config$min_dist <- min_dist
-            umap::umap(data, knn = uknn, config = config)$layout
-          },
-          rtsne = {
-            if (!requireNamespace("Rtsne", quietly = TRUE)) {
-              stop("Package `Rtsne` is not installed.", call. = FALSE)
-            }
-            set.seed(seed)
-            perplexity <- min(30, max(2, floor((n - 1L) / 3L)))
-            Rtsne::Rtsne(
-              data,
-              dims = 2L,
-              perplexity = perplexity,
-              theta = 0.5,
-              check_duplicates = FALSE,
-              pca = FALSE,
-              max_iter = max(250L, as.integer(n_epochs)),
-              verbose = FALSE,
-              num_threads = max(1L, as.integer(n_threads))
-            )$Y
-          },
-          rtsne_neighbors = {
-            if (!requireNamespace("Rtsne", quietly = TRUE)) {
-              stop("Package `Rtsne` is not installed.", call. = FALSE)
-            }
-            set.seed(seed)
-            perplexity <- min(30, max(2, floor(ncol(indices) / 3L)))
-            Rtsne::Rtsne_neighbors(
-              indices,
-              distances,
-              dims = 2L,
-              perplexity = perplexity,
-              theta = 0.5,
-              max_iter = max(250L, as.integer(n_epochs)),
-              verbose = FALSE,
-              num_threads = max(1L, as.integer(n_threads))
-            )$Y
-          },
-          uwot = {
-            if (!requireNamespace("uwot", quietly = TRUE)) {
-              stop("Package `uwot` is not installed.", call. = FALSE)
-            }
-            uwot::umap(
-              X = NULL,
-              n_neighbors = ncol(nn_indices_self),
-              nn_method = list(idx = nn_indices_self, dist = nn_distances_self),
-              n_epochs = n_epochs,
-              learning_rate = learning_rate,
-              min_dist = min_dist,
-              negative_sample_rate = negative_sample_rate,
-              init = "spectral",
-              seed = seed,
-              verbose = FALSE
-            )
-          },
-          uwot_fast_sgd = {
-            if (!requireNamespace("uwot", quietly = TRUE)) {
-              stop("Package `uwot` is not installed.", call. = FALSE)
-            }
-            uwot::umap(
-              X = NULL,
-              n_neighbors = ncol(nn_indices_self),
-              nn_method = list(idx = nn_indices_self, dist = nn_distances_self),
-              n_epochs = n_epochs,
-              learning_rate = learning_rate,
-              min_dist = min_dist,
-              negative_sample_rate = negative_sample_rate,
-              init = "spectral",
-              fast_sgd = TRUE,
-              seed = seed,
-              verbose = FALSE
-            )
-          },
           stop("Unknown implementation: ", name, call. = FALSE)
         )
       }, error = function(e) {

@@ -4,8 +4,7 @@
 \usage{
 benchmark_knn_umap(data, labels = NULL, k = 30L, nn = NULL,
   implementations = c("fastknnumap_hybrid", "fastknnumap_landmark",
-  "fastknnumap_sgd", "fastknnumap_spectral", "umap", "rtsne",
-  "rtsne_neighbors", "uwot", "uwot_fast_sgd", "knn_tsne", "knn_pacmap",
+  "fastknnumap_sgd", "fastknnumap_spectral", "knn_tsne", "knn_pacmap",
   "knn_trimap", "knn_localmap"),
   n_epochs = 200L, hybrid_epochs = 100L, min_dist = 0.01,
   negative_sample_rate = 10L, learning_rate = 1.5,
@@ -16,7 +15,7 @@ benchmark_knn_umap(data, labels = NULL, k = 30L, nn = NULL,
   verbose = TRUE)
 }
 \arguments{
-\item{data}{Numeric matrix used to compute KNN once and to satisfy reference implementation APIs.}
+\item{data}{Numeric matrix used to compute KNN once.}
 \item{labels}{Optional labels for silhouette scoring.}
 \item{k}{Number of neighbors requested from \code{nn}, including self.}
 \item{nn}{Optional precomputed KNN list with \code{indices} and \code{distances}, including self in the first column.}
@@ -41,7 +40,7 @@ benchmark_knn_umap(data, labels = NULL, k = 30L, nn = NULL,
 \value{A list with KNN timing, per-implementation metrics, layouts, labels, and KNN matrices.}
 \description{
 Computes or accepts one KNN output and feeds the same neighbor index and
-distance matrices to several UMAP implementations. Accuracy is reported as
+distance matrices to several native embedding implementations. Accuracy is reported as
 label silhouette when labels are supplied and as KNN preservation against the
 input neighbor graph.
 }

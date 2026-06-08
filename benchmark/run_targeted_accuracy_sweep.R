@@ -2,8 +2,7 @@ Sys.setenv(LC_ALL="C", LANG="C")
 library(fastknnumap)
 
 score_layout <- function(layout, labels, keep) {
-  labels <- as.integer(as.factor(labels))
-  mean(cluster::silhouette(labels[keep], stats::dist(layout[keep, , drop = FALSE]))[, "sil_width"])
+  fastknnumap:::silhouette_score(labels[keep], layout[keep, , drop = FALSE])
 }
 
 preserve_score <- function(layout, indices, keep, preserve_k = min(29, ncol(indices))) {
@@ -26,15 +25,19 @@ run_one <- function(dataset, x, labels, nn, method, k, n_epochs, min_dist, neg, 
   dst <- nnk$distances[, -1, drop=FALSE]
   t <- system.time({
     layout <- switch(method,
-      uwot_fast_sgd = uwot::umap(X=NULL, n_neighbors=k, nn_method=list(idx=nnk$indices, dist=nnk$distances), n_epochs=n_epochs, min_dist=min_dist, negative_sample_rate=neg, init="spectral", fast_sgd=TRUE, seed=4, verbose=FALSE),
       native = fast_knn_umap(idx, dst, mode="hybrid", n_epochs=n_epochs, min_dist=min_dist, negative_sample_rate=neg, learning_rate=lr, spectral_n_iter=25, seed=4),
+      native_sgd = fast_knn_umap(idx, dst, mode="sgd", n_epochs=n_epochs, min_dist=min_dist, negative_sample_rate=neg, learning_rate=lr, spectral_n_iter=25, seed=4),
+      native_spectral = fast_knn_umap(idx, dst, mode="spectral", min_dist=min_dist, negative_sample_rate=neg, learning_rate=lr, spectral_n_iter=25, seed=4),
       native_random = fast_knn_umap(idx, dst, mode="hybrid", init="random", n_epochs=n_epochs, min_dist=min_dist, negative_sample_rate=neg, learning_rate=lr, spectral_n_iter=25, seed=4),
       native_landmark = landmark_knn_umap(idx, dst, landmark_ratio=0.1, landmark_k=10, local_k=10, mode="hybrid", n_epochs=n_epochs, min_dist=min_dist, negative_sample_rate=neg, learning_rate=lr, spectral_n_iter=25, seed=4),
       knn_tsne = knn_tsne(idx, dst, n_epochs=n_epochs, negative_sample_rate=neg, n_threads=n_threads, seed=4),
+      knn_pacmap = knn_pacmap(idx, dst, n_epochs=n_epochs, negative_sample_rate=neg, n_threads=n_threads, seed=4),
+      knn_trimap = knn_trimap(idx, dst, n_epochs=n_epochs, negative_sample_rate=neg, n_threads=n_threads, seed=4),
+      knn_localmap = knn_localmap(idx, dst, n_epochs=n_epochs, negative_sample_rate=neg, n_threads=n_threads, seed=4),
       stop("unknown method")
     )
   })
-  data.frame(dataset=dataset, method=method, k=k, n_epochs=n_epochs, min_dist=min_dist, neg=neg, lr=lr, elapsed=t[["elapsed"]], silhouette=score_layout(layout, labels, keep), knn_preservation=preserve_score(layout, idx, keep), stringsAsFactors=FALSE)
+  data.frame(dataset=dataset, method=method, k=k, n_epochs=n_epochs, min_dist=min_dist, neg=neg, lr=lr, elapsed=t[["elapsed"]], silhouette=score_layout(layout, labels, keep), knn_preservation=preserve_score(layout, idx, keep), error="", stringsAsFactors=FALSE)
 }
 
 run_dataset <- function(dataset, x, labels, max_k=100, sample_n=3000, out_file) {
@@ -42,22 +45,23 @@ run_dataset <- function(dataset, x, labels, max_k=100, sample_n=3000, out_file) 
   keep <- sort(sample.int(nrow(x), min(sample_n, nrow(x))))
   message("KNN ", dataset)
   tknn <- system.time(nn <- fastknnumap::nn(x, x, max_k, parallel = TRUE))
-  rows <- list(data.frame(dataset=dataset, method="KNN", k=max_k, n_epochs=NA, min_dist=NA, neg=NA, lr=NA, elapsed=tknn[["elapsed"]], silhouette=NA, knn_preservation=NA))
+  rows <- list(data.frame(dataset=dataset, method="KNN", k=max_k, n_epochs=NA, min_dist=NA, neg=NA, lr=NA, elapsed=tknn[["elapsed"]], silhouette=NA, knn_preservation=NA, error=""))
   saveRDS(list(results=do.call(rbind, rows), nn=nn), out_file)
 
-  # Accuracy target: uwot at useful k values.
+  # Accuracy target: native KNN-based objectives at useful k values.
   params <- rbind(
-    expand.grid(method="uwot_fast_sgd", k=c(15,30,50,100), n_epochs=200, min_dist=c(0.01,0.1), neg=5, lr=NA, stringsAsFactors=FALSE),
     expand.grid(method="native", k=c(30,50,100), n_epochs=c(200,500,800), min_dist=c(0.001,0.01,0.1), neg=c(5,10), lr=c(1.0,1.5), stringsAsFactors=FALSE),
+    expand.grid(method="native_sgd", k=c(30,50,100), n_epochs=c(200,500), min_dist=c(0.01,0.1), neg=c(5,10), lr=c(1.0,1.5), stringsAsFactors=FALSE),
+    expand.grid(method="native_spectral", k=c(30,50,100), n_epochs=0, min_dist=c(0.01,0.1), neg=5, lr=1.0, stringsAsFactors=FALSE),
     expand.grid(method="native_landmark", k=c(50,100), n_epochs=c(200,500), min_dist=c(0.01,0.1), neg=5, lr=1.0, stringsAsFactors=FALSE),
-    expand.grid(method="knn_tsne", k=c(30,100), n_epochs=c(100,300), min_dist=NA, neg=5, lr=NA, stringsAsFactors=FALSE)
+    expand.grid(method=c("knn_tsne","knn_pacmap","knn_trimap","knn_localmap"), k=c(30,100), n_epochs=c(100,300), min_dist=NA, neg=5, lr=NA, stringsAsFactors=FALSE)
   )
   for (i in seq_len(nrow(params))) {
     p <- params[i,]
     r <- tryCatch(run_one(dataset, x, labels, nn, p$method, p$k, p$n_epochs, ifelse(is.na(p$min_dist), 0.01, p$min_dist), p$neg, ifelse(is.na(p$lr), 1.0, p$lr), keep), error=function(e) data.frame(dataset=dataset, method=p$method, k=p$k, n_epochs=p$n_epochs, min_dist=p$min_dist, neg=p$neg, lr=p$lr, elapsed=NA, silhouette=NA, knn_preservation=NA, error=conditionMessage(e)))
     print(r)
     rows[[length(rows)+1]] <- r
-    saveRDS(list(results=rbind.fill(lapply(rows, function(z) { if (!"error" %in% names(z)) z <- ""; z })), nn=nn), out_file)
+    saveRDS(list(results=rbind.fill(lapply(rows, function(z) { if (!"error" %in% names(z)) z$error <- ""; z })), nn=nn), out_file)
   }
   invisible(do.call(rbind.fill, rows))
 }

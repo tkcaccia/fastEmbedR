@@ -37,10 +37,10 @@ fastknnumap::metal_available()
 nn <- fastknnumap::nn(data, data, 30, backend = "gpu")
 ```
 
-The SGD optimizer exposes `uwot`-style controls such as `a`, `b`,
+The SGD optimizer exposes UMAP-style controls such as `a`, `b`,
 `repulsion_strength`, `negative_sample_rate`, `init_sdev`, and epoch-based edge
 pruning. Use `init_sdev = "range"` for Python UMAP-compatible spectral scaling,
-or leave it as `NULL` for uwot's default initialization scaling.
+or leave it as `NULL` for native spectral scaling.
 
 For larger datasets, the package also supports a paper-inspired spectral path
 based on the normalized fuzzy KNN graph:
@@ -77,9 +77,8 @@ bench <- fastknnumap::benchmark_knn_umap(
     "fastknnumap_hybrid",
     "fastknnumap_sgd",
     "fastknnumap_spectral",
-    "umap",
-    "uwot",
-    "uwot_fast_sgd"
+    "knn_tsne",
+    "knn_pacmap"
   )
 )
 
@@ -87,19 +86,20 @@ bench$knn_time
 bench$metrics
 ```
 
-Compare against the R `umap` and `Rtsne` packages across public datasets:
+Compare the native implementations across public datasets:
 
 ```r
 suite <- fastknnumap::benchmark_embed(
-  output_csv = "benchmark/r_reference_suite.csv"
+  output_csv = "benchmark/native_suite.csv"
 )
 suite$metrics
 ```
 
-The compact method names are `"fast"`, `"umap"`, `"rtsne"`, `"uwot"`, and
-`"all"`. Use `preset = "quick"`, `"balanced"`, or `"accuracy"` to trade speed
-for repeat-based stability estimates. When `output_csv` is set, benchmark plots
-are written next to the CSV. Advanced controls are available through
+The compact method names are `"fast"`, `"tsne"`, `"pacmap"`, `"trimap"`,
+`"localmap"`, and `"all"`. Use `preset = "quick"`, `"balanced"`, or
+`"accuracy"` to trade speed for repeat-based stability estimates. When
+`output_csv` is set, benchmark plots are written next to the CSV with base R
+graphics. Advanced controls are available through
 `benchmark_embedding_datasets()` and `benchmark_knn_umap()`.
 
 The benchmark also supports a landmark approximation inspired by bipartite
@@ -135,7 +135,6 @@ bench <- fastknnumap::benchmark_fashion_mnist(
   pca_dims = 30,
   implementations = c(
     "fastknnumap_hybrid",
-    "uwot_fast_sgd",
     "knn_tsne",
     "knn_pacmap",
     "knn_trimap",

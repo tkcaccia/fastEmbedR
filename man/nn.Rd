@@ -30,7 +30,7 @@ Indices are 1-based.
 }
 \description{
 Package-native exact nearest-neighbor search compatible with the common
-\code{Rnanoflann::nn(data, points, k)} use case. It is implemented in C++ and
+\code{nn(data, points, k)} use case. It is implemented in C++ and
 can parallelize over query points. On macOS it can also use a native Metal GPU
 backend for exact Euclidean search.
 }

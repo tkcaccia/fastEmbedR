@@ -133,8 +133,8 @@ load_embedding_dataset <- function(name,
   dataset <- switch(
     name,
     iris = {
-      x <- as.matrix(iris[, 1:4])
-      y <- iris$Species
+      x <- as.matrix(datasets::iris[, 1:4])
+      y <- datasets::iris$Species
       sample_rows(x, y, n, seed)
     },
     mnist = load_mnist(file.path(cache_dir, "mnist"), n = if (is.null(n)) 10000L else n, seed = seed),
@@ -164,7 +164,7 @@ load_embedding_dataset <- function(name,
 #' @export
 benchmark_embedding_datasets <- function(datasets = c("iris", "pendigits", "fashion_mnist"),
                                          subsets = c(iris = NA, pendigits = NA, fashion_mnist = 2000),
-                                         implementations = c("fastknnumap_sgd", "umap", "rtsne"),
+                                         implementations = c("fastknnumap_sgd", "knn_tsne"),
                                          pca_dims = 50L,
                                          repeats = 1L,
                                          cache_dir = file.path(tempdir(), "fastembedr-data"),
@@ -228,22 +228,47 @@ benchmark_embedding_datasets <- function(datasets = c("iris", "pendigits", "fash
 }
 
 plot_embedding_benchmark <- function(benchmark, output_dir) {
-  if (!requireNamespace("ggplot2", quietly = TRUE)) {
-    warning("Package `ggplot2` is required for benchmark plots.", call. = FALSE)
-    return(character())
-  }
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   metrics <- benchmark$metrics
   ok <- metrics[metrics$status == "ok", , drop = FALSE]
   paths <- character()
   if (nrow(ok) == 0L) return(paths)
 
-  p1 <- ggplot2::ggplot(ok, ggplot2::aes(elapsed, knn_preservation, color = implementation)) +
-    ggplot2::geom_point(size = 2) +
-    ggplot2::facet_wrap(~ dataset, scales = "free") +
-    ggplot2::labs(x = "Elapsed seconds", y = "KNN preservation")
   paths["speed_quality"] <- file.path(output_dir, "speed_quality.png")
-  ggplot2::ggsave(paths["speed_quality"], p1, width = 8, height = 5, dpi = 140)
+  datasets <- unique(ok$dataset)
+  implementations <- unique(ok$implementation)
+  colors <- stats::setNames(grDevices::hcl.colors(length(implementations), "Dark 3"), implementations)
+  nc <- ceiling(sqrt(length(datasets)))
+  nr <- ceiling(length(datasets) / nc)
+
+  grDevices::png(paths["speed_quality"], width = 1120, height = 700, res = 140)
+  old_par <- graphics::par(no.readonly = TRUE)
+  tryCatch({
+    graphics::par(mfrow = c(nr, nc), mar = c(4.2, 4.2, 2.4, 1))
+    for (dataset in datasets) {
+      sub <- ok[ok$dataset == dataset, , drop = FALSE]
+      graphics::plot(
+        sub$elapsed,
+        sub$knn_preservation,
+        pch = 19,
+        col = colors[sub$implementation],
+        xlab = "Elapsed seconds",
+        ylab = "KNN preservation",
+        main = dataset
+      )
+      graphics::legend(
+        "bottomright",
+        legend = unique(sub$implementation),
+        col = colors[unique(sub$implementation)],
+        pch = 19,
+        bty = "n",
+        cex = 0.75
+      )
+    }
+  }, finally = {
+    graphics::par(old_par)
+    grDevices::dev.off()
+  })
 
   long <- rbind(
     data.frame(ok[, c("dataset", "implementation", "repeat")], metric = "silhouette", value = ok$silhouette),
@@ -252,13 +277,38 @@ plot_embedding_benchmark <- function(benchmark, output_dir) {
   )
   long <- long[is.finite(long$value), , drop = FALSE]
   if (nrow(long) > 0L) {
-    p2 <- ggplot2::ggplot(long, ggplot2::aes(implementation, value, fill = implementation)) +
-      ggplot2::geom_col(show.legend = FALSE) +
-      ggplot2::facet_grid(metric ~ dataset, scales = "free_y") +
-      ggplot2::labs(x = NULL, y = "Score") +
-      ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 30, hjust = 1))
+    avg <- stats::aggregate(value ~ dataset + implementation + metric, data = long, FUN = mean)
     paths["metrics"] <- file.path(output_dir, "metrics.png")
-    ggplot2::ggsave(paths["metrics"], p2, width = 9, height = 7, dpi = 140)
+    grDevices::png(paths["metrics"], width = 1260, height = 980, res = 140)
+    old_par <- graphics::par(no.readonly = TRUE)
+    tryCatch({
+      metric_names <- unique(avg$metric)
+      graphics::par(
+        mfrow = c(length(metric_names), length(datasets)),
+        mar = c(6.8, 4.2, 2.4, 1)
+      )
+      for (metric in metric_names) {
+        for (dataset in datasets) {
+          sub <- avg[avg$dataset == dataset & avg$metric == metric, , drop = FALSE]
+          if (nrow(sub) == 0L) {
+            graphics::plot.new()
+            graphics::title(main = paste(dataset, metric, sep = " / "))
+            next
+          }
+          graphics::barplot(
+            sub$value,
+            names.arg = sub$implementation,
+            col = colors[sub$implementation],
+            las = 2,
+            ylab = "Score",
+            main = paste(dataset, metric, sep = " / ")
+          )
+        }
+      }
+    }, finally = {
+      graphics::par(old_par)
+      grDevices::dev.off()
+    })
   }
   paths
 }
@@ -266,20 +316,20 @@ plot_embedding_benchmark <- function(benchmark, output_dir) {
 method_aliases <- function(methods) {
   aliases <- c(
     fast = "fastknnumap_sgd",
+    native_umap = "fastknnumap_sgd",
+    umap = "fastknnumap_sgd",
     spectral = "fastknnumap_spectral",
     hybrid = "fastknnumap_hybrid",
     landmark = "fastknnumap_landmark",
-    umap = "umap",
-    rtsne = "rtsne",
-    rtsne_neighbors = "rtsne_neighbors",
-    uwot = "uwot",
     tsne = "knn_tsne",
+    rtsne = "knn_tsne",
+    rtsne_neighbors = "knn_tsne",
     pacmap = "knn_pacmap",
     trimap = "knn_trimap",
     localmap = "knn_localmap"
   )
   if (any(methods == "all")) {
-    return(unname(aliases[c("fast", "umap", "rtsne", "rtsne_neighbors", "uwot")]))
+    return(unname(aliases[c("hybrid", "landmark", "fast", "spectral", "tsne", "pacmap", "trimap", "localmap")]))
   }
   unknown <- setdiff(methods, c(names(aliases), aliases))
   if (length(unknown) > 0L) {
@@ -294,13 +344,13 @@ method_aliases <- function(methods) {
 #' @param n Row subset for datasets larger than Iris. Use `NULL` for each
 #'   dataset's default.
 #' @param methods Methods to compare. Use simple names such as `"fast"`,
-#'   `"umap"`, `"rtsne"`, `"uwot"`, or `"all"`.
+#'   `"tsne"`, `"pacmap"`, `"trimap"`, `"localmap"`, or `"all"`.
 #' @param output_csv Optional path to save the combined metrics table.
 #' @return A list with combined `metrics` and per-dataset `results`.
 #' @export
 benchmark_embed <- function(datasets = c("iris", "pendigits", "fashion_mnist"),
                             n = 2000L,
-                            methods = c("fast", "umap", "rtsne"),
+                            methods = c("fast", "tsne"),
                             output_csv = NULL,
                             preset = c("balanced", "quick", "accuracy")) {
   preset <- match.arg(preset)

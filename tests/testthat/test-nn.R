@@ -34,18 +34,24 @@ test_that("parallel nn matches serial nn", {
   expect_equal(parallel$distances, serial$distances)
 })
 
-test_that("nn matches Rnanoflann on the common euclidean path", {
-  skip_if_not_installed("Rnanoflann")
-
+test_that("nn matches brute-force euclidean neighbors for query points", {
   set.seed(13)
   data <- matrix(rnorm(120), ncol = 6)
   points <- matrix(rnorm(60), ncol = 6)
 
   ours <- nn(data, points, k = 5)
-  ref <- Rnanoflann::nn(data, points, k = 5)
+  d <- matrix(0, nrow(points), nrow(data))
+  for (i in seq_len(nrow(points))) {
+    d[i, ] <- rowSums((data - matrix(points[i, ], nrow(data), ncol(data), byrow = TRUE))^2)
+  }
+  expected_idx <- t(apply(d, 1L, order))[, 1:5, drop = FALSE]
+  expected_dst <- matrix(0, nrow(points), 5L)
+  for (i in seq_len(nrow(points))) {
+    expected_dst[i, ] <- sqrt(d[i, expected_idx[i, ]])
+  }
 
-  expect_equal(ours$indices, ref$indices)
-  expect_equal(ours$distances, ref$distances, tolerance = 1e-12)
+  expect_equal(ours$indices, expected_idx)
+  expect_equal(ours$distances, expected_dst, tolerance = 1e-12)
 })
 
 test_that("nn supports squared euclidean and manhattan distances", {

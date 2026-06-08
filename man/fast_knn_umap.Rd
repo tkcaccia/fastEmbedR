@@ -34,7 +34,7 @@ umap_knn(indices, distances, n_components = 2L, n_epochs = NULL,
 \item{repulsion_strength}{Weight applied to negative samples.}
 \item{mode}{Embedding mode. \code{"sgd"} runs UMAP SGD, \code{"spectral"} returns the normalized graph-Laplacian spectral embedding, and \code{"hybrid"} uses spectral initialization with fewer default epochs.}
 \item{init}{Initialization method. \code{"spectral"} uses a randomized eigensolver on the normalized graph; \code{"random"} uses uniform random coordinates.}
-\item{init_sdev}{Optional initialization scaling. Use \code{NULL} for uwot's default, \code{"range"} for Python UMAP-compatible 0-10 range scaling, or a positive scalar to scale each initialized dimension to that standard deviation.}
+\item{init_sdev}{Optional initialization scaling. Use \code{NULL} for native spectral scaling, \code{"range"} for Python UMAP-compatible 0-10 range scaling, or a positive scalar to scale each initialized dimension to that standard deviation.}
 \item{prune_epochs}{Remove graph edges too weak to be sampled at least once over \code{n_epochs}.}
 \item{spectral_n_iter}{Number of power iterations for spectral initialization.}
 \item{seed}{Integer random seed.}

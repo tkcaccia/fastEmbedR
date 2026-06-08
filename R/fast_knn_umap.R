@@ -16,12 +16,12 @@
 #' @param repulsion_strength Weight applied to negative samples.
 #' @param init Initialization method: `"spectral"` uses a randomized eigensolver
 #'   on the normalized graph; `"random"` uses uniform random coordinates.
-#' @param init_sdev Optional initialization scaling. Use `NULL` for uwot's
-#'   default, `"range"` for Python UMAP-compatible 0-10 range scaling, or a
+#' @param init_sdev Optional initialization scaling. Use `NULL` for native
+#'   spectral scaling, `"range"` for Python UMAP-compatible 0-10 range scaling, or a
 #'   positive number to scale each initialized dimension to that standard
 #'   deviation.
 #' @param prune_epochs Remove graph edges too weak to be sampled at least once
-#'   over `n_epochs`, matching UMAP/uwot's epoch scheduling more closely.
+#'   over `n_epochs`, matching UMAP epoch scheduling more closely.
 #' @param seed Integer random seed.
 #' @param verbose Print progress from C++.
 #' @return A numeric matrix with `nrow(indices)` rows and `n_components` columns.
