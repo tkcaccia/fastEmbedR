@@ -13,3 +13,11 @@ nn_cpp <- function(data, points, k, method, square, sorted, p, parallel, cores) 
     .Call(`_fastknnumap_nn_cpp`, data, points, k, method, square, sorted, p, parallel, cores)
 }
 
+metal_available_cpp <- function() {
+    .Call(`_fastknnumap_metal_available_cpp`)
+}
+
+nn_metal_cpp <- function(data, points, k, square) {
+    .Call(`_fastknnumap_nn_metal_cpp`, data, points, k, square)
+}
+

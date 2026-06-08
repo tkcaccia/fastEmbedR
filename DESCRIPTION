@@ -22,5 +22,5 @@ Suggests:
     uwot
 LinkingTo:
     Rcpp
-SystemRequirements: C++17
+SystemRequirements: C++17, Metal framework on macOS for the optional GPU backend
 RoxygenNote: 7.3.2

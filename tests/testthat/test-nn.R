@@ -58,3 +58,30 @@ test_that("nn supports squared euclidean and manhattan distances", {
   man <- nn(data, point, k = 3, method = "manhattan")
   expect_equal(man$distances[1, ], c(0, 2, 3))
 })
+
+test_that("metal availability helper returns a logical scalar", {
+  expect_type(metal_available(), "logical")
+  expect_length(metal_available(), 1L)
+})
+
+test_that("Metal nn backend matches CPU euclidean results", {
+  skip_if_not(metal_available())
+
+  set.seed(14)
+  data <- matrix(rnorm(500), ncol = 10)
+  points <- matrix(rnorm(230), ncol = 10)
+
+  cpu <- nn(data, points, k = 6, backend = "cpu", parallel = TRUE, cores = 2)
+  gpu <- nn(data, points, k = 6, backend = "gpu")
+
+  expect_equal(attr(gpu, "backend"), "metal")
+  expect_equal(gpu$indices, cpu$indices)
+  expect_equal(gpu$distances, cpu$distances, tolerance = 1e-5)
+})
+
+test_that("Metal backend rejects unsupported metrics", {
+  skip_if_not(metal_available())
+
+  x <- matrix(rnorm(30), ncol = 3)
+  expect_error(nn(x, x, k = 2, method = "manhattan", backend = "gpu"), "euclidean")
+})

@@ -1,3 +1,14 @@
 CXX_STD = CXX17
 PKG_CXXFLAGS = -pthread
+PKG_OBJCXXFLAGS = -std=gnu++17 -fobjc-exceptions
+
+UNAME_S := $(shell uname -s)
+
+ifeq ($(UNAME_S),Darwin)
+PKG_CPPFLAGS = -DHAVE_METAL=1
+PKG_LIBS = -pthread -framework Foundation -framework Metal
+OBJECTS = RcppExports.o fast_knn_umap.o knn_objectives.o nn.o nn_metal_bridge.o nn_metal_impl.o
+else
 PKG_LIBS = -pthread
+OBJECTS = RcppExports.o fast_knn_umap.o knn_objectives.o nn.o nn_metal_bridge.o nn_metal_stub.o
+endif

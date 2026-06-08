@@ -1,1 +1,2 @@
 CXX_STD = CXX17
+OBJECTS = RcppExports.o fast_knn_umap.o knn_objectives.o nn.o nn_metal_bridge.o nn_metal_stub.o

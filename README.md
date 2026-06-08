@@ -30,6 +30,13 @@ layout <- fastknnumap::fast_knn_umap(
 plot(layout, pch = 21, bg = out$Ytrain)
 ```
 
+On macOS, exact Euclidean KNN can use the native Metal GPU backend:
+
+```r
+fastknnumap::metal_available()
+nn <- fastknnumap::nn(data, data, 30, backend = "gpu")
+```
+
 The SGD optimizer exposes `uwot`-style controls such as `a`, `b`,
 `repulsion_strength`, `negative_sample_rate`, `init_sdev`, and epoch-based edge
 pruning. Use `init_sdev = "range"` for Python UMAP-compatible spectral scaling,
