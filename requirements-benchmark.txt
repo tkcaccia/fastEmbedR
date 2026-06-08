@@ -1,0 +1,10 @@
+numpy
+scipy
+pandas
+scikit-learn
+
+# Optional implementations and datasets:
+# umap-learn
+# openTSNE
+# medmnist
+# pytest

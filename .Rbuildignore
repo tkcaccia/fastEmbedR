@@ -1,0 +1,7 @@
+^\\.git$
+^benchmark$
+^benchmark/
+^tools$
+^tools/
+^\\.Rbuildignore$
+^\\.DS_Store$

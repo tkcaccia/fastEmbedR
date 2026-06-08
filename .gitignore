@@ -1,0 +1,31 @@
+# R build and check artifacts
+*.Rcheck/
+*.tar.gz
+src/*.o
+src/*.so
+src/*.dll
+src/*.dylib
+
+# Local R/session files
+.Rhistory
+.RData
+.Ruserdata
+.DS_Store
+
+# Python cache and environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Downloaded data and generated benchmark outputs
+data/
+cache/
+benchmark/*.rds
+benchmark/python_*/
+benchmark/plots/
+
+# Local IDE/editor files
+.vscode/
+.idea/
