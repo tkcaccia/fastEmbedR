@@ -188,6 +188,7 @@ benchmark_knn_umap <- function(data,
                                  "fastknnumap_sgd",
                                  "fastknnumap_spectral",
                                  "umap",
+                                 "rtsne",
                                  "uwot",
                                  "uwot_fast_sgd",
                                  "knn_tsne",
@@ -379,6 +380,24 @@ benchmark_knn_umap <- function(data,
             config$n_epochs <- n_epochs
             config$min_dist <- min_dist
             umap::umap(data, knn = uknn, config = config)$layout
+          },
+          rtsne = {
+            if (!requireNamespace("Rtsne", quietly = TRUE)) {
+              stop("Package `Rtsne` is not installed.", call. = FALSE)
+            }
+            set.seed(seed)
+            perplexity <- min(30, max(2, floor((n - 1L) / 3L)))
+            Rtsne::Rtsne(
+              data,
+              dims = 2L,
+              perplexity = perplexity,
+              theta = 0.5,
+              check_duplicates = FALSE,
+              pca = FALSE,
+              max_iter = max(250L, as.integer(n_epochs)),
+              verbose = FALSE,
+              num_threads = max(1L, as.integer(n_threads))
+            )$Y
           },
           uwot = {
             if (!requireNamespace("uwot", quietly = TRUE)) {

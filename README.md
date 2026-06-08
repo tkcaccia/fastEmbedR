@@ -80,6 +80,21 @@ bench$knn_time
 bench$metrics
 ```
 
+Compare against the R `umap` and `Rtsne` packages across public datasets:
+
+```r
+suite <- fastknnumap::benchmark_embedding_datasets(
+  datasets = c("iris", "pendigits", "fashion_mnist"),
+  subsets = c(iris = NA, pendigits = NA, fashion_mnist = 2000),
+  implementations = c("fastknnumap_sgd", "umap", "rtsne"),
+  n_epochs = 250,
+  pca_dims = 50,
+  n_threads = 4,
+  output_csv = "benchmark/r_reference_suite.csv"
+)
+suite$metrics
+```
+
 The benchmark also supports a landmark approximation inspired by bipartite
 landmark UMAP methods. It selects hub-like landmarks from the KNN graph, keeps
 a small landmark graph plus a few original local KNN edges, then runs the same

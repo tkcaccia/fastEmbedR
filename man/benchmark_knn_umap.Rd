@@ -4,8 +4,8 @@
 \usage{
 benchmark_knn_umap(data, labels = NULL, k = 30L, nn = NULL,
   implementations = c("fastknnumap_hybrid", "fastknnumap_landmark",
-  "fastknnumap_sgd", "fastknnumap_spectral", "umap", "uwot", "uwot_fast_sgd",
-  "knn_tsne", "knn_pacmap", "knn_trimap", "knn_localmap"),
+  "fastknnumap_sgd", "fastknnumap_spectral", "umap", "rtsne", "uwot",
+  "uwot_fast_sgd", "knn_tsne", "knn_pacmap", "knn_trimap", "knn_localmap"),
   n_epochs = 200L, hybrid_epochs = 100L, min_dist = 0.01,
   negative_sample_rate = 10L, learning_rate = 1.5,
   spectral_n_iter = 25L, landmark_ratio = 0.1, n_landmarks = NULL,
