@@ -147,11 +147,7 @@ fast_knn_umap_core <- function(indices,
     } else {
       NA_character_
     }
-    metal_optimizer_mode <- if (identical(gpu_backend, "metal")) {
-      fast_knn_umap_metal_optimizer_mode()
-    } else {
-      NA_character_
-    }
+    metal_optimizer_mode <- if (identical(gpu_backend, "metal")) "atomic_inplace" else NA_character_
     cfg$gpu_optimizer_mode <- if (identical(gpu_backend, "metal")) {
       metal_optimizer_mode
     } else {
@@ -163,13 +159,7 @@ fast_knn_umap_core <- function(indices,
       NA_integer_
     }
     cfg$gpu_optimizer_update_rule <- if (gpu_backend == "metal") {
-      if (identical(metal_optimizer_mode, "atomic_inplace")) {
-        "native_metal_csr_atomic_inplace_edge_update"
-      } else if (identical(metal_optimizer_mode, "atomic_delta")) {
-        "native_metal_csr_atomic_endpoint_delta"
-      } else {
-        "native_metal_csr_scheduled_double_buffer"
-      }
+      "native_metal_csr_atomic_inplace_edge_update"
     } else if (identical(cuda_optimizer_mode, "deterministic")) {
       "native_cuda_deterministic_csr_jacobi"
     } else {
@@ -262,20 +252,17 @@ fast_knn_umap_core <- function(indices,
       )
       cfg$graph_nnz <- as.integer(graph$nnz)
       cfg$graph_max_weight <- as.numeric(graph$max_weight)
-      out <- with_fast_knn_umap_metal_optimizer(
-        metal_optimizer_mode,
-        knn_embed_metal_csr_cpp(
-          graph$offsets,
-          graph$neighbors,
-          graph$weights,
-          init,
-          as.integer(hybrid$gpu_epochs),
-          as.integer(cfg$negative_sample_rate),
-          cfg$learning_rate,
-          cfg$min_dist,
-          as.numeric(graph$max_weight),
-          as.integer(seed)
-        )
+      out <- knn_embed_metal_csr_cpp(
+        graph$offsets,
+        graph$neighbors,
+        graph$weights,
+        init,
+        as.integer(hybrid$gpu_epochs),
+        as.integer(cfg$negative_sample_rate),
+        cfg$learning_rate,
+        cfg$min_dist,
+        as.numeric(graph$max_weight),
+        as.integer(seed)
       )
       cfg$metal_graph_input <- attr(out, "metal_graph_input")
       cfg$metal_csr_width <- attr(out, "metal_csr_width")
@@ -509,34 +496,7 @@ fast_knn_umap_cuda_optimizer_mode <- function() {
 }
 
 fast_knn_umap_metal_optimizer_mode <- function() {
-  value <- getOption(
-    "fastEmbedR.metal_optimizer",
-    Sys.getenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER", "atomic_inplace")
-  )
-  value <- tolower(trimws(as.character(value[1L])))
-  if (value %in% c("atomic_inplace", "inplace", "edge_atomic", "uwot")) {
-    return("atomic_inplace")
-  }
-  if (value %in% c("atomic", "atomic_delta", "endpoint")) {
-    return("atomic_delta")
-  }
-  if (value %in% c("torchdr", "row", "row_negatives")) {
-    return("torchdr_row_negatives")
-  }
   "atomic_inplace"
-}
-
-with_fast_knn_umap_metal_optimizer <- function(mode, expr) {
-  old_env <- Sys.getenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER", unset = NA_character_)
-  Sys.setenv(FASTEMBEDR_METAL_UMAP_OPTIMIZER = mode)
-  on.exit({
-    if (is.na(old_env)) {
-      Sys.unsetenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER")
-    } else {
-      Sys.setenv(FASTEMBEDR_METAL_UMAP_OPTIMIZER = old_env)
-    }
-  }, add = TRUE)
-  force(expr)
 }
 
 scale_embedding_sdev_r <- function(embedding, target_sdev) {

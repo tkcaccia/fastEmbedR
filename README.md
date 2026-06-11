@@ -59,10 +59,10 @@ Python, `reticulate`, Torch, or MLX. The graph preparation is still shared with
 the CPU CSR path in this restored build; the optimizer itself is Metal-labelled
 only when the native Metal path is used.
 
-The Metal UMAP source keeps three optimizer kernels for diagnostics:
-`scheduled`, `atomic_delta`, and `torchdr_row_negatives`. The package default is
-`scheduled`, and benchmark scripts force `scheduled` so the experimental modes
-are not mixed into published comparisons.
+Metal UMAP has a single optimizer path: `atomic_inplace`. This is the
+visually validated native Metal edge-update kernel used for published
+benchmarks; the slower or distorted experimental Metal UMAP optimizers were
+removed to keep results reproducible and the API simple.
 
 Native Metal openTSNE is available when the `knn_tsne_opentsne_metal_cpp`
 symbol is compiled. `negative_gradient_method = "auto"` resolves to the native

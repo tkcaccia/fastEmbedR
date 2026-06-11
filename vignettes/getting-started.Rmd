@@ -81,10 +81,10 @@ Objective-C++/Metal UMAP optimizer directly. It does not use Python,
 `reticulate`, Torch, or MLX, and it does not fall back to CPU while reporting a
 GPU backend.
 
-The Metal UMAP source keeps three optimizer kernels for diagnostics:
-`scheduled`, `atomic_delta`, and `torchdr_row_negatives`. The default is
-`scheduled`, and benchmark scripts force `scheduled` so experimental modes are
-not mixed into reference comparisons.
+Metal UMAP has a single optimizer path: `atomic_inplace`. This is the
+visually validated native Metal edge-update kernel used for reference
+comparisons; the slower or distorted experimental Metal UMAP optimizers were
+removed to keep results reproducible and the user API simple.
 
 Native openTSNE Metal is conditional: it is available only when the package is
 compiled with the `knn_tsne_opentsne_metal_cpp` symbol. In that build,

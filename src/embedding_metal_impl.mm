@@ -39,12 +39,7 @@ struct MetalEmbeddingState {
   id<MTLDevice> device;
   id<MTLLibrary> library;
   id<MTLComputePipelineState> embed_pipeline;
-  id<MTLComputePipelineState> embed_scheduled_pipeline;
-  id<MTLComputePipelineState> embed_torchdr_pipeline;
-  id<MTLComputePipelineState> embed_atomic_delta_pipeline;
   id<MTLComputePipelineState> embed_atomic_inplace_pipeline;
-  id<MTLComputePipelineState> clear_atomic_delta_pipeline;
-  id<MTLComputePipelineState> apply_atomic_delta_pipeline;
   id<MTLComputePipelineState> standardize_stats_pipeline;
   id<MTLComputePipelineState> standardize_apply_pipeline;
   id<MTLComputePipelineState> project_pipeline;
@@ -198,12 +193,7 @@ id<MTLComputePipelineState> make_pipeline(MetalEmbeddingState& state,
 MetalEmbeddingState& metal_embedding_state() {
   static MetalEmbeddingState state{};
   if (state.device != nil && state.embed_pipeline != nil &&
-      state.embed_scheduled_pipeline != nil &&
-      state.embed_torchdr_pipeline != nil &&
-      state.embed_atomic_delta_pipeline != nil &&
       state.embed_atomic_inplace_pipeline != nil &&
-      state.clear_atomic_delta_pipeline != nil &&
-      state.apply_atomic_delta_pipeline != nil &&
       state.opentsne_sum_q_pipeline != nil &&
       state.opentsne_epoch_pipeline != nil &&
       state.opentsne_center_pipeline != nil &&
@@ -235,12 +225,7 @@ MetalEmbeddingState& metal_embedding_state() {
   }
 
   state.embed_pipeline = make_pipeline(state, "embed_epoch");
-  state.embed_scheduled_pipeline = make_pipeline(state, "embed_epoch_scheduled");
-  state.embed_torchdr_pipeline = make_pipeline(state, "embed_epoch_torchdr_row_negatives");
-  state.embed_atomic_delta_pipeline = make_pipeline(state, "embed_epoch_atomic_delta");
   state.embed_atomic_inplace_pipeline = make_pipeline(state, "embed_epoch_atomic_inplace");
-  state.clear_atomic_delta_pipeline = make_pipeline(state, "clear_atomic_delta");
-  state.apply_atomic_delta_pipeline = make_pipeline(state, "apply_atomic_delta");
   state.standardize_stats_pipeline = make_pipeline(state, "standardize_stats");
   state.standardize_apply_pipeline = make_pipeline(state, "standardize_apply");
   state.project_pipeline = make_pipeline(state, "project_membership");
@@ -1073,194 +1058,9 @@ kernel void embed_epoch(
   next[gid] = yi + alpha * delta;
 }
 
-kernel void embed_epoch_scheduled(
-  device const float2* current [[buffer(0)]],
-  device float2* next [[buffer(1)]],
-  device const int* neighbors [[buffer(2)]],
-  device const float* weights [[buffer(3)]],
-  device const float* epochs_per_sample [[buffer(4)]],
-  constant EmbedParams& p [[buffer(5)]],
-  constant uint& epoch [[buffer(6)]],
-  uint gid [[thread_position_in_grid]]
-) {
-  if (gid >= p.n) return;
-
-  float2 yi = current[gid];
-  float2 delta = float2(0.0f, 0.0f);
-
-  for (uint e = 0; e < p.k; ++e) {
-    uint pos = gid * p.k + e;
-    int nb = neighbors[pos];
-    if (nb < 0 || uint(nb) >= p.n || uint(nb) == gid) continue;
-    float w = weights[pos];
-    float period = epochs_per_sample[pos];
-    int positive_samples = positive_samples_this_epoch_period(period, p, epoch);
-    if (positive_samples <= 0) continue;
-    float2 diff = yi - current[uint(nb)];
-    float d2 = dot(diff, diff);
-
-    if (p.objective == 3u) {
-      uint samples = max(1u, p.negative_sample_rate);
-      float triplet_w = w / float(samples);
-      float pos_d2 = d2 + 1.0e-4f;
-      for (uint s = 0; s < samples; ++s) {
-        uint neg = deterministic_vertex(p.n, p.seed, epoch, gid, e, s);
-        if (neg == gid || neg == uint(nb)) continue;
-        float2 ndiff = yi - current[neg];
-        float neg_d2 = dot(ndiff, ndiff) + 1.0e-4f;
-        float denom = pos_d2 + neg_d2 + 1.0e-6f;
-        float scale = triplet_w / (denom * denom);
-        float pos_coeff = -2.0f * scale * neg_d2;
-        float neg_coeff =  2.0f * scale * pos_d2;
-        delta += float2(
-          clip4(pos_coeff * diff.x) + clip4(neg_coeff * ndiff.x),
-          clip4(pos_coeff * diff.y) + clip4(neg_coeff * ndiff.y)
-        );
-      }
-      continue;
-    }
-
-    float coeff = attractive_coeff(d2, w, p);
-    delta += float2(clip4(coeff * diff.x), clip4(coeff * diff.y));
-
-    uint neg_samples = uint(negative_samples_this_epoch_period(period, p, epoch));
-    for (uint s = 0; s < neg_samples; ++s) {
-      uint neg = deterministic_vertex(p.n, p.seed, epoch, gid, e, s);
-      if (neg == gid || neg == uint(nb)) continue;
-      float2 ndiff = yi - current[neg];
-      float nd2 = dot(ndiff, ndiff);
-      float rcoeff = repulsive_coeff(nd2, p);
-      delta += float2(clip4(rcoeff * ndiff.x), clip4(rcoeff * ndiff.y));
-    }
-  }
-
-  float alpha = p.learning_rate * (1.0f - float(epoch) / max(1.0f, float(p.n_epochs)));
-  next[gid] = yi + alpha * delta;
-}
-
-// TorchDR-style experimental variant: keep attractive edge scheduling, but
-// draw negatives per row from the active attractive-neighbour count.
-kernel void embed_epoch_torchdr_row_negatives(
-  device const float2* current [[buffer(0)]],
-  device float2* next [[buffer(1)]],
-  device const int* neighbors [[buffer(2)]],
-  device const float* weights [[buffer(3)]],
-  device const float* epochs_per_sample [[buffer(4)]],
-  constant EmbedParams& p [[buffer(5)]],
-  constant uint& epoch [[buffer(6)]],
-  uint gid [[thread_position_in_grid]]
-) {
-  if (gid >= p.n) return;
-
-  float2 yi = current[gid];
-  float2 delta = float2(0.0f, 0.0f);
-  uint active_positive_edges = 0u;
-
-  for (uint e = 0; e < p.k; ++e) {
-    uint pos = gid * p.k + e;
-    int nb = neighbors[pos];
-    if (nb < 0 || uint(nb) >= p.n || uint(nb) == gid) continue;
-    float period = epochs_per_sample[pos];
-    int positive_samples = positive_samples_this_epoch_period(period, p, epoch);
-    if (positive_samples <= 0) continue;
-
-    ++active_positive_edges;
-    float w = weights[pos];
-    float2 diff = yi - current[uint(nb)];
-    float d2 = dot(diff, diff);
-    float coeff = attractive_coeff(d2, w, p);
-    delta += float2(clip4(coeff * diff.x), clip4(coeff * diff.y));
-  }
-
-  uint neg_samples = active_positive_edges * p.negative_sample_rate;
-  for (uint s = 0u; s < neg_samples; ++s) {
-    uint neg = deterministic_vertex(p.n, p.seed, epoch, gid, s, 0u);
-    if (neg == gid) continue;
-    float2 ndiff = yi - current[neg];
-    float nd2 = dot(ndiff, ndiff);
-    float rcoeff = repulsive_coeff(nd2, p);
-    delta += float2(clip4(rcoeff * ndiff.x), clip4(rcoeff * ndiff.y));
-  }
-
-  float alpha = p.learning_rate * (1.0f - float(epoch) / max(1.0f, float(p.n_epochs)));
-  next[gid] = yi + alpha * delta;
-}
-
 int fixed_delta(float value) {
   constexpr float scale = 65536.0f;
   return int(clamp(value * scale, -2140000000.0f, 2140000000.0f));
-}
-
-kernel void clear_atomic_delta(
-  device atomic_int* delta [[buffer(0)]],
-  constant uint& count [[buffer(1)]],
-  uint gid [[thread_position_in_grid]]
-) {
-  if (gid >= count) return;
-  atomic_store_explicit(&delta[gid], 0, memory_order_relaxed);
-}
-
-kernel void embed_epoch_atomic_delta(
-  device const float2* current [[buffer(0)]],
-  device atomic_int* delta [[buffer(1)]],
-  device const int* neighbors [[buffer(2)]],
-  device const float* weights [[buffer(3)]],
-  device const float* epochs_per_sample [[buffer(4)]],
-  constant EmbedParams& p [[buffer(5)]],
-  constant uint& epoch [[buffer(6)]],
-  uint gid [[thread_position_in_grid]]
-) {
-  if (gid >= p.n) return;
-
-  float2 yi = current[gid];
-  float alpha = p.learning_rate * (1.0f - float(epoch) / max(1.0f, float(p.n_epochs)));
-
-  for (uint e = 0; e < p.k; ++e) {
-    uint pos = gid * p.k + e;
-    int nb_i = neighbors[pos];
-    if (nb_i < 0 || uint(nb_i) >= p.n || uint(nb_i) == gid) continue;
-    float period = epochs_per_sample[pos];
-    int positive_samples = positive_samples_this_epoch_period(period, p, epoch);
-    if (positive_samples <= 0) continue;
-
-    uint nb = uint(nb_i);
-    float w = weights[pos];
-    float2 diff = yi - current[nb];
-    float d2 = dot(diff, diff);
-    float coeff = attractive_coeff(d2, w, p);
-    float2 attractive = alpha * float2(clip4(coeff * diff.x), clip4(coeff * diff.y));
-
-    atomic_fetch_add_explicit(&delta[gid * 2u], fixed_delta(attractive.x), memory_order_relaxed);
-    atomic_fetch_add_explicit(&delta[gid * 2u + 1u], fixed_delta(attractive.y), memory_order_relaxed);
-    atomic_fetch_add_explicit(&delta[nb * 2u], fixed_delta(-attractive.x), memory_order_relaxed);
-    atomic_fetch_add_explicit(&delta[nb * 2u + 1u], fixed_delta(-attractive.y), memory_order_relaxed);
-
-    uint neg_samples = uint(negative_samples_this_epoch_period(period, p, epoch));
-    for (uint s = 0; s < neg_samples; ++s) {
-      uint neg = deterministic_vertex(p.n, p.seed, epoch, gid, e, s);
-      if (neg == gid || neg == nb) continue;
-      float2 ndiff = yi - current[neg];
-      float nd2 = dot(ndiff, ndiff);
-      float rcoeff = repulsive_coeff(nd2, p);
-      float2 repulsive = alpha * float2(clip4(rcoeff * ndiff.x), clip4(rcoeff * ndiff.y));
-      atomic_fetch_add_explicit(&delta[gid * 2u], fixed_delta(repulsive.x), memory_order_relaxed);
-      atomic_fetch_add_explicit(&delta[gid * 2u + 1u], fixed_delta(repulsive.y), memory_order_relaxed);
-    }
-  }
-}
-
-kernel void apply_atomic_delta(
-  device const float2* current [[buffer(0)]],
-  device float2* next [[buffer(1)]],
-  device atomic_int* delta [[buffer(2)]],
-  constant uint& n [[buffer(3)]],
-  uint gid [[thread_position_in_grid]]
-) {
-  if (gid >= n) return;
-  constexpr float inv_scale = 1.0f / 65536.0f;
-  int dx = atomic_load_explicit(&delta[gid * 2u], memory_order_relaxed);
-  int dy = atomic_load_explicit(&delta[gid * 2u + 1u], memory_order_relaxed);
-  next[gid] = current[gid] + float2(float(dx) * inv_scale, float(dy) * inv_scale);
 }
 
 kernel void embed_epoch_atomic_inplace(
@@ -3160,25 +2960,6 @@ std::vector<float> initialize_tsne_transform_metal(const NumericMatrix& referenc
   return out;
 }
 
-std::string metal_umap_optimizer_mode() {
-  const char* value = std::getenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER");
-  if (value == nullptr) return "atomic_inplace";
-  std::string mode(value);
-  std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
-  if (mode == "torchdr" || mode == "row" || mode == "row_negatives") {
-    return "torchdr_row_negatives";
-  }
-  if (mode == "atomic_inplace" || mode == "inplace" || mode == "uwot" || mode == "edge_atomic") {
-    return "atomic_inplace";
-  }
-  if (mode == "atomic" || mode == "atomic_delta" || mode == "endpoint") {
-    return "atomic_delta";
-  }
-  return "atomic_inplace";
-}
-
 } // namespace
 
 NumericMatrix spectral_knn_init_metal_impl(IntegerMatrix indices,
@@ -4741,7 +4522,6 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
 
     const int k = static_cast<int>(neighbors.size() / static_cast<std::size_t>(n));
     std::vector<float> current = init_to_float_2d(init);
-    std::vector<float> next(current.size());
     const auto ab = find_ab_params(1.0, min_dist);
     std::vector<float> epochs_per_sample(weights.size(), 0.0f);
     for (std::size_t i = 0; i < weights.size(); ++i) {
@@ -4762,11 +4542,16 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
       max_weight
     };
 
-    id<MTLBuffer> current_buffer = [state.device newBufferWithBytes:current.data()
-                                                             length:current.size() * sizeof(float)
-                                                            options:MTLResourceStorageModeShared];
-    id<MTLBuffer> next_buffer = [state.device newBufferWithLength:next.size() * sizeof(float)
-                                                          options:MTLResourceStorageModeShared];
+    std::vector<std::int32_t> fixed_layout(current.size());
+    constexpr float fixed_scale = 65536.0f;
+    for (std::size_t i = 0; i < current.size(); ++i) {
+      const float value = std::max(-2140000000.0f, std::min(2140000000.0f, current[i] * fixed_scale));
+      fixed_layout[i] = static_cast<std::int32_t>(value);
+    }
+
+    id<MTLBuffer> fixed_layout_buffer = [state.device newBufferWithBytes:fixed_layout.data()
+                                                                  length:fixed_layout.size() * sizeof(std::int32_t)
+                                                                 options:MTLResourceStorageModeShared];
     id<MTLBuffer> neighbors_buffer = [state.device newBufferWithBytes:neighbors.data()
                                                                length:neighbors.size() * sizeof(std::int32_t)
                                                               options:MTLResourceStorageModeShared];
@@ -4779,159 +4564,48 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
     id<MTLBuffer> params_buffer = [state.device newBufferWithBytes:&params
                                                             length:sizeof(EmbedParams)
                                                            options:MTLResourceStorageModeShared];
-    if (current_buffer == nil || next_buffer == nil || neighbors_buffer == nil ||
+    if (fixed_layout_buffer == nil || neighbors_buffer == nil ||
         weights_buffer == nil || epochs_buffer == nil || params_buffer == nil) {
       Rcpp::stop("Failed to allocate Metal CSR embedding buffers.");
     }
 
-    const std::string metal_optimizer = metal_umap_optimizer_mode();
-    id<MTLComputePipelineState> embed_pipeline =
-      metal_optimizer == "atomic_delta" ?
-        state.embed_atomic_delta_pipeline :
-        (metal_optimizer == "torchdr_row_negatives" ?
-          state.embed_torchdr_pipeline :
-          state.embed_scheduled_pipeline);
+    const char* metal_optimizer = "atomic_inplace";
     const MTLSize grid_size = MTLSizeMake(static_cast<NSUInteger>(n), 1, 1);
     const std::uint32_t epochs_per_command = kMetalEmbeddingEpochsPerCommand;
 
-    id<MTLBuffer> delta_buffer = nil;
-    id<MTLBuffer> fixed_layout_buffer = nil;
-    if (metal_optimizer == "atomic_inplace") {
-      std::vector<std::int32_t> fixed_layout(current.size());
-      constexpr float fixed_scale = 65536.0f;
-      for (std::size_t i = 0; i < current.size(); ++i) {
-        const float value = std::max(-2140000000.0f, std::min(2140000000.0f, current[i] * fixed_scale));
-        fixed_layout[i] = static_cast<std::int32_t>(value);
+    const NSUInteger embed_threads = bounded_threads(state.embed_atomic_inplace_pipeline);
+    const MTLSize embed_threadgroup_size = MTLSizeMake(embed_threads, 1, 1);
+    for (std::uint32_t epoch0 = 0; epoch0 < static_cast<std::uint32_t>(n_epochs); epoch0 += epochs_per_command) {
+      id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+      const std::uint32_t epoch_end = std::min<std::uint32_t>(
+        static_cast<std::uint32_t>(n_epochs),
+        epoch0 + epochs_per_command
+      );
+      for (std::uint32_t epoch = epoch0; epoch < epoch_end; ++epoch) {
+        id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+        [encoder setComputePipelineState:state.embed_atomic_inplace_pipeline];
+        [encoder setBuffer:fixed_layout_buffer offset:0 atIndex:0];
+        [encoder setBuffer:neighbors_buffer offset:0 atIndex:1];
+        [encoder setBuffer:weights_buffer offset:0 atIndex:2];
+        [encoder setBuffer:epochs_buffer offset:0 atIndex:3];
+        [encoder setBuffer:params_buffer offset:0 atIndex:4];
+        [encoder setBytes:&epoch length:sizeof(std::uint32_t) atIndex:5];
+        [encoder dispatchThreads:grid_size threadsPerThreadgroup:embed_threadgroup_size];
+        [encoder endEncoding];
       }
-      fixed_layout_buffer = [state.device newBufferWithBytes:fixed_layout.data()
-                                                       length:fixed_layout.size() * sizeof(std::int32_t)
-                                                      options:MTLResourceStorageModeShared];
-      if (fixed_layout_buffer == nil) Rcpp::stop("Failed to allocate Metal atomic in-place layout buffer.");
-
-      const NSUInteger embed_threads = bounded_threads(state.embed_atomic_inplace_pipeline);
-      const MTLSize embed_threadgroup_size = MTLSizeMake(embed_threads, 1, 1);
-      for (std::uint32_t epoch0 = 0; epoch0 < static_cast<std::uint32_t>(n_epochs); epoch0 += epochs_per_command) {
-        id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
-        const std::uint32_t epoch_end = std::min<std::uint32_t>(
-          static_cast<std::uint32_t>(n_epochs),
-          epoch0 + epochs_per_command
-        );
-        for (std::uint32_t epoch = epoch0; epoch < epoch_end; ++epoch) {
-          id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
-          [encoder setComputePipelineState:state.embed_atomic_inplace_pipeline];
-          [encoder setBuffer:fixed_layout_buffer offset:0 atIndex:0];
-          [encoder setBuffer:neighbors_buffer offset:0 atIndex:1];
-          [encoder setBuffer:weights_buffer offset:0 atIndex:2];
-          [encoder setBuffer:epochs_buffer offset:0 atIndex:3];
-          [encoder setBuffer:params_buffer offset:0 atIndex:4];
-          [encoder setBytes:&epoch length:sizeof(std::uint32_t) atIndex:5];
-          [encoder dispatchThreads:grid_size threadsPerThreadgroup:embed_threadgroup_size];
-          [encoder endEncoding];
-        }
-        [command_buffer commit];
-        [command_buffer waitUntilCompleted];
-        if (command_buffer.status == MTLCommandBufferStatusError) {
-          Rcpp::stop("Metal CSR atomic in-place embedding command failed: %s", ns_error_message(command_buffer.error).c_str());
-        }
-      }
-
-      std::memcpy(fixed_layout.data(), [fixed_layout_buffer contents], fixed_layout.size() * sizeof(std::int32_t));
-      constexpr float inv_fixed_scale = 1.0f / 65536.0f;
-      for (std::size_t i = 0; i < current.size(); ++i) {
-        current[i] = static_cast<float>(fixed_layout[i]) * inv_fixed_scale;
-      }
-    } else if (metal_optimizer == "atomic_delta") {
-      const std::uint32_t delta_count = static_cast<std::uint32_t>(n * 2);
-      delta_buffer = [state.device newBufferWithLength:static_cast<std::size_t>(delta_count) * sizeof(int)
-                                               options:MTLResourceStorageModeShared];
-      if (delta_buffer == nil) Rcpp::stop("Failed to allocate Metal atomic delta buffer.");
-
-      const NSUInteger clear_threads = bounded_threads(state.clear_atomic_delta_pipeline);
-      const NSUInteger embed_threads = bounded_threads(state.embed_atomic_delta_pipeline);
-      const NSUInteger apply_threads = bounded_threads(state.apply_atomic_delta_pipeline);
-      const MTLSize clear_grid_size = MTLSizeMake(static_cast<NSUInteger>(delta_count), 1, 1);
-      const MTLSize clear_threadgroup_size = MTLSizeMake(clear_threads, 1, 1);
-      const MTLSize embed_threadgroup_size = MTLSizeMake(embed_threads, 1, 1);
-      const MTLSize apply_threadgroup_size = MTLSizeMake(apply_threads, 1, 1);
-      const std::uint32_t n_u = static_cast<std::uint32_t>(n);
-
-      for (std::uint32_t epoch0 = 0; epoch0 < static_cast<std::uint32_t>(n_epochs); epoch0 += epochs_per_command) {
-        id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
-        const std::uint32_t epoch_end = std::min<std::uint32_t>(
-          static_cast<std::uint32_t>(n_epochs),
-          epoch0 + epochs_per_command
-        );
-        for (std::uint32_t epoch = epoch0; epoch < epoch_end; ++epoch) {
-          id<MTLComputeCommandEncoder> clear_encoder = [command_buffer computeCommandEncoder];
-          [clear_encoder setComputePipelineState:state.clear_atomic_delta_pipeline];
-          [clear_encoder setBuffer:delta_buffer offset:0 atIndex:0];
-          [clear_encoder setBytes:&delta_count length:sizeof(std::uint32_t) atIndex:1];
-          [clear_encoder dispatchThreads:clear_grid_size threadsPerThreadgroup:clear_threadgroup_size];
-          [clear_encoder endEncoding];
-
-          id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
-          [encoder setComputePipelineState:state.embed_atomic_delta_pipeline];
-          [encoder setBuffer:current_buffer offset:0 atIndex:0];
-          [encoder setBuffer:delta_buffer offset:0 atIndex:1];
-          [encoder setBuffer:neighbors_buffer offset:0 atIndex:2];
-          [encoder setBuffer:weights_buffer offset:0 atIndex:3];
-          [encoder setBuffer:epochs_buffer offset:0 atIndex:4];
-          [encoder setBuffer:params_buffer offset:0 atIndex:5];
-          [encoder setBytes:&epoch length:sizeof(std::uint32_t) atIndex:6];
-          [encoder dispatchThreads:grid_size threadsPerThreadgroup:embed_threadgroup_size];
-          [encoder endEncoding];
-
-          id<MTLComputeCommandEncoder> apply_encoder = [command_buffer computeCommandEncoder];
-          [apply_encoder setComputePipelineState:state.apply_atomic_delta_pipeline];
-          [apply_encoder setBuffer:current_buffer offset:0 atIndex:0];
-          [apply_encoder setBuffer:next_buffer offset:0 atIndex:1];
-          [apply_encoder setBuffer:delta_buffer offset:0 atIndex:2];
-          [apply_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:3];
-          [apply_encoder dispatchThreads:grid_size threadsPerThreadgroup:apply_threadgroup_size];
-          [apply_encoder endEncoding];
-
-          std::swap(current_buffer, next_buffer);
-        }
-        [command_buffer commit];
-        [command_buffer waitUntilCompleted];
-        if (command_buffer.status == MTLCommandBufferStatusError) {
-          Rcpp::stop("Metal CSR atomic embedding command failed: %s", ns_error_message(command_buffer.error).c_str());
-        }
-      }
-    } else {
-      const NSUInteger threads_per_group = bounded_threads(embed_pipeline);
-      const MTLSize threadgroup_size = MTLSizeMake(threads_per_group, 1, 1);
-      for (std::uint32_t epoch0 = 0; epoch0 < static_cast<std::uint32_t>(n_epochs); epoch0 += epochs_per_command) {
-        id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
-        const std::uint32_t epoch_end = std::min<std::uint32_t>(
-          static_cast<std::uint32_t>(n_epochs),
-          epoch0 + epochs_per_command
-        );
-        for (std::uint32_t epoch = epoch0; epoch < epoch_end; ++epoch) {
-          id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
-          [encoder setComputePipelineState:embed_pipeline];
-          [encoder setBuffer:current_buffer offset:0 atIndex:0];
-          [encoder setBuffer:next_buffer offset:0 atIndex:1];
-          [encoder setBuffer:neighbors_buffer offset:0 atIndex:2];
-          [encoder setBuffer:weights_buffer offset:0 atIndex:3];
-          [encoder setBuffer:epochs_buffer offset:0 atIndex:4];
-          [encoder setBuffer:params_buffer offset:0 atIndex:5];
-          [encoder setBytes:&epoch length:sizeof(std::uint32_t) atIndex:6];
-          [encoder dispatchThreads:grid_size threadsPerThreadgroup:threadgroup_size];
-          [encoder endEncoding];
-          std::swap(current_buffer, next_buffer);
-        }
-        [command_buffer commit];
-        [command_buffer waitUntilCompleted];
-        if (command_buffer.status == MTLCommandBufferStatusError) {
-          Rcpp::stop("Metal CSR embedding command failed: %s", ns_error_message(command_buffer.error).c_str());
-        }
+      [command_buffer commit];
+      [command_buffer waitUntilCompleted];
+      if (command_buffer.status == MTLCommandBufferStatusError) {
+        Rcpp::stop("Metal CSR atomic in-place embedding command failed: %s", ns_error_message(command_buffer.error).c_str());
       }
     }
 
-    if (metal_optimizer != "atomic_inplace") {
-      std::memcpy(current.data(), [current_buffer contents], current.size() * sizeof(float));
+    std::memcpy(fixed_layout.data(), [fixed_layout_buffer contents], fixed_layout.size() * sizeof(std::int32_t));
+    constexpr float inv_fixed_scale = 1.0f / 65536.0f;
+    for (std::size_t i = 0; i < current.size(); ++i) {
+      current[i] = static_cast<float>(fixed_layout[i]) * inv_fixed_scale;
     }
+
     NumericMatrix out(n, 2);
     for (int i = 0; i < n; ++i) {
       out(i, 0) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u]);
@@ -4942,14 +4616,11 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
     out.attr("metal_graph_input") = "cpu_csr_fuzzy_graph";
     out.attr("metal_csr_width") = k;
     out.attr("metal_truncated_edges") = truncated_edges;
-    [current_buffer release];
-    [next_buffer release];
+    [fixed_layout_buffer release];
     [neighbors_buffer release];
     [weights_buffer release];
     [epochs_buffer release];
     [params_buffer release];
-    if (delta_buffer != nil) [delta_buffer release];
-    if (fixed_layout_buffer != nil) [fixed_layout_buffer release];
     return out;
   }
 }
@@ -4982,6 +4653,9 @@ NumericMatrix knn_embed_metal_impl(IntegerMatrix indices,
 
     const int n = indices.nrow();
     const std::uint32_t objective_code = objective_id(objective);
+    if (objective_code == kObjectiveUmap) {
+      Rcpp::stop("Internal Metal UMAP uses the CSR atomic-inplace path; call knn_embed_metal_csr_cpp.");
+    }
     std::vector<std::int32_t> neighbors;
     std::vector<float> weights;
     prepare_embedding_neighbors(indices, distances, objective_code, n_epochs, neighbors, weights);
@@ -4991,7 +4665,7 @@ NumericMatrix knn_embed_metal_impl(IntegerMatrix indices,
     const auto ab = find_ab_params(1.0, min_dist);
     const float max_weight = weights.empty() ? 1.0f :
       std::max(*std::max_element(weights.begin(), weights.end()), 1.0e-6f);
-    const bool use_precomputed_schedule = objective_code == kObjectiveUmap;
+    const bool use_precomputed_schedule = false;
     std::vector<float> epochs_per_sample;
     if (use_precomputed_schedule) {
       epochs_per_sample.resize(weights.size(), 0.0f);
@@ -5040,12 +4714,7 @@ NumericMatrix knn_embed_metal_impl(IntegerMatrix indices,
       Rcpp::stop("Failed to allocate Metal embedding buffers.");
     }
 
-    const std::string metal_optimizer =
-      use_precomputed_schedule ? metal_umap_optimizer_mode() : "scheduled";
-    id<MTLComputePipelineState> embed_pipeline =
-      use_precomputed_schedule && metal_optimizer == "torchdr_row_negatives" ?
-        state.embed_torchdr_pipeline :
-        (use_precomputed_schedule ? state.embed_scheduled_pipeline : state.embed_pipeline);
+    id<MTLComputePipelineState> embed_pipeline = state.embed_pipeline;
     const NSUInteger threads_per_group = bounded_threads(embed_pipeline);
     const MTLSize grid_size = MTLSizeMake(static_cast<NSUInteger>(n), 1, 1);
     const MTLSize threadgroup_size = MTLSizeMake(threads_per_group, 1, 1);
@@ -5091,7 +4760,6 @@ NumericMatrix knn_embed_metal_impl(IntegerMatrix indices,
     }
     if (use_precomputed_schedule) {
       out.attr("metal_epoch_schedule") = "precomputed_epochs_per_sample";
-      out.attr("metal_optimizer") = metal_optimizer;
     }
     [current_buffer release];
     [next_buffer release];

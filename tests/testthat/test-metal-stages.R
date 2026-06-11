@@ -18,65 +18,28 @@ test_that("Metal public paths stay native and do not depend on Python bridges", 
   expect_false(grepl("reticulate|py_|python|torch|mlx", paste(nn_body, prepare_body, transform_body, opentsne_body), ignore.case = TRUE))
 })
 
-test_that("Metal UMAP keeps scheduled as default while retaining diagnostic modes", {
-  old_option <- getOption("fastEmbedR.metal_optimizer", NULL)
-  old_env <- Sys.getenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER", unset = NA_character_)
-  on.exit({
-    if (is.null(old_option)) {
-      options(fastEmbedR.metal_optimizer = NULL)
-    } else {
-      options(fastEmbedR.metal_optimizer = old_option)
-    }
-    if (is.na(old_env)) {
-      Sys.unsetenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER")
-    } else {
-      Sys.setenv(FASTEMBEDR_METAL_UMAP_OPTIMIZER = old_env)
-    }
-  }, add = TRUE)
-
-  options(fastEmbedR.metal_optimizer = NULL)
-  Sys.unsetenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER")
-  expect_equal(fastEmbedR:::fast_knn_umap_metal_optimizer_mode(), "scheduled")
-
-  options(fastEmbedR.metal_optimizer = "atomic")
-  expect_equal(fastEmbedR:::fast_knn_umap_metal_optimizer_mode(), "atomic_delta")
-
-  options(fastEmbedR.metal_optimizer = "torchdr")
-  expect_equal(fastEmbedR:::fast_knn_umap_metal_optimizer_mode(), "torchdr_row_negatives")
+test_that("Metal UMAP exposes only the validated atomic-inplace optimizer", {
+  expect_equal(fastEmbedR:::fast_knn_umap_metal_optimizer_mode(), "atomic_inplace")
 })
 
-test_that("Metal UMAP auto policy keeps the visually validated scheduled path", {
-  old_option <- getOption("fastEmbedR.metal_optimizer", NULL)
+test_that("Metal UMAP auto policy keeps the visually validated atomic-inplace path", {
   old_hybrid <- getOption("fastEmbedR.gpu_hybrid_refine", NULL)
-  old_env <- Sys.getenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER", unset = NA_character_)
   on.exit({
-    if (is.null(old_option)) {
-      options(fastEmbedR.metal_optimizer = NULL)
-    } else {
-      options(fastEmbedR.metal_optimizer = old_option)
-    }
     if (is.null(old_hybrid)) {
       options(fastEmbedR.gpu_hybrid_refine = NULL)
     } else {
       options(fastEmbedR.gpu_hybrid_refine = old_hybrid)
     }
-    if (is.na(old_env)) {
-      Sys.unsetenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER")
-    } else {
-      Sys.setenv(FASTEMBEDR_METAL_UMAP_OPTIMIZER = old_env)
-    }
   }, add = TRUE)
 
-  options(fastEmbedR.metal_optimizer = NULL)
   options(fastEmbedR.gpu_hybrid_refine = "auto")
-  Sys.unsetenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER")
 
   cfg <- fastEmbedR:::fast_knn_umap_config(
     n = 70000L,
     k = 50L,
     backend = "metal"
   )
-  expect_equal(fastEmbedR:::fast_knn_umap_metal_optimizer_mode(), "scheduled")
+  expect_equal(fastEmbedR:::fast_knn_umap_metal_optimizer_mode(), "atomic_inplace")
   expect_false(fastEmbedR:::fast_knn_umap_gpu_hybrid_auto_selected(cfg))
   expect_equal(fastEmbedR:::fast_knn_umap_gpu_hybrid_plan(cfg)$reason, "auto_policy_keeps_pure_gpu")
 })
