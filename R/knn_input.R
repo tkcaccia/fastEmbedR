@@ -26,14 +26,11 @@ coerce_knn_input <- function(indices,
   if (nrow(indices) < 2L || ncol(indices) < 1L) {
     stop("KNN input must have at least two rows and one neighbor column.", call. = FALSE)
   }
-  if (any(!is.finite(distances)) || any(distances < 0)) {
-    stop("KNN `distances` must be finite and non-negative.", call. = FALSE)
-  }
 
-  stripped <- strip_self_neighbors(indices, distances)
+  stripped <- strip_self_neighbors_cpp(indices, distances)
   indices <- stripped$indices
   distances <- stripped$distances
-  has_self <- stripped$has_self
+  has_self <- isTRUE(stripped$has_self)
   col_start <- stripped$col_start
   n_neighbors <- stripped$n_neighbors
   if (n_neighbors < 1L) {
@@ -169,52 +166,4 @@ finish_nn_result <- function(out,
   attr(out, "exact") <- isTRUE(exact)
   class(out) <- c("fastEmbedR_nn", "list")
   out
-}
-
-run_native_knn_optimizer <- function(backend,
-                                     indices,
-                                     distances,
-                                     init,
-                                     objective,
-                                     n_epochs,
-                                     negative_sample_rate,
-                                     learning_rate,
-                                     min_dist,
-                                     seed) {
-  if (!backend %in% c("cuda", "metal")) {
-    return(NULL)
-  }
-  if (ncol(init) != 2L) {
-    stop("Native GPU embedding backends currently support only `n_components = 2`.", call. = FALSE)
-  }
-  if (identical(backend, "cuda")) {
-    if (!embedding_cuda_available_cpp()) {
-      stop("CUDA embedding backend is not available on this system.", call. = FALSE)
-    }
-    return(knn_embed_cuda_cpp(
-      indices,
-      distances,
-      init,
-      objective,
-      as.integer(n_epochs),
-      as.integer(negative_sample_rate),
-      learning_rate,
-      min_dist,
-      as.integer(seed)
-    ))
-  }
-  if (!embedding_metal_available_cpp()) {
-    stop("Metal embedding backend is not available on this system.", call. = FALSE)
-  }
-  knn_embed_metal_cpp(
-    indices,
-    distances,
-    init,
-    objective,
-    as.integer(n_epochs),
-    as.integer(negative_sample_rate),
-    learning_rate,
-    min_dist,
-    as.integer(seed)
-  )
 }

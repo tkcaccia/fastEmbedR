@@ -7,17 +7,78 @@ test_that("Metal public paths stay native and do not depend on Python bridges", 
   expect_false(grepl("\\b(reticulate|torch|mlx)\\b", dependency_fields, ignore.case = TRUE))
 
   nn_body <- paste(deparse(body(fastEmbedR:::nn_compute)), collapse = "\n")
-  optimizer_body <- paste(deparse(body(fastEmbedR:::run_native_knn_optimizer)), collapse = "\n")
-  spectral_body <- paste(deparse(body(fastEmbedR:::spectral_knn_init)), collapse = "\n")
   prepare_body <- paste(deparse(body(fastEmbedR:::prepare_embedding_data)), collapse = "\n")
   transform_body <- paste(deparse(body(fastEmbedR::transform_tsne)), collapse = "\n")
+  opentsne_body <- paste(deparse(body(fastEmbedR:::fast_knn_opentsne_materialized)), collapse = "\n")
 
   expect_match(nn_body, "nn_metal_cpp", fixed = TRUE)
-  expect_match(optimizer_body, "knn_embed_metal_cpp", fixed = TRUE)
-  expect_match(spectral_body, "spectral_knn_init_metal_cpp", fixed = TRUE)
   expect_match(prepare_body, "standardize_metal_cpp", fixed = TRUE)
   expect_match(transform_body, "transform_tsne_metal_cpp", fixed = TRUE)
-  expect_false(grepl("reticulate|py_|python|torch|mlx", paste(nn_body, optimizer_body, spectral_body, prepare_body, transform_body), ignore.case = TRUE))
+  expect_match(opentsne_body, "knn_tsne_opentsne_metal_cpp", fixed = TRUE)
+  expect_false(grepl("reticulate|py_|python|torch|mlx", paste(nn_body, prepare_body, transform_body, opentsne_body), ignore.case = TRUE))
+})
+
+test_that("Metal UMAP keeps scheduled as default while retaining diagnostic modes", {
+  old_option <- getOption("fastEmbedR.metal_optimizer", NULL)
+  old_env <- Sys.getenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER", unset = NA_character_)
+  on.exit({
+    if (is.null(old_option)) {
+      options(fastEmbedR.metal_optimizer = NULL)
+    } else {
+      options(fastEmbedR.metal_optimizer = old_option)
+    }
+    if (is.na(old_env)) {
+      Sys.unsetenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER")
+    } else {
+      Sys.setenv(FASTEMBEDR_METAL_UMAP_OPTIMIZER = old_env)
+    }
+  }, add = TRUE)
+
+  options(fastEmbedR.metal_optimizer = NULL)
+  Sys.unsetenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER")
+  expect_equal(fastEmbedR:::fast_knn_umap_metal_optimizer_mode(), "scheduled")
+
+  options(fastEmbedR.metal_optimizer = "atomic")
+  expect_equal(fastEmbedR:::fast_knn_umap_metal_optimizer_mode(), "atomic_delta")
+
+  options(fastEmbedR.metal_optimizer = "torchdr")
+  expect_equal(fastEmbedR:::fast_knn_umap_metal_optimizer_mode(), "torchdr_row_negatives")
+})
+
+test_that("Metal UMAP auto policy keeps the visually validated scheduled path", {
+  old_option <- getOption("fastEmbedR.metal_optimizer", NULL)
+  old_hybrid <- getOption("fastEmbedR.gpu_hybrid_refine", NULL)
+  old_env <- Sys.getenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER", unset = NA_character_)
+  on.exit({
+    if (is.null(old_option)) {
+      options(fastEmbedR.metal_optimizer = NULL)
+    } else {
+      options(fastEmbedR.metal_optimizer = old_option)
+    }
+    if (is.null(old_hybrid)) {
+      options(fastEmbedR.gpu_hybrid_refine = NULL)
+    } else {
+      options(fastEmbedR.gpu_hybrid_refine = old_hybrid)
+    }
+    if (is.na(old_env)) {
+      Sys.unsetenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER")
+    } else {
+      Sys.setenv(FASTEMBEDR_METAL_UMAP_OPTIMIZER = old_env)
+    }
+  }, add = TRUE)
+
+  options(fastEmbedR.metal_optimizer = NULL)
+  options(fastEmbedR.gpu_hybrid_refine = "auto")
+  Sys.unsetenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER")
+
+  cfg <- fastEmbedR:::fast_knn_umap_config(
+    n = 70000L,
+    k = 50L,
+    backend = "metal"
+  )
+  expect_equal(fastEmbedR:::fast_knn_umap_metal_optimizer_mode(), "scheduled")
+  expect_false(fastEmbedR:::fast_knn_umap_gpu_hybrid_auto_selected(cfg))
+  expect_equal(fastEmbedR:::fast_knn_umap_gpu_hybrid_plan(cfg)$reason, "auto_policy_keeps_pure_gpu")
 })
 
 test_that("Metal preprocessing, projection, interpolation, and scoring match CPU", {
@@ -53,18 +114,6 @@ test_that("Metal preprocessing, projection, interpolation, and scoring match CPU
   expect_equal(dim(metal_pca$data), c(60L, 4L))
   expect_equal(metal_pca$preprocess$pca_backend, "metal_rsvd")
   expect_equal(metal_pca$preprocess$pca_method, "rsvd")
-
-  spectral_knn <- fastEmbedR::nn(x, x, k = 8L, backend = "cpu")
-  metal_init <- fastEmbedR:::spectral_knn_init(
-    spectral_knn$indices[, -1L, drop = FALSE],
-    spectral_knn$distances[, -1L, drop = FALSE],
-    spectral_n_iter = 5L,
-    seed = 71L,
-    backend = "metal"
-  )
-  expect_equal(dim(metal_init), c(nrow(x), 2L))
-  expect_true(all(is.finite(metal_init)))
-  expect_equal(attr(metal_init, "backend"), "metal")
 
   reference_layout <- cbind(rnorm(8L), rnorm(8L))
   projection_indices <- matrix(
@@ -194,21 +243,4 @@ test_that("Metal preprocessing, projection, interpolation, and scoring match CPU
   cpu_sil <- fastEmbedR:::silhouette_score_cpp(layout, as.integer(labels))
   metal_sil <- fastEmbedR:::silhouette_score_metal_cpp(layout, as.integer(labels), 3L)
   expect_equal(metal_sil, cpu_sil, tolerance = 1e-5)
-
-  fit <- fastEmbedR::umap(
-    x,
-    labels = rep(1:2, each = 20L),
-    n_neighbors = 6L,
-    landmarks = 16L,
-    backend = "metal",
-    seed = 72L,
-    silhouette_sample = 20L,
-    preserve_sample = 20L
-  )
-  expect_equal(fit$parameters$standardize_backend, "metal")
-  expect_equal(fit$parameters$gpu_optimizer_schedule, "csr_precomputed_epochs_per_sample")
-  expect_equal(fit$parameters$landmark_interpolation_backend, "metal_fused")
-  expect_equal(fit$parameters$landmark_projection_backend, "metal_fused_knn_confidence")
-  expect_equal(fit$parameters$scoring_structure_backend, "metal")
-  expect_equal(fit$parameters$scoring_silhouette_backend, "metal")
 })

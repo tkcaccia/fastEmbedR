@@ -5,47 +5,42 @@ template:
 
 navbar:
   structure:
-    left: [intro, reference, articles, tutorials, news]
+    left: [intro, reference, articles, news]
     right: [github]
 
 home:
   title: fastEmbedR
-  description: Fast KNN-based UMAP, t-SNE-like, and PaCMAP-like embeddings.
+  description: Fast KNN and native openTSNE-style embeddings from precomputed nearest neighbours.
 
 articles:
   - title: Start Here
     navbar: ~
     contents:
       - getting-started
-      - landmarking-and-modes
-      - technical-implementation
-      - function-smoke-tests
 
 reference:
-  - title: One-Call Embeddings
-    desc: Start here when you have a data matrix and want an embedding, metrics, and a plot.
-    contents:
-      - umap
-      - tsne
-      - pacmap
-      - embed
-      - auto_k
-  - title: KNN and KNN-Based Objectives
-    desc: Reuse one nearest-neighbor graph across UMAP, t-SNE-like, and PaCMAP-like objectives.
+  - title: KNN
+    desc: Build nearest-neighbour matrices once and reuse them.
     contents:
       - nn
-      - fast_knn_umap
-      - umap_knn
-      - knn_embed
-      - knn_tsne
-      - knn_pacmap
+  - title: openTSNE Embeddings
+    desc: Native openTSNE-style embedding, transform, and landmark workflows.
+    contents:
+      - opentsne
+      - opentsne_knn
+      - embed_knn
+      - transform_tsne
+      - landmark_tsne
   - title: Quality Metrics
-    desc: Score embeddings by local structure, global structure, labels, batch mixing, and stability fields.
+    desc: Score local preservation, labels, and global structure.
     contents:
       - evaluate_embedding
   - title: Backends and Reproducibility
-    desc: Check native GPU availability and set seeds for reproducible runs.
+    desc: Inspect optional CPU/GPU nearest-neighbour backends explicitly.
     contents:
+      - backend_info
       - metal_available
       - cuda_available
+      - cuvs_available
+      - faiss_available
       - set_seed

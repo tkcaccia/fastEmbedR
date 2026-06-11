@@ -23,6 +23,37 @@ metal_metric_available <- function() {
   isTRUE(embedding_metal_available_cpp())
 }
 
+resolve_metric_backend <- function(backend) {
+  backend <- as.character(backend)[1L]
+  if (length(backend) != 1L || is.na(backend) || !nzchar(backend)) {
+    backend <- "auto"
+  }
+  backend <- tolower(backend)
+  if (backend %in% c("auto", "cpu")) {
+    return(list(backend = "cpu", reason = NA_character_))
+  }
+  if (identical(backend, "gpu")) {
+    selected <- available_native_gpu_backend(need_embedding = TRUE)
+    if (!is.na(selected)) {
+      return(list(backend = selected, reason = NA_character_))
+    }
+    return(list(backend = "cpu", reason = "gpu_metric_backend_unavailable"))
+  }
+  if (identical(backend, "metal")) {
+    if (metal_metric_available()) {
+      return(list(backend = "metal", reason = NA_character_))
+    }
+    return(list(backend = "cpu", reason = "metal_metric_backend_unavailable"))
+  }
+  if (identical(backend, "cuda")) {
+    if (cuda_metric_available()) {
+      return(list(backend = "cuda", reason = NA_character_))
+    }
+    return(list(backend = "cpu", reason = "cuda_metric_backend_unavailable"))
+  }
+  list(backend = "cpu", reason = paste0(backend, "_metric_backend_not_supported"))
+}
+
 structure_score_with_backend <- function(layout,
                                          indices,
                                          keep,

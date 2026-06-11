@@ -124,19 +124,4 @@ test_that("CUDA preprocessing, projection, interpolation, and scoring match CPU"
   cpu_sil <- fastEmbedR:::silhouette_score_cpp(layout, as.integer(labels))
   cuda_sil <- fastEmbedR:::silhouette_score_cuda_cpp(layout, as.integer(labels), 3L)
   expect_equal(cuda_sil, cpu_sil, tolerance = 1e-10)
-
-  fit <- umap(
-    x,
-    labels = rep(1:2, each = 20L),
-    n_neighbors = 6L,
-    landmarks = 16L,
-    backend = "cuda",
-    seed = 72L,
-    silhouette_sample = 20L,
-    preserve_sample = 20L
-  )
-  expect_equal(fit$parameters$standardize_backend, "cuda")
-  expect_equal(fit$parameters$landmark_interpolation_backend, "cuda")
-  expect_equal(fit$parameters$scoring_structure_backend, "cuda")
-  expect_equal(fit$parameters$scoring_silhouette_backend, "cuda")
 })

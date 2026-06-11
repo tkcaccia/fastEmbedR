@@ -839,24 +839,58 @@ extern "C" int fastembedr_cuda_landmark_candidate_knn(const double* data,
   }
 
   if (k <= kFastCudaCandidateK) {
-    const int threads = 128;
-    const std::size_t shared_bytes =
+    int threads = 128;
+    std::size_t shared_bytes =
       static_cast<std::size_t>(threads) * k * (sizeof(float) + sizeof(int)) +
       static_cast<std::size_t>(threads) * sizeof(int);
-    landmark_candidate_knn_cooperative_kernel<<<n, threads, shared_bytes>>>(
-      d_data,
-      d_projection,
-      d_indices,
-      d_distances,
-      n,
-      n_features,
-      k,
-      bucket_cols,
-      query_cols
-    );
-    if (check_cuda(cudaGetLastError(), "landmark_candidate_knn_cooperative_kernel launch")) {
-      cleanup();
-      return 1;
+    std::size_t shared_limit = 48u * 1024u;
+    int device = 0;
+    cudaDeviceProp prop;
+    if (cudaGetDevice(&device) == cudaSuccess &&
+        cudaGetDeviceProperties(&prop, device) == cudaSuccess &&
+        prop.sharedMemPerBlock > 0) {
+      shared_limit = static_cast<std::size_t>(prop.sharedMemPerBlock);
+    }
+    while (threads > 32 && shared_bytes > shared_limit) {
+      threads /= 2;
+      shared_bytes =
+        static_cast<std::size_t>(threads) * k * (sizeof(float) + sizeof(int)) +
+        static_cast<std::size_t>(threads) * sizeof(int);
+    }
+    if (shared_bytes <= shared_limit) {
+      landmark_candidate_knn_cooperative_kernel<<<n, threads, shared_bytes>>>(
+        d_data,
+        d_projection,
+        d_indices,
+        d_distances,
+        n,
+        n_features,
+        k,
+        bucket_cols,
+        query_cols
+      );
+      if (check_cuda(cudaGetLastError(), "landmark_candidate_knn_cooperative_kernel launch")) {
+        cleanup();
+        return 1;
+      }
+    } else {
+      const int serial_threads = 128;
+      const int blocks = (n + serial_threads - 1) / serial_threads;
+      landmark_candidate_knn_serial_kernel<<<blocks, serial_threads>>>(
+        d_data,
+        d_projection,
+        d_indices,
+        d_distances,
+        n,
+        n_features,
+        k,
+        bucket_cols,
+        query_cols
+      );
+      if (check_cuda(cudaGetLastError(), "landmark_candidate_knn_serial_kernel launch")) {
+        cleanup();
+        return 1;
+      }
     }
   } else {
     const int threads = 128;

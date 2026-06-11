@@ -61,6 +61,43 @@ test_that("CPU nn handles non-small Euclidean work", {
   expect_true(isTRUE(attr(out, "exact")))
 })
 
+test_that("CPU nn row-major distance layout matches column-major fallback", {
+  old_row_major <- Sys.getenv("FASTEMBEDR_NN_ROW_MAJOR", unset = NA_character_)
+  old_fortran <- Sys.getenv("FASTEMBEDR_USE_FORTRAN_NN", unset = NA_character_)
+  on.exit({
+    if (is.na(old_row_major)) {
+      Sys.unsetenv("FASTEMBEDR_NN_ROW_MAJOR")
+    } else {
+      Sys.setenv(FASTEMBEDR_NN_ROW_MAJOR = old_row_major)
+    }
+    if (is.na(old_fortran)) {
+      Sys.unsetenv("FASTEMBEDR_USE_FORTRAN_NN")
+    } else {
+      Sys.setenv(FASTEMBEDR_USE_FORTRAN_NN = old_fortran)
+    }
+  }, add = TRUE)
+
+  set.seed(1211)
+  data <- matrix(rnorm(140L * 11L), nrow = 140L)
+  points <- matrix(rnorm(65L * 11L), nrow = 65L)
+
+  Sys.setenv(
+    FASTEMBEDR_USE_FORTRAN_NN = "0",
+    FASTEMBEDR_NN_ROW_MAJOR = "1"
+  )
+  row_major <- nn(data, points, k = 9L, backend = "cpu", n_threads = 2L)
+
+  Sys.setenv(FASTEMBEDR_NN_ROW_MAJOR = "0")
+  column_major <- nn(data, points, k = 9L, backend = "cpu", n_threads = 2L)
+
+  expect_equal(attr(row_major, "memory_layout"), "row_major_contiguous")
+  expect_equal(attr(column_major, "memory_layout"), "r_column_major")
+  expect_true(isTRUE(attr(row_major, "row_major_copy")))
+  expect_false(isTRUE(attr(column_major, "row_major_copy")))
+  expect_equal(row_major$indices, column_major$indices)
+  expect_equal(row_major$distances, column_major$distances, tolerance = 1e-12)
+})
+
 test_that("clustered self KNN reports approximation and preserves useful neighbors", {
   set.seed(122)
   n_per <- 80L
@@ -116,6 +153,9 @@ test_that("approximate landmark projection KNN matches exact when window covers 
   expect_equal(approx$distances, exact$distances, tolerance = 1e-6)
   expect_equal(approx$n_projections, 4L)
   expect_equal(approx$window, nrow(landmarks))
+  expect_equal(approx$n_threads, 1L)
+  expect_equal(approx$score_threads, 1L)
+  expect_gt(approx$visited_stamp_mb_per_thread, 0)
 })
 
 test_that("subset landmark candidate KNN matches full candidate rows", {
@@ -149,12 +189,6 @@ test_that("subset landmark candidate KNN matches full candidate rows", {
   expect_equal(subset$row_ids, rows)
   expect_equal(subset$indices, full$indices[rows, , drop = FALSE])
   expect_equal(subset$distances, full$distances[rows, , drop = FALSE], tolerance = 1e-8)
-})
-
-test_that("approximate landmark projection is selected only for CPU/no-native-GPU policy", {
-  expect_true(fastEmbedR:::use_approx_landmark_projection("cpu"))
-  expect_false(fastEmbedR:::use_approx_landmark_projection("metal"))
-  expect_false(fastEmbedR:::use_approx_landmark_projection("cuda"))
 })
 
 test_that("clustered self KNN is not selected automatically", {
@@ -238,8 +272,8 @@ test_that("NN-descent CPU backend is public, deterministic, and recall-aware", {
 })
 
 test_that("CPU approximate selector chooses a public native backend", {
-  expect_equal(fastEmbedR:::select_cpu_approx_backend(12000L, 30L, 30L), "cpu_annoy")
-  expect_equal(fastEmbedR:::select_cpu_approx_backend(70000L, 50L, 50L), "cpu_annoy")
+  expect_equal(fastEmbedR:::select_cpu_approx_backend(12000L, 30L, 30L), "cpu_nndescent")
+  expect_equal(fastEmbedR:::select_cpu_approx_backend(70000L, 50L, 50L), "cpu_nndescent")
   expect_true(fastEmbedR:::should_use_auto_cpu_approx_self_knn(
     self_query = TRUE,
     n = 12000L,
@@ -736,7 +770,7 @@ test_that("MLX-inspired NN-descent candidate builder tracks active rows", {
   flags <- matrix(FALSE, nrow = 6L, ncol = 3L)
   flags[c(1L, 3L, 5L), 1L] <- TRUE
 
-  candidates <- nndescent_candidate_matrix_mlx_cpp(
+  candidates <- fastEmbedR:::nndescent_candidate_matrix_mlx_cpp(
     indices,
     flags,
     n_sources = 2L,
@@ -778,14 +812,8 @@ test_that("CUDA nn backend matches CPU euclidean results", {
   expect_equal(gpu$distances, cpu$distances, tolerance = 1e-5)
 })
 
-test_that("CUDA NN-descent refinement uses the native row-candidate kernel", {
-  skip_if_not(cuda_available())
-  old_options <- options(
-    fastEmbedR.cuda_nndescent_iters = 1L,
-    fastEmbedR.cuda_nndescent_sources = 4L,
-    fastEmbedR.cuda_nndescent_neighbors = 5L
-  )
-  on.exit(options(old_options), add = TRUE)
+test_that("CUDA NN-descent requests use RAPIDS cuVS", {
+  skip_if_not(cuvs_available())
 
   set.seed(136)
   x <- rbind(
@@ -794,15 +822,14 @@ test_that("CUDA NN-descent refinement uses the native row-candidate kernel", {
   )
   k <- 8L
   exact <- fastEmbedR:::nn_without_self(x, k = k, backend = "cpu", n_threads = 4L)
-  refined <- fastEmbedR:::nn_without_self(x, k = k, backend = "cuda_nndescent")
+  refined <- fastEmbedR:::nn_without_self(x, k = k, backend = "cuda_cuvs_nndescent")
   recall <- fastEmbedR:::knn_recall(refined, exact, k)
 
   expect_equal(dim(refined$indices), c(nrow(x), k))
-  expect_equal(attr(refined, "backend"), "cuda_nndescent")
-  expect_equal(attr(refined, "cuda_kernel"), "row_candidate_knn")
+  expect_equal(attr(refined, "backend"), "cuda_cuvs_nndescent")
   expect_equal(
     attr(refined, "approximation")$strategy,
-    "seeded_nndescent_native_cuda"
+    "rapids_cuvs_nndescent"
   )
   expect_false(isTRUE(attr(refined, "exact")))
   expect_gt(recall$recall_at_k, 0.65)
@@ -813,8 +840,6 @@ test_that("CUDA backend reports unavailable runtime clearly", {
 
   x <- matrix(rnorm(30), ncol = 3)
   expect_error(nn(x, x, k = 2, backend = "cuda"), "No CUDA")
-  expect_error(nn(x, x, k = 2, backend = "cuda_approx"), "No CUDA")
-  expect_error(nn(x, x, k = 2, backend = "cuda_nndescent"), "No CUDA")
   expect_error(nn(x, x, k = 2, backend = "cuda_ivf"), "No CUDA")
   expect_error(nn(x, x, k = 2, backend = "cuda_faiss"), "No CUDA")
 })
@@ -826,4 +851,6 @@ test_that("cuVS backend reports unavailable runtime clearly", {
   expect_error(nn(x, x, k = 2, backend = "cuda_cuvs"), "cuVS")
   expect_error(nn(x, x, k = 2, backend = "cuda_cuvs_bruteforce"), "cuVS")
   expect_error(nn(x, x, k = 2, backend = "cuda_cuvs_nndescent"), "cuVS")
+  expect_error(nn(x, x, k = 2, backend = "cuda_approx"), "cuVS")
+  expect_error(nn(x, x, k = 2, backend = "cuda_nndescent"), "cuVS")
 })

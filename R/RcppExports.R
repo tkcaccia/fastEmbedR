@@ -21,6 +21,10 @@ knn_tsne_exact_cuda_cpp <- function(indices, distances, init, n_epochs, perplexi
     .Call(`_fastEmbedR_knn_tsne_exact_cuda_cpp`, indices, distances, init, n_epochs, perplexity, learning_rate, stop_lying_iter, mom_switch_iter, momentum, final_momentum, exaggeration_factor, seed)
 }
 
+knn_tsne_opentsne_cuda_cpp <- function(indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs) {
+    .Call(`_fastEmbedR_knn_tsne_opentsne_cuda_cpp`, indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs)
+}
+
 standardize_cuda_cpp <- function(data) {
     .Call(`_fastEmbedR_standardize_cuda_cpp`, data)
 }
@@ -99,6 +103,42 @@ rsvd_multiply_metal_cpp <- function(left, right, transpose_left) {
 
 transform_tsne_metal_cpp <- function(reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, seed) {
     .Call(`_fastEmbedR_transform_tsne_metal_cpp`, reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, seed)
+}
+
+knn_tsne_opentsne_metal_cpp <- function(indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs) {
+    .Call(`_fastEmbedR_knn_tsne_opentsne_metal_cpp`, indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs)
+}
+
+standardize_cpu_cpp <- function(data) {
+    .Call(`_fastEmbedR_standardize_cpu_cpp`, data)
+}
+
+strip_self_neighbors_cpp <- function(indices, distances) {
+    .Call(`_fastEmbedR_strip_self_neighbors_cpp`, indices, distances)
+}
+
+validate_projection_knn_cpp <- function(indices, distances, n_reference, k) {
+    .Call(`_fastEmbedR_validate_projection_knn_cpp`, indices, distances, n_reference, k)
+}
+
+mean_neighbor_rank_error_cpp <- function(high_indices, embed_indices, k) {
+    .Call(`_fastEmbedR_mean_neighbor_rank_error_cpp`, high_indices, embed_indices, k)
+}
+
+knn_recall_cpp <- function(approx_indices, exact_indices, k) {
+    .Call(`_fastEmbedR_knn_recall_cpp`, approx_indices, exact_indices, k)
+}
+
+majority_vote_knn_labels_cpp <- function(embed_indices, labels, k, n_label_levels) {
+    .Call(`_fastEmbedR_majority_vote_knn_labels_cpp`, embed_indices, labels, k, n_label_levels)
+}
+
+batch_entropy_cpp <- function(embed_indices, batch, k, n_batch_levels) {
+    .Call(`_fastEmbedR_batch_entropy_cpp`, embed_indices, batch, k, n_batch_levels)
+}
+
+sampled_pair_distances_cpp <- function(x, a, b, n_threads) {
+    .Call(`_fastEmbedR_sampled_pair_distances_cpp`, x, a, b, n_threads)
 }
 
 knn_structure_score_cpp <- function(layout, indices, keep, preserve_k, labels, n_label_levels) {
@@ -277,16 +317,8 @@ row_candidate_knn_metal_cpp <- function(data, candidate_indices, k) {
     .Call(`_fastEmbedR_row_candidate_knn_metal_cpp`, data, candidate_indices, k)
 }
 
-knn_tsne_rtsne_cpp <- function(indices, distances, y_init, init, n_components, perplexity, theta, max_iter, stop_lying_iter, mom_switch_iter, momentum, final_momentum, eta, exaggeration_factor, negative_gradient_method, n_threads, seed, verbose) {
-    .Call(`_fastEmbedR_knn_tsne_rtsne_cpp`, indices, distances, y_init, init, n_components, perplexity, theta, max_iter, stop_lying_iter, mom_switch_iter, momentum, final_momentum, eta, exaggeration_factor, negative_gradient_method, n_threads, seed, verbose)
-}
-
 knn_tsne_opentsne_cpp <- function(indices, distances, y_init, init, n_components, perplexity, theta, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, n_threads, seed, verbose, record_costs) {
     .Call(`_fastEmbedR_knn_tsne_opentsne_cpp`, indices, distances, y_init, init, n_components, perplexity, theta, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, n_threads, seed, verbose, record_costs)
-}
-
-knn_infotsne_cpp <- function(indices, distances, y_init, init, n_components, perplexity, max_iter, early_exaggeration_iter, momentum, final_momentum, learning_rate, early_exaggeration_coeff, repulsion_strength, n_negatives, n_threads, seed, verbose) {
-    .Call(`_fastEmbedR_knn_infotsne_cpp`, indices, distances, y_init, init, n_components, perplexity, max_iter, early_exaggeration_iter, momentum, final_momentum, learning_rate, early_exaggeration_coeff, repulsion_strength, n_negatives, n_threads, seed, verbose)
 }
 
 transform_tsne_cpp <- function(reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, n_threads, seed, verbose) {

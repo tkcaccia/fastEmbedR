@@ -10,18 +10,29 @@ expect_embedding <- function(layout, n) {
   expect_true(all(is.finite(layout)))
 }
 
-test_that("public API is UMAP, t-SNE, and KNN focused", {
+test_that("public API is KNN and openTSNE focused", {
   exports <- getNamespaceExports("fastEmbedR")
   expect_true(all(c(
-    "umap", "tsne", "opentsne", "opentsne_knn", "embed_knn", "nn", "backend_info",
-    "metal_available", "cuda_available", "cuvs_available", "evaluate_embedding",
-    "transform_embedding", "transform_tsne", "landmark_tsne"
+    "umap", "umap_knn", "opentsne", "opentsne_knn", "embed_knn", "nn", "backend_info",
+    "metal_available", "cuda_available", "cuvs_available", "faiss_available",
+    "evaluate_embedding", "transform_tsne", "landmark_tsne"
   ) %in% exports))
-  expect_false(any(c("pacmap", "trimap", "localmap") %in% exports))
-  expect_false(any(c("knn_tsne", "knn_pacmap", "knn_trimap", "knn_localmap") %in% exports))
+  expect_false(any(c(
+    "supervised_umap", "tsne", "infotsne", "pacmap", "trimap",
+    "localmap", "transform_embedding"
+  ) %in% exports))
+
+  expect_true("n_threads" %in% names(formals(opentsne)))
+  expect_true("n_threads" %in% names(formals(opentsne_knn)))
+  expect_true("n_threads" %in% names(formals(umap)))
+  expect_true("n_threads" %in% names(formals(umap_knn)))
+  expect_true("n_threads" %in% names(formals(embed_knn)))
+  expect_true("n_threads" %in% names(formals(landmark_tsne)))
+  expect_true("n_threads" %in% names(formals(transform_tsne)))
+  expect_true("n_threads" %in% names(formals(evaluate_embedding)))
 })
 
-test_that("core exported functions have tiny smoke tests", {
+test_that("core exported functions have tiny openTSNE smoke tests", {
   set.seed(101)
   fixture <- make_cluster_data()
   x <- fixture$x
@@ -47,55 +58,39 @@ test_that("core exported functions have tiny smoke tests", {
   expect_equal(dim(knn$distances), c(n, fastEmbedR:::auto_k(x, include_self = TRUE)))
   expect_equal(attr(knn, "backend"), "cpu")
 
+  layout <- embed_knn(knn, method = "opentsne", perplexity = 1, early_exaggeration_iter = 2L, n_iter = 3L)
+  expect_embedding(layout, n)
+  expect_equal(attr(layout, "fastEmbedR_config")$method, "opentsne")
+
   layout_umap <- embed_knn(knn, method = "umap")
   expect_embedding(layout_umap, n)
-  layout_tsne <- embed_knn(knn, method = "tsne", perplexity = 1, max_iter = 5L)
-  expect_embedding(layout_tsne, n)
-  layout_opentsne <- embed_knn(knn, method = "opentsne", perplexity = 1,
-    early_exaggeration_iter = 2L, n_iter = 3L)
-  expect_embedding(layout_opentsne, n)
-  expect_equal(attr(layout_opentsne, "fastEmbedR_config")$method, "opentsne")
-  layout_opentsne_knn <- opentsne_knn(knn, perplexity = 1,
-    early_exaggeration_iter = 2L, n_iter = 3L)
-  expect_embedding(layout_opentsne_knn, n)
-  expect_equal(attr(layout_opentsne_knn, "fastEmbedR_config")$method, "opentsne")
+  expect_equal(attr(layout_umap, "fastEmbedR_config")$method, "umap")
 
-  fit <- umap(x, labels = labels, n_neighbors = 4L,
-    silhouette_sample = NULL, preserve_sample = NULL)
+  layout_umap_knn <- umap_knn(knn)
+  expect_embedding(layout_umap_knn, n)
+  expect_equal(attr(layout_umap_knn, "fastEmbedR_config")$method, "umap")
+
+  layout_knn <- opentsne_knn(knn, perplexity = 1, early_exaggeration_iter = 2L, n_iter = 3L)
+  expect_embedding(layout_knn, n)
+  expect_equal(attr(layout_knn, "fastEmbedR_config")$method, "opentsne")
+
+  fit <- opentsne(x, labels = labels, n_neighbors = 4L, perplexity = 1,
+    early_exaggeration_iter = 2L, n_iter = 3L,
+    silhouette_sample = NULL, preserve_sample = NULL,
+    n_threads = 2L)
   expect_s3_class(fit, "fastEmbedR_embedding")
   expect_embedding(fit$layout, n)
+  expect_equal(fit$parameters$method, "opentsne")
+  expect_equal(fit$parameters$n_threads, 2L)
   expect_null(fit$knn)
 
-  fit_tsne <- tsne(x, labels = labels, n_neighbors = 4L, perplexity = 1,
-    max_iter = 5L, silhouette_sample = NULL, preserve_sample = NULL)
-  expect_s3_class(fit_tsne, "fastEmbedR_embedding")
-  expect_embedding(fit_tsne$layout, n)
-  expect_equal(fit_tsne$parameters$method, "tsne")
-
-  fit_opentsne <- opentsne(x, labels = labels, n_neighbors = 4L, perplexity = 1,
+  fit_knn <- opentsne(knn, labels = labels, perplexity = 1,
     early_exaggeration_iter = 2L, n_iter = 3L,
     silhouette_sample = NULL, preserve_sample = NULL)
-  expect_s3_class(fit_opentsne, "fastEmbedR_embedding")
-  expect_embedding(fit_opentsne$layout, n)
-  expect_equal(fit_opentsne$parameters$method, "opentsne")
-
-  fit_opentsne_knn <- opentsne(knn, labels = labels, perplexity = 1,
-    early_exaggeration_iter = 2L, n_iter = 3L,
-    silhouette_sample = NULL, preserve_sample = NULL)
-  expect_s3_class(fit_opentsne_knn, "fastEmbedR_embedding")
-  expect_embedding(fit_opentsne_knn$layout, n)
-  expect_equal(fit_opentsne_knn$parameters$input, "knn")
-  expect_equal(fit_opentsne_knn$metrics$knn_elapsed, 0)
-
-  sup <- supervised_umap(x, labels = labels, n_neighbors = 4L,
-    silhouette_sample = NULL, preserve_sample = NULL)
-  expect_embedding(sup$layout, n)
-  expect_true(isTRUE(sup$parameters$supervised))
-
-  projected <- transform_embedding(fit$layout, nn(x, x[1:3, , drop = FALSE],
-    k = 4L, backend = "cpu"))
-  expect_embedding(projected, 3L)
-  expect_equal(attr(projected, "backend"), "cpu")
+  expect_s3_class(fit_knn, "fastEmbedR_embedding")
+  expect_embedding(fit_knn$layout, n)
+  expect_equal(fit_knn$parameters$input, "knn")
+  expect_equal(fit_knn$metrics$knn_elapsed, 0)
 
   scores <- evaluate_embedding(
     x,
@@ -105,7 +100,7 @@ test_that("core exported functions have tiny smoke tests", {
     sample_size_for_global_metrics = n,
     sample_size_for_local_metrics = n,
     use_cache = FALSE,
-    method = "umap",
+    method = "opentsne",
     backend = "cpu",
     dataset = "toy"
   )
@@ -113,4 +108,26 @@ test_that("core exported functions have tiny smoke tests", {
     "trustworthiness", "knn_preservation", "silhouette",
     "density_spearman", "density_log_radius_rmse", "rare_class_recall"
   ) %in% names(scores)))
+
+  gpu_scores <- evaluate_embedding(
+    x,
+    fit$layout,
+    labels = labels,
+    k = c(4L, 5L),
+    sample_size_for_global_metrics = n,
+    sample_size_for_local_metrics = n,
+    use_cache = FALSE,
+    method = "opentsne",
+    backend = "gpu",
+    n_threads = 2L,
+    dataset = "toy"
+  )
+  if (isTRUE(fastEmbedR:::metal_metric_available())) {
+    expect_equal(gpu_scores$metric_backend, "metal")
+  } else if (isTRUE(fastEmbedR:::cuda_metric_available())) {
+    expect_equal(gpu_scores$metric_backend, "cuda")
+  } else {
+    expect_equal(gpu_scores$metric_backend, "cpu")
+    expect_match(gpu_scores$metric_backend_reason, "gpu_metric_backend_unavailable")
+  }
 })

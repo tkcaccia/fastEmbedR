@@ -75,10 +75,13 @@ majority_vote <- function(values) {
 classification_from_embedding_nn <- function(embed_indices, labels, k) {
   labels <- as.factor(labels)
   k <- min(as.integer(k), ncol(embed_indices))
-  pred <- vapply(seq_len(nrow(embed_indices)), function(i) {
-    majority_vote(labels[embed_indices[i, seq_len(k)]])
-  }, character(1))
-  factor(pred, levels = levels(labels))
+  pred <- majority_vote_knn_labels_cpp(
+    embed_indices,
+    as.integer(labels),
+    as.integer(k),
+    as.integer(length(levels(labels)))
+  )
+  factor(levels(labels)[pred], levels = levels(labels))
 }
 
 class_recall_metrics <- function(truth, pred) {
@@ -115,13 +118,16 @@ batch_entropy_metrics <- function(embed_indices, batch, k) {
     return(list(batch_entropy = NA_real_, batch_mixing_score = NA_real_))
   }
   k <- min(as.integer(k), ncol(embed_indices))
-  denom <- log(length(levels(batch)))
-  entropy <- vapply(seq_len(nrow(embed_indices)), function(i) {
-    vals <- batch[embed_indices[i, seq_len(k)]]
-    p <- as.numeric(table(vals)) / k
-    -sum(p * log(p)) / denom
-  }, numeric(1))
-  list(batch_entropy = mean(entropy, na.rm = TRUE), batch_mixing_score = mean(entropy, na.rm = TRUE))
+  out <- batch_entropy_cpp(
+    embed_indices,
+    as.integer(batch),
+    as.integer(k),
+    as.integer(length(levels(batch)))
+  )
+  list(
+    batch_entropy = unname(out["batch_entropy"]),
+    batch_mixing_score = unname(out["batch_mixing_score"])
+  )
 }
 
 centroid_distance_correlation <- function(x_high, embedding, labels) {
@@ -188,7 +194,8 @@ get_or_compute_evaluation_reference <- function(x_high,
                                                 use_cache = TRUE,
                                                 cache_dir = file.path("results", "cache"),
                                                 force_recompute = FALSE,
-                                                backend = "cpu") {
+                                                backend = "cpu",
+                                                n_threads = NULL) {
   n <- nrow(x_high)
   max_k <- min(as.integer(max_k), n - 1L)
   if (length(max_k) != 1L || is.na(max_k) || max_k < 1L) {
@@ -204,7 +211,8 @@ get_or_compute_evaluation_reference <- function(x_high,
     x_high,
     x_high,
     k = max_k + 1L,
-    backend = backend
+    backend = backend,
+    n_threads = n_threads
   )
   out <- normalize_supplied_knn(raw, n, max_k)
   out$backend <- attr(raw, "backend")
@@ -227,21 +235,19 @@ append_metric_backend_reason <- function(current, message) {
   if (length(values) == 0L) NA_character_ else paste(values, collapse = "; ")
 }
 
-sampled_pair_distances <- function(x, a, b) {
-  p <- ncol(x)
-  batch_size <- max(512L, as.integer(floor(2e6 / max(1L, p))))
-  out <- numeric(length(a))
-  starts <- seq.int(1L, length(a), by = batch_size)
-  for (start in starts) {
-    end <- min(length(a), start + batch_size - 1L)
-    rows <- start:end
-    diff <- x[a[rows], , drop = FALSE] - x[b[rows], , drop = FALSE]
-    out[rows] <- sqrt(rowSums(diff * diff))
+sampled_pair_distances <- function(x, a, b, n_threads = NULL) {
+  if (is.null(n_threads)) {
+    n_threads <- default_tsne_threads()
   }
-  out
+  sampled_pair_distances_cpp(
+    x,
+    as.integer(a),
+    as.integer(b),
+    as.integer(max(1L, n_threads))
+  )
 }
 
-global_distance_metrics <- function(x_high, embedding, sample_size, seed) {
+global_distance_metrics <- function(x_high, embedding, sample_size, seed, n_threads = NULL) {
   n <- nrow(x_high)
   if (n < 3L) {
     return(list(
@@ -268,8 +274,8 @@ global_distance_metrics <- function(x_high, embedding, sample_size, seed) {
     b <- b + as.integer(b >= a)
     x_sample <- x_high[keep, , drop = FALSE]
     embedding_sample <- embedding[keep, , drop = FALSE]
-    high_dist <- sampled_pair_distances(x_sample, a, b)
-    low_dist <- sampled_pair_distances(embedding_sample, a, b)
+    high_dist <- sampled_pair_distances(x_sample, a, b, n_threads = n_threads)
+    low_dist <- sampled_pair_distances(embedding_sample, a, b, n_threads = n_threads)
   }
   list(
     distance_spearman = safe_numeric_cor(high_dist, low_dist, method = "spearman"),
@@ -366,6 +372,8 @@ local_density_radius_metrics <- function(high_distances,
 #' @param seed Random seed recorded in the output and used for subsampling.
 #' @param method Method name recorded in the output.
 #' @param backend Backend name recorded in the output.
+#' @param n_threads Number of CPU worker threads used when quality metrics need
+#'   nearest-neighbor searches. Ignored by native GPU metric backends.
 #' @param dataset Dataset name recorded in the output.
 #' @return A one-row data frame with local, global, label-aware, batch-aware,
 #'   and metadata columns. Per-class recall is also attached as an attribute.
@@ -385,6 +393,7 @@ evaluate_embedding <- function(x_high,
                                seed = NA_integer_,
                                method = NA_character_,
                                backend = NA_character_,
+                               n_threads = NULL,
                                dataset = NA_character_) {
   x_high <- as.matrix(x_high)
   embedding <- as.matrix(embedding)
@@ -411,21 +420,10 @@ evaluate_embedding <- function(x_high,
   } else {
     min(as.integer(primary_k), max_k)
   }
-  metric_backend <- "cpu"
-  metric_backend_reason <- NA_character_
-  if (cuda_metric_requested(backend)) {
-    if (cuda_metric_available()) {
-      metric_backend <- "cuda"
-    } else {
-      metric_backend_reason <- "cuda_metric_backend_unavailable"
-    }
-  } else if (identical(backend, "metal")) {
-    if (metal_metric_available()) {
-      metric_backend <- "metal"
-    } else {
-      metric_backend_reason <- "metal_metric_backend_unavailable"
-    }
-  }
+  n_threads <- normalize_nn_threads(n_threads)
+  metric_resolution <- resolve_metric_backend(backend)
+  metric_backend <- metric_resolution$backend
+  metric_backend_reason <- metric_resolution$reason
 
   high_nn <- if (is.null(reference_nn)) {
     tryCatch(
@@ -436,7 +434,8 @@ evaluate_embedding <- function(x_high,
         use_cache = use_cache,
         cache_dir = cache_dir,
         force_recompute = force_recompute,
-        backend = metric_backend
+        backend = metric_backend,
+        n_threads = n_threads
       ),
       error = function(e) {
         metric_backend_reason <<- append_metric_backend_reason(
@@ -451,7 +450,8 @@ evaluate_embedding <- function(x_high,
           use_cache = use_cache,
           cache_dir = cache_dir,
           force_recompute = force_recompute,
-          backend = "cpu"
+          backend = "cpu",
+          n_threads = n_threads
         )
       }
     )
@@ -459,14 +459,26 @@ evaluate_embedding <- function(x_high,
     normalize_evaluation_reference(reference_nn, nrow(x_high), max_k)
   }
   embed_nn <- tryCatch(
-    fastEmbedR::nn(embedding, embedding, max_k + 1L, backend = metric_backend),
+    fastEmbedR::nn(
+      embedding,
+      embedding,
+      max_k + 1L,
+      backend = metric_backend,
+      n_threads = n_threads
+    ),
     error = function(e) {
       metric_backend_reason <<- append_metric_backend_reason(
         metric_backend_reason,
         conditionMessage(e)
       )
       metric_backend <<- "cpu"
-      fastEmbedR::nn(embedding, embedding, max_k + 1L, backend = "cpu")
+      fastEmbedR::nn(
+        embedding,
+        embedding,
+        max_k + 1L,
+        backend = "cpu",
+        n_threads = n_threads
+      )
     }
   )
   high_indices <- high_nn$indices
@@ -498,7 +510,8 @@ evaluate_embedding <- function(x_high,
     x_high,
     embedding,
     sample_size = sample_size_for_global_metrics,
-    seed = if (is.na(seed)) 4L else seed
+    seed = if (is.na(seed)) 4L else seed,
+    n_threads = n_threads
   )
   density <- local_density_radius_metrics(
     high_nn$distances,
@@ -548,6 +561,7 @@ evaluate_embedding <- function(x_high,
     metric_backend_reason = metric_backend_reason,
     high_nn_backend = if (is.null(high_nn$backend)) NA_character_ else as.character(high_nn$backend),
     embedding_nn_backend = attr(embed_nn, "backend"),
+    n_threads = if (identical(metric_backend, "cpu")) as.integer(n_threads) else NA_integer_,
     seed = as.integer(seed),
     primary_k = as.integer(primary_k),
     local_sample_size = length(local_keep),
@@ -557,7 +571,7 @@ evaluate_embedding <- function(x_high,
     knn_preservation_15 = named_metric_or_na(preservation, "knn_preservation_15"),
     knn_preservation_30 = named_metric_or_na(preservation, "knn_preservation_30"),
     knn_preservation_50 = named_metric_or_na(preservation, "knn_preservation_50"),
-    mean_neighbor_rank_error = mean_neighbor_rank_error(high_indices, embed_indices, primary_k),
+    mean_neighbor_rank_error = mean_neighbor_rank_error_cpp(high_indices, embed_indices, primary_k),
     distance_spearman = global$distance_spearman,
     distance_pearson = global$distance_pearson,
     stress = global$stress,

@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cfloat>
 #include <cmath>
+#include <complex>
 #include <cstdlib>
 #include <cstdint>
 #include <limits>
@@ -44,6 +45,29 @@ int key_first(std::uint64_t key) {
 
 int key_second(std::uint64_t key) {
   return static_cast<int>(key & 0xffffffffu);
+}
+
+std::uint32_t mix_uint32(std::uint32_t value) {
+  value ^= value >> 16u;
+  value *= 0x7feb352du;
+  value ^= value >> 15u;
+  value *= 0x846ca68bu;
+  value ^= value >> 16u;
+  return value == 0u ? 0x6d2b79f5u : value;
+}
+
+std::uint32_t xorshift32(std::uint32_t& state) {
+  state ^= state << 13u;
+  state ^= state >> 17u;
+  state ^= state << 5u;
+  return state;
+}
+
+int uniform_index(std::uint32_t& state, const int n) {
+  return static_cast<int>(
+    (static_cast<std::uint64_t>(xorshift32(state)) *
+      static_cast<std::uint64_t>(n)) >> 32u
+  );
 }
 
 int resolve_index_offset(const IntegerMatrix& indices) {
@@ -112,7 +136,11 @@ std::string tsne_repulsion_mode(const int n,
                                 const std::string& requested_method) {
   const std::string requested = lowercase(requested_method);
   if (requested == "bh" || requested == "barnes_hut" || requested == "barnes-hut") {
-    return "barnes_hut";
+    Rcpp::stop(
+      "Barnes-Hut openTSNE has been removed from fastEmbedR. "
+      "Use `negative_gradient_method = \"fft\"` for the standard CPU path "
+      "or `\"exact\"` for small reference runs."
+    );
   }
   if (requested == "exact" || requested == "pair" || requested == "pair_symmetric") {
     return "pair_symmetric";
@@ -121,7 +149,7 @@ std::string tsne_repulsion_mode(const int n,
     return "keops_blocked";
   }
   if (requested == "fft" || requested == "interpolation" || requested == "fitsne") {
-    Rcpp::stop("openTSNE-style FFT interpolation is not yet available in native fastEmbedR C++.");
+    return "fft_grid";
   }
 
   const char* raw = std::getenv("FASTEMBEDR_TSNE_REPULSION");
@@ -129,7 +157,10 @@ std::string tsne_repulsion_mode(const int n,
     const std::string value = lowercase(std::string(raw));
     if (value == "barnes_hut" || value == "barnes-hut" || value == "bh" ||
         value == "rtsne") {
-      return "barnes_hut";
+      Rcpp::stop(
+        "FASTEMBEDR_TSNE_REPULSION requests Barnes-Hut, which has been "
+        "removed from fastEmbedR. Use `fft` or `exact`."
+      );
     }
     if (value == "keops" || value == "keops_blocked" || value == "blocked" ||
         value == "lazy") {
@@ -142,12 +173,35 @@ std::string tsne_repulsion_mode(const int n,
   }
 
   (void)n;
-  return theta > 0.0 ? "barnes_hut" : "pair_symmetric";
+  return theta > 0.0 ? "fft_grid" : "pair_symmetric";
 }
 
 int tsne_repulsion_block_size(const int n) {
   const int requested = env_positive_int("FASTEMBEDR_TSNE_BLOCK_SIZE", 1024);
   return std::max(32, std::min(n, requested));
+}
+
+int tsne_fft_grid_size(const int n) {
+  const int fallback = n >= 50000 ? 128 : (n >= 10000 ? 96 : 64);
+  const int requested = env_positive_int("FASTEMBEDR_TSNE_FFT_GRID", fallback);
+  int grid = 32;
+  while (grid < requested && grid < 512) grid <<= 1;
+  return std::max(32, std::min(512, grid));
+}
+
+int tsne_transform_batch_size(const int n_query,
+                              const int k,
+                              const int dims) {
+  const int requested = env_positive_int("FASTEMBEDR_TSNE_TRANSFORM_BATCH_SIZE", 0);
+  if (requested > 0) return std::max(1, std::min(n_query, requested));
+  if (n_query < 25000) return n_query;
+
+  const double bytes_per_row =
+    static_cast<double>(k) * sizeof(double) +
+    static_cast<double>(dims) * 4.0 * sizeof(double);
+  const double target_bytes = 8.0 * 1024.0 * 1024.0;
+  const int auto_batch = static_cast<int>(std::floor(target_bytes / std::max(1.0, bytes_per_row)));
+  return std::max(1024, std::min(n_query, std::max(1, auto_batch)));
 }
 
 void compute_row_probabilities(const NumericMatrix& distances,
@@ -198,6 +252,57 @@ void compute_row_probabilities(const NumericMatrix& distances,
   }
 
   for (double& value : row_p) value /= sum_p;
+}
+
+void compute_row_probabilities_flat(const NumericMatrix& distances,
+                                    const int row,
+                                    const double perplexity,
+                                    double* row_p) {
+  const int k = distances.ncol();
+  std::fill(row_p, row_p + k, 0.0);
+
+  bool found = false;
+  double beta = 1.0;
+  double min_beta = -DBL_MAX;
+  double max_beta = DBL_MAX;
+  const double tol = 1e-5;
+  double sum_p = DBL_MIN;
+
+  for (int iter = 0; !found && iter < 200; ++iter) {
+    sum_p = DBL_MIN;
+    for (int j = 0; j < k; ++j) {
+      const double d = distances(row, j);
+      const double d2 = d * d;
+      const double p = std::exp(-beta * d2);
+      row_p[j] = p;
+      sum_p += p;
+    }
+
+    double entropy = 0.0;
+    for (int j = 0; j < k; ++j) {
+      const double d = distances(row, j);
+      entropy += beta * (d * d * row_p[j]);
+    }
+    entropy = entropy / sum_p + std::log(sum_p);
+    const double diff = entropy - std::log(perplexity);
+
+    if (std::abs(diff) < tol) {
+      found = true;
+    } else if (diff > 0.0) {
+      min_beta = beta;
+      beta = (max_beta == DBL_MAX || max_beta == -DBL_MAX) ?
+        beta * 2.0 :
+        (beta + max_beta) / 2.0;
+    } else {
+      max_beta = beta;
+      beta = (min_beta == -DBL_MAX || min_beta == DBL_MAX) ?
+        beta / 2.0 :
+        (beta + min_beta) / 2.0;
+    }
+  }
+
+  const double inv_sum_p = 1.0 / sum_p;
+  for (int j = 0; j < k; ++j) row_p[j] *= inv_sum_p;
 }
 
 SparseProbabilities build_tsne_probabilities(const IntegerMatrix& indices,
@@ -319,166 +424,6 @@ double squared_distance(const std::vector<double>& y,
   }
   return out;
 }
-
-struct BarnesHutNode2D {
-  double center_x = 0.0;
-  double center_y = 0.0;
-  double half_x = 0.0;
-  double half_y = 0.0;
-  double mass_x = 0.0;
-  double mass_y = 0.0;
-  int count = 0;
-  int point = -1;
-  int children[4] = {-1, -1, -1, -1};
-  bool leaf = true;
-};
-
-class BarnesHutTree2D {
- public:
-  BarnesHutTree2D(const std::vector<double>& y_in, const int n_in) :
-    y(y_in), n(n_in) {
-    double min_x = DBL_MAX;
-    double max_x = -DBL_MAX;
-    double min_y = DBL_MAX;
-    double max_y = -DBL_MAX;
-    for (int i = 0; i < n; ++i) {
-      const std::size_t base = static_cast<std::size_t>(i) * 2u;
-      min_x = std::min(min_x, y[base]);
-      max_x = std::max(max_x, y[base]);
-      min_y = std::min(min_y, y[base + 1u]);
-      max_y = std::max(max_y, y[base + 1u]);
-    }
-
-    BarnesHutNode2D root;
-    root.center_x = 0.5 * (min_x + max_x);
-    root.center_y = 0.5 * (min_y + max_y);
-    const double side = std::max(max_x - min_x, max_y - min_y) + 1e-5;
-    root.half_x = std::max(0.5 * side, 1e-5);
-    root.half_y = std::max(0.5 * side, 1e-5);
-    nodes.reserve(static_cast<std::size_t>(std::max(1, 2 * n)));
-    nodes.push_back(root);
-    for (int i = 0; i < n; ++i) insert(0, i, 0);
-  }
-
-  double non_edge_force(const int point_index,
-                        const double theta,
-                        double& force_x,
-                        double& force_y) const {
-    force_x = 0.0;
-    force_y = 0.0;
-    return non_edge_force_node(0, point_index, theta, force_x, force_y);
-  }
-
- private:
-  const std::vector<double>& y;
-  int n;
-  std::vector<BarnesHutNode2D> nodes;
-
-  int child_slot(const BarnesHutNode2D& node, const int point_index) const {
-    const std::size_t base = static_cast<std::size_t>(point_index) * 2u;
-    const int right = y[base] > node.center_x ? 1 : 0;
-    const int upper = y[base + 1u] > node.center_y ? 2 : 0;
-    return right + upper;
-  }
-
-  int make_child(const int node_index, const int slot) {
-    BarnesHutNode2D& parent = nodes[static_cast<std::size_t>(node_index)];
-    BarnesHutNode2D child;
-    child.half_x = std::max(0.5 * parent.half_x, 1e-12);
-    child.half_y = std::max(0.5 * parent.half_y, 1e-12);
-    child.center_x = parent.center_x + ((slot & 1) ? child.half_x : -child.half_x);
-    child.center_y = parent.center_y + ((slot & 2) ? child.half_y : -child.half_y);
-    const int child_index = static_cast<int>(nodes.size());
-    nodes.push_back(child);
-    nodes[static_cast<std::size_t>(node_index)].children[slot] = child_index;
-    return child_index;
-  }
-
-  void subdivide(const int node_index) {
-    BarnesHutNode2D& node = nodes[static_cast<std::size_t>(node_index)];
-    if (!node.leaf) return;
-    node.leaf = false;
-    const int existing = node.point;
-    node.point = -1;
-    if (existing >= 0) {
-      const int slot = child_slot(node, existing);
-      const int child = node.children[slot] >= 0 ? node.children[slot] : make_child(node_index, slot);
-      insert(child, existing, 0, false);
-    }
-  }
-
-  void update_mass(BarnesHutNode2D& node, const int point_index) {
-    const std::size_t base = static_cast<std::size_t>(point_index) * 2u;
-    const double old_count = static_cast<double>(node.count);
-    const double new_count = old_count + 1.0;
-    node.mass_x = (node.mass_x * old_count + y[base]) / new_count;
-    node.mass_y = (node.mass_y * old_count + y[base + 1u]) / new_count;
-    ++node.count;
-  }
-
-  void insert(const int node_index,
-              const int point_index,
-              const int depth,
-              const bool update_current = true) {
-    BarnesHutNode2D& node = nodes[static_cast<std::size_t>(node_index)];
-    if (update_current) update_mass(node, point_index);
-
-    if (node.leaf) {
-      if (node.point < 0) {
-        node.point = point_index;
-        return;
-      }
-
-      const std::size_t old_base = static_cast<std::size_t>(node.point) * 2u;
-      const std::size_t new_base = static_cast<std::size_t>(point_index) * 2u;
-      const double dx = y[old_base] - y[new_base];
-      const double dy = y[old_base + 1u] - y[new_base + 1u];
-      if (depth >= 64 || dx * dx + dy * dy <= 1e-24) {
-        return;
-      }
-      subdivide(node_index);
-    }
-
-    BarnesHutNode2D& parent = nodes[static_cast<std::size_t>(node_index)];
-    const int slot = child_slot(parent, point_index);
-    const int child = parent.children[slot] >= 0 ? parent.children[slot] : make_child(node_index, slot);
-    insert(child, point_index, depth + 1);
-  }
-
-  double non_edge_force_node(const int node_index,
-                             const int point_index,
-                             const double theta,
-                             double& force_x,
-                             double& force_y) const {
-    const BarnesHutNode2D& node = nodes[static_cast<std::size_t>(node_index)];
-    if (node.count == 0) return 0.0;
-    if (node.leaf && node.count == 1 && node.point == point_index) return 0.0;
-
-    const std::size_t base = static_cast<std::size_t>(point_index) * 2u;
-    const double dx = y[base] - node.mass_x;
-    const double dy = y[base + 1u] - node.mass_y;
-    const double dist_sq = dx * dx + dy * dy;
-    const double width = 2.0 * std::max(node.half_x, node.half_y);
-
-    const double effective_dist_sq = std::max(dist_sq, 1e-24);
-    if (node.leaf || width * width < theta * theta * effective_dist_sq) {
-      if (dist_sq <= 1e-24) return 0.0;
-      const double q = 1.0 / (1.0 + dist_sq);
-      const double mass = static_cast<double>(node.count);
-      const double coeff = mass * q * q;
-      force_x += coeff * dx;
-      force_y += coeff * dy;
-      return mass * q;
-    }
-
-    double sum_q = 0.0;
-    for (int slot = 0; slot < 4; ++slot) {
-      const int child = node.children[slot];
-      if (child >= 0) sum_q += non_edge_force_node(child, point_index, theta, force_x, force_y);
-    }
-    return sum_q;
-  }
-};
 
 double compute_sum_q(const std::vector<double>& y,
                      const int n,
@@ -653,42 +598,292 @@ void compute_gradient_keops_blocked(const SparseProbabilities& p,
   add_sparse_attractive_gradient(p, y, n, dims, exaggeration, n_threads, grad);
 }
 
-void compute_gradient_barnes_hut(const SparseProbabilities& p,
-                                 const std::vector<double>& y,
-                                 const int n,
-                                 const int dims,
-                                 const double exaggeration,
-                                 const double theta,
-                                 const int n_threads,
-                                 std::vector<double>& grad) {
+void fft_1d(std::complex<double>* a, const int n, const bool inverse) {
+  for (int i = 1, j = 0; i < n; ++i) {
+    int bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) std::swap(a[i], a[j]);
+  }
+
+  const double direction = inverse ? -1.0 : 1.0;
+  for (int len = 2; len <= n; len <<= 1) {
+    const double angle = direction * 6.283185307179586476925286766559 / static_cast<double>(len);
+    const std::complex<double> root(std::cos(angle), std::sin(angle));
+    for (int i = 0; i < n; i += len) {
+      std::complex<double> w(1.0, 0.0);
+      const int half = len >> 1;
+      for (int j = 0; j < half; ++j) {
+        const std::complex<double> u = a[i + j];
+        const std::complex<double> v = a[i + j + half] * w;
+        a[i + j] = u + v;
+        a[i + j + half] = u - v;
+        w *= root;
+      }
+    }
+  }
+
+  if (inverse) {
+    const double scale = 1.0 / static_cast<double>(n);
+    for (int i = 0; i < n; ++i) a[i] *= scale;
+  }
+}
+
+void fft_2d(std::vector<std::complex<double>>& values,
+            const int size,
+            const bool inverse,
+            const int n_threads) {
+  parallel_for(size, n_threads, [&](const int begin, const int end, const int) {
+    for (int row = begin; row < end; ++row) {
+      fft_1d(values.data() + static_cast<std::size_t>(row) * size, size, inverse);
+    }
+  });
+
+  parallel_for(size, n_threads, [&](const int begin, const int end, const int) {
+    std::vector<std::complex<double>> column(static_cast<std::size_t>(size));
+    for (int col = begin; col < end; ++col) {
+      for (int row = 0; row < size; ++row) {
+        column[static_cast<std::size_t>(row)] =
+          values[static_cast<std::size_t>(row) * size + col];
+      }
+      fft_1d(column.data(), size, inverse);
+      for (int row = 0; row < size; ++row) {
+        values[static_cast<std::size_t>(row) * size + col] =
+          column[static_cast<std::size_t>(row)];
+      }
+    }
+  });
+}
+
+double bilinear_grid_value(const std::vector<double>& grid,
+                           const int grid_size,
+                           const double gx,
+                           const double gy) {
+  const double cx = std::max(0.0, std::min(static_cast<double>(grid_size - 1), gx));
+  const double cy = std::max(0.0, std::min(static_cast<double>(grid_size - 1), gy));
+  const int x0 = std::max(0, std::min(grid_size - 2, static_cast<int>(std::floor(cx))));
+  const int y0 = std::max(0, std::min(grid_size - 2, static_cast<int>(std::floor(cy))));
+  const double tx = cx - static_cast<double>(x0);
+  const double ty = cy - static_cast<double>(y0);
+  const int x1 = x0 + 1;
+  const int y1 = y0 + 1;
+  const double v00 = grid[static_cast<std::size_t>(y0) * grid_size + x0];
+  const double v10 = grid[static_cast<std::size_t>(y0) * grid_size + x1];
+  const double v01 = grid[static_cast<std::size_t>(y1) * grid_size + x0];
+  const double v11 = grid[static_cast<std::size_t>(y1) * grid_size + x1];
+  return (1.0 - tx) * (1.0 - ty) * v00 +
+    tx * (1.0 - ty) * v10 +
+    (1.0 - tx) * ty * v01 +
+    tx * ty * v11;
+}
+
+void copy_grid_to_fft(const std::vector<double>& grid,
+                      const int grid_size,
+                      const int fft_size,
+                      std::vector<std::complex<double>>& out) {
+  std::fill(out.begin(), out.end(), std::complex<double>(0.0, 0.0));
+  for (int y_cell = 0; y_cell < grid_size; ++y_cell) {
+    for (int x_cell = 0; x_cell < grid_size; ++x_cell) {
+      out[static_cast<std::size_t>(y_cell) * fft_size + x_cell] =
+        grid[static_cast<std::size_t>(y_cell) * grid_size + x_cell];
+    }
+  }
+}
+
+void copy_fft_to_grid(const std::vector<std::complex<double>>& values,
+                      const int grid_size,
+                      const int fft_size,
+                      std::vector<double>& out) {
+  out.assign(static_cast<std::size_t>(grid_size) * grid_size, 0.0);
+  for (int y_cell = 0; y_cell < grid_size; ++y_cell) {
+    for (int x_cell = 0; x_cell < grid_size; ++x_cell) {
+      out[static_cast<std::size_t>(y_cell) * grid_size + x_cell] =
+        values[static_cast<std::size_t>(y_cell) * fft_size + x_cell].real();
+    }
+  }
+}
+
+void compute_fft_grid_convolution(const std::vector<double>& mass,
+                                  const std::vector<double>& mass_x,
+                                  const std::vector<double>& mass_y,
+                                  const int grid_size,
+                                  const double spacing,
+                                  const int n_threads,
+                                  std::vector<double>& q_grid,
+                                  std::vector<double>& q2_grid,
+                                  std::vector<double>& xq2_grid,
+                                  std::vector<double>& yq2_grid) {
+  const int fft_size = grid_size << 1;
+  const std::size_t fft_total = static_cast<std::size_t>(fft_size) * fft_size;
+  std::vector<std::complex<double>> mass_fft(fft_total, std::complex<double>(0.0, 0.0));
+  std::vector<std::complex<double>> mass_x_fft(fft_total, std::complex<double>(0.0, 0.0));
+  std::vector<std::complex<double>> mass_y_fft(fft_total, std::complex<double>(0.0, 0.0));
+  std::vector<std::complex<double>> kernel_q(fft_total, std::complex<double>(0.0, 0.0));
+  std::vector<std::complex<double>> kernel_q2(fft_total, std::complex<double>(0.0, 0.0));
+
+  copy_grid_to_fft(mass, grid_size, fft_size, mass_fft);
+  copy_grid_to_fft(mass_x, grid_size, fft_size, mass_x_fft);
+  copy_grid_to_fft(mass_y, grid_size, fft_size, mass_y_fft);
+
+  for (int dy = -(grid_size - 1); dy <= grid_size - 1; ++dy) {
+    const int yy = dy < 0 ? dy + fft_size : dy;
+    const double y_offset = static_cast<double>(dy) * spacing;
+    for (int dx = -(grid_size - 1); dx <= grid_size - 1; ++dx) {
+      const int xx = dx < 0 ? dx + fft_size : dx;
+      const double x_offset = static_cast<double>(dx) * spacing;
+      const double d2 = x_offset * x_offset + y_offset * y_offset;
+      const double q = 1.0 / (1.0 + d2);
+      const double q2 = q * q;
+      const std::size_t pos = static_cast<std::size_t>(yy) * fft_size + xx;
+      kernel_q[pos] = q;
+      kernel_q2[pos] = q2;
+    }
+  }
+
+  fft_2d(mass_fft, fft_size, false, n_threads);
+  fft_2d(mass_x_fft, fft_size, false, n_threads);
+  fft_2d(mass_y_fft, fft_size, false, n_threads);
+  fft_2d(kernel_q, fft_size, false, n_threads);
+  fft_2d(kernel_q2, fft_size, false, n_threads);
+
+  auto convolve = [&](const std::vector<std::complex<double>>& mass_values,
+                      const std::vector<std::complex<double>>& kernel_values,
+                      std::vector<double>& out) {
+    std::vector<std::complex<double>> work(fft_total);
+    for (std::size_t i = 0; i < fft_total; ++i) work[i] = mass_values[i] * kernel_values[i];
+    fft_2d(work, fft_size, true, n_threads);
+    copy_fft_to_grid(work, grid_size, fft_size, out);
+  };
+
+  convolve(mass_fft, kernel_q, q_grid);
+  convolve(mass_fft, kernel_q2, q2_grid);
+  convolve(mass_x_fft, kernel_q2, xq2_grid);
+  convolve(mass_y_fft, kernel_q2, yq2_grid);
+}
+
+void compute_gradient_fft_grid(const SparseProbabilities& p,
+                               const std::vector<double>& y,
+                               const int n,
+                               const int dims,
+                               const double exaggeration,
+                               const int n_threads,
+                               std::vector<double>& grad) {
   if (dims != 2) {
     compute_gradient_pair_symmetric(p, y, n, dims, exaggeration, n_threads, grad);
     return;
   }
 
-  BarnesHutTree2D tree(y, n);
-  std::vector<double> partial_sum_q(static_cast<std::size_t>(n_threads), 0.0);
+  std::fill(grad.begin(), grad.end(), 0.0);
+  const int grid_size = tsne_fft_grid_size(n);
+  double min_x = y[0], max_x = y[0], min_y = y[1], max_y = y[1];
+  for (int i = 1; i < n; ++i) {
+    const std::size_t base = static_cast<std::size_t>(i) * 2u;
+    min_x = std::min(min_x, y[base]);
+    max_x = std::max(max_x, y[base]);
+    min_y = std::min(min_y, y[base + 1u]);
+    max_y = std::max(max_y, y[base + 1u]);
+  }
+  const double cx = 0.5 * (min_x + max_x);
+  const double cy = 0.5 * (min_y + max_y);
+  double span = std::max(max_x - min_x, max_y - min_y);
+  if (!std::isfinite(span) || span <= 0.0) span = 1.0;
+  const double half = 0.55 * span + 1.0e-3;
+  const double lower_x = cx - half;
+  const double lower_y = cy - half;
+  const double spacing = (2.0 * half) / static_cast<double>(grid_size - 1);
+  const double inv_spacing = 1.0 / spacing;
 
+  std::vector<double> mass(static_cast<std::size_t>(grid_size) * grid_size, 0.0);
+  std::vector<double> mass_x(static_cast<std::size_t>(grid_size) * grid_size, 0.0);
+  std::vector<double> mass_y(static_cast<std::size_t>(grid_size) * grid_size, 0.0);
+  std::vector<double> gx(static_cast<std::size_t>(n), 0.0);
+  std::vector<double> gy(static_cast<std::size_t>(n), 0.0);
+  for (int i = 0; i < n; ++i) {
+    const std::size_t base = static_cast<std::size_t>(i) * 2u;
+    const double x_coord = y[base];
+    const double y_coord = y[base + 1u];
+    const double raw_x = (x_coord - lower_x) * inv_spacing;
+    const double raw_y = (y_coord - lower_y) * inv_spacing;
+    const double clamped_x = std::max(0.0, std::min(static_cast<double>(grid_size - 1), raw_x));
+    const double clamped_y = std::max(0.0, std::min(static_cast<double>(grid_size - 1), raw_y));
+    const int x0 = std::max(0, std::min(grid_size - 2, static_cast<int>(std::floor(clamped_x))));
+    const int y0 = std::max(0, std::min(grid_size - 2, static_cast<int>(std::floor(clamped_y))));
+    const int x1 = x0 + 1;
+    const int y1 = y0 + 1;
+    const double tx = clamped_x - static_cast<double>(x0);
+    const double ty = clamped_y - static_cast<double>(y0);
+    gx[static_cast<std::size_t>(i)] = clamped_x;
+    gy[static_cast<std::size_t>(i)] = clamped_y;
+    const double w00 = (1.0 - tx) * (1.0 - ty);
+    const double w10 = tx * (1.0 - ty);
+    const double w01 = (1.0 - tx) * ty;
+    const double w11 = tx * ty;
+    const std::size_t p00 = static_cast<std::size_t>(y0) * grid_size + x0;
+    const std::size_t p10 = static_cast<std::size_t>(y0) * grid_size + x1;
+    const std::size_t p01 = static_cast<std::size_t>(y1) * grid_size + x0;
+    const std::size_t p11 = static_cast<std::size_t>(y1) * grid_size + x1;
+    mass[p00] += w00;
+    mass[p10] += w10;
+    mass[p01] += w01;
+    mass[p11] += w11;
+    mass_x[p00] += w00 * x_coord;
+    mass_x[p10] += w10 * x_coord;
+    mass_x[p01] += w01 * x_coord;
+    mass_x[p11] += w11 * x_coord;
+    mass_y[p00] += w00 * y_coord;
+    mass_y[p10] += w10 * y_coord;
+    mass_y[p01] += w01 * y_coord;
+    mass_y[p11] += w11 * y_coord;
+  }
+
+  std::vector<double> q_grid;
+  std::vector<double> q2_grid;
+  std::vector<double> xq2_grid;
+  std::vector<double> yq2_grid;
+  compute_fft_grid_convolution(
+    mass,
+    mass_x,
+    mass_y,
+    grid_size,
+    spacing,
+    n_threads,
+    q_grid,
+    q2_grid,
+    xq2_grid,
+    yq2_grid
+  );
+
+  std::vector<double> partial_sum_q(static_cast<std::size_t>(n_threads), 0.0);
   parallel_for(n, n_threads, [&](const int begin, const int end, const int thread_id) {
     double local_sum_q = 0.0;
     for (int i = begin; i < end; ++i) {
-      double fx = 0.0;
-      double fy = 0.0;
-      local_sum_q += tree.non_edge_force(i, theta, fx, fy);
-      const std::size_t base = static_cast<std::size_t>(i) * 2u;
-      grad[base] = -fx;
-      grad[base + 1u] = -fy;
+      const double q_value = bilinear_grid_value(
+        q_grid,
+        grid_size,
+        gx[static_cast<std::size_t>(i)],
+        gy[static_cast<std::size_t>(i)]
+      );
+      local_sum_q += q_value;
     }
     partial_sum_q[static_cast<std::size_t>(thread_id)] = local_sum_q;
   });
-
-  const double inv_sum_q = 1.0 / std::max(
-    std::accumulate(partial_sum_q.begin(), partial_sum_q.end(), 0.0),
+  const double sum_q = std::max(
+    std::accumulate(partial_sum_q.begin(), partial_sum_q.end(), 0.0) -
+      static_cast<double>(n),
     DBL_MIN
   );
-  parallel_for(static_cast<int>(grad.size()), n_threads, [&](const int begin, const int end, const int) {
-    for (int index = begin; index < end; ++index) {
-      grad[static_cast<std::size_t>(index)] *= inv_sum_q;
+  const double inv_sum_q = 1.0 / sum_q;
+
+  parallel_for(n, n_threads, [&](const int begin, const int end, const int) {
+    for (int i = begin; i < end; ++i) {
+      const std::size_t base = static_cast<std::size_t>(i) * 2u;
+      const double px = gx[static_cast<std::size_t>(i)];
+      const double py = gy[static_cast<std::size_t>(i)];
+      const double q2_value = bilinear_grid_value(q2_grid, grid_size, px, py);
+      const double xq2_value = bilinear_grid_value(xq2_grid, grid_size, px, py);
+      const double yq2_value = bilinear_grid_value(yq2_grid, grid_size, px, py);
+      grad[base] = -(y[base] * q2_value - xq2_value) * inv_sum_q;
+      grad[base + 1u] = -(y[base + 1u] * q2_value - yq2_value) * inv_sum_q;
     }
   });
 
@@ -707,8 +902,8 @@ void compute_gradient(const SparseProbabilities& p,
                       std::vector<double>& grad) {
   if (repulsion_mode == "keops_blocked") {
     compute_gradient_keops_blocked(p, y, n, dims, exaggeration, n_threads, block_size, grad);
-  } else if (repulsion_mode == "barnes_hut") {
-    compute_gradient_barnes_hut(p, y, n, dims, exaggeration, theta, n_threads, grad);
+  } else if (repulsion_mode == "fft_grid") {
+    compute_gradient_fft_grid(p, y, n, dims, exaggeration, n_threads, grad);
   } else {
     compute_gradient_pair_symmetric(p, y, n, dims, exaggeration, n_threads, grad);
   }
@@ -772,12 +967,6 @@ void apply_open_tsne_update(std::vector<double>& y,
   });
 }
 
-int sample_nonself(std::mt19937& rng, const int n, const int self) {
-  std::uniform_int_distribution<int> uniform(0, n - 2);
-  const int draw = uniform(rng);
-  return draw >= self ? draw + 1 : draw;
-}
-
 int resolve_reference_index_offset(const IntegerMatrix& indices,
                                    const int n_reference) {
   int min_idx = std::numeric_limits<int>::max();
@@ -791,166 +980,97 @@ int resolve_reference_index_offset(const IntegerMatrix& indices,
   return (min_idx >= 1 && max_idx <= n_reference) ? 1 : 0;
 }
 
-void compute_infotsne_gradient(const SparseProbabilities& p,
-                               const std::vector<double>& y,
-                               const int n,
-                               const int dims,
-                               const double exaggeration,
-                               const double repulsion_strength,
-                               const int n_negatives,
-                               const int n_threads,
-                               const int seed,
-                               std::vector<double>& grad) {
-  std::fill(grad.begin(), grad.end(), 0.0);
-  std::vector<std::vector<double>> local_grad(
-    static_cast<std::size_t>(n_threads),
-    std::vector<double>(grad.size(), 0.0)
-  );
-
-  parallel_for(n, n_threads, [&](const int begin, const int end, const int thread_id) {
-    std::vector<double>& g = local_grad[static_cast<std::size_t>(thread_id)];
-    std::vector<int> negatives(static_cast<std::size_t>(n_negatives), 0);
-    std::vector<double> neg_q(static_cast<std::size_t>(n_negatives), 0.0);
-    const std::uint32_t stream_seed =
-      static_cast<std::uint32_t>(seed) ^
-      (static_cast<std::uint32_t>(thread_id + 1) * 0x9e3779b9u);
-    std::mt19937 rng(stream_seed);
-
-    for (int i = begin; i < end; ++i) {
-      const std::size_t ib = static_cast<std::size_t>(i) * dims;
-
-      const int row_begin = p.row_ptr[static_cast<std::size_t>(i)];
-      const int row_end = p.row_ptr[static_cast<std::size_t>(i + 1)];
-      for (int pos = row_begin; pos < row_end; ++pos) {
-        const int j = p.col[static_cast<std::size_t>(pos)];
-        const std::size_t jb = static_cast<std::size_t>(j) * dims;
-        double d2 = 0.0;
-        for (int d = 0; d < dims; ++d) {
-          const double diff = y[ib + d] - y[jb + d];
-          d2 += diff * diff;
-        }
-        const double q = 1.0 / (1.0 + d2);
-        const double coeff = 2.0 * exaggeration * p.val[static_cast<std::size_t>(pos)] * q;
-        for (int d = 0; d < dims; ++d) {
-          g[ib + d] += coeff * (y[ib + d] - y[jb + d]);
-        }
-      }
-
-      double sum_q = DBL_MIN;
-      for (int m = 0; m < n_negatives; ++m) {
-        const int j = sample_nonself(rng, n, i);
-        negatives[static_cast<std::size_t>(m)] = j;
-        const double q = 1.0 / (1.0 + squared_distance(y, i, j, dims));
-        neg_q[static_cast<std::size_t>(m)] = q;
-        sum_q += q;
-      }
-
-      const double normalizer = repulsion_strength / (static_cast<double>(n) * sum_q);
-      for (int m = 0; m < n_negatives; ++m) {
-        const int j = negatives[static_cast<std::size_t>(m)];
-        const std::size_t jb = static_cast<std::size_t>(j) * dims;
-        const double coeff = -2.0 * normalizer * neg_q[static_cast<std::size_t>(m)] *
-          neg_q[static_cast<std::size_t>(m)];
-        for (int d = 0; d < dims; ++d) {
-          const double diff = y[ib + d] - y[jb + d];
-          const double step = coeff * diff;
-          g[ib + d] += step;
-          g[jb + d] -= step;
-        }
-      }
-    }
-  });
-
-  parallel_for(static_cast<int>(grad.size()), n_threads, [&](const int begin, const int end, const int) {
-    for (int index = begin; index < end; ++index) {
-      double value = 0.0;
-      for (int t = 0; t < n_threads; ++t) {
-        value += local_grad[static_cast<std::size_t>(t)][static_cast<std::size_t>(index)];
-      }
-      grad[static_cast<std::size_t>(index)] = value;
-    }
-  });
-}
-
 void initialize_tsne_transform(const NumericMatrix& reference_layout,
                                const IntegerMatrix& indices,
                                const NumericMatrix& distances,
                                const int offset,
                                const std::string& initialization,
                                const int seed,
+                               const int query_begin,
+                               const int batch_n,
+                               const int n_threads,
                                std::vector<double>& y) {
-  const int n_query = indices.nrow();
   const int k = indices.ncol();
   const int dims = reference_layout.ncol();
+  const std::size_t active_size = static_cast<std::size_t>(batch_n) * dims;
 
   if (initialization == "random") {
     const unsigned int resolved_seed = seed == NA_INTEGER ?
       5489u :
       static_cast<unsigned int>(seed);
-    std::mt19937 rng(resolved_seed);
-    std::normal_distribution<double> normal(0.0, 1.0e-4);
-    for (double& value : y) value = normal(rng);
+    parallel_for(batch_n, n_threads, [&](const int begin, const int end, const int) {
+      std::normal_distribution<double> normal(0.0, 1.0e-4);
+      for (int i = begin; i < end; ++i) {
+        const int global_i = query_begin + i;
+        std::mt19937 rng(
+          mix_uint32(resolved_seed ^ (static_cast<std::uint32_t>(global_i + 1) * 0x9e3779b9u))
+        );
+        for (int d = 0; d < dims; ++d) {
+          y[static_cast<std::size_t>(i) * dims + d] = normal(rng);
+        }
+      }
+    });
     return;
   }
 
-  std::vector<double> values(static_cast<std::size_t>(k), 0.0);
-  for (int i = 0; i < n_query; ++i) {
-    const std::size_t ib = static_cast<std::size_t>(i) * dims;
-    for (int d = 0; d < dims; ++d) {
-      if (initialization == "weighted") {
-        double numerator = 0.0;
-        double denominator = DBL_MIN;
-        for (int j = 0; j < k; ++j) {
-          const int ref = indices(i, j) - offset;
-          const double distance = std::max(0.0, distances(i, j));
-          const double weight = 1.0 / (distance + 1e-6);
-          numerator += weight * reference_layout(ref, d);
-          denominator += weight;
+  std::fill(y.begin(), y.begin() + active_size, 0.0);
+  parallel_for(batch_n, n_threads, [&](const int begin, const int end, const int) {
+    std::vector<double> values(static_cast<std::size_t>(k), 0.0);
+    for (int i = begin; i < end; ++i) {
+      const int global_i = query_begin + i;
+      const std::size_t ib = static_cast<std::size_t>(i) * dims;
+      for (int d = 0; d < dims; ++d) {
+        if (initialization == "weighted") {
+          double numerator = 0.0;
+          double denominator = DBL_MIN;
+          for (int j = 0; j < k; ++j) {
+            const int ref = indices(global_i, j) - offset;
+            const double distance = std::max(0.0, distances(global_i, j));
+            const double weight = 1.0 / (distance + 1e-6);
+            numerator += weight * reference_layout(ref, d);
+            denominator += weight;
+          }
+          y[ib + d] = numerator / denominator;
+        } else {
+          for (int j = 0; j < k; ++j) {
+            const int ref = indices(global_i, j) - offset;
+            values[static_cast<std::size_t>(j)] = reference_layout(ref, d);
+          }
+          const int mid = k / 2;
+          std::nth_element(values.begin(), values.begin() + mid, values.end());
+          double median = values[static_cast<std::size_t>(mid)];
+          if ((k & 1) == 0) {
+            std::nth_element(values.begin(), values.begin() + mid - 1, values.begin() + mid);
+            median = 0.5 * (median + values[static_cast<std::size_t>(mid - 1)]);
+          }
+          y[ib + d] = median;
         }
-        y[ib + d] = numerator / denominator;
-      } else {
-        for (int j = 0; j < k; ++j) {
-          const int ref = indices(i, j) - offset;
-          values[static_cast<std::size_t>(j)] = reference_layout(ref, d);
-        }
-        const int mid = k / 2;
-        std::nth_element(values.begin(), values.begin() + mid, values.end());
-        double median = values[static_cast<std::size_t>(mid)];
-        if ((k & 1) == 0) {
-          std::nth_element(values.begin(), values.begin() + mid - 1, values.begin() + mid);
-          median = 0.5 * (median + values[static_cast<std::size_t>(mid - 1)]);
-        }
-        y[ib + d] = median;
       }
     }
-  }
+  });
 }
 
 void compute_tsne_transform_gradient(const NumericMatrix& reference_layout,
                                      const IntegerMatrix& indices,
-                                     const std::vector<std::vector<double>>& probabilities,
+                                     const std::vector<double>& probabilities,
                                      const std::vector<double>& y,
                                      const int offset,
+                                     const int query_begin,
+                                     const int batch_n,
                                      const double exaggeration,
                                      const int n_negatives,
                                      const int exact_repulsion_threshold,
                                      const int n_threads,
                                      const int seed,
                                      std::vector<double>& grad) {
-  const int n_query = indices.nrow();
   const int k = indices.ncol();
   const int n_reference = reference_layout.nrow();
   const int dims = reference_layout.ncol();
   const bool exact_repulsion = n_reference <= exact_repulsion_threshold ||
     n_negatives >= n_reference;
-  std::fill(grad.begin(), grad.end(), 0.0);
+  std::fill(grad.begin(), grad.begin() + static_cast<std::size_t>(batch_n) * dims, 0.0);
 
-  parallel_for(n_query, n_threads, [&](const int begin, const int end, const int thread_id) {
-    const std::uint32_t stream_seed =
-      static_cast<std::uint32_t>(seed) ^
-      (static_cast<std::uint32_t>(thread_id + 1) * 0x85ebca6bu);
-    std::mt19937 rng(stream_seed);
-    std::uniform_int_distribution<int> uniform_ref(0, std::max(0, n_reference - 1));
+  parallel_for(batch_n, n_threads, [&](const int begin, const int end, const int) {
     std::vector<int> sampled(static_cast<std::size_t>(std::max(1, n_negatives)), 0);
     std::vector<double> q_values;
     if (exact_repulsion) {
@@ -960,8 +1080,13 @@ void compute_tsne_transform_gradient(const NumericMatrix& reference_layout,
     }
 
     for (int i = begin; i < end; ++i) {
+      const int global_i = query_begin + i;
       const std::size_t ib = static_cast<std::size_t>(i) * dims;
       double sum_q = DBL_MIN;
+      std::uint32_t rng_state = mix_uint32(
+        static_cast<std::uint32_t>(seed) ^
+          (static_cast<std::uint32_t>(global_i + 1) * 0x9e3779b9u)
+      );
 
       if (exact_repulsion) {
         for (int ref = 0; ref < n_reference; ++ref) {
@@ -983,7 +1108,7 @@ void compute_tsne_transform_gradient(const NumericMatrix& reference_layout,
         }
       } else {
         for (int m = 0; m < n_negatives; ++m) {
-          const int ref = uniform_ref(rng);
+          const int ref = uniform_index(rng_state, n_reference);
           sampled[static_cast<std::size_t>(m)] = ref;
           double d2 = 0.0;
           for (int d = 0; d < dims; ++d) {
@@ -1004,16 +1129,16 @@ void compute_tsne_transform_gradient(const NumericMatrix& reference_layout,
         }
       }
 
-      const std::vector<double>& row_p = probabilities[static_cast<std::size_t>(i)];
+      const std::size_t p_base = static_cast<std::size_t>(i) * k;
       for (int j = 0; j < k; ++j) {
-        const int ref = indices(i, j) - offset;
+        const int ref = indices(global_i, j) - offset;
         double d2 = 0.0;
         for (int d = 0; d < dims; ++d) {
           const double diff = y[ib + d] - reference_layout(ref, d);
           d2 += diff * diff;
         }
         const double q = 1.0 / (1.0 + d2);
-        const double coeff = exaggeration * row_p[static_cast<std::size_t>(j)] * q;
+        const double coeff = exaggeration * probabilities[p_base + j] * q;
         for (int d = 0; d < dims; ++d) {
           grad[ib + d] += coeff * (y[ib + d] - reference_layout(ref, d));
         }
@@ -1054,149 +1179,6 @@ double evaluate_kl(const SparseProbabilities& p,
 }
 
 } // namespace
-
-// The public R wrapper follows the behaviour of Rtsne::Rtsne_neighbors.
-// This C++ optimizer is an independent fastEmbedR implementation: it does not
-// copy Rtsne's Barnes-Hut source files, whose original Delft license includes
-// an advertising clause.
-// [[Rcpp::export]]
-List knn_tsne_rtsne_cpp(IntegerMatrix indices,
-                        NumericMatrix distances,
-                        NumericMatrix y_init,
-                        bool init,
-                        int n_components,
-                        double perplexity,
-                        double theta,
-                        int max_iter,
-                        int stop_lying_iter,
-                        int mom_switch_iter,
-                        double momentum,
-                        double final_momentum,
-                        double eta,
-                        double exaggeration_factor,
-                        std::string negative_gradient_method,
-                        int n_threads,
-                        int seed,
-                        bool verbose) {
-  if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
-    Rcpp::stop("KNN `indices` and `distances` must have the same dimensions.");
-  }
-  const int n = indices.nrow();
-  const int k = indices.ncol();
-  if (n < 2 || k < 1) Rcpp::stop("KNN input must have at least two rows and one neighbor column.");
-  if (n - 1 < 3.0 * perplexity) Rcpp::stop("perplexity is too large for the number of samples.");
-  if (n_components < 1 || n_components > 3) Rcpp::stop("`n_components` must be 1, 2, or 3 for t-SNE.");
-  if (max_iter < 1) Rcpp::stop("`max_iter` must be positive.");
-  if (eta <= 0.0) Rcpp::stop("`eta` must be positive.");
-  if (momentum < 0.0 || final_momentum < 0.0) Rcpp::stop("momentum values must be non-negative.");
-  if (exaggeration_factor <= 0.0) Rcpp::stop("`exaggeration_factor` must be positive.");
-  if (theta < 0.0 || theta > 1.0) Rcpp::stop("`theta` must lie in [0, 1].");
-
-  const int threads = resolve_threads(n_threads, n);
-  if (verbose) {
-    Rcpp::Rcout << "fastEmbedR t-SNE from KNN: n=" << n
-                << ", k=" << k
-                << ", perplexity=" << perplexity
-                << ", threads=" << threads << "\n";
-  }
-
-  SparseProbabilities p = build_tsne_probabilities(indices, distances, perplexity, threads);
-  const std::string repulsion_mode = tsne_repulsion_mode(n, theta, negative_gradient_method);
-  const int repulsion_block_size = tsne_repulsion_block_size(n);
-  std::string optimizer_name = "exact_sparse_knn";
-  if (repulsion_mode == "keops_blocked") optimizer_name = "exact_sparse_knn_keops_blocked";
-  if (repulsion_mode == "barnes_hut") optimizer_name = "barnes_hut_sparse_knn";
-  if (verbose) {
-    Rcpp::Rcout << "t-SNE repulsion: " << repulsion_mode
-                << ", block_size=" << repulsion_block_size << "\n";
-  }
-
-  std::vector<double> y(static_cast<std::size_t>(n) * n_components);
-  if (init) {
-    if (y_init.nrow() != n || y_init.ncol() != n_components) {
-      Rcpp::stop("`Y_init` has the wrong shape.");
-    }
-    for (int i = 0; i < n; ++i) {
-      for (int d = 0; d < n_components; ++d) {
-        y[static_cast<std::size_t>(i) * n_components + d] = y_init(i, d);
-      }
-    }
-  } else {
-    const unsigned int resolved_seed = seed == NA_INTEGER ?
-      5489u :
-      static_cast<unsigned int>(seed);
-    std::mt19937 rng(resolved_seed);
-    std::normal_distribution<double> normal(0.0, 1.0e-4);
-    for (double& value : y) value = normal(rng);
-  }
-  zero_mean(y, n, n_components);
-
-  std::vector<double> grad(y.size(), 0.0);
-  std::vector<double> update(y.size(), 0.0);
-  std::vector<double> gains(y.size(), 1.0);
-  std::vector<double> costs(static_cast<std::size_t>(n), 0.0);
-  NumericVector iter_costs(static_cast<int>(std::ceil(static_cast<double>(max_iter) / 50.0)));
-  int cost_index = 0;
-
-  for (int iter = 0; iter < max_iter; ++iter) {
-    if ((iter & 7) == 0) Rcpp::checkUserInterrupt();
-    const double current_exaggeration = iter < stop_lying_iter ? exaggeration_factor : 1.0;
-    const double current_momentum = iter >= mom_switch_iter ? final_momentum : momentum;
-    compute_gradient(
-      p,
-      y,
-      n,
-      n_components,
-      current_exaggeration,
-      threads,
-      repulsion_mode,
-      repulsion_block_size,
-      theta,
-      grad
-    );
-
-    parallel_for(static_cast<int>(y.size()), threads, [&](const int begin, const int end, const int) {
-      for (int i = begin; i < end; ++i) {
-        gains[static_cast<std::size_t>(i)] =
-          sign_tsne(grad[static_cast<std::size_t>(i)]) != sign_tsne(update[static_cast<std::size_t>(i)]) ?
-            gains[static_cast<std::size_t>(i)] + 0.2 :
-            gains[static_cast<std::size_t>(i)] * 0.8;
-        if (gains[static_cast<std::size_t>(i)] < 0.01) gains[static_cast<std::size_t>(i)] = 0.01;
-        update[static_cast<std::size_t>(i)] =
-          current_momentum * update[static_cast<std::size_t>(i)] -
-          eta * gains[static_cast<std::size_t>(i)] * grad[static_cast<std::size_t>(i)];
-        y[static_cast<std::size_t>(i)] += update[static_cast<std::size_t>(i)];
-      }
-    });
-    zero_mean(y, n, n_components);
-
-    if ((iter > 0 && (iter + 1) % 50 == 0) || iter == max_iter - 1) {
-      const double kl = evaluate_kl(p, y, n, n_components, threads);
-      if (cost_index < iter_costs.size()) iter_costs[cost_index++] = kl;
-      if (verbose) Rcpp::Rcout << "Iteration " << (iter + 1) << ": error is " << kl << "\n";
-    }
-  }
-
-  evaluate_kl(p, y, n, n_components, threads, &costs);
-
-  NumericMatrix layout(n, n_components);
-  for (int i = 0; i < n; ++i) {
-    for (int d = 0; d < n_components; ++d) {
-      layout(i, d) = y[static_cast<std::size_t>(i) * n_components + d];
-    }
-  }
-
-  return List::create(
-    Rcpp::Named("Y") = layout,
-    Rcpp::Named("costs") = NumericVector(costs.begin(), costs.end()),
-    Rcpp::Named("itercosts") = iter_costs,
-    Rcpp::Named("optimizer") = optimizer_name,
-    Rcpp::Named("repulsion") = repulsion_mode,
-    Rcpp::Named("repulsion_block_size") = repulsion_block_size,
-    Rcpp::Named("theta_requested") = theta,
-    Rcpp::Named("n_threads") = threads
-  );
-}
 
 // Native openTSNE-style optimizer from precomputed KNN probabilities. This
 // follows openTSNE's two-phase optimization contract while keeping the
@@ -1252,11 +1234,11 @@ List knn_tsne_opentsne_cpp(IntegerMatrix indices,
   SparseProbabilities p = build_tsne_probabilities(indices, distances, perplexity, threads);
   const std::string repulsion_mode = tsne_repulsion_mode(n, theta, negative_gradient_method);
   if (repulsion_mode == "keops_blocked") {
-    Rcpp::stop("`negative_gradient_method = \"keops_blocked\"` is not part of the openTSNE-style native path; use `method = \"tsne\"` for that experimental reducer.");
+    Rcpp::stop("`negative_gradient_method = \"keops_blocked\"` is not part of the native openTSNE-style path.");
   }
   const int repulsion_block_size = tsne_repulsion_block_size(n);
-  std::string optimizer_name = repulsion_mode == "barnes_hut" ?
-    "opentsne_barnes_hut_sparse_knn" :
+  std::string optimizer_name = repulsion_mode == "fft_grid" ?
+    "opentsne_fitsne_fft_grid_sparse_knn" :
     "opentsne_exact_sparse_knn";
   if (verbose) {
     Rcpp::Rcout << "openTSNE-style repulsion: " << repulsion_mode
@@ -1387,131 +1369,6 @@ List knn_tsne_opentsne_cpp(IntegerMatrix indices,
 }
 
 // [[Rcpp::export]]
-List knn_infotsne_cpp(IntegerMatrix indices,
-                      NumericMatrix distances,
-                      NumericMatrix y_init,
-                      bool init,
-                      int n_components,
-                      double perplexity,
-                      int max_iter,
-                      int early_exaggeration_iter,
-                      double momentum,
-                      double final_momentum,
-                      double learning_rate,
-                      double early_exaggeration_coeff,
-                      double repulsion_strength,
-                      int n_negatives,
-                      int n_threads,
-                      int seed,
-                      bool verbose) {
-  if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
-    Rcpp::stop("KNN `indices` and `distances` must have the same dimensions.");
-  }
-  const int n = indices.nrow();
-  const int k = indices.ncol();
-  if (n < 2 || k < 1) Rcpp::stop("KNN input must have at least two rows and one neighbor column.");
-  if (n - 1 < 3.0 * perplexity) Rcpp::stop("perplexity is too large for the number of samples.");
-  if (n_components < 1 || n_components > 3) Rcpp::stop("`n_components` must be 1, 2, or 3 for InfoTSNE.");
-  if (max_iter < 1) Rcpp::stop("`max_iter` must be positive.");
-  if (early_exaggeration_iter < 0) Rcpp::stop("`early_exaggeration_iter` must be non-negative.");
-  if (momentum < 0.0 || final_momentum < 0.0) Rcpp::stop("momentum values must be non-negative.");
-  if (learning_rate <= 0.0) Rcpp::stop("`learning_rate` must be positive.");
-  if (early_exaggeration_coeff <= 0.0) Rcpp::stop("`early_exaggeration_coeff` must be positive.");
-  if (repulsion_strength <= 0.0) Rcpp::stop("`repulsion_strength` must be positive.");
-  if (n_negatives < 1) Rcpp::stop("`n_negatives` must be positive.");
-  if (n_negatives > n - 1) {
-    Rcpp::warning("`n_negatives` exceeds n - 1; capping to n - 1.");
-    n_negatives = n - 1;
-  }
-
-  const int threads = resolve_threads(n_threads, n);
-  if (verbose) {
-    Rcpp::Rcout << "fastEmbedR InfoTSNE from KNN: n=" << n
-                << ", k=" << k
-                << ", perplexity=" << perplexity
-                << ", negatives=" << n_negatives
-                << ", threads=" << threads << "\n";
-  }
-
-  SparseProbabilities p = build_tsne_probabilities(indices, distances, perplexity, threads);
-
-  std::vector<double> y(static_cast<std::size_t>(n) * n_components);
-  if (init) {
-    if (y_init.nrow() != n || y_init.ncol() != n_components) {
-      Rcpp::stop("`Y_init` has the wrong shape.");
-    }
-    for (int i = 0; i < n; ++i) {
-      for (int d = 0; d < n_components; ++d) {
-        y[static_cast<std::size_t>(i) * n_components + d] = y_init(i, d);
-      }
-    }
-  } else {
-    const unsigned int resolved_seed = seed == NA_INTEGER ?
-      5489u :
-      static_cast<unsigned int>(seed);
-    std::mt19937 rng(resolved_seed);
-    std::normal_distribution<double> normal(0.0, 1.0e-4);
-    for (double& value : y) value = normal(rng);
-  }
-  zero_mean(y, n, n_components);
-
-  std::vector<double> grad(y.size(), 0.0);
-  std::vector<double> velocity(y.size(), 0.0);
-
-  for (int iter = 0; iter < max_iter; ++iter) {
-    if ((iter & 7) == 0) Rcpp::checkUserInterrupt();
-    const double current_exaggeration = iter < early_exaggeration_iter ?
-      early_exaggeration_coeff :
-      1.0;
-    const double current_momentum = iter >= early_exaggeration_iter ?
-      final_momentum :
-      momentum;
-    const double decay = 1.0 - (static_cast<double>(iter) / std::max(1.0, static_cast<double>(max_iter)));
-    const double current_lr = learning_rate * std::max(0.01, decay);
-    const int iter_seed = (seed == NA_INTEGER ? 5489 : seed) +
-      104729 * (iter + 1);
-
-    compute_infotsne_gradient(
-      p,
-      y,
-      n,
-      n_components,
-      current_exaggeration,
-      repulsion_strength,
-      n_negatives,
-      threads,
-      iter_seed,
-      grad
-    );
-
-    parallel_for(static_cast<int>(y.size()), threads, [&](const int begin, const int end, const int) {
-      for (int i = begin; i < end; ++i) {
-        velocity[static_cast<std::size_t>(i)] =
-          current_momentum * velocity[static_cast<std::size_t>(i)] -
-          current_lr * grad[static_cast<std::size_t>(i)];
-        y[static_cast<std::size_t>(i)] += velocity[static_cast<std::size_t>(i)];
-      }
-    });
-    zero_mean(y, n, n_components);
-  }
-
-  NumericMatrix layout(n, n_components);
-  for (int i = 0; i < n; ++i) {
-    for (int d = 0; d < n_components; ++d) {
-      layout(i, d) = y[static_cast<std::size_t>(i) * n_components + d];
-    }
-  }
-
-  return List::create(
-    Rcpp::Named("Y") = layout,
-    Rcpp::Named("optimizer") = "infotsne_negative_sampling",
-    Rcpp::Named("objective") = "InfoTSNE",
-    Rcpp::Named("n_negatives") = n_negatives,
-    Rcpp::Named("n_threads") = threads
-  );
-}
-
-// [[Rcpp::export]]
 List transform_tsne_cpp(NumericMatrix reference_layout,
                         IntegerMatrix indices,
                         NumericMatrix distances,
@@ -1588,101 +1445,134 @@ List transform_tsne_cpp(NumericMatrix reference_layout,
                 << ", threads=" << threads << "\n";
   }
 
-  std::vector<std::vector<double>> probabilities(static_cast<std::size_t>(n_query));
-  parallel_for(n_query, threads, [&](const int begin, const int end, const int) {
-    for (int i = begin; i < end; ++i) {
-      compute_row_probabilities(distances, i, perplexity, probabilities[static_cast<std::size_t>(i)]);
-    }
-  });
-
-  std::vector<double> y(static_cast<std::size_t>(n_query) * dims, 0.0);
-  if (init) {
-    if (y_init.nrow() != n_query || y_init.ncol() != dims) {
-      Rcpp::stop("`Y_init` has the wrong shape.");
-    }
-    for (int i = 0; i < n_query; ++i) {
-      for (int d = 0; d < dims; ++d) {
-        y[static_cast<std::size_t>(i) * dims + d] = y_init(i, d);
-      }
-    }
-  } else {
-    initialize_tsne_transform(
-      reference_layout,
-      indices,
-      distances,
-      offset,
-      initialization,
-      seed,
-      y
-    );
+  if (init && (y_init.nrow() != n_query || y_init.ncol() != dims)) {
+    Rcpp::stop("`Y_init` has the wrong shape.");
   }
 
+  const int batch_size = tsne_transform_batch_size(n_query, k, dims);
+  const int n_batches = (n_query + batch_size - 1) / batch_size;
+  std::vector<double> probabilities(static_cast<std::size_t>(batch_size) * k, 0.0);
+  std::vector<double> y(static_cast<std::size_t>(batch_size) * dims, 0.0);
   std::vector<double> grad(y.size(), 0.0);
   std::vector<double> update(y.size(), 0.0);
   std::vector<double> gains(y.size(), 1.0);
   const int total_iter = early_exaggeration_iter + n_iter;
+  NumericMatrix layout(n_query, dims);
 
-  for (int iter = 0; iter < total_iter; ++iter) {
-    if ((iter & 7) == 0) Rcpp::checkUserInterrupt();
-    const bool in_early = iter < early_exaggeration_iter;
-    const double current_exaggeration = in_early ? early_exaggeration : exaggeration;
-    const double current_momentum = in_early ? initial_momentum : final_momentum;
-    const int iter_seed = (seed == NA_INTEGER ? 5489 : seed) + 65537 * (iter + 1);
+  for (int query_begin = 0; query_begin < n_query; query_begin += batch_size) {
+    const int batch_n = std::min(batch_size, n_query - query_begin);
+    const int batch_threads = resolve_threads(threads, batch_n);
+    const std::size_t active_points = static_cast<std::size_t>(batch_n);
+    const std::size_t active_layout = active_points * dims;
+    const std::size_t active_graph = active_points * k;
 
-    compute_tsne_transform_gradient(
-      reference_layout,
-      indices,
-      probabilities,
-      y,
-      offset,
-      current_exaggeration,
-      n_negatives,
-      exact_repulsion_threshold,
-      threads,
-      iter_seed,
-      grad
-    );
-
-    parallel_for(n_query, threads, [&](const int begin, const int end, const int) {
+    parallel_for(batch_n, batch_threads, [&](const int begin, const int end, const int) {
       for (int i = begin; i < end; ++i) {
-        const std::size_t ib = static_cast<std::size_t>(i) * dims;
-        double grad_norm_sq = 0.0;
-        for (int d = 0; d < dims; ++d) {
-          grad_norm_sq += grad[ib + d] * grad[ib + d];
-        }
-        if (grad_norm_sq > max_grad_norm * max_grad_norm) {
-          const double scale = max_grad_norm / (std::sqrt(grad_norm_sq) + 1e-12);
-          for (int d = 0; d < dims; ++d) grad[ib + d] *= scale;
-        }
-
-        for (int d = 0; d < dims; ++d) {
-          const std::size_t index = ib + d;
-          if (sign_tsne(update[index]) != sign_tsne(grad[index])) {
-            gains[index] += 0.2;
-          } else {
-            gains[index] = gains[index] * 0.8 + 0.01;
-          }
-          if (gains[index] < 0.01) gains[index] = 0.01;
-          update[index] = current_momentum * update[index] -
-            learning_rate * gains[index] * grad[index];
-        }
-
-        double step_norm_sq = 0.0;
-        for (int d = 0; d < dims; ++d) step_norm_sq += update[ib + d] * update[ib + d];
-        if (step_norm_sq > max_step_norm * max_step_norm) {
-          const double scale = max_step_norm / (std::sqrt(step_norm_sq) + 1e-12);
-          for (int d = 0; d < dims; ++d) update[ib + d] *= scale;
-        }
-        for (int d = 0; d < dims; ++d) y[ib + d] += update[ib + d];
+        compute_row_probabilities_flat(
+          distances,
+          query_begin + i,
+          perplexity,
+          probabilities.data() + static_cast<std::size_t>(i) * k
+        );
       }
     });
-  }
 
-  NumericMatrix layout(n_query, dims);
-  for (int i = 0; i < n_query; ++i) {
-    for (int d = 0; d < dims; ++d) {
-      layout(i, d) = y[static_cast<std::size_t>(i) * dims + d];
+    if (init) {
+      parallel_for(batch_n, batch_threads, [&](const int begin, const int end, const int) {
+        for (int i = begin; i < end; ++i) {
+          const int global_i = query_begin + i;
+          for (int d = 0; d < dims; ++d) {
+            y[static_cast<std::size_t>(i) * dims + d] = y_init(global_i, d);
+          }
+        }
+      });
+    } else {
+      initialize_tsne_transform(
+        reference_layout,
+        indices,
+        distances,
+        offset,
+        initialization,
+        seed,
+        query_begin,
+        batch_n,
+        batch_threads,
+        y
+      );
     }
+    std::fill(update.begin(), update.begin() + active_layout, 0.0);
+    std::fill(gains.begin(), gains.begin() + active_layout, 1.0);
+    std::fill(grad.begin(), grad.begin() + active_layout, 0.0);
+    if (active_graph < probabilities.size()) {
+      std::fill(probabilities.begin() + active_graph, probabilities.end(), 0.0);
+    }
+
+    for (int iter = 0; iter < total_iter; ++iter) {
+      if ((iter & 7) == 0) Rcpp::checkUserInterrupt();
+      const bool in_early = iter < early_exaggeration_iter;
+      const double current_exaggeration = in_early ? early_exaggeration : exaggeration;
+      const double current_momentum = in_early ? initial_momentum : final_momentum;
+      const int iter_seed = (seed == NA_INTEGER ? 5489 : seed) + 65537 * (iter + 1);
+
+      compute_tsne_transform_gradient(
+        reference_layout,
+        indices,
+        probabilities,
+        y,
+        offset,
+        query_begin,
+        batch_n,
+        current_exaggeration,
+        n_negatives,
+        exact_repulsion_threshold,
+        batch_threads,
+        iter_seed,
+        grad
+      );
+
+      parallel_for(batch_n, batch_threads, [&](const int begin, const int end, const int) {
+        for (int i = begin; i < end; ++i) {
+          const std::size_t ib = static_cast<std::size_t>(i) * dims;
+          double grad_norm_sq = 0.0;
+          for (int d = 0; d < dims; ++d) {
+            grad_norm_sq += grad[ib + d] * grad[ib + d];
+          }
+          if (grad_norm_sq > max_grad_norm * max_grad_norm) {
+            const double scale = max_grad_norm / (std::sqrt(grad_norm_sq) + 1e-12);
+            for (int d = 0; d < dims; ++d) grad[ib + d] *= scale;
+          }
+
+          for (int d = 0; d < dims; ++d) {
+            const std::size_t index = ib + d;
+            if (sign_tsne(update[index]) != sign_tsne(grad[index])) {
+              gains[index] += 0.2;
+            } else {
+              gains[index] = gains[index] * 0.8 + 0.01;
+            }
+            if (gains[index] < 0.01) gains[index] = 0.01;
+            update[index] = current_momentum * update[index] -
+              learning_rate * gains[index] * grad[index];
+          }
+
+          double step_norm_sq = 0.0;
+          for (int d = 0; d < dims; ++d) step_norm_sq += update[ib + d] * update[ib + d];
+          if (step_norm_sq > max_step_norm * max_step_norm) {
+            const double scale = max_step_norm / (std::sqrt(step_norm_sq) + 1e-12);
+            for (int d = 0; d < dims; ++d) update[ib + d] *= scale;
+          }
+          for (int d = 0; d < dims; ++d) y[ib + d] += update[ib + d];
+        }
+      });
+    }
+
+    parallel_for(batch_n, batch_threads, [&](const int begin, const int end, const int) {
+      for (int i = begin; i < end; ++i) {
+        const int global_i = query_begin + i;
+        for (int d = 0; d < dims; ++d) {
+          layout(global_i, d) = y[static_cast<std::size_t>(i) * dims + d];
+        }
+      }
+    });
   }
 
   return List::create(
@@ -1690,6 +1580,10 @@ List transform_tsne_cpp(NumericMatrix reference_layout,
     Rcpp::Named("optimizer") = "opentsne_style_fixed_reference_transform",
     Rcpp::Named("initialization") = initialization,
     Rcpp::Named("repulsion") = exact_repulsion ? "exact_reference" : "sampled_reference",
+    Rcpp::Named("affinities") = "precomputed_query_conditional",
+    Rcpp::Named("affinity_storage") = "flat_row_major_double",
+    Rcpp::Named("transform_batch_size") = batch_size,
+    Rcpp::Named("transform_batches") = n_batches,
     Rcpp::Named("n_negatives") = n_negatives,
     Rcpp::Named("n_threads") = threads
   );

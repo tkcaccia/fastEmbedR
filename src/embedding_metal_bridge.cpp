@@ -81,6 +81,25 @@ List transform_tsne_metal_impl(NumericMatrix reference_layout,
                                int n_negatives,
                                int exact_repulsion_threshold,
                                int seed);
+List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
+                                  NumericMatrix distances,
+                                  NumericMatrix y_init,
+                                  bool init,
+                                  int n_components,
+                                  double perplexity,
+                                  int early_exaggeration_iter,
+                                  int n_iter,
+                                  double early_exaggeration,
+                                  double exaggeration,
+                                  double learning_rate,
+                                  bool learning_rate_auto,
+                                  double initial_momentum,
+                                  double final_momentum,
+                                  double min_gain,
+                                  double max_step_norm,
+                                  std::string negative_gradient_method,
+                                  int seed,
+                                  bool record_costs);
 
 // [[Rcpp::export]]
 bool embedding_metal_available_cpp() {
@@ -256,5 +275,48 @@ List transform_tsne_metal_cpp(NumericMatrix reference_layout,
     n_negatives,
     exact_repulsion_threshold,
     seed
+  );
+}
+
+// [[Rcpp::export]]
+List knn_tsne_opentsne_metal_cpp(IntegerMatrix indices,
+                                 NumericMatrix distances,
+                                 NumericMatrix y_init,
+                                 bool init,
+                                 int n_components,
+                                 double perplexity,
+                                 int early_exaggeration_iter,
+                                 int n_iter,
+                                 double early_exaggeration,
+                                 double exaggeration,
+                                 double learning_rate,
+                                 bool learning_rate_auto,
+                                 double initial_momentum,
+                                 double final_momentum,
+                                 double min_gain,
+                                 double max_step_norm,
+                                 std::string negative_gradient_method,
+                                 int seed,
+                                 bool record_costs) {
+  return knn_tsne_opentsne_metal_impl(
+    indices,
+    distances,
+    y_init,
+    init,
+    n_components,
+    perplexity,
+    early_exaggeration_iter,
+    n_iter,
+    early_exaggeration,
+    exaggeration,
+    learning_rate,
+    learning_rate_auto,
+    initial_momentum,
+    final_momentum,
+    min_gain,
+    max_step_norm,
+    negative_gradient_method,
+    seed,
+    record_costs
   );
 }

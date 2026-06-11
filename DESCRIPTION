@@ -1,6 +1,6 @@
 Package: fastEmbedR
 Type: Package
-Title: Fast UMAP and t-SNE from Precomputed KNN Matrices
+Title: Fast Native UMAP and openTSNE from Precomputed KNN Matrices
 Version: 0.1.0
 Authors@R: person(given = "Stefano",
     family = "User",
@@ -8,11 +8,12 @@ Authors@R: person(given = "Stefano",
     email = "stefano@example.com")
 Author: Stefano User [aut, cre]
 Maintainer: Stefano User <stefano@example.com>
-Description: A compact UMAP and t-SNE implementation focused on fast
+Description: A compact UMAP and openTSNE-style implementation focused on fast
     embeddings from precomputed nearest-neighbor index and distance matrices.
-    The graph construction, exact nearest-neighbor search, and stochastic
-    layout optimization are implemented in native C++ with a user-facing API
-    centered on fast KNN reuse.
+    Nearest-neighbor search, preprocessing helpers, fixed-reference transform,
+    and stochastic layout optimization are implemented in native code with a
+    user-facing API centered on fast KNN reuse and explicit CPU/Metal/CUDA
+    backend reporting.
 License: GPL (>= 3)
 URL: https://github.com/tkcaccia/fastEmbedR
 BugReports: https://github.com/tkcaccia/fastEmbedR/issues
@@ -29,4 +30,4 @@ LinkingTo:
     Rcpp
 SystemRequirements: C++17, Fortran, optional FAISS C++ library for backend = "faiss", optional RAPIDS cuVS library for backend = "cuda_cuvs", Metal framework on macOS for the optional Metal backend, CUDA toolkit for the optional CUDA backend
 VignetteBuilder: knitr
-RoxygenNote: 7.3.2
+Config/roxygen2/version: 8.0.0

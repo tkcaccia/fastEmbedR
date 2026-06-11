@@ -1,6 +1,7 @@
 #include <Rcpp.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <limits>
 #include <numeric>
@@ -51,6 +52,41 @@ bool neighbor_less(const Neighbor& a, const Neighbor& b) {
 bool fortran_nn_enabled() {
   const char* value = std::getenv("FASTEMBEDR_USE_FORTRAN_NN");
   return value != nullptr && std::string(value) == "1";
+}
+
+bool env_is_truthy(const char* value) {
+  if (value == nullptr) return false;
+  const std::string text(value);
+  return text == "1" || text == "true" || text == "TRUE" ||
+    text == "yes" || text == "YES" || text == "on" || text == "ON";
+}
+
+bool env_is_falsey(const char* value) {
+  if (value == nullptr) return false;
+  const std::string text(value);
+  return text == "0" || text == "false" || text == "FALSE" ||
+    text == "no" || text == "NO" || text == "off" || text == "OFF";
+}
+
+double env_positive_double(const char* name, const double fallback) {
+  const char* value = std::getenv(name);
+  if (value == nullptr) return fallback;
+  char* end = nullptr;
+  const double parsed = std::strtod(value, &end);
+  if (end == value || !std::isfinite(parsed) || parsed <= 0.0) return fallback;
+  return parsed;
+}
+
+bool use_row_major_distance_layout(const double copy_bytes) {
+  const char* forced = std::getenv("FASTEMBEDR_NN_ROW_MAJOR");
+  if (env_is_truthy(forced)) return true;
+  if (env_is_falsey(forced)) return false;
+
+  const double max_mb = env_positive_double(
+    "FASTEMBEDR_NN_ROW_MAJOR_MAX_MB",
+    2048.0
+  );
+  return copy_bytes <= max_mb * 1024.0 * 1024.0;
 }
 
 void copy_row_major(const double* src, std::vector<double>& dest, const int nrow, const int ncol) {
@@ -730,10 +766,14 @@ List nn_cpp(NumericMatrix data,
       for (auto& worker : workers) worker.join();
     }
 
-    return List::create(
+    List result = List::create(
       Rcpp::Named("indices") = indices,
       Rcpp::Named("distances") = distances
     );
+    result.attr("memory_layout") = "fortran_column_major";
+    result.attr("row_major_copy") = false;
+    result.attr("row_major_copy_mb") = 0.0;
+    return result;
   }
 
   std::vector<double> data_row_major;
@@ -743,10 +783,10 @@ List nn_cpp(NumericMatrix data,
     static_cast<double>(n_features) *
     static_cast<double>(n_data + (same_matrix ? 0 : n_points)) *
     static_cast<double>(sizeof(double));
-  const bool use_column_major = input_copy_bytes >= 128.0 * 1024.0 * 1024.0;
+  const bool use_row_major = use_row_major_distance_layout(input_copy_bytes);
   const double* data_ptr = data.begin();
   const double* points_ptr = points.begin();
-  if (!use_column_major) {
+  if (use_row_major) {
     copy_row_major(data.begin(), data_row_major, n_data, n_features);
     data_ptr = data_row_major.data();
     points_ptr = data_ptr;
@@ -759,7 +799,7 @@ List nn_cpp(NumericMatrix data,
 
   const auto write_result = [&](const int query_start, const int query_end) {
     if (distance_kind == DistanceKind::Euclidean) {
-      if (use_column_major) {
+      if (!use_row_major) {
         write_knn_rows<DistanceKind::Euclidean, false>(
           data_ptr, points_ptr, n_data, n_points, n_features, k, square, sorted,
           p, use_fixed_topk, exclude_self, indices_ptr, distances_ptr, query_start, query_end
@@ -771,7 +811,7 @@ List nn_cpp(NumericMatrix data,
         );
       }
     } else if (distance_kind == DistanceKind::Manhattan) {
-      if (use_column_major) {
+      if (!use_row_major) {
         write_knn_rows<DistanceKind::Manhattan, false>(
           data_ptr, points_ptr, n_data, n_points, n_features, k, square, sorted,
           p, use_fixed_topk, exclude_self, indices_ptr, distances_ptr, query_start, query_end
@@ -783,7 +823,7 @@ List nn_cpp(NumericMatrix data,
         );
       }
     } else {
-      if (use_column_major) {
+      if (!use_row_major) {
         write_knn_rows<DistanceKind::Minkowski, false>(
           data_ptr, points_ptr, n_data, n_points, n_features, k, square, sorted,
           p, use_fixed_topk, exclude_self, indices_ptr, distances_ptr, query_start, query_end
@@ -810,10 +850,18 @@ List nn_cpp(NumericMatrix data,
     for (auto& worker : workers) worker.join();
   }
 
-  return List::create(
+  List result = List::create(
     Rcpp::Named("indices") = indices,
     Rcpp::Named("distances") = distances
   );
+  result.attr("memory_layout") = use_row_major
+    ? "row_major_contiguous"
+    : "r_column_major";
+  result.attr("row_major_copy") = use_row_major;
+  result.attr("row_major_copy_mb") = use_row_major
+    ? input_copy_bytes / (1024.0 * 1024.0)
+    : 0.0;
+  return result;
 }
 
 // [[Rcpp::export]]
@@ -1335,6 +1383,7 @@ List landmark_projection_knn_approx_cpp(NumericMatrix landmarks,
   if (k < 1 || k > n_landmarks) Rcpp::stop("k must be in [1, nrow(landmarks)]");
   n_projections = std::max(1, std::min(n_projections, 64));
   window = std::max(1, std::min(window, n_landmarks));
+  const int n_threads = requested_threads(parallel, cores, n_queries);
 
   std::vector<float> landmark_data;
   std::vector<float> query_data;
@@ -1369,46 +1418,71 @@ List landmark_projection_knn_approx_cpp(NumericMatrix landmarks,
     static_cast<std::size_t>(n_projections) * n_queries,
     0.0f
   );
-  for (int pidx = 0; pidx < n_projections; ++pidx) {
-    const float* vec = projection_vectors.data() + static_cast<std::size_t>(pidx) * n_features;
-    std::vector<ProjectionScore>& scores = landmark_scores[static_cast<std::size_t>(pidx)];
-    scores.resize(static_cast<std::size_t>(n_landmarks));
-    for (int i = 0; i < n_landmarks; ++i) {
-      const float* row = landmark_data.data() + static_cast<std::size_t>(i) * n_features;
-      float score = 0.0f;
-      for (int c = 0; c < n_features; ++c) score += row[c] * vec[c];
-      scores[static_cast<std::size_t>(i)] = ProjectionScore{score, i};
-    }
-    std::sort(scores.begin(), scores.end(), projection_score_less);
 
-    float* query_score = query_scores.data() + static_cast<std::size_t>(pidx) * n_queries;
-    for (int q = 0; q < n_queries; ++q) {
-      const float* row = query_data.data() + static_cast<std::size_t>(q) * n_features;
-      float score = 0.0f;
-      for (int c = 0; c < n_features; ++c) score += row[c] * vec[c];
-      query_score[q] = score;
+  auto score_projection_range = [&](const int projection_start, const int projection_end) {
+    for (int pidx = projection_start; pidx < projection_end; ++pidx) {
+      const float* vec = projection_vectors.data() + static_cast<std::size_t>(pidx) * n_features;
+      std::vector<ProjectionScore>& scores = landmark_scores[static_cast<std::size_t>(pidx)];
+      scores.resize(static_cast<std::size_t>(n_landmarks));
+      for (int i = 0; i < n_landmarks; ++i) {
+        const float* row = landmark_data.data() + static_cast<std::size_t>(i) * n_features;
+        float score = 0.0f;
+        for (int c = 0; c < n_features; ++c) score += row[c] * vec[c];
+        scores[static_cast<std::size_t>(i)] = ProjectionScore{score, i};
+      }
+      std::sort(scores.begin(), scores.end(), projection_score_less);
+
+      float* query_score = query_scores.data() + static_cast<std::size_t>(pidx) * n_queries;
+      for (int q = 0; q < n_queries; ++q) {
+        const float* row = query_data.data() + static_cast<std::size_t>(q) * n_features;
+        float score = 0.0f;
+        for (int c = 0; c < n_features; ++c) score += row[c] * vec[c];
+        query_score[q] = score;
+      }
     }
+  };
+
+  const double score_work = static_cast<double>(n_projections) *
+    static_cast<double>(n_landmarks + n_queries) *
+    static_cast<double>(n_features);
+  const int score_threads = score_work >= 10000000.0
+    ? std::max(1, std::min(n_threads, n_projections))
+    : 1;
+  if (score_threads == 1) {
+    score_projection_range(0, n_projections);
+  } else {
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(score_threads));
+    for (int t = 0; t < score_threads; ++t) {
+      const int start = (n_projections * t) / score_threads;
+      const int end = (n_projections * (t + 1)) / score_threads;
+      workers.emplace_back(score_projection_range, start, end);
+    }
+    for (auto& worker : workers) worker.join();
   }
 
   IntegerMatrix indices(n_queries, k);
   NumericMatrix distances(n_queries, k);
   int* indices_ptr = indices.begin();
   double* distances_ptr = distances.begin();
-  const int n_threads = requested_threads(parallel, cores, n_queries);
+  const double visited_stamp_mb =
+    static_cast<double>(n_landmarks) * static_cast<double>(sizeof(std::uint16_t)) /
+    (1024.0 * 1024.0);
 
   auto write_rows = [&](const int row_start, const int row_end) {
-    std::vector<int> seen(static_cast<std::size_t>(n_landmarks), 0);
-    int stamp = 1;
+    std::vector<std::uint16_t> seen(static_cast<std::size_t>(n_landmarks), 0);
+    std::uint16_t stamp = 0;
     std::vector<NeighborF> top;
     top.reserve(static_cast<std::size_t>(k));
 
     for (int q = row_start; q < row_end; ++q) {
       top.clear();
-      if (stamp == std::numeric_limits<int>::max()) {
+      if (stamp == std::numeric_limits<std::uint16_t>::max()) {
         std::fill(seen.begin(), seen.end(), 0);
         stamp = 1;
+      } else {
+        ++stamp;
       }
-      ++stamp;
 
       for (int pidx = 0; pidx < n_projections; ++pidx) {
         const std::vector<ProjectionScore>& scores =
@@ -1488,7 +1562,10 @@ List landmark_projection_knn_approx_cpp(NumericMatrix landmarks,
     Rcpp::Named("indices") = indices,
     Rcpp::Named("distances") = distances,
     Rcpp::Named("n_projections") = n_projections,
-    Rcpp::Named("window") = window
+    Rcpp::Named("window") = window,
+    Rcpp::Named("n_threads") = n_threads,
+    Rcpp::Named("score_threads") = score_threads,
+    Rcpp::Named("visited_stamp_mb_per_thread") = visited_stamp_mb
   );
 }
 

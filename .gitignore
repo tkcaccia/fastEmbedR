@@ -27,3 +27,6 @@ results/
 # Local IDE/editor files
 .vscode/
 .idea/
+
+# Local credentials
+*.key

@@ -104,8 +104,7 @@ run_one <- function(method, x, labels, knn, k, perplexity, seed, n_threads) {
         mom_switch_iter = early_iter,
         eta = 200,
         exaggeration_factor = 12,
-        negative_gradient_method = "bh",
-        theta = 0.5,
+        negative_gradient_method = "fft",
         n_threads = n_threads
       )),
       opentsne = timed(fastEmbedR::opentsne(
@@ -126,8 +125,7 @@ run_one <- function(method, x, labels, knn, k, perplexity, seed, n_threads) {
         n_iter = normal_iter,
         learning_rate = "auto",
         early_exaggeration = "auto",
-        negative_gradient_method = "bh",
-        theta = 0.5,
+        negative_gradient_method = "fft",
         n_threads = n_threads
       )),
       stop("Unknown method: ", method, call. = FALSE)

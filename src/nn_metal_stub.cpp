@@ -22,3 +22,17 @@ List metal_landmark_candidate_knn_impl(NumericMatrix,
                                        int) {
   Rcpp::stop("Metal approximate candidate KNN is only available on macOS with Metal support.");
 }
+
+List metal_grid_knn_impl(NumericMatrix,
+                         int,
+                         int,
+                         int,
+                         int) {
+  Rcpp::stop("Metal grid KNN is only available on macOS with Metal support.");
+}
+
+List metal_row_candidate_knn_impl(NumericMatrix,
+                                  IntegerMatrix,
+                                  int) {
+  Rcpp::stop("Metal row-candidate KNN is only available on macOS with Metal support.");
+}

@@ -57,6 +57,28 @@ NumericMatrix knn_tsne_exact_cuda_impl(IntegerMatrix,
   Rcpp::stop("CUDA exact t-SNE is available only when the package is built with CUDA support.");
 }
 
+List knn_tsne_opentsne_cuda_impl(IntegerMatrix,
+                                 NumericMatrix,
+                                 NumericMatrix,
+                                 bool,
+                                 int,
+                                 double,
+                                 int,
+                                 int,
+                                 double,
+                                 double,
+                                 double,
+                                 bool,
+                                 double,
+                                 double,
+                                 double,
+                                 double,
+                                 std::string,
+                                 int,
+                                 bool) {
+  Rcpp::stop("CUDA openTSNE FFT-grid is available only when the package is built with the native CUDA openTSNE backend.");
+}
+
 List standardize_cuda_impl(NumericMatrix) {
   Rcpp::stop("CUDA preprocessing is available only when the package is built with CUDA support.");
 }

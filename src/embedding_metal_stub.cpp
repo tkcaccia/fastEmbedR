@@ -106,3 +106,25 @@ List transform_tsne_metal_impl(NumericMatrix,
                                int) {
   Rcpp::stop("Metal t-SNE transform is only available on macOS with Metal support.");
 }
+
+List knn_tsne_opentsne_metal_impl(IntegerMatrix,
+                                  NumericMatrix,
+                                  NumericMatrix,
+                                  bool,
+                                  int,
+                                  double,
+                                  int,
+                                  int,
+                                  double,
+                                  double,
+                                  double,
+                                  bool,
+                                  double,
+                                  double,
+                                  double,
+                                  double,
+                                  std::string,
+                                  int,
+                                  bool) {
+  Rcpp::stop("Metal openTSNE optimizer is only available on macOS with Metal support.");
+}

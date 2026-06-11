@@ -95,8 +95,11 @@ License decision:
 Ideas/code behaviour used:
 
 - Expose a `negative_gradient_method` choice in the t-SNE API. The native C++
-  implementation currently supports `"bh"` and `"exact"`; `"fft"` is reserved
-  for the future FIt-SNE/openTSNE interpolation port and fails clearly for now.
+  implementation now supports `"exact"` and `"fft"` grid approximation; the
+  older Barnes-Hut route was removed from the public path after it lost to
+  FFT-grid in the MNIST 70k benchmark. The Metal backend has a package-native
+  FFT-grid path. CUDA FFT remains explicitly unsupported until real CUDA
+  kernels are ported.
 - Expose `opentsne()` and `embed_knn(method = "opentsne")` as a separate
   native C++ path with openTSNE-style early exaggeration, normal optimization,
   automatic learning-rate selection, momentum/gain updates, and max-step
@@ -108,6 +111,11 @@ Ideas/code behaviour used:
 - For transforms/landmark projection, initialize query points from reference
   embedding neighbours, compute asymmetric query-to-reference affinities, and
   optimize query points against the fixed reference embedding.
+- For the native Metal full-embedding path, compute exact dense symmetric KNN
+  affinities from row-wise perplexity probabilities and use a global t-SNE
+  `sum_Q` normalizer inside the Metal optimizer. This is a package-native
+  Objective-C++/Metal implementation, not a port of openTSNE Python/Cython
+  files.
 
 Source locations studied:
 
@@ -142,19 +150,21 @@ Ideas translated now:
 - Keep query coordinates, reference coordinates, gains, updates, probabilities,
   and query-reference indices in device buffers for all transform iterations.
 - Return only the final two-dimensional query layout to R.
-- For the exact CUDA t-SNE-from-KNN parity path, keep the Rtsne-style sparse
-  attractive affinities, early exaggeration, momentum/gains, and zero-mean
-  update schedule while executing the dense exact repulsive force on CUDA.
+- For a future exact CUDA t-SNE-from-KNN parity path, keep the Rtsne-style
+  sparse attractive affinities, early exaggeration, momentum/gains, and
+  zero-mean update schedule while executing the dense exact repulsive force on
+  CUDA.
 
 Implemented location:
 
 - `src/embedding_metal_impl.mm::tsne_transform_epoch`: native Metal kernel for
   the openTSNE-style fixed-reference transform.
+- `src/embedding_metal_impl.mm::tsne_probability_dense_rows`,
+  `tsne_global_sum_q`, and `tsne_full_exact_dense_epoch`: native Metal exact
+  openTSNE-style optimizer from KNN for moderate datasets.
 - `R/transform_tsne.R::transform_tsne`: explicit `backend = "metal"` dispatch.
-- `src/embedding_cuda_kernels.cpp::fastembedr_cuda_exact_tsne_from_knn`:
-  native exact CUDA t-SNE-from-KNN kernel owned by fastEmbedR.
-- `R/fast_knn_tsne.R::fast_knn_tsne_core`: explicit
-  `backend = "cuda"` dispatch for the native exact CUDA path.
+- CUDA full-embedding kernels are intentionally not shipped in the cleaned
+  source until the openTSNE-style CUDA path is implemented and validated.
 
 CUDA notes to keep for later:
 

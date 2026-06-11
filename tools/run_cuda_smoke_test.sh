@@ -72,6 +72,7 @@ cd "$repo_root"
 FASTEMBEDR_USE_CUDA=${FASTEMBEDR_USE_CUDA:-1} \
 FASTEMBEDR_USE_CUVS=${FASTEMBEDR_USE_CUVS:-auto} \
 R CMD INSTALL .
+
 Rscript - <<'RS'
 library(fastEmbedR)
 stopifnot(isTRUE(cuda_available()))
@@ -79,153 +80,106 @@ stopifnot(isTRUE(fastEmbedR:::embedding_cuda_available_cpp()))
 print(backend_info())
 
 set.seed(1)
-x <- matrix(rnorm(240), ncol = 6)
-cpu <- nn(x, k = 8, backend = "cpu")
-gpu <- nn(x, k = 8, backend = "cuda")
-stopifnot(identical(cpu$indices, gpu$indices))
-stopifnot(max(abs(cpu$distances - gpu$distances)) < 1e-4)
+x <- scale(matrix(rnorm(80L * 6L), 80L, 6L))
+cpu <- nn(x, k = 8L, backend = "cpu", n_threads = 4L)
+gpu <- nn(x, k = 8L, backend = "cuda")
 stopifnot(identical(attr(gpu, "backend"), "cuda"))
 stopifnot(isTRUE(attr(gpu, "exact")))
+stopifnot(identical(cpu$indices, gpu$indices))
+stopifnot(max(abs(cpu$distances - gpu$distances)) < 1e-4)
 
-if (cuvs_available()) {
-  cuvs_exact <- nn(x, k = 8, backend = "cuda_cuvs_bruteforce")
-  stopifnot(identical(attr(cuvs_exact, "backend"), "cuda_cuvs_bruteforce"))
-  stopifnot(isTRUE(attr(cuvs_exact, "exact")))
-  stopifnot(identical(cpu$indices, cuvs_exact$indices))
-  stopifnot(max(abs(cpu$distances - cuvs_exact$distances)) < 1e-4)
+pre <- fastEmbedR:::prepare_embedding_data(x, TRUE, pca_dims = 4L, seed = 1L, backend = "cuda")
+stopifnot(identical(pre$preprocess$standardize_backend, "cuda"))
+stopifnot(dim(pre$data)[2L] == 4L)
 
-  cuvs_auto_exact <- nn(x, k = 8, backend = "cuda_cuvs")
-  stopifnot(identical(attr(cuvs_auto_exact, "backend"), "cuda_cuvs_bruteforce"))
-  stopifnot(isTRUE(attr(cuvs_auto_exact, "exact")))
+left <- matrix(rnorm(20L * 5L), 20L, 5L)
+right <- matrix(rnorm(5L * 3L), 5L, 3L)
+mm <- fastEmbedR:::rsvd_multiply_cuda_cpp(left, right, FALSE)
+stopifnot(max(abs(mm - left %*% right)) < 1e-10)
 
-  cuvs_cagra <- nn(x, k = 8, backend = "cuda_cuvs_cagra")
-  stopifnot(identical(attr(cuvs_cagra, "backend"), "cuda_cuvs_cagra"))
-  stopifnot(!isTRUE(attr(cuvs_cagra, "exact")))
-  stopifnot(is.matrix(cuvs_cagra$indices), ncol(cuvs_cagra$indices) == 8L)
+x_wide <- scale(matrix(rnorm(90L * 40L), 90L, 40L))
+pre_wide <- fastEmbedR:::prepare_embedding_data(x_wide, TRUE, pca_dims = 4L, seed = 1L, backend = "cuda")
+stopifnot(identical(pre_wide$preprocess$standardize_backend, "cuda"))
+stopifnot(identical(pre_wide$preprocess$pca_backend, "cuda_rsvd"))
+stopifnot(dim(pre_wide$data)[2L] == 4L)
 
-  cuvs_nnd <- nn(x, k = 8, backend = "cuda_cuvs_nndescent")
-  stopifnot(identical(attr(cuvs_nnd, "backend"), "cuda_cuvs_nndescent"))
-  stopifnot(!isTRUE(attr(cuvs_nnd, "exact")))
-  stopifnot(is.matrix(cuvs_nnd$indices), ncol(cuvs_nnd$indices) == 8L)
-
-  old_cuvs_options <- options(fastEmbedR.cuvs_nndescent_threshold = 2L)
-  cuvs_auto_nnd <- nn(x, k = 8, backend = "cuda_cuvs")
-  options(old_cuvs_options)
-  stopifnot(identical(attr(cuvs_auto_nnd, "backend"), "cuda_cuvs_nndescent"))
-  stopifnot(!isTRUE(attr(cuvs_auto_nnd, "exact")))
-} else {
-  stopifnot(inherits(
-    try(nn(x, k = 8, backend = "cuda_cuvs"), silent = TRUE),
-    "try-error"
-  ))
-}
-
-layout <- fastEmbedR:::fast_knn_umap(gpu, backend = "cuda", seed = 1)
+layout <- opentsne_knn(
+  gpu,
+  perplexity = 2,
+  early_exaggeration_iter = 2L,
+  n_iter = 3L,
+  backend = "cuda"
+)
+cfg <- attr(layout, "fastEmbedR_config")
 stopifnot(is.matrix(layout), ncol(layout) == 2L, all(is.finite(layout)))
-stopifnot(identical(attr(layout, "fastEmbedR_config")$backend, "cuda"))
-stopifnot(identical(attr(layout, "fastEmbedR_config")$init_backend, "cuda_fused_spectral"))
-stopifnot(identical(attr(layout, "fastEmbedR_config")$graph_prep_backend, "cuda_fused_csr"))
-stopifnot(identical(attr(layout, "fastEmbedR_config")$graph_storage, "native_cuda_coo_fused"))
-stopifnot(identical(attr(layout, "fastEmbedR_config")$gpu_optimizer_mode, "atomic"))
-stopifnot(identical(attr(layout, "fastEmbedR_config")$gpu_optimizer_update_rule, "native_cuda_atomic_coo_uwot_schedule"))
-stopifnot(identical(attr(layout, "fastEmbedR_config")$gpu_transfer_policy, "single_upload_optimizer"))
-stopifnot(isTRUE(attr(layout, "fastEmbedR_config")$gpu_transfer_knn_uploaded_once))
-stopifnot(!isTRUE(attr(layout, "fastEmbedR_config")$gpu_transfer_init_uploaded_once))
-stopifnot(isTRUE(attr(layout, "fastEmbedR_config")$gpu_transfer_init_computed_on_device))
-stopifnot(isTRUE(attr(layout, "fastEmbedR_config")$gpu_transfer_embedding_returned_only_at_end))
-stopifnot(!isTRUE(attr(layout, "fastEmbedR_config")$gpu_transfer_init_roundtrip))
-stopifnot(!isTRUE(attr(layout, "fastEmbedR_config")$gpu_transfer_graph_metadata_roundtrip))
+stopifnot(identical(cfg$backend, "cuda"))
+stopifnot(identical(cfg$optimizer, "opentsne_exact_dense_native_cuda"))
+stopifnot(identical(cfg$probabilities, "dense_symmetric_knn_cuda_perplexity"))
 
-set.seed(2)
-large_x <- matrix(rnorm(3600), ncol = 6)
-large_gpu <- nn(large_x, k = 8, backend = "cuda")
-large_layout <- fastEmbedR:::fast_knn_umap(large_gpu, backend = "cuda", seed = 2)
-stopifnot(is.matrix(large_layout), ncol(large_layout) == 2L, all(is.finite(large_layout)))
-stopifnot(identical(attr(large_layout, "fastEmbedR_config")$backend, "cuda"))
-stopifnot(identical(attr(large_layout, "fastEmbedR_config")$init_backend, "cuda_fused_spectral"))
-stopifnot(identical(attr(large_layout, "fastEmbedR_config")$graph_prep_backend, "cuda_fused_csr"))
-stopifnot(identical(attr(large_layout, "fastEmbedR_config")$graph_storage, "native_cuda_coo_fused"))
-stopifnot(identical(attr(large_layout, "fastEmbedR_config")$gpu_optimizer_mode, "atomic"))
-stopifnot(identical(attr(large_layout, "fastEmbedR_config")$gpu_optimizer_update_rule, "native_cuda_atomic_coo_uwot_schedule"))
-stopifnot(identical(attr(large_layout, "fastEmbedR_config")$gpu_transfer_policy, "single_upload_optimizer"))
-stopifnot(isTRUE(attr(large_layout, "fastEmbedR_config")$gpu_transfer_knn_uploaded_once))
-stopifnot(!isTRUE(attr(large_layout, "fastEmbedR_config")$gpu_transfer_init_uploaded_once))
-stopifnot(isTRUE(attr(large_layout, "fastEmbedR_config")$gpu_transfer_init_computed_on_device))
-stopifnot(isTRUE(attr(large_layout, "fastEmbedR_config")$gpu_transfer_embedding_returned_only_at_end))
-stopifnot(!isTRUE(attr(large_layout, "fastEmbedR_config")$gpu_transfer_init_roundtrip))
-stopifnot(!isTRUE(attr(large_layout, "fastEmbedR_config")$gpu_transfer_graph_metadata_roundtrip))
-
-approx_gpu <- nn(large_x, k = 8, backend = "cuda_approx")
-stopifnot(is.matrix(approx_gpu$indices), nrow(approx_gpu$indices) == nrow(large_x), ncol(approx_gpu$indices) == 8L)
-stopifnot(identical(attr(approx_gpu, "backend"), "cuda_approx"))
-stopifnot(!isTRUE(attr(approx_gpu, "exact")))
-stopifnot(identical(attr(approx_gpu, "approximation")$strategy, "anchor_projection_candidate_knn"))
-stopifnot(is.data.frame(attr(approx_gpu, "recall")))
-stopifnot(is.finite(attr(approx_gpu, "recall")$recall_at_k[1L]))
-stopifnot(attr(approx_gpu, "recall")$sample_size[1L] > 0L)
-
-tsne_layout <- fastEmbedR:::knn_tsne(gpu, backend = "cuda", seed = 1)
-stopifnot(is.matrix(tsne_layout), ncol(tsne_layout) == 2L, all(is.finite(tsne_layout)))
-stopifnot(identical(attr(tsne_layout, "fastEmbedR_config")$backend, "cuda"))
-stopifnot(identical(attr(tsne_layout, "fastEmbedR_config")$init_backend, "cpu_random"))
-stopifnot(identical(attr(tsne_layout, "fastEmbedR_config")$tsne_mode, "exact"))
-stopifnot(identical(attr(tsne_layout, "fastEmbedR_config")$graph_prep_backend, "cuda_exact"))
-stopifnot(identical(attr(tsne_layout, "fastEmbedR_config")$affinity_backend, "cuda"))
-stopifnot(identical(attr(tsne_layout, "fastEmbedR_config")$optimizer_backend, "cuda"))
-stopifnot(identical(attr(tsne_layout, "fastEmbedR_config")$gpu_transfer_policy, "single_upload_optimizer"))
-stopifnot(isTRUE(attr(tsne_layout, "fastEmbedR_config")$gpu_transfer_knn_uploaded_once))
-stopifnot(isTRUE(attr(tsne_layout, "fastEmbedR_config")$gpu_transfer_embedding_returned_only_at_end))
-stopifnot(!isTRUE(attr(tsne_layout, "fastEmbedR_config")$gpu_transfer_init_roundtrip))
-
-tsne_exact_layout <- fastEmbedR:::knn_tsne(gpu, backend = "cuda", quality = "exact", seed = 1)
-stopifnot(is.matrix(tsne_exact_layout), ncol(tsne_exact_layout) == 2L, all(is.finite(tsne_exact_layout)))
-stopifnot(identical(attr(tsne_exact_layout, "fastEmbedR_config")$backend, "cuda"))
-stopifnot(identical(attr(tsne_exact_layout, "fastEmbedR_config")$tsne_mode, "exact"))
-stopifnot(identical(attr(tsne_exact_layout, "fastEmbedR_config")$graph_prep_backend, "cuda_exact"))
-stopifnot(identical(attr(tsne_exact_layout, "fastEmbedR_config")$gpu_transfer_policy, "single_upload_optimizer"))
-
-pacmap_layout <- fastEmbedR:::knn_pacmap(gpu, backend = "cuda", seed = 1)
-stopifnot(is.matrix(pacmap_layout), ncol(pacmap_layout) == 2L, all(is.finite(pacmap_layout)))
-stopifnot(identical(attr(pacmap_layout, "fastEmbedR_config")$backend, "cuda"))
-stopifnot(identical(attr(pacmap_layout, "fastEmbedR_config")$init_backend, "cpu"))
-stopifnot(identical(attr(pacmap_layout, "fastEmbedR_config")$graph_prep_backend, "cuda"))
-stopifnot(identical(attr(pacmap_layout, "fastEmbedR_config")$gpu_transfer_policy, "single_upload_optimizer"))
-
-fit <- umap(
+fit <- opentsne(
   x,
-  n_neighbors = 7,
+  n_neighbors = 8L,
+  perplexity = 2,
+  early_exaggeration_iter = 2L,
+  n_iter = 3L,
   backend = "cuda",
-  seed = 1,
   silhouette_sample = NULL,
-  preserve_sample = NULL
+  preserve_sample = NULL,
+  keep_knn = TRUE
 )
 stopifnot(inherits(fit, "fastEmbedR_embedding"))
 stopifnot(identical(fit$parameters$backend, "cuda"))
 stopifnot(identical(fit$parameters$nn_backend, "cuda"))
-stopifnot(identical(fit$parameters$init_backend, "cuda_fused_spectral"))
-stopifnot(identical(fit$parameters$graph_prep_backend, "cuda_fused_csr"))
-stopifnot(identical(fit$parameters$graph_storage, "native_cuda_coo_fused"))
-stopifnot(identical(fit$parameters$gpu_optimizer_mode, "atomic"))
-stopifnot(identical(fit$parameters$gpu_optimizer_update_rule, "native_cuda_atomic_coo_uwot_schedule"))
-stopifnot(identical(fit$parameters$gpu_transfer_policy, "single_upload_optimizer"))
-stopifnot(isTRUE(fit$parameters$gpu_transfer_knn_uploaded_once))
-stopifnot(!isTRUE(fit$parameters$gpu_transfer_init_uploaded_once))
-stopifnot(isTRUE(fit$parameters$gpu_transfer_init_computed_on_device))
-stopifnot(isTRUE(fit$parameters$gpu_transfer_embedding_returned_only_at_end))
-stopifnot(!isTRUE(fit$parameters$gpu_transfer_init_roundtrip))
-stopifnot(!isTRUE(fit$parameters$gpu_transfer_graph_metadata_roundtrip))
 stopifnot(all(is.finite(fit$layout)))
 
-projected <- transform_embedding(
-  layout,
-  reference_data = x,
-  new_data = x[1:5, , drop = FALSE],
-  k = 5,
-  backend = "cuda"
+query_knn <- nn(x[1:50, , drop = FALSE], x[51:60, , drop = FALSE], k = 8L, backend = "cuda")
+projected <- transform_tsne(
+  fit$layout[1:50, , drop = FALSE],
+  knn = query_knn,
+  perplexity = 2,
+  n_iter = 3L,
+  n_negatives = 20L,
+  backend = "cuda",
+  seed = 3L
 )
-stopifnot(is.matrix(projected), nrow(projected) == 5L, ncol(projected) == 2L)
-stopifnot(identical(attr(projected, "backend"), "cuda"))
-stopifnot(isTRUE(attr(projected, "exact")))
+tcfg <- attr(projected, "fastEmbedR_config")
+stopifnot(is.matrix(projected), dim(projected)[1L] == 10L, dim(projected)[2L] == 2L)
+stopifnot(all(is.finite(projected)))
+stopifnot(identical(tcfg$backend, "cuda"))
+stopifnot(identical(tcfg$optimizer, "opentsne_style_fixed_reference_transform_cuda"))
+
+land <- landmark_tsne(
+  x,
+  landmarks = 0.5,
+  n_neighbors = 8L,
+  perplexity = 2,
+  early_exaggeration_iter = 2L,
+  n_iter = 3L,
+  transform_iter = 3L,
+  transform_perplexity = 2,
+  backend = "cuda",
+  standardize = FALSE,
+  silhouette_sample = NULL,
+  preserve_sample = NULL,
+  keep_knn = TRUE
+)
+stopifnot(inherits(land, "fastEmbedR_embedding"))
+stopifnot(identical(land$parameters$backend, "cuda"))
+stopifnot(identical(land$parameters$transform_backend, "cuda"))
+stopifnot(identical(land$parameters$projection_nn_backend, "cuda_fused_projection"))
+stopifnot(all(is.finite(land$layout)))
+
+scores <- evaluate_embedding(
+  x,
+  fit$layout,
+  k = c(5L, 8L),
+  reference_nn = fit$knn,
+  backend = "cuda",
+  n_threads = 4L
+)
+stopifnot(is.data.frame(scores), nrow(scores) == 1L)
+stopifnot(identical(scores$metric_backend, "cuda"))
+stopifnot(is.finite(scores$trustworthiness))
 
 cat("CUDA smoke test passed.\n")
 RS

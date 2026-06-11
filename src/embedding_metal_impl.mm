@@ -42,6 +42,7 @@ struct MetalEmbeddingState {
   id<MTLComputePipelineState> embed_scheduled_pipeline;
   id<MTLComputePipelineState> embed_torchdr_pipeline;
   id<MTLComputePipelineState> embed_atomic_delta_pipeline;
+  id<MTLComputePipelineState> embed_atomic_inplace_pipeline;
   id<MTLComputePipelineState> clear_atomic_delta_pipeline;
   id<MTLComputePipelineState> apply_atomic_delta_pipeline;
   id<MTLComputePipelineState> standardize_stats_pipeline;
@@ -58,6 +59,20 @@ struct MetalEmbeddingState {
   id<MTLComputePipelineState> spectral_stats_pipeline;
   id<MTLComputePipelineState> spectral_normalize_pipeline;
   id<MTLComputePipelineState> tsne_transform_pipeline;
+  id<MTLComputePipelineState> opentsne_sum_q_pipeline;
+  id<MTLComputePipelineState> opentsne_epoch_pipeline;
+  id<MTLComputePipelineState> opentsne_center_pipeline;
+  id<MTLComputePipelineState> opentsne_fft_clear_pipeline;
+  id<MTLComputePipelineState> opentsne_fft_scatter_pipeline;
+  id<MTLComputePipelineState> opentsne_fft_load_pipeline;
+  id<MTLComputePipelineState> opentsne_fft_bit_reverse_rows_pipeline;
+  id<MTLComputePipelineState> opentsne_fft_bit_reverse_cols_pipeline;
+  id<MTLComputePipelineState> opentsne_fft_butterfly_rows_pipeline;
+  id<MTLComputePipelineState> opentsne_fft_butterfly_cols_pipeline;
+  id<MTLComputePipelineState> opentsne_fft_multiply_pipeline;
+  id<MTLComputePipelineState> opentsne_fft_scale_pipeline;
+  id<MTLComputePipelineState> opentsne_fft_sum_q_pipeline;
+  id<MTLComputePipelineState> opentsne_fft_epoch_pipeline;
   id<MTLCommandQueue> queue;
 };
 
@@ -81,6 +96,35 @@ struct TsneTransformParams {
   float max_grad_norm;
   float max_step_norm;
 };
+
+struct OpenTsneMetalParams {
+  std::uint32_t n;
+  std::uint32_t seed;
+  float learning_rate;
+  float exaggeration;
+  float momentum;
+  float min_gain;
+  float max_step_norm;
+  float inv_sum_q;
+};
+
+struct OpenTsneFFTGridParams {
+  std::uint32_t n;
+  std::uint32_t grid_size;
+  std::uint32_t fft_size;
+  float lower_x;
+  float lower_y;
+  float inv_spacing;
+  float spacing;
+  float inv_sum_q;
+};
+
+struct Center2 {
+  float x;
+  float y;
+};
+
+constexpr int kMetalOpenTsneExactDenseThreshold = 6000;
 
 struct WeightedEdge {
   std::uint64_t key;
@@ -157,8 +201,23 @@ MetalEmbeddingState& metal_embedding_state() {
       state.embed_scheduled_pipeline != nil &&
       state.embed_torchdr_pipeline != nil &&
       state.embed_atomic_delta_pipeline != nil &&
+      state.embed_atomic_inplace_pipeline != nil &&
       state.clear_atomic_delta_pipeline != nil &&
       state.apply_atomic_delta_pipeline != nil &&
+      state.opentsne_sum_q_pipeline != nil &&
+      state.opentsne_epoch_pipeline != nil &&
+      state.opentsne_center_pipeline != nil &&
+      state.opentsne_fft_clear_pipeline != nil &&
+      state.opentsne_fft_scatter_pipeline != nil &&
+      state.opentsne_fft_load_pipeline != nil &&
+      state.opentsne_fft_bit_reverse_rows_pipeline != nil &&
+      state.opentsne_fft_bit_reverse_cols_pipeline != nil &&
+      state.opentsne_fft_butterfly_rows_pipeline != nil &&
+      state.opentsne_fft_butterfly_cols_pipeline != nil &&
+      state.opentsne_fft_multiply_pipeline != nil &&
+      state.opentsne_fft_scale_pipeline != nil &&
+      state.opentsne_fft_sum_q_pipeline != nil &&
+      state.opentsne_fft_epoch_pipeline != nil &&
       state.queue != nil) {
     return state;
   }
@@ -179,6 +238,7 @@ MetalEmbeddingState& metal_embedding_state() {
   state.embed_scheduled_pipeline = make_pipeline(state, "embed_epoch_scheduled");
   state.embed_torchdr_pipeline = make_pipeline(state, "embed_epoch_torchdr_row_negatives");
   state.embed_atomic_delta_pipeline = make_pipeline(state, "embed_epoch_atomic_delta");
+  state.embed_atomic_inplace_pipeline = make_pipeline(state, "embed_epoch_atomic_inplace");
   state.clear_atomic_delta_pipeline = make_pipeline(state, "clear_atomic_delta");
   state.apply_atomic_delta_pipeline = make_pipeline(state, "apply_atomic_delta");
   state.standardize_stats_pipeline = make_pipeline(state, "standardize_stats");
@@ -196,6 +256,20 @@ MetalEmbeddingState& metal_embedding_state() {
   state.spectral_stats_pipeline = make_pipeline(state, "spectral_init_stats");
   state.spectral_normalize_pipeline = make_pipeline(state, "spectral_normalize");
   state.tsne_transform_pipeline = make_pipeline(state, "tsne_transform_epoch");
+  state.opentsne_sum_q_pipeline = make_pipeline(state, "opentsne_sum_q_rows");
+  state.opentsne_epoch_pipeline = make_pipeline(state, "opentsne_epoch_exact");
+  state.opentsne_center_pipeline = make_pipeline(state, "opentsne_apply_center");
+  state.opentsne_fft_clear_pipeline = make_pipeline(state, "opentsne_fft_clear_grids");
+  state.opentsne_fft_scatter_pipeline = make_pipeline(state, "opentsne_fft_scatter_bilinear");
+  state.opentsne_fft_load_pipeline = make_pipeline(state, "opentsne_fft_load_inputs");
+  state.opentsne_fft_bit_reverse_rows_pipeline = make_pipeline(state, "opentsne_fft_bit_reverse_rows");
+  state.opentsne_fft_bit_reverse_cols_pipeline = make_pipeline(state, "opentsne_fft_bit_reverse_cols");
+  state.opentsne_fft_butterfly_rows_pipeline = make_pipeline(state, "opentsne_fft_butterfly_rows");
+  state.opentsne_fft_butterfly_cols_pipeline = make_pipeline(state, "opentsne_fft_butterfly_cols");
+  state.opentsne_fft_multiply_pipeline = make_pipeline(state, "opentsne_fft_multiply");
+  state.opentsne_fft_scale_pipeline = make_pipeline(state, "opentsne_fft_scale");
+  state.opentsne_fft_sum_q_pipeline = make_pipeline(state, "opentsne_fft_sum_q_rows");
+  state.opentsne_fft_epoch_pipeline = make_pipeline(state, "opentsne_epoch_fft_grid");
 
   state.queue = [state.device newCommandQueue];
   if (state.queue == nil) {
@@ -565,6 +639,179 @@ std::vector<float> init_to_float_2d(const NumericMatrix& init) {
   return out;
 }
 
+struct TsneSparseMetalGraph {
+  std::vector<std::int32_t> row_ptr;
+  std::vector<std::int32_t> col;
+  std::vector<float> val;
+};
+
+struct TsnePackedEdge {
+  std::uint64_t key;
+  double value;
+};
+
+void compute_tsne_row_probabilities_metal(const NumericMatrix& distances,
+                                          const int row,
+                                          const double perplexity,
+                                          std::vector<double>& row_p) {
+  const int k = distances.ncol();
+  row_p.assign(static_cast<std::size_t>(k), 0.0);
+  bool found = false;
+  double beta = 1.0;
+  double min_beta = -std::numeric_limits<double>::max();
+  double max_beta = std::numeric_limits<double>::max();
+  const double target_entropy = std::log(perplexity);
+  const double tol = 1e-5;
+  double sum_p = std::numeric_limits<double>::min();
+
+  for (int iter = 0; !found && iter < 200; ++iter) {
+    sum_p = std::numeric_limits<double>::min();
+    for (int j = 0; j < k; ++j) {
+      const double d = distances(row, j);
+      const double p = std::exp(-beta * d * d);
+      row_p[static_cast<std::size_t>(j)] = p;
+      sum_p += p;
+    }
+    double entropy = 0.0;
+    for (int j = 0; j < k; ++j) {
+      const double d = distances(row, j);
+      entropy += beta * d * d * row_p[static_cast<std::size_t>(j)];
+    }
+    entropy = entropy / sum_p + std::log(sum_p);
+    const double diff = entropy - target_entropy;
+    if (std::abs(diff) < tol) {
+      found = true;
+    } else if (diff > 0.0) {
+      min_beta = beta;
+      beta = max_beta == std::numeric_limits<double>::max() ?
+        beta * 2.0 :
+        (beta + max_beta) / 2.0;
+    } else {
+      max_beta = beta;
+      beta = min_beta == -std::numeric_limits<double>::max() ?
+        beta / 2.0 :
+        (beta + min_beta) / 2.0;
+    }
+  }
+  const double inv_sum = 1.0 / sum_p;
+  for (double& value : row_p) value *= inv_sum;
+}
+
+TsneSparseMetalGraph build_tsne_sparse_graph_metal(const IntegerMatrix& indices,
+                                                   const NumericMatrix& distances,
+                                                   const double perplexity) {
+  const int n = indices.nrow();
+  const int k = indices.ncol();
+  if (distances.nrow() != n || distances.ncol() != k) {
+    Rcpp::stop("KNN `indices` and `distances` must have the same dimensions.");
+  }
+  int min_idx = std::numeric_limits<int>::max();
+  int max_idx = std::numeric_limits<int>::min();
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < k; ++j) {
+      min_idx = std::min(min_idx, indices(i, j));
+      max_idx = std::max(max_idx, indices(i, j));
+    }
+  }
+  const int offset = (min_idx >= 1 && max_idx <= n) ? 1 : 0;
+
+  std::vector<TsnePackedEdge> edges;
+  edges.reserve(static_cast<std::size_t>(n) * k);
+  std::vector<double> row_p;
+  for (int i = 0; i < n; ++i) {
+    compute_tsne_row_probabilities_metal(distances, i, perplexity, row_p);
+    for (int j = 0; j < k; ++j) {
+      const int nb = indices(i, j) - offset;
+      if (nb < 0 || nb >= n) Rcpp::stop("KNN indices are out of range.");
+      const double d = distances(i, j);
+      if (!std::isfinite(d) || d < 0.0) {
+        Rcpp::stop("KNN distances must be finite and non-negative.");
+      }
+      if (nb == i) continue;
+      const int a = std::min(i, nb);
+      const int b = std::max(i, nb);
+      edges.push_back({edge_key(a, b), row_p[static_cast<std::size_t>(j)]});
+    }
+  }
+  if (edges.empty()) Rcpp::stop("KNN graph produced no non-self t-SNE edges.");
+  std::sort(edges.begin(), edges.end(), [](const TsnePackedEdge& a, const TsnePackedEdge& b) {
+    return a.key < b.key;
+  });
+
+  std::size_t write = 0;
+  double total_directed_mass = 0.0;
+  TsneSparseMetalGraph graph;
+  graph.row_ptr.assign(static_cast<std::size_t>(n) + 1u, 0);
+  for (std::size_t read = 0; read < edges.size();) {
+    const std::uint64_t key = edges[read].key;
+    double sum = 0.0;
+    while (read < edges.size() && edges[read].key == key) {
+      sum += edges[read].value;
+      ++read;
+    }
+    edges[write++] = {key, sum};
+    total_directed_mass += sum;
+    ++graph.row_ptr[static_cast<std::size_t>(key_head(key) + 1)];
+    ++graph.row_ptr[static_cast<std::size_t>(key_tail(key) + 1)];
+  }
+  edges.resize(write);
+  if (!std::isfinite(total_directed_mass) || total_directed_mass <= 0.0) {
+    Rcpp::stop("t-SNE probability normalization failed.");
+  }
+  for (int i = 0; i < n; ++i) {
+    graph.row_ptr[static_cast<std::size_t>(i + 1)] += graph.row_ptr[static_cast<std::size_t>(i)];
+  }
+  graph.col.assign(static_cast<std::size_t>(graph.row_ptr[static_cast<std::size_t>(n)]), 0);
+  graph.val.assign(graph.col.size(), 0.0f);
+  std::vector<std::int32_t> fill = graph.row_ptr;
+  for (const auto& edge : edges) {
+    const int a = key_head(edge.key);
+    const int b = key_tail(edge.key);
+    const float value = static_cast<float>(0.5 * edge.value / total_directed_mass);
+    int pos = fill[static_cast<std::size_t>(a)]++;
+    graph.col[static_cast<std::size_t>(pos)] = b;
+    graph.val[static_cast<std::size_t>(pos)] = value;
+    pos = fill[static_cast<std::size_t>(b)]++;
+    graph.col[static_cast<std::size_t>(pos)] = a;
+    graph.val[static_cast<std::size_t>(pos)] = value;
+  }
+  return graph;
+}
+
+std::vector<float> initialize_opentsne_metal_layout(const NumericMatrix& y_init,
+                                                    const bool init,
+                                                    const int n,
+                                                    const int seed) {
+  std::vector<float> out(static_cast<std::size_t>(n) * 2u, 0.0f);
+  if (init) {
+    if (y_init.nrow() != n || y_init.ncol() != 2) {
+      Rcpp::stop("`Y_init` must have one row per point and two columns for Metal openTSNE.");
+    }
+    for (int i = 0; i < n; ++i) {
+      out[static_cast<std::size_t>(i) * 2u] = static_cast<float>(y_init(i, 0));
+      out[static_cast<std::size_t>(i) * 2u + 1u] = static_cast<float>(y_init(i, 1));
+    }
+  } else {
+    const unsigned int resolved_seed = seed == NA_INTEGER ? 5489u : static_cast<unsigned int>(seed);
+    std::mt19937 rng(resolved_seed);
+    std::normal_distribution<float> normal(0.0f, 1.0e-4f);
+    for (float& value : out) value = normal(rng);
+  }
+  double mean_x = 0.0;
+  double mean_y = 0.0;
+  for (int i = 0; i < n; ++i) {
+    mean_x += out[static_cast<std::size_t>(i) * 2u];
+    mean_y += out[static_cast<std::size_t>(i) * 2u + 1u];
+  }
+  mean_x /= static_cast<double>(n);
+  mean_y /= static_cast<double>(n);
+  for (int i = 0; i < n; ++i) {
+    out[static_cast<std::size_t>(i) * 2u] -= static_cast<float>(mean_x);
+    out[static_cast<std::size_t>(i) * 2u + 1u] -= static_cast<float>(mean_y);
+  }
+  return out;
+}
+
 const char* metal_embed_kernel_source() {
   return R"METAL(
 #include <metal_stdlib>
@@ -602,6 +849,28 @@ struct TsneTransformParams {
   float momentum;
   float max_grad_norm;
   float max_step_norm;
+};
+
+struct OpenTsneMetalParams {
+  uint n;
+  uint seed;
+  float learning_rate;
+  float exaggeration;
+  float momentum;
+  float min_gain;
+  float max_step_norm;
+  float inv_sum_q;
+};
+
+struct OpenTsneFFTGridParams {
+  uint n;
+  uint grid_size;
+  uint fft_size;
+  float lower_x;
+  float lower_y;
+  float inv_spacing;
+  float spacing;
+  float inv_sum_q;
 };
 
 uint mix_uint(uint x) {
@@ -992,6 +1261,66 @@ kernel void apply_atomic_delta(
   int dx = atomic_load_explicit(&delta[gid * 2u], memory_order_relaxed);
   int dy = atomic_load_explicit(&delta[gid * 2u + 1u], memory_order_relaxed);
   next[gid] = current[gid] + float2(float(dx) * inv_scale, float(dy) * inv_scale);
+}
+
+kernel void embed_epoch_atomic_inplace(
+  device atomic_int* layout [[buffer(0)]],
+  device const int* neighbors [[buffer(1)]],
+  device const float* weights [[buffer(2)]],
+  device const float* epochs_per_sample [[buffer(3)]],
+  constant EmbedParams& p [[buffer(4)]],
+  constant uint& epoch [[buffer(5)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= p.n) return;
+
+  constexpr float inv_scale = 1.0f / 65536.0f;
+  float alpha = p.learning_rate * (1.0f - float(epoch) / max(1.0f, float(p.n_epochs)));
+
+  for (uint e = 0; e < p.k; ++e) {
+    uint pos = gid * p.k + e;
+    int nb_i = neighbors[pos];
+    if (nb_i < 0 || uint(nb_i) >= p.n || uint(nb_i) == gid) continue;
+    float period = epochs_per_sample[pos];
+    int positive_samples = positive_samples_this_epoch_period(period, p, epoch);
+    if (positive_samples <= 0) continue;
+
+    uint nb = uint(nb_i);
+    uint head_base = gid * 2u;
+    uint tail_base = nb * 2u;
+    float head_x = float(atomic_load_explicit(&layout[head_base], memory_order_relaxed)) * inv_scale;
+    float head_y = float(atomic_load_explicit(&layout[head_base + 1u], memory_order_relaxed)) * inv_scale;
+    float tail_x = float(atomic_load_explicit(&layout[tail_base], memory_order_relaxed)) * inv_scale;
+    float tail_y = float(atomic_load_explicit(&layout[tail_base + 1u], memory_order_relaxed)) * inv_scale;
+
+    float2 diff = float2(head_x - tail_x, head_y - tail_y);
+    float d2 = max(1.1920928955078125e-7f, dot(diff, diff));
+    float w = weights[pos];
+    float coeff = attractive_coeff(d2, w, p);
+    float2 attractive = alpha * float2(clip4(coeff * diff.x), clip4(coeff * diff.y));
+
+    atomic_fetch_add_explicit(&layout[head_base], fixed_delta(attractive.x), memory_order_relaxed);
+    atomic_fetch_add_explicit(&layout[head_base + 1u], fixed_delta(attractive.y), memory_order_relaxed);
+    atomic_fetch_add_explicit(&layout[tail_base], fixed_delta(-attractive.x), memory_order_relaxed);
+    atomic_fetch_add_explicit(&layout[tail_base + 1u], fixed_delta(-attractive.y), memory_order_relaxed);
+
+    uint neg_samples = uint(negative_samples_this_epoch_period(period, p, epoch));
+    for (uint s = 0; s < neg_samples; ++s) {
+      uint neg = deterministic_vertex(p.n, p.seed, epoch, gid, e, s);
+      if (neg == gid || neg == nb) continue;
+      uint neg_base = neg * 2u;
+      head_x = float(atomic_load_explicit(&layout[head_base], memory_order_relaxed)) * inv_scale;
+      head_y = float(atomic_load_explicit(&layout[head_base + 1u], memory_order_relaxed)) * inv_scale;
+      float neg_x = float(atomic_load_explicit(&layout[neg_base], memory_order_relaxed)) * inv_scale;
+      float neg_y = float(atomic_load_explicit(&layout[neg_base + 1u], memory_order_relaxed)) * inv_scale;
+      float2 ndiff = float2(head_x - neg_x, head_y - neg_y);
+      float nd2 = max(1.1920928955078125e-7f, dot(ndiff, ndiff));
+      float rcoeff = repulsive_coeff(nd2, p);
+      float2 repulsive = alpha * float2(clip4(rcoeff * ndiff.x), clip4(rcoeff * ndiff.y));
+      atomic_fetch_add_explicit(&layout[head_base], fixed_delta(repulsive.x), memory_order_relaxed);
+      atomic_fetch_add_explicit(&layout[head_base + 1u], fixed_delta(repulsive.y), memory_order_relaxed);
+    }
+  }
 }
 
 kernel void matrix_multiply(
@@ -1457,6 +1786,401 @@ kernel void tsne_transform_epoch(
   updates[row] = update;
 }
 
+kernel void opentsne_sum_q_rows(
+  device const float2* current [[buffer(0)]],
+  device float* row_sums [[buffer(1)]],
+  constant OpenTsneMetalParams& p [[buffer(2)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= p.n) return;
+  float2 yi = current[row];
+  float sum_q = 0.0f;
+  for (uint j = 0u; j < p.n; ++j) {
+    if (j == row) continue;
+    float2 diff = yi - current[j];
+    float d2 = dot(diff, diff);
+    sum_q += 1.0f / (1.0f + d2);
+  }
+  row_sums[row] = sum_q;
+}
+
+kernel void opentsne_epoch_exact(
+  device const int* row_ptr [[buffer(0)]],
+  device const int* col_idx [[buffer(1)]],
+  device const float* p_val [[buffer(2)]],
+  device float2* current [[buffer(3)]],
+  device float2* gains [[buffer(4)]],
+  device float2* updates [[buffer(5)]],
+  constant OpenTsneMetalParams& p [[buffer(6)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= p.n) return;
+  constexpr float eps = 1.0e-12f;
+  float2 yi = current[row];
+  float2 grad = float2(0.0f, 0.0f);
+
+  for (uint j = 0u; j < p.n; ++j) {
+    if (j == row) continue;
+    float2 diff = yi - current[j];
+    float d2 = dot(diff, diff);
+    float q = 1.0f / (1.0f + d2);
+    grad += (-(q * q) * p.inv_sum_q) * diff;
+  }
+
+  int begin = row_ptr[row];
+  int end = row_ptr[row + 1u];
+  for (int pos = begin; pos < end; ++pos) {
+    int j = col_idx[pos];
+    if (j < 0 || uint(j) >= p.n || uint(j) == row) continue;
+    float2 diff = yi - current[uint(j)];
+    float d2 = dot(diff, diff);
+    float q = 1.0f / (1.0f + d2);
+    grad += (p.exaggeration * p_val[pos] * q) * diff;
+  }
+
+  float2 gain = gains[row];
+  float2 update = updates[row];
+  float sx0 = sign_component(update.x);
+  float sx1 = sign_component(update.y);
+  float sg0 = sign_component(grad.x);
+  float sg1 = sign_component(grad.y);
+  gain.x = sx0 != sg0 ? gain.x + 0.2f : gain.x * 0.8f + p.min_gain;
+  gain.y = sx1 != sg1 ? gain.y + 0.2f : gain.y * 0.8f + p.min_gain;
+  gain = max(gain, float2(p.min_gain, p.min_gain));
+
+  update = p.momentum * update - p.learning_rate * gain * grad;
+  float step_norm2 = dot(update, update);
+  float max_step2 = p.max_step_norm * p.max_step_norm;
+  if (isfinite(max_step2) && max_step2 > 0.0f && step_norm2 > max_step2) {
+    update *= p.max_step_norm / (sqrt(step_norm2) + eps);
+  }
+
+  current[row] = yi + update;
+  gains[row] = gain;
+  updates[row] = update;
+}
+
+kernel void opentsne_apply_center(
+  device float2* current [[buffer(0)]],
+  constant float2& center [[buffer(1)]],
+  constant uint& n [[buffer(2)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= n) return;
+  current[row] -= center;
+}
+
+float2 complex_mul(float2 a, float2 b) {
+  return float2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+uint reverse_bits_limited(uint value, uint n_bits) {
+  uint out = 0u;
+  for (uint bit = 0u; bit < n_bits; ++bit) {
+    out = (out << 1u) | (value & 1u);
+    value >>= 1u;
+  }
+  return out;
+}
+
+kernel void opentsne_fft_clear_grids(
+  device atomic_float* mass [[buffer(0)]],
+  device atomic_float* mass_x [[buffer(1)]],
+  device atomic_float* mass_y [[buffer(2)]],
+  constant OpenTsneFFTGridParams& g [[buffer(3)]],
+  uint cell [[thread_position_in_grid]]
+) {
+  uint total = g.grid_size * g.grid_size;
+  if (cell >= total) return;
+  atomic_store_explicit(&mass[cell], 0.0f, memory_order_relaxed);
+  atomic_store_explicit(&mass_x[cell], 0.0f, memory_order_relaxed);
+  atomic_store_explicit(&mass_y[cell], 0.0f, memory_order_relaxed);
+}
+
+kernel void opentsne_fft_scatter_bilinear(
+  device const float2* current [[buffer(0)]],
+  device atomic_float* mass [[buffer(1)]],
+  device atomic_float* mass_x [[buffer(2)]],
+  device atomic_float* mass_y [[buffer(3)]],
+  constant OpenTsneFFTGridParams& g [[buffer(4)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= g.n) return;
+  float2 yi = current[row];
+  if (!isfinite(yi.x)) yi.x = 0.0f;
+  if (!isfinite(yi.y)) yi.y = 0.0f;
+  float raw_x = (yi.x - g.lower_x) * g.inv_spacing;
+  float raw_y = (yi.y - g.lower_y) * g.inv_spacing;
+  float max_cell = float(g.grid_size - 1u);
+  raw_x = clamp(raw_x, 0.0f, max_cell);
+  raw_y = clamp(raw_y, 0.0f, max_cell);
+  uint x0 = min(uint(floor(raw_x)), g.grid_size - 2u);
+  uint y0 = min(uint(floor(raw_y)), g.grid_size - 2u);
+  uint x1 = x0 + 1u;
+  uint y1 = y0 + 1u;
+  float tx = raw_x - float(x0);
+  float ty = raw_y - float(y0);
+  float w00 = (1.0f - tx) * (1.0f - ty);
+  float w10 = tx * (1.0f - ty);
+  float w01 = (1.0f - tx) * ty;
+  float w11 = tx * ty;
+  uint p00 = y0 * g.grid_size + x0;
+  uint p10 = y0 * g.grid_size + x1;
+  uint p01 = y1 * g.grid_size + x0;
+  uint p11 = y1 * g.grid_size + x1;
+  atomic_fetch_add_explicit(&mass[p00], w00, memory_order_relaxed);
+  atomic_fetch_add_explicit(&mass[p10], w10, memory_order_relaxed);
+  atomic_fetch_add_explicit(&mass[p01], w01, memory_order_relaxed);
+  atomic_fetch_add_explicit(&mass[p11], w11, memory_order_relaxed);
+  atomic_fetch_add_explicit(&mass_x[p00], w00 * yi.x, memory_order_relaxed);
+  atomic_fetch_add_explicit(&mass_x[p10], w10 * yi.x, memory_order_relaxed);
+  atomic_fetch_add_explicit(&mass_x[p01], w01 * yi.x, memory_order_relaxed);
+  atomic_fetch_add_explicit(&mass_x[p11], w11 * yi.x, memory_order_relaxed);
+  atomic_fetch_add_explicit(&mass_y[p00], w00 * yi.y, memory_order_relaxed);
+  atomic_fetch_add_explicit(&mass_y[p10], w10 * yi.y, memory_order_relaxed);
+  atomic_fetch_add_explicit(&mass_y[p01], w01 * yi.y, memory_order_relaxed);
+  atomic_fetch_add_explicit(&mass_y[p11], w11 * yi.y, memory_order_relaxed);
+}
+
+kernel void opentsne_fft_load_inputs(
+  device const atomic_float* mass [[buffer(0)]],
+  device const atomic_float* mass_x [[buffer(1)]],
+  device const atomic_float* mass_y [[buffer(2)]],
+  device float2* mass_fft [[buffer(3)]],
+  device float2* mass_x_fft [[buffer(4)]],
+  device float2* mass_y_fft [[buffer(5)]],
+  device float2* kernel_q [[buffer(6)]],
+  device float2* kernel_q2 [[buffer(7)]],
+  constant OpenTsneFFTGridParams& g [[buffer(8)]],
+  uint2 gid [[thread_position_in_grid]]
+) {
+  if (gid.x >= g.fft_size || gid.y >= g.fft_size) return;
+  uint fft_pos = gid.y * g.fft_size + gid.x;
+  float m = 0.0f;
+  float mx = 0.0f;
+  float my = 0.0f;
+  if (gid.x < g.grid_size && gid.y < g.grid_size) {
+    uint grid_pos = gid.y * g.grid_size + gid.x;
+    m = atomic_load_explicit(&mass[grid_pos], memory_order_relaxed);
+    mx = atomic_load_explicit(&mass_x[grid_pos], memory_order_relaxed);
+    my = atomic_load_explicit(&mass_y[grid_pos], memory_order_relaxed);
+  }
+  mass_fft[fft_pos] = float2(m, 0.0f);
+  mass_x_fft[fft_pos] = float2(mx, 0.0f);
+  mass_y_fft[fft_pos] = float2(my, 0.0f);
+
+  bool x_ok = gid.x < g.grid_size || gid.x > g.grid_size;
+  bool y_ok = gid.y < g.grid_size || gid.y > g.grid_size;
+  float q = 0.0f;
+  float q2 = 0.0f;
+  if (x_ok && y_ok) {
+    int dx = gid.x < g.grid_size ? int(gid.x) : int(gid.x) - int(g.fft_size);
+    int dy = gid.y < g.grid_size ? int(gid.y) : int(gid.y) - int(g.fft_size);
+    if (abs(dx) < int(g.grid_size) && abs(dy) < int(g.grid_size)) {
+      float x_offset = float(dx) * g.spacing;
+      float y_offset = float(dy) * g.spacing;
+      float d2 = x_offset * x_offset + y_offset * y_offset;
+      q = 1.0f / (1.0f + d2);
+      q2 = q * q;
+    }
+  }
+  kernel_q[fft_pos] = float2(q, 0.0f);
+  kernel_q2[fft_pos] = float2(q2, 0.0f);
+}
+
+kernel void opentsne_fft_bit_reverse_rows(
+  device const float2* input [[buffer(0)]],
+  device float2* output [[buffer(1)]],
+  constant uint& n_fft [[buffer(2)]],
+  constant uint& log_n [[buffer(3)]],
+  uint2 gid [[thread_position_in_grid]]
+) {
+  if (gid.x >= n_fft || gid.y >= n_fft) return;
+  uint rev = reverse_bits_limited(gid.x, log_n);
+  output[gid.y * n_fft + rev] = input[gid.y * n_fft + gid.x];
+}
+
+kernel void opentsne_fft_bit_reverse_cols(
+  device const float2* input [[buffer(0)]],
+  device float2* output [[buffer(1)]],
+  constant uint& n_fft [[buffer(2)]],
+  constant uint& log_n [[buffer(3)]],
+  uint2 gid [[thread_position_in_grid]]
+) {
+  if (gid.x >= n_fft || gid.y >= n_fft) return;
+  uint rev = reverse_bits_limited(gid.y, log_n);
+  output[rev * n_fft + gid.x] = input[gid.y * n_fft + gid.x];
+}
+
+kernel void opentsne_fft_butterfly_rows(
+  device float2* values [[buffer(0)]],
+  constant uint& n_fft [[buffer(1)]],
+  constant uint& stage [[buffer(2)]],
+  constant uint& inverse [[buffer(3)]],
+  uint2 gid [[thread_position_in_grid]]
+) {
+  uint half_count = n_fft >> 1u;
+  if (gid.x >= half_count || gid.y >= n_fft) return;
+  uint span_half = 1u << (stage - 1u);
+  uint width = span_half << 1u;
+  uint group = gid.x / span_half;
+  uint j = gid.x - group * span_half;
+  uint base = gid.y * n_fft + group * width + j;
+  constexpr float two_pi = 6.2831853071795864769f;
+  float direction = inverse == 0u ? 1.0f : -1.0f;
+  float angle = direction * two_pi * float(j) / float(width);
+  float2 w = float2(cos(angle), sin(angle));
+  float2 u = values[base];
+  float2 v = complex_mul(values[base + span_half], w);
+  values[base] = u + v;
+  values[base + span_half] = u - v;
+}
+
+kernel void opentsne_fft_butterfly_cols(
+  device float2* values [[buffer(0)]],
+  constant uint& n_fft [[buffer(1)]],
+  constant uint& stage [[buffer(2)]],
+  constant uint& inverse [[buffer(3)]],
+  uint2 gid [[thread_position_in_grid]]
+) {
+  uint half_count = n_fft >> 1u;
+  if (gid.x >= n_fft || gid.y >= half_count) return;
+  uint span_half = 1u << (stage - 1u);
+  uint width = span_half << 1u;
+  uint group = gid.y / span_half;
+  uint j = gid.y - group * span_half;
+  uint row0 = group * width + j;
+  uint idx0 = row0 * n_fft + gid.x;
+  uint idx1 = (row0 + span_half) * n_fft + gid.x;
+  constexpr float two_pi = 6.2831853071795864769f;
+  float direction = inverse == 0u ? 1.0f : -1.0f;
+  float angle = direction * two_pi * float(j) / float(width);
+  float2 w = float2(cos(angle), sin(angle));
+  float2 u = values[idx0];
+  float2 v = complex_mul(values[idx1], w);
+  values[idx0] = u + v;
+  values[idx1] = u - v;
+}
+
+kernel void opentsne_fft_multiply(
+  device const float2* a [[buffer(0)]],
+  device const float2* b [[buffer(1)]],
+  device float2* out [[buffer(2)]],
+  constant uint& total [[buffer(3)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= total) return;
+  out[gid] = complex_mul(a[gid], b[gid]);
+}
+
+kernel void opentsne_fft_scale(
+  device float2* values [[buffer(0)]],
+  constant uint& total [[buffer(1)]],
+  constant float& scale [[buffer(2)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= total) return;
+  values[gid] *= scale;
+}
+
+float opentsne_sample_grid_value(device const float2* grid,
+                                 constant OpenTsneFFTGridParams& g,
+                                 float2 yi) {
+  float raw_x = (yi.x - g.lower_x) * g.inv_spacing;
+  float raw_y = (yi.y - g.lower_y) * g.inv_spacing;
+  float max_cell = float(g.grid_size - 1u);
+  raw_x = clamp(raw_x, 0.0f, max_cell);
+  raw_y = clamp(raw_y, 0.0f, max_cell);
+  uint x0 = min(uint(floor(raw_x)), g.grid_size - 2u);
+  uint y0 = min(uint(floor(raw_y)), g.grid_size - 2u);
+  uint x1 = x0 + 1u;
+  uint y1 = y0 + 1u;
+  float tx = raw_x - float(x0);
+  float ty = raw_y - float(y0);
+  float v00 = grid[y0 * g.fft_size + x0].x;
+  float v10 = grid[y0 * g.fft_size + x1].x;
+  float v01 = grid[y1 * g.fft_size + x0].x;
+  float v11 = grid[y1 * g.fft_size + x1].x;
+  return (1.0f - tx) * (1.0f - ty) * v00 +
+    tx * (1.0f - ty) * v10 +
+    (1.0f - tx) * ty * v01 +
+    tx * ty * v11;
+}
+
+kernel void opentsne_fft_sum_q_rows(
+  device const float2* current [[buffer(0)]],
+  device const float2* q_grid [[buffer(1)]],
+  device float* row_sums [[buffer(2)]],
+  constant OpenTsneFFTGridParams& g [[buffer(3)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= g.n) return;
+  float2 yi = current[row];
+  if (!isfinite(yi.x)) yi.x = 0.0f;
+  if (!isfinite(yi.y)) yi.y = 0.0f;
+  row_sums[row] = opentsne_sample_grid_value(q_grid, g, yi);
+}
+
+kernel void opentsne_epoch_fft_grid(
+  device const int* row_ptr [[buffer(0)]],
+  device const int* col_idx [[buffer(1)]],
+  device const float* p_val [[buffer(2)]],
+  device float2* current [[buffer(3)]],
+  device float2* gains [[buffer(4)]],
+  device float2* updates [[buffer(5)]],
+  device const float2* q2_grid [[buffer(6)]],
+  device const float2* xq2_grid [[buffer(7)]],
+  device const float2* yq2_grid [[buffer(8)]],
+  constant OpenTsneMetalParams& p [[buffer(9)]],
+  constant OpenTsneFFTGridParams& g [[buffer(10)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= p.n) return;
+  constexpr float eps = 1.0e-12f;
+  float2 yi = current[row];
+  if (!isfinite(yi.x)) yi.x = 0.0f;
+  if (!isfinite(yi.y)) yi.y = 0.0f;
+  float q2_value = opentsne_sample_grid_value(q2_grid, g, yi);
+  float xq2_value = opentsne_sample_grid_value(xq2_grid, g, yi);
+  float yq2_value = opentsne_sample_grid_value(yq2_grid, g, yi);
+  float2 grad = float2(
+    -(yi.x * q2_value - xq2_value) * g.inv_sum_q,
+    -(yi.y * q2_value - yq2_value) * g.inv_sum_q
+  );
+
+  int begin = row_ptr[row];
+  int end = row_ptr[row + 1u];
+  for (int pos = begin; pos < end; ++pos) {
+    int j = col_idx[pos];
+    if (j < 0 || uint(j) >= p.n || uint(j) == row) continue;
+    float2 diff = yi - current[uint(j)];
+    float d2 = dot(diff, diff);
+    float q = 1.0f / (1.0f + d2);
+    grad += (p.exaggeration * p_val[pos] * q) * diff;
+  }
+
+  float2 gain = gains[row];
+  float2 update = updates[row];
+  float sx0 = sign_component(update.x);
+  float sx1 = sign_component(update.y);
+  float sg0 = sign_component(grad.x);
+  float sg1 = sign_component(grad.y);
+  gain.x = sx0 != sg0 ? gain.x + 0.2f : gain.x * 0.8f + p.min_gain;
+  gain.y = sx1 != sg1 ? gain.y + 0.2f : gain.y * 0.8f + p.min_gain;
+  gain = max(gain, float2(p.min_gain, p.min_gain));
+
+  update = p.momentum * update - p.learning_rate * gain * grad;
+  float step_norm2 = dot(update, update);
+  float max_step2 = p.max_step_norm * p.max_step_norm;
+  if (isfinite(max_step2) && max_step2 > 0.0f && step_norm2 > max_step2) {
+    update *= p.max_step_norm / (sqrt(step_norm2) + eps);
+  }
+
+  current[row] = yi + update;
+  gains[row] = gain;
+  updates[row] = update;
+}
+
 kernel void landmark_project_interpolate(
   device const float* landmark_data [[buffer(0)]],
   device const float* query_data [[buffer(1)]],
@@ -1905,6 +2629,149 @@ void dispatch_rows(id<MTLComputeCommandEncoder> encoder,
     threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
 }
 
+MTLSize metal_threadgroup_2d(id<MTLComputePipelineState> pipeline) {
+  const NSUInteger max_threads = [pipeline maxTotalThreadsPerThreadgroup];
+  if (max_threads >= 256) return MTLSizeMake(16, 16, 1);
+  if (max_threads >= 64) return MTLSizeMake(8, 8, 1);
+  return MTLSizeMake(std::max<NSUInteger>(1, max_threads), 1, 1);
+}
+
+int metal_env_positive_int(const char* name, const int fallback) {
+  const char* raw = std::getenv(name);
+  if (raw == nullptr || raw[0] == '\0') return fallback;
+  char* end = nullptr;
+  const long parsed = std::strtol(raw, &end, 10);
+  if (end == raw || parsed <= 0L || parsed > static_cast<long>(std::numeric_limits<int>::max())) {
+    return fallback;
+  }
+  return static_cast<int>(parsed);
+}
+
+int metal_tsne_fft_grid_size(const int n) {
+  // The native Metal path uses the same FFT-grid objective as the CPU path. On
+  // MNIST-scale data, 128 cells is too coarse, while 512 costs too much without
+  // improving the plot once Metal uses stable step clipping. Use 256 for large
+  // runs by default; FASTEMBEDR_TSNE_FFT_GRID remains an explicit override.
+  const int fallback = n >= 50000 ? 256 : (n >= 10000 ? 256 : 64);
+  const int requested = metal_env_positive_int("FASTEMBEDR_TSNE_FFT_GRID", fallback);
+  int grid = 32;
+  while (grid < requested && grid < 512) grid <<= 1;
+  return std::max(32, std::min(512, grid));
+}
+
+std::uint32_t log2_power_of_two(const std::uint32_t value) {
+  std::uint32_t out = 0;
+  std::uint32_t current = value;
+  while (current > 1u) {
+    current >>= 1u;
+    ++out;
+  }
+  return out;
+}
+
+void encode_fft_2d_metal(MetalEmbeddingState& state,
+                         id<MTLCommandBuffer> command_buffer,
+                         id<MTLBuffer> values,
+                         id<MTLBuffer> scratch,
+                         const std::uint32_t fft_size,
+                         const std::uint32_t log_fft,
+                         const bool inverse) {
+  const std::uint32_t inverse_u = inverse ? 1u : 0u;
+  const MTLSize full_grid = MTLSizeMake(static_cast<NSUInteger>(fft_size),
+                                       static_cast<NSUInteger>(fft_size),
+                                       1);
+  const MTLSize half_row_grid = MTLSizeMake(static_cast<NSUInteger>(fft_size / 2u),
+                                           static_cast<NSUInteger>(fft_size),
+                                           1);
+  const MTLSize half_col_grid = MTLSizeMake(static_cast<NSUInteger>(fft_size),
+                                           static_cast<NSUInteger>(fft_size / 2u),
+                                           1);
+
+  {
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    [encoder setComputePipelineState:state.opentsne_fft_bit_reverse_rows_pipeline];
+    [encoder setBuffer:values offset:0 atIndex:0];
+    [encoder setBuffer:scratch offset:0 atIndex:1];
+    [encoder setBytes:&fft_size length:sizeof(std::uint32_t) atIndex:2];
+    [encoder setBytes:&log_fft length:sizeof(std::uint32_t) atIndex:3];
+    [encoder dispatchThreads:full_grid
+       threadsPerThreadgroup:metal_threadgroup_2d(state.opentsne_fft_bit_reverse_rows_pipeline)];
+    [encoder endEncoding];
+  }
+
+  for (std::uint32_t stage = 1u; stage <= log_fft; ++stage) {
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    [encoder setComputePipelineState:state.opentsne_fft_butterfly_rows_pipeline];
+    [encoder setBuffer:scratch offset:0 atIndex:0];
+    [encoder setBytes:&fft_size length:sizeof(std::uint32_t) atIndex:1];
+    [encoder setBytes:&stage length:sizeof(std::uint32_t) atIndex:2];
+    [encoder setBytes:&inverse_u length:sizeof(std::uint32_t) atIndex:3];
+    [encoder dispatchThreads:half_row_grid
+       threadsPerThreadgroup:metal_threadgroup_2d(state.opentsne_fft_butterfly_rows_pipeline)];
+    [encoder endEncoding];
+  }
+
+  {
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    [encoder setComputePipelineState:state.opentsne_fft_bit_reverse_cols_pipeline];
+    [encoder setBuffer:scratch offset:0 atIndex:0];
+    [encoder setBuffer:values offset:0 atIndex:1];
+    [encoder setBytes:&fft_size length:sizeof(std::uint32_t) atIndex:2];
+    [encoder setBytes:&log_fft length:sizeof(std::uint32_t) atIndex:3];
+    [encoder dispatchThreads:full_grid
+       threadsPerThreadgroup:metal_threadgroup_2d(state.opentsne_fft_bit_reverse_cols_pipeline)];
+    [encoder endEncoding];
+  }
+
+  for (std::uint32_t stage = 1u; stage <= log_fft; ++stage) {
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    [encoder setComputePipelineState:state.opentsne_fft_butterfly_cols_pipeline];
+    [encoder setBuffer:values offset:0 atIndex:0];
+    [encoder setBytes:&fft_size length:sizeof(std::uint32_t) atIndex:1];
+    [encoder setBytes:&stage length:sizeof(std::uint32_t) atIndex:2];
+    [encoder setBytes:&inverse_u length:sizeof(std::uint32_t) atIndex:3];
+    [encoder dispatchThreads:half_col_grid
+       threadsPerThreadgroup:metal_threadgroup_2d(state.opentsne_fft_butterfly_cols_pipeline)];
+    [encoder endEncoding];
+  }
+
+  if (inverse) {
+    const std::uint32_t total = fft_size * fft_size;
+    const float scale = 1.0f / static_cast<float>(total);
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    [encoder setComputePipelineState:state.opentsne_fft_scale_pipeline];
+    [encoder setBuffer:values offset:0 atIndex:0];
+    [encoder setBytes:&total length:sizeof(std::uint32_t) atIndex:1];
+    [encoder setBytes:&scale length:sizeof(float) atIndex:2];
+    [encoder dispatchThreads:MTLSizeMake(static_cast<NSUInteger>(total), 1, 1)
+       threadsPerThreadgroup:MTLSizeMake(bounded_threads(state.opentsne_fft_scale_pipeline), 1, 1)];
+    [encoder endEncoding];
+  }
+}
+
+void encode_fft_convolution_metal(MetalEmbeddingState& state,
+                                  id<MTLCommandBuffer> command_buffer,
+                                  id<MTLBuffer> transformed_mass,
+                                  id<MTLBuffer> transformed_kernel,
+                                  id<MTLBuffer> out,
+                                  id<MTLBuffer> scratch,
+                                  const std::uint32_t fft_size,
+                                  const std::uint32_t log_fft,
+                                  const std::uint32_t total) {
+  {
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    [encoder setComputePipelineState:state.opentsne_fft_multiply_pipeline];
+    [encoder setBuffer:transformed_mass offset:0 atIndex:0];
+    [encoder setBuffer:transformed_kernel offset:0 atIndex:1];
+    [encoder setBuffer:out offset:0 atIndex:2];
+    [encoder setBytes:&total length:sizeof(std::uint32_t) atIndex:3];
+    [encoder dispatchThreads:MTLSizeMake(static_cast<NSUInteger>(total), 1, 1)
+       threadsPerThreadgroup:MTLSizeMake(bounded_threads(state.opentsne_fft_multiply_pipeline), 1, 1)];
+    [encoder endEncoding];
+  }
+  encode_fft_2d_metal(state, command_buffer, out, scratch, fft_size, log_fft, true);
+}
+
 std::vector<float> numeric_matrix_to_float(const NumericMatrix& x) {
   const std::size_t size = static_cast<std::size_t>(x.nrow()) * x.ncol();
   std::vector<float> out(size);
@@ -2295,7 +3162,7 @@ std::vector<float> initialize_tsne_transform_metal(const NumericMatrix& referenc
 
 std::string metal_umap_optimizer_mode() {
   const char* value = std::getenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER");
-  if (value == nullptr) return "scheduled";
+  if (value == nullptr) return "atomic_inplace";
   std::string mode(value);
   std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char ch) {
     return static_cast<char>(std::tolower(ch));
@@ -2303,10 +3170,13 @@ std::string metal_umap_optimizer_mode() {
   if (mode == "torchdr" || mode == "row" || mode == "row_negatives") {
     return "torchdr_row_negatives";
   }
+  if (mode == "atomic_inplace" || mode == "inplace" || mode == "uwot" || mode == "edge_atomic") {
+    return "atomic_inplace";
+  }
   if (mode == "atomic" || mode == "atomic_delta" || mode == "endpoint") {
     return "atomic_delta";
   }
-  return "scheduled";
+  return "atomic_inplace";
 }
 
 } // namespace
@@ -2669,6 +3539,506 @@ List transform_tsne_metal_impl(NumericMatrix reference_layout,
       Rcpp::Named("repulsion") = exact_repulsion ? "exact_reference_metal" : "sampled_reference_metal",
       Rcpp::Named("n_negatives") = n_negatives,
       Rcpp::Named("backend") = "metal"
+    );
+  }
+}
+
+List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
+                                  NumericMatrix distances,
+                                  NumericMatrix y_init,
+                                  bool init,
+                                  int n_components,
+                                  double perplexity,
+                                  int early_exaggeration_iter,
+                                  int n_iter,
+                                  double early_exaggeration,
+                                  double exaggeration,
+                                  double learning_rate,
+                                  bool learning_rate_auto,
+                                  double initial_momentum,
+                                  double final_momentum,
+                                  double min_gain,
+                                  double max_step_norm,
+                                  std::string negative_gradient_method,
+                                  int seed,
+                                  bool record_costs) {
+  const int n = indices.nrow();
+  const int k = indices.ncol();
+  if (n < 2 || k < 1) Rcpp::stop("KNN input must have at least two rows and one neighbor column.");
+  if (n_components != 2) Rcpp::stop("Metal openTSNE currently supports exactly two output components.");
+  if (distances.nrow() != n || distances.ncol() != k) {
+    Rcpp::stop("KNN `indices` and `distances` must have the same dimensions.");
+  }
+  if (perplexity <= 0.0 || !std::isfinite(perplexity) || n - 1 < 3.0 * perplexity) {
+    Rcpp::stop("perplexity is too large for the number of samples.");
+  }
+  if (early_exaggeration_iter < 0 || n_iter < 0 || early_exaggeration_iter + n_iter < 1) {
+    Rcpp::stop("Metal openTSNE iteration counts must be non-negative and sum to at least one.");
+  }
+  if (learning_rate <= 0.0 && !learning_rate_auto) Rcpp::stop("`learning_rate` must be positive or automatic.");
+  if (early_exaggeration <= 0.0 || exaggeration <= 0.0) Rcpp::stop("exaggeration values must be positive.");
+  if (initial_momentum < 0.0 || final_momentum < 0.0) Rcpp::stop("momentum values must be non-negative.");
+  if (min_gain <= 0.0) Rcpp::stop("`min_gain` must be positive.");
+
+  std::string method = negative_gradient_method;
+  std::transform(method.begin(), method.end(), method.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  if (method == "auto") method = "fft";
+  const bool use_fft_grid =
+    method == "fft" || method == "fitsne" || method == "fit_sne" || method == "interpolation";
+  const bool use_exact =
+    method == "exact" || method == "pair" || method == "pair_symmetric";
+  if (!use_fft_grid && !use_exact) {
+    Rcpp::stop("Metal openTSNE supports `negative_gradient_method = \"fft\"` or `\"exact\"`.");
+  }
+  if (use_exact && n > kMetalOpenTsneExactDenseThreshold) {
+    Rcpp::stop(
+      "Native Metal openTSNE exact optimization is limited to n <= %d until "
+      "using `negative_gradient_method = \"fft\"`.",
+      kMetalOpenTsneExactDenseThreshold
+    );
+  }
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    TsneSparseMetalGraph graph = build_tsne_sparse_graph_metal(indices, distances, perplexity);
+    std::vector<float> current = initialize_opentsne_metal_layout(y_init, init, n, seed);
+    std::vector<float> gains(current.size(), 1.0f);
+    std::vector<float> updates(current.size(), 0.0f);
+    std::vector<float> row_sums(static_cast<std::size_t>(n), 0.0f);
+
+    id<MTLBuffer> row_ptr_buffer = [state.device newBufferWithBytes:graph.row_ptr.data()
+                                                             length:graph.row_ptr.size() * sizeof(std::int32_t)
+                                                            options:MTLResourceStorageModeShared];
+    id<MTLBuffer> col_buffer = [state.device newBufferWithBytes:graph.col.data()
+                                                         length:graph.col.size() * sizeof(std::int32_t)
+                                                        options:MTLResourceStorageModeShared];
+    id<MTLBuffer> val_buffer = [state.device newBufferWithBytes:graph.val.data()
+                                                         length:graph.val.size() * sizeof(float)
+                                                        options:MTLResourceStorageModeShared];
+    id<MTLBuffer> current_buffer = [state.device newBufferWithBytes:current.data()
+                                                             length:current.size() * sizeof(float)
+                                                            options:MTLResourceStorageModeShared];
+    id<MTLBuffer> gains_buffer = [state.device newBufferWithBytes:gains.data()
+                                                           length:gains.size() * sizeof(float)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> updates_buffer = [state.device newBufferWithBytes:updates.data()
+                                                             length:updates.size() * sizeof(float)
+                                                            options:MTLResourceStorageModeShared];
+    id<MTLBuffer> row_sums_buffer = [state.device newBufferWithBytes:row_sums.data()
+                                                              length:row_sums.size() * sizeof(float)
+                                                             options:MTLResourceStorageModeShared];
+    if (row_ptr_buffer == nil || col_buffer == nil || val_buffer == nil ||
+        current_buffer == nil || gains_buffer == nil || updates_buffer == nil ||
+        row_sums_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal openTSNE buffers.");
+    }
+
+    const int total_iter = early_exaggeration_iter + n_iter;
+    const std::uint32_t n_u = static_cast<std::uint32_t>(n);
+    const float max_step = (max_step_norm > 0.0 && std::isfinite(max_step_norm)) ?
+      static_cast<float>(max_step_norm) :
+      std::numeric_limits<float>::max();
+
+    if (use_fft_grid) {
+      const std::uint32_t grid_n = static_cast<std::uint32_t>(metal_tsne_fft_grid_size(n));
+      const std::uint32_t fft_n = grid_n << 1u;
+      const std::uint32_t log_fft = log2_power_of_two(fft_n);
+      const std::uint32_t grid_total = grid_n * grid_n;
+      const std::uint32_t fft_total = fft_n * fft_n;
+      const std::size_t grid_bytes = static_cast<std::size_t>(grid_total) * sizeof(float);
+      const std::size_t complex_bytes = static_cast<std::size_t>(fft_total) * sizeof(float) * 2u;
+
+      id<MTLBuffer> mass_buffer = [state.device newBufferWithLength:grid_bytes
+                                                            options:MTLResourceStorageModeShared];
+      id<MTLBuffer> mass_x_buffer = [state.device newBufferWithLength:grid_bytes
+                                                              options:MTLResourceStorageModeShared];
+      id<MTLBuffer> mass_y_buffer = [state.device newBufferWithLength:grid_bytes
+                                                              options:MTLResourceStorageModeShared];
+      id<MTLBuffer> mass_fft_buffer = [state.device newBufferWithLength:complex_bytes
+                                                                 options:MTLResourceStorageModeShared];
+      id<MTLBuffer> mass_x_fft_buffer = [state.device newBufferWithLength:complex_bytes
+                                                                   options:MTLResourceStorageModeShared];
+      id<MTLBuffer> mass_y_fft_buffer = [state.device newBufferWithLength:complex_bytes
+                                                                   options:MTLResourceStorageModeShared];
+      id<MTLBuffer> kernel_q_buffer = [state.device newBufferWithLength:complex_bytes
+                                                                 options:MTLResourceStorageModeShared];
+      id<MTLBuffer> kernel_q2_buffer = [state.device newBufferWithLength:complex_bytes
+                                                                  options:MTLResourceStorageModeShared];
+      id<MTLBuffer> q_grid_buffer = [state.device newBufferWithLength:complex_bytes
+                                                              options:MTLResourceStorageModeShared];
+      id<MTLBuffer> q2_grid_buffer = [state.device newBufferWithLength:complex_bytes
+                                                               options:MTLResourceStorageModeShared];
+      id<MTLBuffer> xq2_grid_buffer = [state.device newBufferWithLength:complex_bytes
+                                                                options:MTLResourceStorageModeShared];
+      id<MTLBuffer> yq2_grid_buffer = [state.device newBufferWithLength:complex_bytes
+                                                                options:MTLResourceStorageModeShared];
+      id<MTLBuffer> fft_scratch_buffer = [state.device newBufferWithLength:complex_bytes
+                                                                   options:MTLResourceStorageModeShared];
+      if (mass_buffer == nil || mass_x_buffer == nil || mass_y_buffer == nil ||
+          mass_fft_buffer == nil || mass_x_fft_buffer == nil || mass_y_fft_buffer == nil ||
+          kernel_q_buffer == nil || kernel_q2_buffer == nil || q_grid_buffer == nil ||
+          q2_grid_buffer == nil || xq2_grid_buffer == nil || yq2_grid_buffer == nil ||
+          fft_scratch_buffer == nil) {
+        Rcpp::stop("Failed to allocate Metal openTSNE FFT-grid buffers.");
+      }
+
+      const NSUInteger threads_clear = bounded_threads(state.opentsne_fft_clear_pipeline);
+      const NSUInteger threads_scatter = bounded_threads(state.opentsne_fft_scatter_pipeline);
+      const NSUInteger threads_sum = bounded_threads(state.opentsne_fft_sum_q_pipeline);
+      const NSUInteger threads_epoch = bounded_threads(state.opentsne_fft_epoch_pipeline);
+      const NSUInteger threads_center = bounded_threads(state.opentsne_center_pipeline);
+      const MTLSize point_grid = MTLSizeMake(static_cast<NSUInteger>(n), 1, 1);
+      const MTLSize grid_cells = MTLSizeMake(static_cast<NSUInteger>(grid_total), 1, 1);
+      const MTLSize fft_grid = MTLSizeMake(static_cast<NSUInteger>(fft_n),
+                                          static_cast<NSUInteger>(fft_n),
+                                          1);
+
+      for (int iter = 0; iter < total_iter; ++iter) {
+        double min_x = static_cast<double>(current[0]);
+        double max_x = min_x;
+        double min_y = static_cast<double>(current[1]);
+        double max_y = min_y;
+        for (int i = 1; i < n; ++i) {
+          const std::size_t base = static_cast<std::size_t>(i) * 2u;
+          const double x = static_cast<double>(current[base]);
+          const double y = static_cast<double>(current[base + 1u]);
+          if (std::isfinite(x)) {
+            min_x = std::min(min_x, x);
+            max_x = std::max(max_x, x);
+          }
+          if (std::isfinite(y)) {
+            min_y = std::min(min_y, y);
+            max_y = std::max(max_y, y);
+          }
+        }
+        const double cx = 0.5 * (min_x + max_x);
+        const double cy = 0.5 * (min_y + max_y);
+        double span = std::max(max_x - min_x, max_y - min_y);
+        if (!std::isfinite(span) || span <= 0.0) span = 1.0;
+        const double half = 0.55 * span + 1.0e-3;
+        const double spacing = (2.0 * half) / static_cast<double>(grid_n - 1u);
+        OpenTsneFFTGridParams grid_params{
+          static_cast<std::uint32_t>(n),
+          grid_n,
+          fft_n,
+          static_cast<float>(cx - half),
+          static_cast<float>(cy - half),
+          static_cast<float>(1.0 / spacing),
+          static_cast<float>(spacing),
+          1.0f
+        };
+
+        id<MTLCommandBuffer> fft_command = [state.queue commandBuffer];
+        {
+          id<MTLComputeCommandEncoder> encoder = [fft_command computeCommandEncoder];
+          [encoder setComputePipelineState:state.opentsne_fft_clear_pipeline];
+          [encoder setBuffer:mass_buffer offset:0 atIndex:0];
+          [encoder setBuffer:mass_x_buffer offset:0 atIndex:1];
+          [encoder setBuffer:mass_y_buffer offset:0 atIndex:2];
+          [encoder setBytes:&grid_params length:sizeof(OpenTsneFFTGridParams) atIndex:3];
+          [encoder dispatchThreads:grid_cells
+             threadsPerThreadgroup:MTLSizeMake(threads_clear, 1, 1)];
+          [encoder endEncoding];
+        }
+        {
+          id<MTLComputeCommandEncoder> encoder = [fft_command computeCommandEncoder];
+          [encoder setComputePipelineState:state.opentsne_fft_scatter_pipeline];
+          [encoder setBuffer:current_buffer offset:0 atIndex:0];
+          [encoder setBuffer:mass_buffer offset:0 atIndex:1];
+          [encoder setBuffer:mass_x_buffer offset:0 atIndex:2];
+          [encoder setBuffer:mass_y_buffer offset:0 atIndex:3];
+          [encoder setBytes:&grid_params length:sizeof(OpenTsneFFTGridParams) atIndex:4];
+          [encoder dispatchThreads:point_grid
+             threadsPerThreadgroup:MTLSizeMake(threads_scatter, 1, 1)];
+          [encoder endEncoding];
+        }
+        {
+          id<MTLComputeCommandEncoder> encoder = [fft_command computeCommandEncoder];
+          [encoder setComputePipelineState:state.opentsne_fft_load_pipeline];
+          [encoder setBuffer:mass_buffer offset:0 atIndex:0];
+          [encoder setBuffer:mass_x_buffer offset:0 atIndex:1];
+          [encoder setBuffer:mass_y_buffer offset:0 atIndex:2];
+          [encoder setBuffer:mass_fft_buffer offset:0 atIndex:3];
+          [encoder setBuffer:mass_x_fft_buffer offset:0 atIndex:4];
+          [encoder setBuffer:mass_y_fft_buffer offset:0 atIndex:5];
+          [encoder setBuffer:kernel_q_buffer offset:0 atIndex:6];
+          [encoder setBuffer:kernel_q2_buffer offset:0 atIndex:7];
+          [encoder setBytes:&grid_params length:sizeof(OpenTsneFFTGridParams) atIndex:8];
+          [encoder dispatchThreads:fft_grid
+             threadsPerThreadgroup:metal_threadgroup_2d(state.opentsne_fft_load_pipeline)];
+          [encoder endEncoding];
+        }
+
+        encode_fft_2d_metal(state, fft_command, mass_fft_buffer, fft_scratch_buffer, fft_n, log_fft, false);
+        encode_fft_2d_metal(state, fft_command, mass_x_fft_buffer, fft_scratch_buffer, fft_n, log_fft, false);
+        encode_fft_2d_metal(state, fft_command, mass_y_fft_buffer, fft_scratch_buffer, fft_n, log_fft, false);
+        encode_fft_2d_metal(state, fft_command, kernel_q_buffer, fft_scratch_buffer, fft_n, log_fft, false);
+        encode_fft_2d_metal(state, fft_command, kernel_q2_buffer, fft_scratch_buffer, fft_n, log_fft, false);
+        encode_fft_convolution_metal(state, fft_command, mass_fft_buffer, kernel_q_buffer,
+                                     q_grid_buffer, fft_scratch_buffer, fft_n, log_fft, fft_total);
+        encode_fft_convolution_metal(state, fft_command, mass_fft_buffer, kernel_q2_buffer,
+                                     q2_grid_buffer, fft_scratch_buffer, fft_n, log_fft, fft_total);
+        encode_fft_convolution_metal(state, fft_command, mass_x_fft_buffer, kernel_q2_buffer,
+                                     xq2_grid_buffer, fft_scratch_buffer, fft_n, log_fft, fft_total);
+        encode_fft_convolution_metal(state, fft_command, mass_y_fft_buffer, kernel_q2_buffer,
+                                     yq2_grid_buffer, fft_scratch_buffer, fft_n, log_fft, fft_total);
+        {
+          id<MTLComputeCommandEncoder> encoder = [fft_command computeCommandEncoder];
+          [encoder setComputePipelineState:state.opentsne_fft_sum_q_pipeline];
+          [encoder setBuffer:current_buffer offset:0 atIndex:0];
+          [encoder setBuffer:q_grid_buffer offset:0 atIndex:1];
+          [encoder setBuffer:row_sums_buffer offset:0 atIndex:2];
+          [encoder setBytes:&grid_params length:sizeof(OpenTsneFFTGridParams) atIndex:3];
+          [encoder dispatchThreads:point_grid
+             threadsPerThreadgroup:MTLSizeMake(threads_sum, 1, 1)];
+          [encoder endEncoding];
+        }
+        [fft_command commit];
+        [fft_command waitUntilCompleted];
+        if (fft_command.status == MTLCommandBufferStatusError) {
+          Rcpp::stop("Metal openTSNE FFT-grid command failed: %s", ns_error_message(fft_command.error).c_str());
+        }
+
+        std::memcpy(row_sums.data(), [row_sums_buffer contents], row_sums.size() * sizeof(float));
+        double sum_q = -static_cast<double>(n);
+        for (float value : row_sums) sum_q += static_cast<double>(value);
+        if (!std::isfinite(sum_q) || sum_q <= 0.0) sum_q = std::numeric_limits<double>::min();
+        grid_params.inv_sum_q = static_cast<float>(1.0 / sum_q);
+
+        const bool in_early = iter < early_exaggeration_iter;
+        const double phase_exaggeration = in_early ? early_exaggeration : exaggeration;
+        const double phase_lr = learning_rate_auto ?
+          static_cast<double>(n) / std::max(phase_exaggeration, std::numeric_limits<double>::min()) :
+          learning_rate;
+        OpenTsneMetalParams params{
+          static_cast<std::uint32_t>(n),
+          static_cast<std::uint32_t>(seed == NA_INTEGER ? 5489 : seed),
+          static_cast<float>(phase_lr),
+          static_cast<float>(phase_exaggeration),
+          static_cast<float>(in_early ? initial_momentum : final_momentum),
+          static_cast<float>(min_gain),
+          max_step,
+          static_cast<float>(1.0 / sum_q)
+        };
+
+        id<MTLCommandBuffer> epoch_command = [state.queue commandBuffer];
+        {
+          id<MTLComputeCommandEncoder> encoder = [epoch_command computeCommandEncoder];
+          [encoder setComputePipelineState:state.opentsne_fft_epoch_pipeline];
+          [encoder setBuffer:row_ptr_buffer offset:0 atIndex:0];
+          [encoder setBuffer:col_buffer offset:0 atIndex:1];
+          [encoder setBuffer:val_buffer offset:0 atIndex:2];
+          [encoder setBuffer:current_buffer offset:0 atIndex:3];
+          [encoder setBuffer:gains_buffer offset:0 atIndex:4];
+          [encoder setBuffer:updates_buffer offset:0 atIndex:5];
+          [encoder setBuffer:q2_grid_buffer offset:0 atIndex:6];
+          [encoder setBuffer:xq2_grid_buffer offset:0 atIndex:7];
+          [encoder setBuffer:yq2_grid_buffer offset:0 atIndex:8];
+          [encoder setBytes:&params length:sizeof(OpenTsneMetalParams) atIndex:9];
+          [encoder setBytes:&grid_params length:sizeof(OpenTsneFFTGridParams) atIndex:10];
+          [encoder dispatchThreads:point_grid
+             threadsPerThreadgroup:MTLSizeMake(threads_epoch, 1, 1)];
+          [encoder endEncoding];
+        }
+        [epoch_command commit];
+        [epoch_command waitUntilCompleted];
+        if (epoch_command.status == MTLCommandBufferStatusError) {
+          Rcpp::stop("Metal openTSNE FFT-grid epoch command failed: %s", ns_error_message(epoch_command.error).c_str());
+        }
+
+        std::memcpy(current.data(), [current_buffer contents], current.size() * sizeof(float));
+        double mean_x = 0.0;
+        double mean_y = 0.0;
+        for (int i = 0; i < n; ++i) {
+          mean_x += current[static_cast<std::size_t>(i) * 2u];
+          mean_y += current[static_cast<std::size_t>(i) * 2u + 1u];
+        }
+        mean_x /= static_cast<double>(n);
+        mean_y /= static_cast<double>(n);
+        for (int i = 0; i < n; ++i) {
+          current[static_cast<std::size_t>(i) * 2u] -= static_cast<float>(mean_x);
+          current[static_cast<std::size_t>(i) * 2u + 1u] -= static_cast<float>(mean_y);
+        }
+        const Center2 center{static_cast<float>(mean_x), static_cast<float>(mean_y)};
+        id<MTLCommandBuffer> center_command = [state.queue commandBuffer];
+        id<MTLComputeCommandEncoder> center_encoder = [center_command computeCommandEncoder];
+        [center_encoder setComputePipelineState:state.opentsne_center_pipeline];
+        [center_encoder setBuffer:current_buffer offset:0 atIndex:0];
+        [center_encoder setBytes:&center length:sizeof(Center2) atIndex:1];
+        [center_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
+        [center_encoder dispatchThreads:point_grid
+          threadsPerThreadgroup:MTLSizeMake(threads_center, 1, 1)];
+        [center_encoder endEncoding];
+        [center_command commit];
+        [center_command waitUntilCompleted];
+        if (center_command.status == MTLCommandBufferStatusError) {
+          Rcpp::stop("Metal openTSNE FFT-grid centering command failed: %s", ns_error_message(center_command.error).c_str());
+        }
+      }
+
+      std::memcpy(current.data(), [current_buffer contents], current.size() * sizeof(float));
+      NumericMatrix layout(n, 2);
+      for (int i = 0; i < n; ++i) {
+        layout(i, 0) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u]);
+        layout(i, 1) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u + 1u]);
+      }
+
+      [row_ptr_buffer release];
+      [col_buffer release];
+      [val_buffer release];
+      [current_buffer release];
+      [gains_buffer release];
+      [updates_buffer release];
+      [row_sums_buffer release];
+      [mass_buffer release];
+      [mass_x_buffer release];
+      [mass_y_buffer release];
+      [mass_fft_buffer release];
+      [mass_x_fft_buffer release];
+      [mass_y_fft_buffer release];
+      [kernel_q_buffer release];
+      [kernel_q2_buffer release];
+      [q_grid_buffer release];
+      [q2_grid_buffer release];
+      [xq2_grid_buffer release];
+      [yq2_grid_buffer release];
+      [fft_scratch_buffer release];
+
+      return List::create(
+        Rcpp::Named("Y") = layout,
+        Rcpp::Named("costs") = NumericVector(0),
+        Rcpp::Named("itercosts") = NumericVector(0),
+        Rcpp::Named("optimizer") = "opentsne_fitsne_fft_grid_native_metal",
+        Rcpp::Named("repulsion") = "fft_grid_metal",
+        Rcpp::Named("probabilities") = "symmetric_sparse_knn_cpu_prepared_for_metal",
+        Rcpp::Named("repulsion_block_size") = static_cast<int>(grid_n),
+        Rcpp::Named("n_threads") = NA_INTEGER,
+        Rcpp::Named("learning_rate") = learning_rate_auto ? NA_REAL : learning_rate,
+        Rcpp::Named("learning_rate_early") = static_cast<double>(n) / std::max(early_exaggeration, std::numeric_limits<double>::min()),
+        Rcpp::Named("learning_rate_normal") = static_cast<double>(n) / std::max(exaggeration, std::numeric_limits<double>::min())
+      );
+    }
+
+    const NSUInteger threads_sum = bounded_threads(state.opentsne_sum_q_pipeline);
+    const NSUInteger threads_epoch = bounded_threads(state.opentsne_epoch_pipeline);
+    const NSUInteger threads_center = bounded_threads(state.opentsne_center_pipeline);
+    const MTLSize grid_size = MTLSizeMake(static_cast<NSUInteger>(n), 1, 1);
+    const MTLSize sum_threadgroup = MTLSizeMake(threads_sum, 1, 1);
+    const MTLSize epoch_threadgroup = MTLSizeMake(threads_epoch, 1, 1);
+    const MTLSize center_threadgroup = MTLSizeMake(threads_center, 1, 1);
+
+    for (int iter = 0; iter < total_iter; ++iter) {
+      const bool in_early = iter < early_exaggeration_iter;
+      const double phase_exaggeration = in_early ? early_exaggeration : exaggeration;
+      const double phase_lr = learning_rate_auto ?
+        static_cast<double>(n) / std::max(phase_exaggeration, std::numeric_limits<double>::min()) :
+        learning_rate;
+
+      OpenTsneMetalParams sum_params{
+        static_cast<std::uint32_t>(n),
+        static_cast<std::uint32_t>(seed == NA_INTEGER ? 5489 : seed),
+        static_cast<float>(phase_lr),
+        static_cast<float>(phase_exaggeration),
+        static_cast<float>(in_early ? initial_momentum : final_momentum),
+        static_cast<float>(min_gain),
+        max_step,
+        1.0f
+      };
+
+      id<MTLCommandBuffer> sum_command = [state.queue commandBuffer];
+      id<MTLComputeCommandEncoder> sum_encoder = [sum_command computeCommandEncoder];
+      [sum_encoder setComputePipelineState:state.opentsne_sum_q_pipeline];
+      [sum_encoder setBuffer:current_buffer offset:0 atIndex:0];
+      [sum_encoder setBuffer:row_sums_buffer offset:0 atIndex:1];
+      [sum_encoder setBytes:&sum_params length:sizeof(OpenTsneMetalParams) atIndex:2];
+      [sum_encoder dispatchThreads:grid_size threadsPerThreadgroup:sum_threadgroup];
+      [sum_encoder endEncoding];
+      [sum_command commit];
+      [sum_command waitUntilCompleted];
+      if (sum_command.status == MTLCommandBufferStatusError) {
+        Rcpp::stop("Metal openTSNE normalization command failed: %s", ns_error_message(sum_command.error).c_str());
+      }
+
+      std::memcpy(row_sums.data(), [row_sums_buffer contents], row_sums.size() * sizeof(float));
+      double sum_q = 0.0;
+      for (float value : row_sums) sum_q += static_cast<double>(value);
+      if (!std::isfinite(sum_q) || sum_q <= 0.0) sum_q = std::numeric_limits<double>::min();
+
+      OpenTsneMetalParams params = sum_params;
+      params.inv_sum_q = static_cast<float>(1.0 / sum_q);
+
+      id<MTLCommandBuffer> epoch_command = [state.queue commandBuffer];
+      id<MTLComputeCommandEncoder> epoch_encoder = [epoch_command computeCommandEncoder];
+      [epoch_encoder setComputePipelineState:state.opentsne_epoch_pipeline];
+      [epoch_encoder setBuffer:row_ptr_buffer offset:0 atIndex:0];
+      [epoch_encoder setBuffer:col_buffer offset:0 atIndex:1];
+      [epoch_encoder setBuffer:val_buffer offset:0 atIndex:2];
+      [epoch_encoder setBuffer:current_buffer offset:0 atIndex:3];
+      [epoch_encoder setBuffer:gains_buffer offset:0 atIndex:4];
+      [epoch_encoder setBuffer:updates_buffer offset:0 atIndex:5];
+      [epoch_encoder setBytes:&params length:sizeof(OpenTsneMetalParams) atIndex:6];
+      [epoch_encoder dispatchThreads:grid_size threadsPerThreadgroup:epoch_threadgroup];
+      [epoch_encoder endEncoding];
+      [epoch_command commit];
+      [epoch_command waitUntilCompleted];
+      if (epoch_command.status == MTLCommandBufferStatusError) {
+        Rcpp::stop("Metal openTSNE epoch command failed: %s", ns_error_message(epoch_command.error).c_str());
+      }
+
+      std::memcpy(current.data(), [current_buffer contents], current.size() * sizeof(float));
+      double mean_x = 0.0;
+      double mean_y = 0.0;
+      for (int i = 0; i < n; ++i) {
+        mean_x += current[static_cast<std::size_t>(i) * 2u];
+        mean_y += current[static_cast<std::size_t>(i) * 2u + 1u];
+      }
+      mean_x /= static_cast<double>(n);
+      mean_y /= static_cast<double>(n);
+      const Center2 center{static_cast<float>(mean_x), static_cast<float>(mean_y)};
+      id<MTLCommandBuffer> center_command = [state.queue commandBuffer];
+      id<MTLComputeCommandEncoder> center_encoder = [center_command computeCommandEncoder];
+      [center_encoder setComputePipelineState:state.opentsne_center_pipeline];
+      [center_encoder setBuffer:current_buffer offset:0 atIndex:0];
+      [center_encoder setBytes:&center length:sizeof(Center2) atIndex:1];
+      [center_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
+      [center_encoder dispatchThreads:grid_size threadsPerThreadgroup:center_threadgroup];
+      [center_encoder endEncoding];
+      [center_command commit];
+      [center_command waitUntilCompleted];
+      if (center_command.status == MTLCommandBufferStatusError) {
+        Rcpp::stop("Metal openTSNE centering command failed: %s", ns_error_message(center_command.error).c_str());
+      }
+    }
+
+    std::memcpy(current.data(), [current_buffer contents], current.size() * sizeof(float));
+    NumericMatrix layout(n, 2);
+    for (int i = 0; i < n; ++i) {
+      layout(i, 0) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u]);
+      layout(i, 1) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u + 1u]);
+    }
+
+    [row_ptr_buffer release];
+    [col_buffer release];
+    [val_buffer release];
+    [current_buffer release];
+    [gains_buffer release];
+    [updates_buffer release];
+    [row_sums_buffer release];
+
+    return List::create(
+      Rcpp::Named("Y") = layout,
+      Rcpp::Named("costs") = NumericVector(0),
+      Rcpp::Named("itercosts") = NumericVector(0),
+      Rcpp::Named("optimizer") = "opentsne_exact_sparse_native_metal",
+      Rcpp::Named("repulsion") = "exact_metal",
+      Rcpp::Named("probabilities") = "symmetric_sparse_knn_cpu_prepared_for_metal",
+      Rcpp::Named("repulsion_block_size") = NA_INTEGER,
+      Rcpp::Named("n_threads") = NA_INTEGER,
+      Rcpp::Named("learning_rate") = learning_rate_auto ? NA_REAL : learning_rate,
+      Rcpp::Named("learning_rate_early") = static_cast<double>(n) / std::max(early_exaggeration, std::numeric_limits<double>::min()),
+      Rcpp::Named("learning_rate_normal") = static_cast<double>(n) / std::max(exaggeration, std::numeric_limits<double>::min())
     );
   }
 }
@@ -3425,7 +4795,52 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
     const std::uint32_t epochs_per_command = kMetalEmbeddingEpochsPerCommand;
 
     id<MTLBuffer> delta_buffer = nil;
-    if (metal_optimizer == "atomic_delta") {
+    id<MTLBuffer> fixed_layout_buffer = nil;
+    if (metal_optimizer == "atomic_inplace") {
+      std::vector<std::int32_t> fixed_layout(current.size());
+      constexpr float fixed_scale = 65536.0f;
+      for (std::size_t i = 0; i < current.size(); ++i) {
+        const float value = std::max(-2140000000.0f, std::min(2140000000.0f, current[i] * fixed_scale));
+        fixed_layout[i] = static_cast<std::int32_t>(value);
+      }
+      fixed_layout_buffer = [state.device newBufferWithBytes:fixed_layout.data()
+                                                       length:fixed_layout.size() * sizeof(std::int32_t)
+                                                      options:MTLResourceStorageModeShared];
+      if (fixed_layout_buffer == nil) Rcpp::stop("Failed to allocate Metal atomic in-place layout buffer.");
+
+      const NSUInteger embed_threads = bounded_threads(state.embed_atomic_inplace_pipeline);
+      const MTLSize embed_threadgroup_size = MTLSizeMake(embed_threads, 1, 1);
+      for (std::uint32_t epoch0 = 0; epoch0 < static_cast<std::uint32_t>(n_epochs); epoch0 += epochs_per_command) {
+        id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+        const std::uint32_t epoch_end = std::min<std::uint32_t>(
+          static_cast<std::uint32_t>(n_epochs),
+          epoch0 + epochs_per_command
+        );
+        for (std::uint32_t epoch = epoch0; epoch < epoch_end; ++epoch) {
+          id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+          [encoder setComputePipelineState:state.embed_atomic_inplace_pipeline];
+          [encoder setBuffer:fixed_layout_buffer offset:0 atIndex:0];
+          [encoder setBuffer:neighbors_buffer offset:0 atIndex:1];
+          [encoder setBuffer:weights_buffer offset:0 atIndex:2];
+          [encoder setBuffer:epochs_buffer offset:0 atIndex:3];
+          [encoder setBuffer:params_buffer offset:0 atIndex:4];
+          [encoder setBytes:&epoch length:sizeof(std::uint32_t) atIndex:5];
+          [encoder dispatchThreads:grid_size threadsPerThreadgroup:embed_threadgroup_size];
+          [encoder endEncoding];
+        }
+        [command_buffer commit];
+        [command_buffer waitUntilCompleted];
+        if (command_buffer.status == MTLCommandBufferStatusError) {
+          Rcpp::stop("Metal CSR atomic in-place embedding command failed: %s", ns_error_message(command_buffer.error).c_str());
+        }
+      }
+
+      std::memcpy(fixed_layout.data(), [fixed_layout_buffer contents], fixed_layout.size() * sizeof(std::int32_t));
+      constexpr float inv_fixed_scale = 1.0f / 65536.0f;
+      for (std::size_t i = 0; i < current.size(); ++i) {
+        current[i] = static_cast<float>(fixed_layout[i]) * inv_fixed_scale;
+      }
+    } else if (metal_optimizer == "atomic_delta") {
       const std::uint32_t delta_count = static_cast<std::uint32_t>(n * 2);
       delta_buffer = [state.device newBufferWithLength:static_cast<std::size_t>(delta_count) * sizeof(int)
                                                options:MTLResourceStorageModeShared];
@@ -3514,7 +4929,9 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
       }
     }
 
-    std::memcpy(current.data(), [current_buffer contents], current.size() * sizeof(float));
+    if (metal_optimizer != "atomic_inplace") {
+      std::memcpy(current.data(), [current_buffer contents], current.size() * sizeof(float));
+    }
     NumericMatrix out(n, 2);
     for (int i = 0; i < n; ++i) {
       out(i, 0) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u]);
@@ -3532,6 +4949,7 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
     [epochs_buffer release];
     [params_buffer release];
     if (delta_buffer != nil) [delta_buffer release];
+    if (fixed_layout_buffer != nil) [fixed_layout_buffer release];
     return out;
   }
 }

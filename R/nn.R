@@ -6,9 +6,13 @@ nn_compute <- function(data,
                        exclude_self = FALSE,
                        n_threads = NULL) {
   data <- as.matrix(data)
-  points <- as.matrix(points)
   storage.mode(data) <- "double"
-  storage.mode(points) <- "double"
+  if (isTRUE(points_missing)) {
+    points <- data
+  } else {
+    points <- as.matrix(points)
+    storage.mode(points) <- "double"
+  }
 
   if (!identical(ncol(data), ncol(points))) {
     stop("`data` and `points` must have the same number of columns.", call. = FALSE)
@@ -16,7 +20,7 @@ nn_compute <- function(data,
   if (nrow(data) < 1L || nrow(points) < 1L) {
     stop("`data` and `points` must have at least one row.", call. = FALSE)
   }
-  self_query <- points_missing || (
+  self_query <- isTRUE(points_missing) || (
     nrow(data) == nrow(points) &&
       ncol(data) == ncol(points) &&
       identical(data, points)
@@ -42,10 +46,23 @@ nn_compute <- function(data,
   if (k > max_k) {
     stop("`k` cannot be larger than the available neighbor count.", call. = FALSE)
   }
-  if (any(!is.finite(data)) || any(!is.finite(points))) {
+  finite_input <- if (isTRUE(points_missing)) {
+    all(is.finite(data))
+  } else {
+    all(is.finite(data)) && all(is.finite(points))
+  }
+  if (!isTRUE(finite_input)) {
     stop("`data` and `points` must contain only finite values.", call. = FALSE)
   }
   n_threads <- normalize_nn_threads(n_threads)
+
+  if (backend %in% c("cuda_nndescent", "cuda_approx")) {
+    backend <- "cuda_cuvs_nndescent"
+  }
+  if (backend %in% c("gpu_nndescent", "gpu_approx") &&
+      identical(available_native_gpu_backend(need_knn = TRUE), "cuda")) {
+    backend <- "cuda_cuvs_nndescent"
+  }
 
   work_size <- as.double(nrow(data)) * as.double(nrow(points)) * as.double(ncol(data))
 
@@ -409,7 +426,9 @@ nn_compute <- function(data,
         out$distances <- cbind(rep(0, nrow(data)), out$distances)
       }
     }
-    return(finish_nn_result(out, "cpu_nndescent", k, self_query, exact = FALSE))
+    result <- finish_nn_result(out, "cpu_nndescent", k, self_query, exact = FALSE)
+    attr(result, "approximation") <- attr(out, "approximation")
+    return(result)
   }
 
   if (should_use_clustered_self_knn(
@@ -505,7 +524,9 @@ nn_compute <- function(data,
         out$distances <- cbind(rep(0, nrow(data)), out$distances)
       }
     }
-    return(finish_nn_result(out, "cpu_nndescent", k, self_query, exact = FALSE))
+    result <- finish_nn_result(out, "cpu_nndescent", k, self_query, exact = FALSE)
+    attr(result, "approximation") <- attr(out, "approximation")
+    return(result)
   }
 
   if (identical(backend, "cpu_clustered")) {
@@ -541,6 +562,10 @@ resolve_auto_knn_gpu_backend <- function(backend,
   if (work_size < 5e8) return(NA_character_)
   selected <- available_native_gpu_backend(need_knn = TRUE)
   if (is.na(selected)) return(NA_character_)
+  if (identical(selected, "cuda")) {
+    if (isTRUE(cuvs_available())) return("cuda_cuvs_nndescent")
+    return(NA_character_)
+  }
   paste0(selected, "_nndescent")
 }
 
@@ -560,7 +585,7 @@ select_cpu_approx_backend <- function(n, p, k) {
   p <- as.integer(p)
   k <- as.integer(k)
   if (n >= 10000L && p >= 2L && k >= 10L) {
-    return("cpu_annoy")
+    return("cpu_nndescent")
   }
   "cpu_ivf"
 }
@@ -627,7 +652,7 @@ resolve_gpu_approx_backend <- function(backend,
                                        k,
                                        exclude_self,
                                        work_size) {
-  explicit <- backend %in% c("gpu_approx", "cuda_approx", "metal_approx")
+  explicit <- backend %in% c("gpu_approx", "metal_approx")
   if (!explicit) {
     return(NA_character_)
   }
@@ -647,12 +672,6 @@ resolve_gpu_approx_backend <- function(backend,
     return(NA_character_)
   }
 
-  if (identical(backend, "cuda_approx")) {
-    if (!isTRUE(cuda_available())) {
-      stop("No CUDA GPU backend is available on this machine.", call. = FALSE)
-    }
-    return("cuda")
-  }
   if (identical(backend, "metal_approx")) {
     if (!isTRUE(metal_available())) {
       stop("No Metal GPU backend is available on this machine.", call. = FALSE)
@@ -660,7 +679,15 @@ resolve_gpu_approx_backend <- function(backend,
     return("metal")
   }
   if (identical(backend, "gpu_approx")) {
-    return(resolve_native_gpu_backend(need_knn = TRUE))
+    selected <- resolve_native_gpu_backend(need_knn = TRUE)
+    if (identical(selected, "cuda")) {
+      stop(
+        "Native CUDA approximate KNN has been removed. ",
+        "Use `backend = \"cuda_cuvs_nndescent\"` for RAPIDS cuVS NN-descent.",
+        call. = FALSE
+      )
+    }
+    return(selected)
   }
   available_native_gpu_backend(need_knn = TRUE)
 }
@@ -673,8 +700,8 @@ resolve_gpu_nndescent_backend <- function(backend,
                                           exclude_self,
                                           work_size) {
   explicit <- backend %in% c(
-    "gpu_nndescent", "cuda_nndescent", "metal_nndescent",
-    "gpu_approx", "cuda_approx", "metal_approx"
+    "gpu_nndescent", "metal_nndescent",
+    "gpu_approx", "metal_approx"
   )
   if (!explicit) return(NA_character_)
   if (!isTRUE(self_query)) {
@@ -688,18 +715,20 @@ resolve_gpu_nndescent_backend <- function(backend,
     stop("Native GPU NN-descent currently supports `k <= 256`.", call. = FALSE)
   }
 
-  selected <- if (backend %in% c("cuda_nndescent", "cuda_approx")) {
-    if (!isTRUE(cuda_available())) {
-      stop("No CUDA GPU backend is available on this machine.", call. = FALSE)
-    }
-    "cuda"
-  } else if (backend %in% c("metal_nndescent", "metal_approx")) {
+  selected <- if (backend %in% c("metal_nndescent", "metal_approx")) {
     if (!isTRUE(metal_available())) {
       stop("No Metal GPU backend is available on this machine.", call. = FALSE)
     }
     "metal"
   } else {
     resolve_native_gpu_backend(need_knn = TRUE)
+  }
+  if (identical(selected, "cuda")) {
+    stop(
+      "Native CUDA NN-descent has been removed. ",
+      "Use `backend = \"cuda_cuvs_nndescent\"` for RAPIDS cuVS NN-descent.",
+      call. = FALSE
+    )
   }
   paste0(selected, "_nndescent")
 }
@@ -935,7 +964,7 @@ gpu_nndescent_graph_degree <- function(n, k, backend = "metal") {
 
 gpu_nndescent_params <- function(k, backend = "metal", n = NULL) {
   graph_degree <- gpu_nndescent_graph_degree(n, k, backend = backend)
-  default_iters <- if (identical(backend, "metal") && !is.null(n) && n >= 50000L) {
+  default_iters <- if (backend %in% c("metal", "cuda") && !is.null(n) && n >= 50000L) {
     3L
   } else {
     1L
@@ -1032,7 +1061,7 @@ gpu_nndescent_self_knn <- function(data,
   }
 
   for (iter in seq_len(params$n_iters)) {
-    if (identical(backend, "metal")) {
+    if (backend %in% c("metal", "cuda")) {
       # Native port of the mlx-vis NN-descent schedule: expand aggressively
       # while the graph is moving, then use only NEW-neighbour sources and
       # skip reverse candidates near convergence.
@@ -1115,11 +1144,7 @@ gpu_nndescent_self_knn <- function(data,
     attr(out, "metal_kernel") <- "row_candidate_knn"
   }
   attr(out, "approximation") <- list(
-    strategy = if (identical(backend, "metal")) {
-      "mlx_vis_adaptive_seeded_nndescent_native_metal"
-    } else {
-      "seeded_nndescent_native_cuda"
-    },
+    strategy = paste0("mlx_vis_adaptive_seeded_nndescent_native_", backend),
     backend = backend,
     seed_backend = paste0(backend, "_ivf"),
     output_graph_degree = as.integer(output_k),
@@ -1271,13 +1296,17 @@ nndescent_self_knn <- function(data,
     TRUE,
     as.integer(max(1L, min(8L, n_threads)))
   )
-  attr(out, "nndescent") <- list(
+  params <- list(
+    strategy = "native_cpu_nndescent",
+    backend = "cpu",
     pool_size = pool_size,
     n_iters = n_iters,
     max_candidates = max_candidates,
     n_random_projections = n_random_projections,
     reverse_candidates = "rank_ordered"
   )
+  attr(out, "nndescent") <- params
+  attr(out, "approximation") <- params
   out
 }
 
@@ -1505,13 +1534,13 @@ cuvs_nndescent_params <- function(n, k) {
   k <- as.integer(k)
   graph_degree <- cuvs_option_int(
     "nndescent_graph_degree",
-    default = max(k + 1L, min(64L, 2L * k)),
-    min_value = k + 1L,
+    default = k,
+    min_value = k,
     max_value = max(1L, n - 1L)
   )
   intermediate_graph_degree <- cuvs_option_int(
     "nndescent_intermediate_graph_degree",
-    default = max(graph_degree * 2L, graph_degree + k),
+    default = max(graph_degree * 2L, graph_degree),
     min_value = graph_degree,
     max_value = max(1L, n - 1L)
   )
@@ -1652,11 +1681,13 @@ vptree_self_knn <- function(data,
 #'   `"cpu_nndescent"`, `"cpu_clustered"`, and `"cpu_vptree"` force the native
 #'   NN-descent, legacy clustered-IVF, and VP-tree strategies for self-KNN searches.
 #'   `"gpu"` requests CUDA when available and otherwise Metal. `"cuda"` and
-#'   `"metal"` request exact GPU backends explicitly. `"gpu_nndescent"`,
-#'   `"cuda_nndescent"`, and `"metal_nndescent"` request seeded native
-#'   NN-descent refinement. `"gpu_approx"`, `"cuda_approx"`, and
-#'   `"metal_approx"` are convenience aliases for the preferred native GPU
-#'   NN-descent path. `"gpu_ivf"`,
+#'   `"metal"` request exact GPU backends explicitly. `"metal_nndescent"`
+#'   requests seeded native Metal NN-descent refinement. `"cuda_nndescent"`
+#'   and `"cuda_approx"` are compatibility aliases for
+#'   `"cuda_cuvs_nndescent"`; CUDA approximate KNN is routed through RAPIDS
+#'   cuVS NN-descent rather than the removed native CUDA NN-descent branch.
+#'   `"gpu_nndescent"`, `"gpu_approx"`, and `"metal_approx"` are convenience
+#'   aliases for the preferred native GPU NN-descent path. `"gpu_ivf"`,
 #'   `"cuda_ivf"`, `"metal_ivf"`, `"gpu_faiss"`, `"cuda_faiss"`, and
 #'   `"metal_faiss"` request native GPU IVF/FAISS-style IVF-flat searches and
 #'   fail clearly if the requested GPU backend is unavailable. `"metal_grid"`
@@ -1719,14 +1750,12 @@ knn_recall <- function(approx, exact, k = NULL) {
     stop("`k` must be a positive integer.", call. = FALSE)
   }
   k <- min(k, ncol(approx_idx), ncol(exact_idx))
-  recalls <- vapply(seq_len(nrow(approx_idx)), function(i) {
-    length(intersect(approx_idx[i, seq_len(k)], exact_idx[i, seq_len(k)])) / k
-  }, numeric(1))
+  values <- knn_recall_cpp(approx_idx, exact_idx, as.integer(k))
   data.frame(
     k = k,
-    recall_at_k = mean(recalls),
-    median_recall_at_k = stats::median(recalls),
-    min_recall_at_k = min(recalls),
+    recall_at_k = unname(values["recall_at_k"]),
+    median_recall_at_k = unname(values["median_recall_at_k"]),
+    min_recall_at_k = unname(values["min_recall_at_k"]),
     stringsAsFactors = FALSE
   )
 }

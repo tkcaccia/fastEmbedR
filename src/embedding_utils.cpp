@@ -52,6 +52,431 @@ double median_inplace(std::vector<T>& values) {
 } // namespace
 
 // [[Rcpp::export]]
+List standardize_cpu_cpp(NumericMatrix data) {
+  const int n = data.nrow();
+  const int p = data.ncol();
+  if (n < 1 || p < 1) Rcpp::stop("data must have at least one row and one column");
+
+  NumericMatrix out(n, p);
+  NumericVector center(p);
+  NumericVector scale(p);
+  const double denom = static_cast<double>(std::max(1, n - 1));
+
+  for (int col = 0; col < p; ++col) {
+    double sum = 0.0;
+    for (int row = 0; row < n; ++row) {
+      const double value = data(row, col);
+      if (!std::isfinite(value)) Rcpp::stop("data must contain only finite values");
+      sum += value;
+    }
+    const double mean = sum / static_cast<double>(n);
+    center[col] = mean;
+
+    double ss = 0.0;
+    for (int row = 0; row < n; ++row) {
+      const double centered = data(row, col) - mean;
+      out(row, col) = centered;
+      ss += centered * centered;
+    }
+    double sd = std::sqrt(ss / denom);
+    if (!std::isfinite(sd) || sd == 0.0) sd = 1.0;
+    scale[col] = sd;
+    const double inv_sd = 1.0 / sd;
+    for (int row = 0; row < n; ++row) {
+      out(row, col) *= inv_sd;
+    }
+  }
+
+  return List::create(
+    Rcpp::Named("data") = out,
+    Rcpp::Named("center") = center,
+    Rcpp::Named("scale") = scale
+  );
+}
+
+// [[Rcpp::export]]
+List strip_self_neighbors_cpp(IntegerMatrix indices, NumericMatrix distances) {
+  const int n = indices.nrow();
+  const int k = indices.ncol();
+  if (distances.nrow() != n || distances.ncol() != k) {
+    Rcpp::stop("KNN indices and distances must have the same dimensions");
+  }
+  if (k < 1) {
+    return List::create(
+      Rcpp::Named("indices") = indices,
+      Rcpp::Named("distances") = distances,
+      Rcpp::Named("has_self") = false,
+      Rcpp::Named("col_start") = 0,
+      Rcpp::Named("n_neighbors") = 0,
+      Rcpp::Named("materialized") = false
+    );
+  }
+
+  int min_idx = std::numeric_limits<int>::max();
+  int max_idx = std::numeric_limits<int>::min();
+  const double tolerance = std::max(std::sqrt(std::numeric_limits<double>::epsilon()), 1e-12);
+  for (int col = 0; col < k; ++col) {
+    for (int row = 0; row < n; ++row) {
+      const int idx = indices(row, col);
+      const double dist = distances(row, col);
+      if (idx == NA_INTEGER) Rcpp::stop("KNN indices must not contain NA values");
+      if (!std::isfinite(dist) || dist < 0.0) {
+        Rcpp::stop("KNN distances must be finite and non-negative");
+      }
+      min_idx = std::min(min_idx, idx);
+      max_idx = std::max(max_idx, idx);
+    }
+  }
+  const bool one_based = min_idx >= 1 && max_idx <= n;
+  const int offset = one_based ? 1 : 0;
+
+  bool first_self = true;
+  for (int row = 0; row < n; ++row) {
+    const int expected = row + offset;
+    if (indices(row, 0) != expected || distances(row, 0) > tolerance) {
+      first_self = false;
+      break;
+    }
+  }
+  if (first_self) {
+    return List::create(
+      Rcpp::Named("indices") = indices,
+      Rcpp::Named("distances") = distances,
+      Rcpp::Named("has_self") = true,
+      Rcpp::Named("col_start") = 1,
+      Rcpp::Named("n_neighbors") = k - 1,
+      Rcpp::Named("materialized") = false
+    );
+  }
+
+  std::vector<int> self_pos(static_cast<std::size_t>(n), -1);
+  bool all_rows_have_self = true;
+  for (int row = 0; row < n; ++row) {
+    const int expected = row + offset;
+    for (int col = 0; col < k; ++col) {
+      if (indices(row, col) == expected && distances(row, col) <= tolerance) {
+        self_pos[static_cast<std::size_t>(row)] = col;
+        break;
+      }
+    }
+    if (self_pos[static_cast<std::size_t>(row)] < 0) {
+      all_rows_have_self = false;
+      break;
+    }
+  }
+
+  if (!all_rows_have_self) {
+    return List::create(
+      Rcpp::Named("indices") = indices,
+      Rcpp::Named("distances") = distances,
+      Rcpp::Named("has_self") = false,
+      Rcpp::Named("col_start") = 0,
+      Rcpp::Named("n_neighbors") = k,
+      Rcpp::Named("materialized") = false
+    );
+  }
+
+  if (k == 1) {
+    IntegerMatrix out_indices(n, 0);
+    NumericMatrix out_distances(n, 0);
+    return List::create(
+      Rcpp::Named("indices") = out_indices,
+      Rcpp::Named("distances") = out_distances,
+      Rcpp::Named("has_self") = true,
+      Rcpp::Named("col_start") = 0,
+      Rcpp::Named("n_neighbors") = 0,
+      Rcpp::Named("materialized") = true
+    );
+  }
+
+  IntegerMatrix out_indices(n, k - 1);
+  NumericMatrix out_distances(n, k - 1);
+  for (int row = 0; row < n; ++row) {
+    int out_col = 0;
+    const int skip = self_pos[static_cast<std::size_t>(row)];
+    for (int col = 0; col < k; ++col) {
+      if (col == skip) continue;
+      out_indices(row, out_col) = indices(row, col);
+      out_distances(row, out_col) = distances(row, col);
+      ++out_col;
+    }
+  }
+
+  return List::create(
+    Rcpp::Named("indices") = out_indices,
+    Rcpp::Named("distances") = out_distances,
+    Rcpp::Named("has_self") = true,
+    Rcpp::Named("col_start") = 0,
+    Rcpp::Named("n_neighbors") = k - 1,
+    Rcpp::Named("materialized") = true
+  );
+}
+
+// [[Rcpp::export]]
+List validate_projection_knn_cpp(IntegerMatrix indices,
+                                 NumericMatrix distances,
+                                 int n_reference,
+                                 int k) {
+  const int n = indices.nrow();
+  const int width = indices.ncol();
+  if (distances.nrow() != n || distances.ncol() != width) {
+    Rcpp::stop("KNN indices and distances must have the same dimensions");
+  }
+  if (n < 1 || width < 1) {
+    Rcpp::stop("KNN must have at least one row and one neighbor column");
+  }
+  if (n_reference < 1) Rcpp::stop("n_reference must be positive");
+  if (k < 1 || k > width) Rcpp::stop("k must be in the available neighbor range");
+
+  for (int col = 0; col < width; ++col) {
+    for (int row = 0; row < n; ++row) {
+      const int idx = indices(row, col);
+      const double dist = distances(row, col);
+      if (idx == NA_INTEGER || idx < 1 || idx > n_reference) {
+        Rcpp::stop("KNN indices must be 1-based row numbers into the reference layout");
+      }
+      if (!std::isfinite(dist) || dist < 0.0) {
+        Rcpp::stop("KNN distances must be finite and non-negative");
+      }
+    }
+  }
+
+  if (k == width) {
+    return List::create(
+      Rcpp::Named("indices") = indices,
+      Rcpp::Named("distances") = distances
+    );
+  }
+
+  IntegerMatrix out_indices(n, k);
+  NumericMatrix out_distances(n, k);
+  for (int col = 0; col < k; ++col) {
+    for (int row = 0; row < n; ++row) {
+      out_indices(row, col) = indices(row, col);
+      out_distances(row, col) = distances(row, col);
+    }
+  }
+  return List::create(
+    Rcpp::Named("indices") = out_indices,
+    Rcpp::Named("distances") = out_distances
+  );
+}
+
+// [[Rcpp::export]]
+double mean_neighbor_rank_error_cpp(IntegerMatrix high_indices,
+                                    IntegerMatrix embed_indices,
+                                    int k) {
+  const int n = high_indices.nrow();
+  if (embed_indices.nrow() != n) {
+    Rcpp::stop("high_indices and embed_indices must have the same row count");
+  }
+  k = std::min(k, std::min(high_indices.ncol(), embed_indices.ncol()));
+  if (k < 1) return R_NaReal;
+
+  double sum_error = 0.0;
+  double count = 0.0;
+  std::vector<int> ranks;
+  ranks.reserve(static_cast<std::size_t>(k));
+  for (int row = 0; row < n; ++row) {
+    ranks.clear();
+    for (int col = 0; col < k; ++col) ranks.push_back(high_indices(row, col));
+    for (int col = 0; col < k; ++col) {
+      const int target = embed_indices(row, col);
+      int high_rank = k + 1;
+      for (int r = 0; r < k; ++r) {
+        if (ranks[static_cast<std::size_t>(r)] == target) {
+          high_rank = r + 1;
+          break;
+        }
+      }
+      sum_error += std::abs(high_rank - (col + 1));
+      count += 1.0;
+    }
+  }
+  return count > 0.0 ? sum_error / count : R_NaReal;
+}
+
+// [[Rcpp::export]]
+NumericVector knn_recall_cpp(IntegerMatrix approx_indices,
+                             IntegerMatrix exact_indices,
+                             int k) {
+  const int n = approx_indices.nrow();
+  if (exact_indices.nrow() != n) {
+    Rcpp::stop("Approximate and exact KNN must have the same number of rows");
+  }
+  k = std::min(k, std::min(approx_indices.ncol(), exact_indices.ncol()));
+  if (k < 1) Rcpp::stop("k must be positive");
+
+  std::vector<double> recalls(static_cast<std::size_t>(n), 0.0);
+  for (int row = 0; row < n; ++row) {
+    int shared = 0;
+    for (int a = 0; a < k; ++a) {
+      const int candidate = approx_indices(row, a);
+      for (int e = 0; e < k; ++e) {
+        if (candidate == exact_indices(row, e)) {
+          ++shared;
+          break;
+        }
+      }
+    }
+    recalls[static_cast<std::size_t>(row)] =
+      static_cast<double>(shared) / static_cast<double>(k);
+  }
+
+  double sum = 0.0;
+  double min_value = std::numeric_limits<double>::infinity();
+  for (const double value : recalls) {
+    sum += value;
+    min_value = std::min(min_value, value);
+  }
+  std::vector<double> sorted = recalls;
+  const std::size_t mid = sorted.size() / 2u;
+  std::nth_element(sorted.begin(), sorted.begin() + mid, sorted.end());
+  double median = sorted[mid];
+  if (sorted.size() % 2u == 0u) {
+    std::nth_element(sorted.begin(), sorted.begin() + mid - 1u, sorted.begin() + mid);
+    median = 0.5 * (median + sorted[mid - 1u]);
+  }
+
+  NumericVector out = NumericVector::create(
+    Rcpp::Named("recall_at_k") = sum / static_cast<double>(n),
+    Rcpp::Named("median_recall_at_k") = median,
+    Rcpp::Named("min_recall_at_k") = min_value
+  );
+  return out;
+}
+
+// [[Rcpp::export]]
+IntegerVector majority_vote_knn_labels_cpp(IntegerMatrix embed_indices,
+                                           IntegerVector labels,
+                                           int k,
+                                           int n_label_levels) {
+  const int n = embed_indices.nrow();
+  if (labels.size() != n) Rcpp::stop("labels length must match KNN row count");
+  k = std::min(k, embed_indices.ncol());
+  if (k < 1) Rcpp::stop("k must be positive");
+
+  IntegerVector out(n, NA_INTEGER);
+  std::vector<int> counts(static_cast<std::size_t>(std::max(0, n_label_levels)) + 1u, 0);
+  for (int row = 0; row < n; ++row) {
+    std::fill(counts.begin(), counts.end(), 0);
+    for (int col = 0; col < k; ++col) {
+      const int idx = embed_indices(row, col) - 1;
+      if (idx < 0 || idx >= n) continue;
+      const int label = labels[idx];
+      if (label != NA_INTEGER && label >= 1 && label <= n_label_levels) {
+        ++counts[static_cast<std::size_t>(label)];
+      }
+    }
+    int best_label = NA_INTEGER;
+    int best_count = 0;
+    for (int label = 1; label <= n_label_levels; ++label) {
+      const int count = counts[static_cast<std::size_t>(label)];
+      if (count > best_count) {
+        best_count = count;
+        best_label = label;
+      }
+    }
+    out[row] = best_label;
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector batch_entropy_cpp(IntegerMatrix embed_indices,
+                                IntegerVector batch,
+                                int k,
+                                int n_batch_levels) {
+  const int n = embed_indices.nrow();
+  if (batch.size() != n) Rcpp::stop("batch length must match KNN row count");
+  k = std::min(k, embed_indices.ncol());
+  if (k < 1 || n_batch_levels < 2) {
+    return NumericVector::create(
+      Rcpp::Named("batch_entropy") = R_NaReal,
+      Rcpp::Named("batch_mixing_score") = R_NaReal
+    );
+  }
+
+  const double denom = std::log(static_cast<double>(n_batch_levels));
+  std::vector<int> counts(static_cast<std::size_t>(n_batch_levels) + 1u, 0);
+  double entropy_sum = 0.0;
+  int scored = 0;
+  for (int row = 0; row < n; ++row) {
+    std::fill(counts.begin(), counts.end(), 0);
+    int valid = 0;
+    for (int col = 0; col < k; ++col) {
+      const int idx = embed_indices(row, col) - 1;
+      if (idx < 0 || idx >= n) continue;
+      const int label = batch[idx];
+      if (label != NA_INTEGER && label >= 1 && label <= n_batch_levels) {
+        ++counts[static_cast<std::size_t>(label)];
+        ++valid;
+      }
+    }
+    if (valid == 0) continue;
+    double entropy = 0.0;
+    for (int label = 1; label <= n_batch_levels; ++label) {
+      const int count = counts[static_cast<std::size_t>(label)];
+      if (count == 0) continue;
+      const double prob = static_cast<double>(count) / static_cast<double>(valid);
+      entropy -= prob * std::log(prob);
+    }
+    entropy_sum += entropy / denom;
+    ++scored;
+  }
+  const double value = scored > 0 ? entropy_sum / static_cast<double>(scored) : R_NaReal;
+  return NumericVector::create(
+    Rcpp::Named("batch_entropy") = value,
+    Rcpp::Named("batch_mixing_score") = value
+  );
+}
+
+// [[Rcpp::export]]
+NumericVector sampled_pair_distances_cpp(NumericMatrix x,
+                                         IntegerVector a,
+                                         IntegerVector b,
+                                         int n_threads) {
+  const int n_pairs = a.size();
+  if (b.size() != n_pairs) Rcpp::stop("a and b must have the same length");
+  const int n = x.nrow();
+  const int p = x.ncol();
+  NumericVector out(n_pairs);
+  if (n_pairs == 0) return out;
+  if (n_threads < 1) n_threads = 1;
+  n_threads = std::min(n_threads, n_pairs);
+
+  auto write_range = [&](const int begin, const int end) {
+    for (int i = begin; i < end; ++i) {
+      const int ai = a[i] - 1;
+      const int bi = b[i] - 1;
+      if (ai < 0 || ai >= n || bi < 0 || bi >= n) {
+        Rcpp::stop("pair indices are out of range");
+      }
+      double d2 = 0.0;
+      for (int col = 0; col < p; ++col) {
+        const double diff = x(ai, col) - x(bi, col);
+        d2 += diff * diff;
+      }
+      out[i] = std::sqrt(std::max(0.0, d2));
+    }
+  };
+
+  if (n_threads == 1) {
+    write_range(0, n_pairs);
+  } else {
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(n_threads));
+    for (int t = 0; t < n_threads; ++t) {
+      const int start = (n_pairs * t) / n_threads;
+      const int end = (n_pairs * (t + 1)) / n_threads;
+      workers.emplace_back(write_range, start, end);
+    }
+    for (auto& worker : workers) worker.join();
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
 Rcpp::NumericVector knn_structure_score_cpp(NumericMatrix layout,
                                             IntegerMatrix indices,
                                             Rcpp::IntegerVector keep,

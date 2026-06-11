@@ -1,2 +1,2 @@
 CXX_STD = CXX17
-OBJECTS = RcppExports.o fast_knn_umap.o tsne_neighbors.o embedding_utils.o nn.o nn_fortran.o nn_faiss_bridge.o nn_faiss_stub.o nn_cuvs_bridge.o nn_cuvs_stub.o nn_metal_bridge.o nn_metal_stub.o embedding_metal_bridge.o embedding_metal_stub.o nn_cuda_bridge.o embedding_cuda_bridge.o nn_cuda_stub.o embedding_cuda_stub.o
+OBJECTS = RcppExports.o tsne_neighbors.o embedding_utils.o fast_knn_umap.o nn.o nn_fortran.o nn_faiss_bridge.o nn_faiss_stub.o nn_cuvs_bridge.o nn_cuvs_stub.o nn_metal_bridge.o nn_metal_stub.o embedding_metal_bridge.o embedding_metal_stub.o nn_cuda_bridge.o embedding_cuda_bridge.o nn_cuda_stub.o embedding_cuda_stub.o

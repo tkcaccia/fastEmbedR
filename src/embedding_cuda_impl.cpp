@@ -1,6 +1,7 @@
 #include <Rcpp.h>
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -1138,4 +1139,65 @@ NumericMatrix knn_tsne_exact_cuda_impl(IntegerMatrix indices,
     result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
   }
   return result;
+}
+
+List knn_tsne_opentsne_cuda_impl(IntegerMatrix indices,
+                                 NumericMatrix distances,
+                                 NumericMatrix y_init,
+                                 bool init,
+                                 int n_components,
+                                 double perplexity,
+                                 int early_exaggeration_iter,
+                                 int n_iter,
+                                 double early_exaggeration,
+                                 double exaggeration,
+                                 double learning_rate,
+                                 bool learning_rate_auto,
+                                 double initial_momentum,
+                                 double final_momentum,
+                                 double min_gain,
+                                 double max_step_norm,
+                                 std::string negative_gradient_method,
+                                 int seed,
+                                 bool record_costs) {
+  (void)indices;
+  (void)distances;
+  (void)y_init;
+  (void)init;
+  (void)n_components;
+  (void)perplexity;
+  (void)early_exaggeration_iter;
+  (void)n_iter;
+  (void)early_exaggeration;
+  (void)exaggeration;
+  (void)learning_rate;
+  (void)learning_rate_auto;
+  (void)initial_momentum;
+  (void)final_momentum;
+  (void)min_gain;
+  (void)max_step_norm;
+  (void)seed;
+  (void)record_costs;
+  std::transform(
+    negative_gradient_method.begin(),
+    negative_gradient_method.end(),
+    negative_gradient_method.begin(),
+    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); }
+  );
+  if (negative_gradient_method == "fft" ||
+      negative_gradient_method == "fitsne" ||
+      negative_gradient_method == "fit_sne" ||
+      negative_gradient_method == "interpolation" ||
+      negative_gradient_method == "auto") {
+    Rcpp::stop(
+      "Native CUDA openTSNE FFT-grid is not implemented in this build yet. "
+      "Use CPU `negative_gradient_method = \"fft\"` for the standard openTSNE path; "
+      "fastEmbedR will not relabel the older CUDA exact t-SNE kernel as openTSNE FFT-grid."
+    );
+  }
+  Rcpp::stop(
+    "Native CUDA openTSNE exact mode is not enabled because the available CUDA exact "
+    "kernel follows the older t-SNE wrapper contract. The CUDA path must use a real "
+    "openTSNE/FIt-SNE implementation before it is benchmarked as openTSNE."
+  );
 }

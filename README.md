@@ -1,25 +1,30 @@
 # fastEmbedR
 
-`fastEmbedR` is a compact R package for fast UMAP from precomputed nearest
-neighbours. The current package is intentionally focused on two public tasks:
+`fastEmbedR` is an opinionated KNN-first package for native UMAP and
+openTSNE-style embeddings in R.
 
-- `nn()` computes exact nearest neighbours quickly in native code.
-- `embed_knn()` and `umap()` run UMAP from the KNN graph.
-- `embed_knn(method = "tsne")` and `tsne()` run an `Rtsne_neighbors()`-style
-  t-SNE path from precomputed neighbours.
-- `opentsne_knn()`, `embed_knn(method = "opentsne")`, and `opentsne()` run a
-  native C++, openTSNE-style two-phase t-SNE optimizer from precomputed
-  neighbours without calling Python.
-- `embed_knn(method = "infotsne")` and `infotsne()` run a native
-  TorchDR-inspired negative-sampling t-SNE objective with better per-iteration
-  scaling on large data.
-- `transform_tsne()` and `landmark_tsne()` add an openTSNE-inspired
-  fixed-reference transform path for landmark t-SNE without calling Python.
+The public embedding API is intentionally small:
 
-The restart baseline is designed to be comparable with
-`uwot::umap(..., fast_sgd = TRUE)`: the large-data CPU path uses
-`n_epochs = 200`, `negative_sample_rate = 5`, `min_dist = 0.01`, learning rate
-`1`, a fuzzy-union graph, and at most four physical CPU cores.
+- `nn()` computes nearest neighbours in native code.
+- `umap_knn()` embeds from a precomputed KNN graph with the restored
+  uwot-compatible UMAP path.
+- `umap()` computes or reuses KNN, then runs UMAP.
+- `opentsne_knn()` embeds from a precomputed KNN graph with the native
+  openTSNE-style CPU path.
+- `embed_knn()` dispatches to UMAP by default, or to openTSNE with
+  `method = "opentsne"`.
+- `opentsne()` computes or reuses KNN, then runs the native openTSNE-style
+  optimizer.
+- `transform_tsne()` places new/query points into an existing openTSNE-style
+  map.
+- `landmark_tsne()` embeds landmarks with `opentsne()` and transforms the
+  remaining observations.
+- `evaluate_embedding()` reports trustworthiness, neighbour preservation,
+  silhouette, label KNN accuracy, and related diagnostics.
+
+The legacy `tsne()` and `infotsne()` package implementations were removed from
+the public package. UMAP remains in the public API because it is the main path
+being optimized and visually benchmarked against `uwot`.
 
 ## Installation
 
@@ -28,112 +33,58 @@ install.packages("remotes")
 remotes::install_github("tkcaccia/fastEmbedR")
 ```
 
-The package installs without external FAISS. To enable the real FAISS C++
-backend, install FAISS separately and rebuild with its prefix visible:
+Optional native KNN backends are linked only when available at build time.
+Explicit unavailable GPU/FAISS/cuVS backends fail clearly rather than silently
+running on CPU.
 
 ```sh
 FASTEMBEDR_USE_FAISS=1 FAISS_HOME=/path/to/faiss R CMD INSTALL .
-```
-
-Then use `backend = "faiss"` for FAISS `IndexFlatL2` or
-`backend = "faiss_ivf"` for FAISS `IndexIVFFlat`. If FAISS is not linked,
-these explicit backends fail clearly. The older `backend = "cpu_faiss_ivf"` is
-only a package-native FAISS-style IVF search and is labelled separately.
-
-The RAPIDS cuVS CUDA KNN backend is also optional and external. On a CUDA
-machine with cuVS installed, rebuild with:
-
-```sh
 FASTEMBEDR_USE_CUDA=1 FASTEMBEDR_USE_CUVS=1 CUVS_HOME=/path/to/cuvs R CMD INSTALL .
 ```
 
-Then use `backend = "cuda_cuvs"` for a RAPIDS-inspired cuVS policy: exact
-cuVS brute force for smaller searches and cuVS NN-descent for large self-KNN.
-Use `backend = "cuda_cuvs_cagra"` to force CAGRA, `backend =
-"cuda_cuvs_bruteforce"` for exact cuVS brute force, or `backend =
-"cuda_cuvs_nndescent"` for cuVS NN-descent self-KNN. These backends never fall
-back to CPU; if cuVS is not linked or a CUDA device is not visible, they fail
-with a cuVS-specific error.
+## Backend Rule
 
-For t-SNE, cuVS currently accelerates the KNN stage only:
+All public compute functions that can use parallel CPU work now expose
+`n_threads`; use `n_threads = 4` for a fixed four-core CPU run. Functions with
+native GPU support also accept `backend = "metal"` on Apple Silicon. The
+convenience `backend = "gpu"` requests a real native GPU path where the
+function has one; unsupported GPU work fails clearly instead of being labelled
+as GPU after running on CPU.
 
-```r
-fit <- tsne(x, backend = "cuda_cuvs_nndescent", perplexity = 30)
-fit$parameters$backend     # "cpu" t-SNE optimizer
-fit$parameters$nn_backend  # "cuda_cuvs_nndescent" KNN stage, if available
-```
+## Native Metal UMAP
 
-This is intentional. cuVS does not provide a full t-SNE optimizer; full RAPIDS
-t-SNE belongs to cuML, while cuVS provides the neighbour-search building blocks.
+On Apple Silicon, `umap_knn(..., backend = "metal")` uses the restored native
+Objective-C++/Metal UMAP optimizer from the supplied KNN graph. It does not call
+Python, `reticulate`, Torch, or MLX. The graph preparation is still shared with
+the CPU CSR path in this restored build; the optimizer itself is Metal-labelled
+only when the native Metal path is used.
 
-The exact t-SNE optimizer also includes an internal experimental
-KeOps-inspired blocked map-reduce repulsion path. It keeps the same exact
-Student-t repulsive force, but evaluates it as an online row-wise reduction
-instead of storing a dense interaction matrix or one full gradient copy per
-thread. On the current CPU path it is a memory/prototyping option rather than
-a speed win, so the faster pair-symmetric exact loop remains the default. The
-blocked path is native C++; it does not depend on KeOps, Python, PyTorch, or
-RKeOps at runtime.
+The Metal UMAP source keeps three optimizer kernels for diagnostics:
+`scheduled`, `atomic_delta`, and `torchdr_row_negatives`. The package default is
+`scheduled`, and benchmark scripts force `scheduled` so the experimental modes
+are not mixed into published comparisons.
 
-## License And Provenance
+Native Metal openTSNE is available when the `knn_tsne_opentsne_metal_cpp`
+symbol is compiled. `negative_gradient_method = "auto"` resolves to the native
+Metal FFT-grid path, which keeps the interpolation grid, FFT convolution, sparse
+attractive forces, gains, and updates inside Objective-C++/Metal kernels. If
+the native symbol is unavailable, `opentsne_knn(..., backend = "metal")` fails
+clearly instead of falling back to CPU and reporting a GPU result.
 
-The package is licensed as `GPL (>= 3)` so that UMAP implementation details can
-be compared and adapted from GPL R implementations such as `uwot`.
-FAISS is MIT-licensed and is linked only when available at build time; it is
-not vendored into this package.
-RAPIDS cuVS is Apache-2.0-licensed and is linked only when available at build
-time; it is not vendored into this package.
-KeOps is MIT-licensed and is used only as a design reference for the native
-t-SNE blocked map-reduce repulsion path; no KeOps source is vendored or linked.
+## CPU FIt-SNE-Style openTSNE
 
-The experimental `backend = "metal_nndescent"` and
-`backend = "cuda_nndescent"` KNN paths are native C++/Metal and C++/CUDA
-implementations informed by the seeded NN-descent design in
-[`mlx-vis`](https://github.com/hanxiao/mlx-vis), which is distributed under
-Apache-2.0. `fastEmbedR` does not vendor, link to, or call `mlx-vis` or Python
-for these backends. If source code from Apache-2.0 projects is copied in the
-future, its copyright and license notices must be retained.
+For larger CPU runs, `opentsne_knn(..., negative_gradient_method = "fft")`
+uses a native multi-threaded grid-FFT approximation for the t-SNE repulsive
+field. CPU `negative_gradient_method = "auto"` resolves to this FFT-grid path;
+the older Barnes-Hut route has been removed because it was not competitive in
+the current benchmarks. The implementation follows the FIt-SNE/t-SNE-CUDA idea
+of separating sparse KNN attractive forces from interpolated negative forces on
+a 2D grid. It is implemented in package C++ and does not call Python.
 
-[`annembed`](https://github.com/jean-pierreBoth/annembed), distributed under
-MIT OR Apache-2.0, is tracked as a design reference for HNSW-layer landmarking,
-directed density-aware graph weights, diffusion/spectral initialization, and
-graph-neighbour preservation diagnostics. No annembed source code is currently
-copied or vendored; see `inst/ALGORITHMIC_REFERENCES.md` and `inst/NOTICE` for
-the provenance notes.
-
-The t-SNE-from-KNN API is modelled on
-[`Rtsne::Rtsne_neighbors()`](https://cran.r-project.org/package=Rtsne).
-Only the R-level neighbour-input behaviour and defaults were adapted. The
-classic Rtsne Barnes-Hut C++ files are not vendored; the current optimizer is
-native fastEmbedR code so the package keeps a cleaner publication path.
-
-The `infotsne()` path is informed by
-[`TorchDR::InfoTSNE`](https://github.com/TorchDR/TorchDR), distributed under
-BSD-3-Clause. The current implementation ports the objective structure to
-native C++: sparse KNN affinities for attraction and uniformly sampled
-negatives for the repulsive `logsumexp(log Q)` term. It does not vendor
-TorchDR source, call Python, or depend on PyTorch.
-
-The native `opentsne()` optimizer and the landmark t-SNE transform path are
-informed by
-[`openTSNE`](https://github.com/pavlin-policar/openTSNE), distributed under
-BSD-3-Clause. The full-embedding path follows openTSNE's two-phase optimizer:
-early exaggeration followed by normal optimization, `learning_rate = n /
-exaggeration` when requested, openTSNE-style momentum and gains, max-step
-clipping, sparse positive KNN forces, and native BH/exact negative gradients.
-The transform implementation follows the design of `TSNEEmbedding.transform()`:
-initialize query points from reference neighbours, build row-wise
-query-to-reference affinities, and optimize query points against a fixed
-reference embedding. No openTSNE source is vendored, linked, or called.
-The `backend = "metal"` transform optimizer is additionally informed by the
-device-resident n-body optimization structure described in t-SNE-CUDA
-(Chan, Rao, Huang, and Canny, 2018) and the BSD-3
-[`CannyLab/tsne-cuda`](https://github.com/CannyLab/tsne-cuda) repository. No
-t-SNE-CUDA source is copied or vendored. The current CUDA t-SNE path exposes a
-native fastEmbedR exact-from-KNN kernel through
-`embed_knn(method = "tsne", backend = "cuda")` when CUDA is compiled in; the
-large-data FFT/FIt-SNE repulsive-field port remains a planned native
-CUDA/Metal implementation.
+Native Metal FFT openTSNE is implemented in Objective-C++/Metal when the Metal
+backend is compiled. Native CUDA FFT openTSNE is still refused until the CUDA
+port exists; unsupported GPU requests fail clearly instead of falling back to
+CPU.
 
 ## Basic Use
 
@@ -141,11 +92,11 @@ CUDA/Metal implementation.
 library(fastEmbedR)
 
 set.seed(1)
-x <- scale(iris[, 1:4])
+x <- scale(as.matrix(iris[, 1:4]))
 labels <- iris$Species
 
 knn <- nn(x, k = 31)
-layout <- embed_knn(knn, method = "umap", seed = 1)
+layout <- umap_knn(knn)
 
 plot(layout, pch = 21, bg = labels)
 ```
@@ -153,121 +104,75 @@ plot(layout, pch = 21, bg = labels)
 The one-call interface computes KNN internally:
 
 ```r
-fit <- umap(x, labels = labels, n_neighbors = 30, seed = 1)
+fit <- umap(
+  x,
+  labels = labels,
+  n_neighbors = 30,
+  seed = 1
+)
 plot(fit)
 ```
 
-For large landmark runs, an experimental opt-in refinement policy can update
-only rows with low projection confidence:
+## Landmark Workflow
 
 ```r
-options(fastEmbedR.selective_landmark_refinement = TRUE)
-fit <- umap(x, landmarks = 0.5, seed = 1)
+fit <- landmark_tsne(
+  x,
+  labels = labels,
+  landmarks = 0.5,
+  n_neighbors = 30,
+  perplexity = 10,
+  early_exaggeration_iter = 100,
+  n_iter = 250,
+  transform_iter = 100,
+  seed = 1
+)
+plot(fit)
 ```
 
-This keeps well-projected rows fixed during the short post-projection
-refinement. It is disabled by default because it can reduce refinement time but
-should be checked on each dataset for local-neighbour quality.
+For landmark runs, `backend = "metal"` uses a fused native Metal projection
+kernel that computes query-to-landmark KNN, interpolation, and projection
+confidence in one pass before the fixed-reference transform. CPU/auto runs use
+exact multi-threaded projection KNN by default and switch to a native
+projection-specific approximation only for large projections where the cheaper
+candidate search is worthwhile.
 
 ## API
 
 | Function | Purpose |
 | --- | --- |
-| `nn()` | Exact KNN for a data matrix or query matrix. |
-| `embed_knn()` | UMAP from a supplied KNN object or index/distance matrices. |
-| `tsne()` | t-SNE from data, using KNN input and Rtsne-style defaults. |
-| `opentsne_knn()` | Native openTSNE-style t-SNE directly from a supplied KNN object or KNN matrices. |
-| `opentsne()` | Native openTSNE-style two-phase t-SNE from data, or from an `nn()` result. |
-| `infotsne()` | InfoTSNE from data, using KNN attraction and sampled negative repulsion. |
-| `transform_tsne()` | Place query points into an existing t-SNE embedding with a fixed-reference optimizer. |
-| `landmark_tsne()` | Embed landmarks, then transform the remaining points into the reference t-SNE map. |
-| `umap()` | One-call preprocessing, KNN, UMAP, and optional scoring. |
-| `supervised_umap()` | UMAP with label-adjusted KNN distances. |
-| `transform_embedding()` | Project query points into an existing embedding. |
-| `evaluate_embedding()` | Trustworthiness, KNN preservation, silhouette, and related metrics. |
-| `backend_info()` | Report CPU/CUDA/Metal availability without silently falling back. |
-
-`backend_info()` also reports whether the real FAISS C++ backend and RAPIDS
-cuVS CUDA backend were linked.
-
-Direct openTSNE-style t-SNE from precomputed neighbours:
-
-```r
-x <- scale(as.matrix(iris[, 1:4]))
-knn <- fastEmbedR::nn(x, k = 31)
-
-layout <- fastEmbedR::opentsne_knn(knn, perplexity = 10)
-plot(layout, pch = 21, bg = iris$Species)
-
-fit <- fastEmbedR::opentsne(knn, labels = iris$Species, perplexity = 10)
-plot(fit)
-```
-
-## Comparison With uwot
-
-Use the same KNN width and UMAP parameters when comparing:
-
-```r
-library(uwot)
-
-k <- 50
-knn <- fastEmbedR::nn(x, k = k + 1)
-idx <- knn$indices[, -1, drop = FALSE]
-dst <- knn$distances[, -1, drop = FALSE]
-
-fast <- fastEmbedR::embed_knn(list(indices = idx, distances = dst), seed = 4)
-ref <- uwot::umap(
-  x,
-  nn_method = list(idx = idx, dist = dst),
-  n_neighbors = k,
-  n_epochs = 200,
-  min_dist = 0.01,
-  negative_sample_rate = 5,
-  learning_rate = 1,
-  fast_sgd = TRUE,
-  n_threads = 4,
-  n_sgd_threads = 4,
-  ret_model = FALSE
-)
-```
-
-For large datasets, visual inspection matters. Benchmark scripts outside the
-package under `tools/` create side-by-side panels against `uwot_fast_sgd`, but
-those scripts are deliberately excluded from the package build.
+| `nn()` | Native exact/approximate KNN for data/query matrices. |
+| `umap_knn()` | UMAP from a supplied KNN object or matrices. |
+| `embed_knn()` | KNN dispatcher; UMAP by default, openTSNE with `method = "opentsne"`. |
+| `opentsne_knn()` | Direct native openTSNE-style optimizer from KNN. |
+| `opentsne()` | One-call preprocessing, KNN, and openTSNE-style embedding. |
+| `transform_tsne()` | Fixed-reference openTSNE-style transform for query points. |
+| `landmark_tsne()` | Embed landmarks, then transform remaining rows. |
+| `evaluate_embedding()` | Embedding quality metrics. |
+| `backend_info()` | CPU/CUDA/Metal/FAISS/cuVS detection without silent fallback. |
 
 ## Benchmark Snapshot
 
 The current local benchmark summary is in
-[`BENCHMARK_SUMMARY.md`](BENCHMARK_SUMMARY.md). It compares fastEmbedR with
-available R tools on MNIST, including `uwot`, `umap`, `Rtsne`, `tsne`,
-`Rdimtools`, and the `ReductionWrappers` Python openTSNE wrapper where that
-wrapper is available through `reticulate`.
+[`BENCHMARK_SUMMARY.md`](BENCHMARK_SUMMARY.md). After the cleanup, benchmarks
+should compare:
 
-The short version is:
+- `fastEmbedR::umap_knn()` from a supplied KNN graph.
+- `uwot::umap()` / `uwot::umap(..., fast_sgd = TRUE)` as the R reference UMAP
+  path.
+- `fastEmbedR::opentsne_knn()` from a supplied KNN graph.
+- `Rtsne::Rtsne_neighbors()` as the R reference t-SNE-from-KNN path.
+- `ReductionWrappers::openTSNE()` as the Python openTSNE wrapper when the
+  configured `reticulate` Python can import `openTSNE`.
 
-- On MNIST 2.5k, fastEmbedR is the fastest group among the tested R/package
-  calls; `Rtsne_neighbors()` and the Python openTSNE wrapper retain slightly
-  higher t-SNE trustworthiness.
-- On full MNIST 70k, fastEmbedR's native openTSNE-style path gives the best
-  quality among the current fastEmbedR t-SNE/UMAP paths.
-- On the older full MNIST 70k UMAP-only comparison, `uwot_fast_sgd` remains
-  faster than current fastEmbedR CPU UMAP at essentially tied quality; this is
-  the main remaining UMAP optimization target.
+## License And Provenance
 
-## GPU Backends
+The package remains licensed as `GPL (>= 3)` for a conservative free-software
+publication path. The current openTSNE-style implementation is native
+fastEmbedR C++ code informed by BSD-3-Clause openTSNE. `Rtsne` informed
+neighbour-input validation and perplexity defaults, but Barnes-Hut code is not
+vendored or exposed. FAISS and RAPIDS cuVS are optional
+external KNN backends and are not vendored.
 
-CUDA and Metal checks are explicit. If a requested GPU backend is unavailable,
-the package reports an error/status rather than silently running on CPU and
-calling it GPU. The current restart focuses on the multicore CPU UMAP path
-first; GPU UMAP remains a native experimental path.
-
-For landmark t-SNE, `transform_tsne(..., backend = "metal")` and
-`landmark_tsne(..., backend = "metal")` run the fixed-reference transform
-optimizer in native Metal for two-dimensional maps. `backend = "cuda"` for this
-specific transform path is intentionally not enabled yet; it errors rather than
-falling back to CPU and pretending to be CUDA.
-
-For full t-SNE from precomputed neighbours, `embed_knn(method = "tsne",
-backend = "cuda")` dispatches to a native exact CUDA optimizer when the package
-is built with CUDA support. This is a quality/parity path for moderate sizes,
-not the final scalable FFT t-SNE implementation.
+Detailed provenance is recorded in `inst/NOTICE` and
+`inst/ALGORITHMIC_REFERENCES.md`.

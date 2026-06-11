@@ -36,6 +36,10 @@ void cuda_check(const cudaError_t status, const char* context) {
   Rcpp::stop("%s failed: %s", context, cudaGetErrorString(status));
 }
 
+void cuda_sync(const char* context) {
+  cuda_check(cudaDeviceSynchronize(), context);
+}
+
 void validate_inputs(const NumericMatrix& data,
                      const NumericMatrix& points,
                      const int k,
@@ -452,7 +456,7 @@ List cuvs_bruteforce_knn_impl(NumericMatrix data,
     ),
     "cuvsBruteForceSearch"
   );
-  cuvs_check(cuvsStreamSync(res.get()), "cuvsStreamSync");
+  cuda_sync("cudaDeviceSynchronize");
 
   std::vector<uint32_t> labels(static_cast<std::size_t>(n_points) * search_k);
   std::vector<float> distances(static_cast<std::size_t>(n_points) * search_k);
@@ -588,7 +592,7 @@ List cuvs_cagra_knn_impl(NumericMatrix data,
     ),
     "cuvsCagraSearch"
   );
-  cuvs_check(cuvsStreamSync(res.get()), "cuvsStreamSync");
+  cuda_sync("cudaDeviceSynchronize");
 
   std::vector<uint32_t> labels(static_cast<std::size_t>(n_points) * search_k);
   std::vector<float> distances(static_cast<std::size_t>(n_points) * search_k);
@@ -632,7 +636,7 @@ List cuvs_nndescent_self_knn_impl(NumericMatrix data,
 
   const int n_data = data.nrow();
   const int n_features = data.ncol();
-  graph_degree = std::max(k + 1, graph_degree);
+  graph_degree = std::max(k, graph_degree);
   graph_degree = std::min(graph_degree, n_data - 1);
   intermediate_graph_degree = std::max(
     intermediate_graph_degree,
@@ -679,7 +683,7 @@ List cuvs_nndescent_self_knn_impl(NumericMatrix data,
       res.get(),
       params.get(),
       &dataset_tensor,
-      &graph_tensor,
+      nullptr,
       index.get()
     ),
     "cuvsNNDescentBuild"
@@ -692,7 +696,7 @@ List cuvs_nndescent_self_knn_impl(NumericMatrix data,
     cuvsNNDescentIndexGetDistances(res.get(), index.get(), &distances_tensor),
     "cuvsNNDescentIndexGetDistances"
   );
-  cuvs_check(cuvsStreamSync(res.get()), "cuvsStreamSync");
+  cuda_sync("cudaDeviceSynchronize");
 
   List out = format_uint32_result(
     graph,

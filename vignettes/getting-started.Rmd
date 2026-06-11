@@ -1,8 +1,8 @@
 ---
-title: "Getting Started With fastEmbedR"
+title: "Getting started with fastEmbedR"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Getting Started With fastEmbedR}
+  %\VignetteIndexEntry{Getting started with fastEmbedR}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -11,8 +11,23 @@ vignette: >
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 ```
 
-`fastEmbedR` focuses on fast UMAP from nearest-neighbour matrices. The two most
-important functions are `nn()` and `embed_knn()`.
+`fastEmbedR` is focused on KNN-first embeddings: UMAP from precomputed nearest
+neighbours, plus a native openTSNE-style CPU optimizer.
+
+The legacy `tsne()` and `infotsne()` entry points were removed from the public
+package API. The kept path is:
+
+1. compute or reuse KNN with `nn()`;
+2. embed with `umap_knn()` / `umap()` or, explicitly, `opentsne_knn()` /
+   `opentsne()`;
+3. optionally place query/non-landmark points with `transform_tsne()`.
+
+CPU-capable public functions expose `n_threads`, for example
+`n_threads = 4` for a fixed four-core run. Native Apple GPU paths use
+`backend = "metal"`; `backend = "gpu"` is a convenience request for a real GPU
+path and is not silently relabelled when unavailable.
+
+## Direct KNN Input
 
 ```{r}
 library(fastEmbedR)
@@ -20,155 +35,148 @@ library(fastEmbedR)
 x <- scale(as.matrix(iris[, 1:4]))
 labels <- iris$Species
 
-knn <- nn(x, k = 16)
-layout <- embed_knn(knn, method = "umap", seed = 4)
-head(layout)
+knn <- nn(x, k = 31)
+layout <- umap_knn(knn, n_threads = 4, seed = 4)
+
+plot(layout, pch = 21, bg = labels)
 ```
 
-The same workflow can be run with `umap()`, which computes KNN internally.
+`embed_knn()` dispatches to UMAP by default. Request openTSNE explicitly:
+
+```{r}
+layout2 <- embed_knn(
+  knn,
+  method = "opentsne",
+  perplexity = 10,
+  early_exaggeration_iter = 100,
+  n_iter = 250,
+  seed = 4
+)
+```
+
+## One-Call Workflow
 
 ```{r}
 fit <- umap(
   x,
   labels = labels,
-  n_neighbors = 15,
-  seed = 4,
-  silhouette_sample = NULL,
-  preserve_sample = NULL
-)
-fit$metrics[, c("method", "n", "n_neighbors", "elapsed")]
-```
-
-If fastEmbedR was built against the FAISS C++ library, `nn()` can use FAISS
-directly:
-
-```{r, eval = FALSE}
-faiss_available()
-
-knn_faiss <- nn(x, k = 16, backend = "faiss")
-knn_faiss_ivf <- nn(x, k = 16, backend = "faiss_ivf")
-```
-
-These are real FAISS library calls. They are deliberately separate from
-`backend = "cpu_faiss_ivf"`, which is the package-native FAISS-style IVF
-approximation.
-
-To compare with `uwot`, use the same KNN and the same UMAP settings:
-
-```{r, eval = FALSE}
-library(uwot)
-
-idx <- knn$indices[, -1, drop = FALSE]
-dst <- knn$distances[, -1, drop = FALSE]
-
-fast <- fastEmbedR::embed_knn(list(indices = idx, distances = dst), seed = 4)
-ref <- uwot::umap(
-  x,
-  nn_method = list(idx = idx, dist = dst),
-  n_neighbors = ncol(idx),
-  n_epochs = 200,
-  min_dist = 0.01,
-  negative_sample_rate = 5,
-  learning_rate = 1,
-  fast_sgd = TRUE,
+  n_neighbors = 30,
   n_threads = 4,
-  n_sgd_threads = 4
-)
-```
-
-For large landmark embeddings, you can opt into confidence-gated refinement.
-The package first embeds landmarks, projects all rows, then refines only rows
-whose projection weights are diffuse or far from their nearest landmark.
-
-```{r, eval = FALSE}
-options(fastEmbedR.selective_landmark_refinement = TRUE)
-
-fit <- umap(
-  x_large,
-  landmarks = 0.5,
   seed = 4,
-  backend = "cpu"
+  silhouette_sample = NULL,
+  preserve_sample = NULL
 )
 
-fit$parameters[c(
-  "landmark_refinement_policy",
-  "landmark_refinement_selected",
-  "landmark_refinement_backend"
-)]
+fit
+plot(fit)
 ```
 
-The default remains full landmark refinement because the selective mode can
-reduce refinement work but should be checked for each dataset's neighbourhood
-quality.
+When `keep_knn = TRUE`, the non-self KNN graph used by the embedding is stored
+in the returned object. The default is `FALSE` to keep large results compact.
 
-## Landmark t-SNE
+## Native Metal UMAP
 
-`landmark_tsne()` follows the same idea used by openTSNE for adding new points:
-embed a reference subset, initialize non-landmarks from nearby reference
-coordinates, then optimize each non-landmark against the fixed reference map.
-The implementation is native fastEmbedR code and does not call Python.
+On Apple Silicon, `umap_knn(..., backend = "metal")` calls the package's
+Objective-C++/Metal UMAP optimizer directly. It does not use Python,
+`reticulate`, Torch, or MLX, and it does not fall back to CPU while reporting a
+GPU backend.
+
+The Metal UMAP source keeps three optimizer kernels for diagnostics:
+`scheduled`, `atomic_delta`, and `torchdr_row_negatives`. The default is
+`scheduled`, and benchmark scripts force `scheduled` so experimental modes are
+not mixed into reference comparisons.
+
+Native openTSNE Metal is conditional: it is available only when the package is
+compiled with the `knn_tsne_opentsne_metal_cpp` symbol. In that build,
+`negative_gradient_method = "auto"` resolves to the package-native Metal
+FFT-grid path. If the symbol is absent, `opentsne_knn(..., backend = "metal")`
+fails clearly instead of running on CPU and reporting Metal.
+
+For CPU runs, `negative_gradient_method = "auto"` resolves to
+`negative_gradient_method = "fft"`, a native FIt-SNE-style grid approximation
+for the negative gradient. This is useful for large two-dimensional embeddings
+from a supplied KNN graph. The older Barnes-Hut route has been removed.
+Native Metal FFT openTSNE uses Objective-C++/Metal kernels when compiled.
+Native CUDA FFT openTSNE still fails clearly until the CUDA port is added.
+
+```{r, eval = fastEmbedR:::embedding_metal_available_cpp()}
+metal_layout <- umap_knn(
+  knn,
+  backend = "metal",
+  seed = 4
+)
+
+attr(metal_layout, "fastEmbedR_config")[c("backend", "optimizer", "graph_storage")]
+```
+
+## Landmark Workflow
+
+`landmark_tsne()` embeds a subset with `opentsne()` and places the remaining
+rows with the openTSNE-style fixed-reference transform.
+
+When native openTSNE Metal is compiled, `backend = "metal"` can use fused Metal
+projection kernels for query-to-landmark KNN, interpolation, and confidence
+scoring. In this restored build, request Metal landmark t-SNE only after
+checking `fastEmbedR:::metal_opentsne_native_available()`. CPU runs keep the
+exact multi-threaded projection KNN for small and medium data, and switch
+internally to a projection-specific candidate search only for larger
+projections.
 
 ```{r}
-tsne_landmark <- landmark_tsne(
+landmark_fit <- landmark_tsne(
   x,
   labels = labels,
   landmarks = 0.5,
-  reference_method = "infotsne",
-  n_neighbors = 15,
-  perplexity = 5,
-  max_iter = 25,
-  n_negatives = 10,
-  transform_iter = 10,
-  transform_n_negatives = 10,
-  standardize = FALSE,
+  n_neighbors = 30,
+  perplexity = 10,
+  early_exaggeration_iter = 100,
+  n_iter = 250,
+  transform_iter = 100,
+  seed = 4,
   silhouette_sample = NULL,
   preserve_sample = NULL
 )
 
-tsne_landmark$metrics[, c(
-  "method",
-  "reference_method",
-  "n",
-  "n_landmarks",
-  "elapsed",
-  "reference_embedding_elapsed",
-  "landmark_projection_knn_elapsed",
-  "transform_elapsed"
-)]
+plot(landmark_fit)
 ```
 
-When a reference embedding is already available, `transform_tsne()` can be used
-directly with a query-to-reference KNN object.
+## Transform New Points
 
 ```{r}
-ref <- x[1:100, , drop = FALSE]
-qry <- x[101:110, , drop = FALSE]
-ref_fit <- infotsne(
-  ref,
-  n_neighbors = 15,
-  perplexity = 5,
-  max_iter = 25,
-  n_negatives = 10,
+reference <- x[1:100, , drop = FALSE]
+query <- x[101:110, , drop = FALSE]
+
+ref_fit <- opentsne(
+  reference,
+  n_neighbors = 30,
+  perplexity = 10,
+  early_exaggeration_iter = 100,
+  n_iter = 250,
   standardize = FALSE,
+  seed = 5,
   silhouette_sample = NULL,
   preserve_sample = NULL
 )
-query_knn <- nn(ref, qry, k = 15, backend = "cpu")
+
+query_knn <- nn(reference, query, k = 15)
 query_layout <- transform_tsne(
   ref_fit$layout,
-  query_knn,
+  knn = query_knn,
   perplexity = 5,
-  n_iter = 10,
-  n_negatives = 10
+  n_iter = 100,
+  seed = 5
 )
-head(query_layout)
+
+plot(ref_fit$layout, pch = 21, bg = labels[1:100])
+points(query_layout, pch = 24, bg = labels[101:110], cex = 1.2)
 ```
 
-GPU backends are explicit:
+## Backend Reporting
+
+`backend_info()` reports optional CUDA, Metal, FAISS, and cuVS availability.
+Requested unavailable GPU/accelerator backends fail clearly rather than being
+silently replaced by CPU and reported as GPU.
 
 ```{r}
 backend_info()
 ```
-
-If CUDA or Metal is requested but unavailable, `fastEmbedR` does not silently
-run CPU code and label it as GPU.
