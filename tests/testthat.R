@@ -1,4 +1,4 @@
 library(testthat)
-library(fastknnumap)
+library(fastEmbedR)
 
-test_check("fastknnumap")
+test_check("fastEmbedR")

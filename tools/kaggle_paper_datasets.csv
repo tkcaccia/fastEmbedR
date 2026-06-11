@@ -1,0 +1,3 @@
+dataset,paper,kaggle_slug,benchmark_name,processed_file,default_in_benchmark,reason
+USPS,"TriMap; LocalMAP",bistaumanga/usps-dataset,kaggle_usps,kaggle_usps.npz,no,"Paper uses this Kaggle source, but OpenML USPS remains the no-login default."
+360K+ Lyrics,TriMap,gyani95/380000-lyrics-from-metrolyrics,kaggle_lyrics,kaggle_metrolyrics_svd100.npz,no,"Kaggle is the paper source, so include only in authenticated optional paper-replication runs."

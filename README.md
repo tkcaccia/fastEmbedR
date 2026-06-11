@@ -1,167 +1,231 @@
-# fastknnumap
+# fastEmbedR
 
-`fastknnumap` is a small R package for fast UMAP embeddings from precomputed
-KNN index and distance matrices. The fuzzy graph construction and layout
-optimization are implemented in C++ via Rcpp.
+`fastEmbedR` is a compact R package for fast UMAP from precomputed nearest
+neighbours. The current package is intentionally focused on two public tasks:
 
-For a reproducible Python-first benchmark suite comparing UMAP/t-SNE
-implementations on public datasets, see `BENCHMARK_PYTHON.md`.
+- `nn()` computes exact nearest neighbours quickly in native code.
+- `embed_knn()` and `umap()` run UMAP from the KNN graph.
+- `embed_knn(method = "tsne")` and `tsne()` run an `Rtsne_neighbors()`-style
+  t-SNE path from precomputed neighbours.
+- `embed_knn(method = "infotsne")` and `infotsne()` run a native
+  TorchDR-inspired negative-sampling t-SNE objective with better per-iteration
+  scaling on large data.
+- `transform_tsne()` and `landmark_tsne()` add an openTSNE-inspired
+  fixed-reference transform path for landmark t-SNE without calling Python.
 
-Install the development version from GitHub:
+The restart baseline is designed to be comparable with
+`uwot::umap(..., fast_sgd = TRUE)`: the large-data CPU path uses
+`n_epochs = 200`, `negative_sample_rate = 5`, `min_dist = 0.01`, learning rate
+`1`, a fuzzy-union graph, and at most four physical CPU cores.
+
+## Installation
 
 ```r
+install.packages("remotes")
 remotes::install_github("tkcaccia/fastEmbedR")
 ```
 
+The package installs without external FAISS. To enable the real FAISS C++
+backend, install FAISS separately and rebuild with its prefix visible:
+
+```sh
+FASTEMBEDR_USE_FAISS=1 FAISS_HOME=/path/to/faiss R CMD INSTALL .
+```
+
+Then use `backend = "faiss"` for FAISS `IndexFlatL2` or
+`backend = "faiss_ivf"` for FAISS `IndexIVFFlat`. If FAISS is not linked,
+these explicit backends fail clearly. The older `backend = "cpu_faiss_ivf"` is
+only a package-native FAISS-style IVF search and is labelled separately.
+
+The RAPIDS cuVS CUDA KNN backend is also optional and external. On a CUDA
+machine with cuVS installed, rebuild with:
+
+```sh
+FASTEMBEDR_USE_CUDA=1 FASTEMBEDR_USE_CUVS=1 CUVS_HOME=/path/to/cuvs R CMD INSTALL .
+```
+
+Then use `backend = "cuda_cuvs"` for a RAPIDS-inspired cuVS policy: exact
+cuVS brute force for smaller searches and cuVS NN-descent for large self-KNN.
+Use `backend = "cuda_cuvs_cagra"` to force CAGRA, `backend =
+"cuda_cuvs_bruteforce"` for exact cuVS brute force, or `backend =
+"cuda_cuvs_nndescent"` for cuVS NN-descent self-KNN. These backends never fall
+back to CPU; if cuVS is not linked or a CUDA device is not visible, they fail
+with a cuVS-specific error.
+
+For t-SNE, cuVS currently accelerates the KNN stage only:
+
 ```r
-load("/Users/stefano/Documents/GPUPLS/Data/metref_remote_task.RData")
+fit <- tsne(x, backend = "cuda_cuvs_nndescent", perplexity = 30)
+fit$parameters$backend     # "cpu" t-SNE optimizer
+fit$parameters$nn_backend  # "cuda_cuvs_nndescent" KNN stage, if available
+```
 
-data <- scale(out$Xtrain)
-nn <- fastknnumap::nn(data, data, 30, parallel = TRUE)
+This is intentional. cuVS does not provide a full t-SNE optimizer; full RAPIDS
+t-SNE belongs to cuML, while cuVS provides the neighbour-search building blocks.
 
-layout <- fastknnumap::fast_knn_umap(
-  nn$indices[, -1],
-  nn$distances[, -1],
-  n_epochs = 500,
-  init_sdev = "range",
-  seed = 42
+The exact t-SNE optimizer also includes an internal experimental
+KeOps-inspired blocked map-reduce repulsion path. It keeps the same exact
+Student-t repulsive force, but evaluates it as an online row-wise reduction
+instead of storing a dense interaction matrix or one full gradient copy per
+thread. On the current CPU path it is a memory/prototyping option rather than
+a speed win, so the faster pair-symmetric exact loop remains the default. The
+blocked path is native C++; it does not depend on KeOps, Python, PyTorch, or
+RKeOps at runtime.
+
+## License And Provenance
+
+The package is licensed as `GPL (>= 3)` so that UMAP implementation details can
+be compared and adapted from GPL R implementations such as `uwot`.
+FAISS is MIT-licensed and is linked only when available at build time; it is
+not vendored into this package.
+RAPIDS cuVS is Apache-2.0-licensed and is linked only when available at build
+time; it is not vendored into this package.
+KeOps is MIT-licensed and is used only as a design reference for the native
+t-SNE blocked map-reduce repulsion path; no KeOps source is vendored or linked.
+
+The experimental `backend = "metal_nndescent"` and
+`backend = "cuda_nndescent"` KNN paths are native C++/Metal and C++/CUDA
+implementations informed by the seeded NN-descent design in
+[`mlx-vis`](https://github.com/hanxiao/mlx-vis), which is distributed under
+Apache-2.0. `fastEmbedR` does not vendor, link to, or call `mlx-vis` or Python
+for these backends. If source code from Apache-2.0 projects is copied in the
+future, its copyright and license notices must be retained.
+
+[`annembed`](https://github.com/jean-pierreBoth/annembed), distributed under
+MIT OR Apache-2.0, is tracked as a design reference for HNSW-layer landmarking,
+directed density-aware graph weights, diffusion/spectral initialization, and
+graph-neighbour preservation diagnostics. No annembed source code is currently
+copied or vendored; see `inst/ALGORITHMIC_REFERENCES.md` and `inst/NOTICE` for
+the provenance notes.
+
+The t-SNE-from-KNN API is modelled on
+[`Rtsne::Rtsne_neighbors()`](https://cran.r-project.org/package=Rtsne).
+Only the R-level neighbour-input behaviour and defaults were adapted. The
+classic Rtsne Barnes-Hut C++ files are not vendored; the current optimizer is
+native fastEmbedR code so the package keeps a cleaner publication path.
+
+The `infotsne()` path is informed by
+[`TorchDR::InfoTSNE`](https://github.com/TorchDR/TorchDR), distributed under
+BSD-3-Clause. The current implementation ports the objective structure to
+native C++: sparse KNN affinities for attraction and uniformly sampled
+negatives for the repulsive `logsumexp(log Q)` term. It does not vendor
+TorchDR source, call Python, or depend on PyTorch.
+
+The landmark t-SNE transform path is informed by
+[`openTSNE`](https://github.com/pavlin-policar/openTSNE), distributed under
+BSD-3-Clause. The native implementation follows the design of
+`TSNEEmbedding.transform()`: initialize query points from reference neighbours,
+build row-wise query-to-reference affinities, and optimize query points against
+a fixed reference embedding. No openTSNE source is vendored, linked, or called.
+The `backend = "metal"` transform optimizer is additionally informed by the
+device-resident n-body optimization structure described in t-SNE-CUDA
+(Chan, Rao, Huang, and Canny, 2018) and the BSD-3
+[`CannyLab/tsne-cuda`](https://github.com/CannyLab/tsne-cuda) repository. No
+t-SNE-CUDA source is copied or vendored. The current CUDA t-SNE path exposes a
+native fastEmbedR exact-from-KNN kernel through
+`embed_knn(method = "tsne", backend = "cuda")` when CUDA is compiled in; the
+large-data FFT/FIt-SNE repulsive-field port remains a planned native
+CUDA/Metal implementation.
+
+## Basic Use
+
+```r
+library(fastEmbedR)
+
+set.seed(1)
+x <- scale(iris[, 1:4])
+labels <- iris$Species
+
+knn <- nn(x, k = 31)
+layout <- embed_knn(knn, method = "umap", seed = 1)
+
+plot(layout, pch = 21, bg = labels)
+```
+
+The one-call interface computes KNN internally:
+
+```r
+fit <- umap(x, labels = labels, n_neighbors = 30, seed = 1)
+plot(fit)
+```
+
+For large landmark runs, an experimental opt-in refinement policy can update
+only rows with low projection confidence:
+
+```r
+options(fastEmbedR.selective_landmark_refinement = TRUE)
+fit <- umap(x, landmarks = 0.5, seed = 1)
+```
+
+This keeps well-projected rows fixed during the short post-projection
+refinement. It is disabled by default because it can reduce refinement time but
+should be checked on each dataset for local-neighbour quality.
+
+## API
+
+| Function | Purpose |
+| --- | --- |
+| `nn()` | Exact KNN for a data matrix or query matrix. |
+| `embed_knn()` | UMAP from a supplied KNN object or index/distance matrices. |
+| `tsne()` | t-SNE from data, using KNN input and Rtsne-style defaults. |
+| `infotsne()` | InfoTSNE from data, using KNN attraction and sampled negative repulsion. |
+| `transform_tsne()` | Place query points into an existing t-SNE embedding with a fixed-reference optimizer. |
+| `landmark_tsne()` | Embed landmarks, then transform the remaining points into the reference t-SNE map. |
+| `umap()` | One-call preprocessing, KNN, UMAP, and optional scoring. |
+| `supervised_umap()` | UMAP with label-adjusted KNN distances. |
+| `transform_embedding()` | Project query points into an existing embedding. |
+| `evaluate_embedding()` | Trustworthiness, KNN preservation, silhouette, and related metrics. |
+| `backend_info()` | Report CPU/CUDA/Metal availability without silently falling back. |
+
+`backend_info()` also reports whether the real FAISS C++ backend and RAPIDS
+cuVS CUDA backend were linked.
+
+## Comparison With uwot
+
+Use the same KNN width and UMAP parameters when comparing:
+
+```r
+library(uwot)
+
+k <- 50
+knn <- fastEmbedR::nn(x, k = k + 1)
+idx <- knn$indices[, -1, drop = FALSE]
+dst <- knn$distances[, -1, drop = FALSE]
+
+fast <- fastEmbedR::embed_knn(list(indices = idx, distances = dst), seed = 4)
+ref <- uwot::umap(
+  x,
+  nn_method = list(idx = idx, dist = dst),
+  n_neighbors = k,
+  n_epochs = 200,
+  min_dist = 0.01,
+  negative_sample_rate = 5,
+  learning_rate = 1,
+  fast_sgd = TRUE,
+  n_threads = 4,
+  n_sgd_threads = 4,
+  ret_model = FALSE
 )
-
-plot(layout, pch = 21, bg = out$Ytrain)
 ```
 
-Exact Euclidean KNN can use native GPU backends. On NVIDIA systems, build with
-the CUDA toolkit available and request CUDA explicitly:
+For large datasets, visual inspection matters. Benchmark scripts outside the
+package under `tools/` create side-by-side panels against `uwot_fast_sgd`, but
+those scripts are deliberately excluded from the package build.
 
-```r
-fastknnumap::cuda_available()
-nn <- fastknnumap::nn(data, data, 30, backend = "cuda")
-```
+## GPU Backends
 
-Set `CUDA_HOME` if the toolkit is not under the `nvcc` prefix; set
-`FASTEMBEDR_USE_CUDA=0` to force a non-CUDA build.
+CUDA and Metal checks are explicit. If a requested GPU backend is unavailable,
+the package reports an error/status rather than silently running on CPU and
+calling it GPU. The current restart focuses on the multicore CPU UMAP path
+first; GPU UMAP remains a native experimental path.
 
-On macOS, the package can use the native Metal backend:
+For landmark t-SNE, `transform_tsne(..., backend = "metal")` and
+`landmark_tsne(..., backend = "metal")` run the fixed-reference transform
+optimizer in native Metal for two-dimensional maps. `backend = "cuda"` for this
+specific transform path is intentionally not enabled yet; it errors rather than
+falling back to CPU and pretending to be CUDA.
 
-```r
-fastknnumap::metal_available()
-nn <- fastknnumap::nn(data, data, 30, backend = "metal")
-```
-
-Use `backend = "gpu"` to request any available native GPU backend.
-
-The SGD optimizer exposes UMAP-style controls such as `a`, `b`,
-`repulsion_strength`, `negative_sample_rate`, `init_sdev`, and epoch-based edge
-pruning. Use `init_sdev = "range"` for Python UMAP-compatible spectral scaling,
-or leave it as `NULL` for native spectral scaling.
-
-For larger datasets, the package also supports a paper-inspired spectral path
-based on the normalized fuzzy KNN graph:
-
-```r
-layout <- fastknnumap::fast_knn_umap(
-  nn$indices[, -1],
-  nn$distances[, -1],
-  mode = "hybrid",
-  n_epochs = 100,
-  spectral_n_iter = 25,
-  seed = 4
-)
-```
-
-Run the included benchmark:
-
-```r
-bench <- fastknnumap::benchmark_metref(
-  "/Users/stefano/Documents/GPUPLS/Data/metref_remote_task.RData"
-)
-bench$timings
-bench$silhouette
-```
-
-Compare multiple implementations from one shared KNN output:
-
-```r
-bench <- fastknnumap::benchmark_knn_umap(
-  data,
-  labels,
-  k = 30,
-  implementations = c(
-    "fastknnumap_hybrid",
-    "fastknnumap_sgd",
-    "fastknnumap_spectral",
-    "knn_tsne",
-    "knn_pacmap"
-  )
-)
-
-bench$knn_time
-bench$metrics
-```
-
-Every row in a method comparison uses the same KNN graph and the same shared
-settings (`k`, `n_epochs`, `learning_rate`, `negative_sample_rate`, scoring
-samples). Hyperparameter sweeps should be read within each parameter row, not by
-mixing the best row from each method.
-
-Compare the native implementations across public datasets:
-
-```r
-suite <- fastknnumap::benchmark_embed(
-  output_csv = "benchmark/native_suite.csv"
-)
-suite$metrics
-```
-
-The compact method names are `"fast"`, `"tsne"`, `"pacmap"`, `"trimap"`,
-`"localmap"`, and `"all"`. Use `preset = "quick"`, `"balanced"`, or
-`"accuracy"` to trade speed for repeat-based stability estimates. When
-`output_csv` is set, benchmark plots are written next to the CSV with base R
-graphics. Advanced controls are available through
-`benchmark_embedding_datasets()` and `benchmark_knn_umap()`.
-
-The benchmark also supports a landmark approximation inspired by bipartite
-landmark UMAP methods. It selects hub-like landmarks from the KNN graph, keeps
-a small landmark graph plus a few original local KNN edges, then runs the same
-C++ optimizer:
-
-```r
-layout <- fastknnumap::landmark_knn_umap(
-  nn$indices[, -1],
-  nn$distances[, -1],
-  landmark_ratio = 0.1,
-  landmark_k = 10,
-  local_k = 5,
-  n_epochs = 100
-)
-```
-
-Additional KNN-driven objectives are available for benchmarking:
-
-```r
-layout <- fastknnumap::knn_tsne(idx, dst, n_epochs = 100, n_threads = 4)
-layout <- fastknnumap::knn_pacmap(idx, dst, n_epochs = 100, n_threads = 4)
-layout <- fastknnumap::knn_trimap(idx, dst, n_epochs = 100, n_threads = 4)
-layout <- fastknnumap::knn_localmap(idx, dst, n_epochs = 100, n_threads = 4)
-```
-
-Fashion-MNIST benchmark:
-
-```r
-bench <- fastknnumap::benchmark_fashion_mnist(
-  n_train = 2000,
-  pca_dims = 30,
-  implementations = c(
-    "fastknnumap_hybrid",
-    "knn_tsne",
-    "knn_pacmap",
-    "knn_trimap",
-    "knn_localmap"
-  ),
-  n_threads = 4
-)
-bench$metrics
-```
-
-The `tools/run_metal_smoke_test.sh` script checks whether local Metal command
-line compilation is available.
+For full t-SNE from precomputed neighbours, `embed_knn(method = "tsne",
+backend = "cuda")` dispatches to a native exact CUDA optimizer when the package
+is built with CUDA support. This is a quality/parity path for moderate sizes,
+not the final scalable FFT t-SNE implementation.

@@ -1,0 +1,51 @@
+url: https://tkcaccia.github.io/fastEmbedR/
+
+template:
+  bootstrap: 5
+
+navbar:
+  structure:
+    left: [intro, reference, articles, tutorials, news]
+    right: [github]
+
+home:
+  title: fastEmbedR
+  description: Fast KNN-based UMAP, t-SNE-like, and PaCMAP-like embeddings.
+
+articles:
+  - title: Start Here
+    navbar: ~
+    contents:
+      - getting-started
+      - landmarking-and-modes
+      - technical-implementation
+      - function-smoke-tests
+
+reference:
+  - title: One-Call Embeddings
+    desc: Start here when you have a data matrix and want an embedding, metrics, and a plot.
+    contents:
+      - umap
+      - tsne
+      - pacmap
+      - embed
+      - auto_k
+  - title: KNN and KNN-Based Objectives
+    desc: Reuse one nearest-neighbor graph across UMAP, t-SNE-like, and PaCMAP-like objectives.
+    contents:
+      - nn
+      - fast_knn_umap
+      - umap_knn
+      - knn_embed
+      - knn_tsne
+      - knn_pacmap
+  - title: Quality Metrics
+    desc: Score embeddings by local structure, global structure, labels, batch mixing, and stability fields.
+    contents:
+      - evaluate_embedding
+  - title: Backends and Reproducibility
+    desc: Check native GPU availability and set seeds for reproducible runs.
+    contents:
+      - metal_available
+      - cuda_available
+      - set_seed

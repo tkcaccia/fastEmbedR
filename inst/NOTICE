@@ -1,0 +1,223 @@
+fastEmbedR third-party provenance notice
+
+fastEmbedR is distributed under GPL (>= 3).
+
+Optional FAISS backend
+----------------------
+
+The optional `nn(..., backend = "faiss")` and
+`nn(..., backend = "faiss_ivf")` paths link to the FAISS C++ library when
+FAISS is available at package build time:
+
+  FAISS
+  Repository: https://github.com/facebookresearch/faiss
+  License: MIT
+
+FAISS is not vendored into fastEmbedR. The package build system only links to
+an external FAISS installation when requested or automatically detected.
+
+UMAP compatibility work
+-----------------------
+
+Some UMAP graph and optimizer details were studied against `uwot` so that
+fastEmbedR can be compared fairly with `uwot::umap(..., fast_sgd = TRUE)`.
+The installed `uwot` package reports License: GPL (>= 3). Any implementation
+code adapted from GPL sources must remain in this GPL-compatible package.
+
+Rtsne_neighbors compatibility work
+----------------------------------
+
+The t-SNE-from-KNN public behaviour was studied against:
+
+  Rtsne
+  Authors: Jesse Krijthe, Laurens van der Maaten
+  Repository: https://github.com/jkrijthe/Rtsne
+  CRAN: https://cran.r-project.org/package=Rtsne
+  License: BSD-style license in Rtsne's LICENSE file
+
+The R-level validation/default structure in `R/fast_knn_tsne.R` is adapted
+from `Rtsne::Rtsne_neighbors()` and related parameter checking in Rtsne 0.17,
+with attribution here and in the source comments.
+
+fastEmbedR does not vendor or copy Rtsne's Barnes-Hut C++ implementation
+files (`tsne.cpp`, `tsne.h`, `sptree.cpp`, `sptree.h`, `datapoint.h`,
+`vptree.h`). Those upstream files carry the original Delft advertising-clause
+BSD license. The current fastEmbedR t-SNE optimizer in `src/tsne_neighbors.cpp`
+is package-native code using Rtsne-style KNN affinities, early exaggeration,
+momentum, adaptive gains, and zero-mean centering.
+
+Native GPU NN-descent work
+--------------------------
+
+The experimental `nn(..., backend = "metal_nndescent")` path adapts the
+adaptive NN-descent schedule from:
+
+  mlx-vis
+  Author: Han Xiao
+  Repository: https://github.com/hanxiao/mlx-vis
+  License: Apache-2.0
+
+Specifically, `R/nn.R` and `src/nn.cpp` reuse the high-level ideas from
+`mlx_vis/_nndescent/nndescent.py`: NEW/OLD neighbour tracking, adaptive
+candidate expansion based on update fraction, reverse-candidate skipping near
+convergence, and active-row candidate generation. The implementation is native
+R/C++/Metal code for fastEmbedR. It does not vendor mlx-vis source files, link
+to mlx-vis, or call Python/MLX at runtime.
+
+The experimental `nn(..., backend = "cuda_nndescent")` path remains native
+C++/CUDA code and does not use mlx-vis code.
+
+If future changes copy Apache-2.0 source code into fastEmbedR, keep the
+original copyright headers and Apache-2.0 license notices with the copied
+source and update this NOTICE file with the exact files/functions used.
+
+annembed design reference
+-------------------------
+
+The ANN and embedding roadmap also studies:
+
+  annembed
+  Author: Jean-Pierre Both
+  Repository: https://github.com/jean-pierreBoth/annembed
+  License: MIT OR Apache-2.0
+
+No annembed source files are vendored into fastEmbedR, linked from
+fastEmbedR, or copied into the current implementation. As of 2026-06-11,
+annembed has been used as a design reference only.
+
+Ideas recorded for future experiments include HNSW-layer hierarchical
+landmarking, diffusion-map/spectral initialization from an ANN graph,
+directed probability-normalized graph edges with local-density modulation,
+and graph-neighbour preservation diagnostics. If future changes copy or
+adapt annembed implementation code, keep the original copyright and license
+notices with the copied source and update this NOTICE file with the exact
+files/functions used.
+
+RAPIDS/cuML and cuVS design references
+--------------------------------------
+
+The native GPU NN-descent roadmap studies RAPIDS cuML and cuVS, both
+distributed under Apache-2.0:
+
+  RAPIDS cuML
+  Repository: https://github.com/rapidsai/cuml
+  License: Apache-2.0
+
+  RAPIDS cuVS
+  Repository: https://github.com/rapidsai/cuvs
+  License: Apache-2.0
+
+The optional `nn(..., backend = "cuda_cuvs")`,
+`nn(..., backend = "cuda_cuvs_bruteforce")`, and
+`nn(..., backend = "cuda_cuvs_nndescent")` paths link to an external RAPIDS
+cuVS installation only when it is available at package build time. No RAPIDS
+source files are vendored into fastEmbedR.
+
+The `tsne(..., backend = "cuda_cuvs*")` interface uses these RAPIDS cuVS paths
+only for the nearest-neighbour stage. cuVS does not contain a full t-SNE
+optimizer; the current t-SNE layout optimizer remains fastEmbedR-native CPU
+code modelled on `Rtsne_neighbors()` behaviour.
+
+Other current fastEmbedR changes use high-level design ideas only, including
+separating requested output k from a wider internal NN-descent graph degree and
+evaluating overlapping batched all-neighbors graph construction.
+
+KeOps design reference
+----------------------
+
+The exact t-SNE repulsion path in `src/tsne_neighbors.cpp` is informed by the
+LazyTensor/map-reduce design used by KeOps:
+
+  KeOps
+  Repository: https://github.com/getkeops/keops
+  Documentation: https://www.kernel-operations.io/keops/index.html
+  License: MIT
+
+fastEmbedR does not vendor, link to, or call KeOps, RKeOps, PyKeOps, PyTorch,
+or Python at runtime. The implemented t-SNE change is package-native C++ and
+currently internal/experimental: the all-pairs Student-t repulsive force can be
+evaluated as a blocked online row-wise reduction with linear gradient memory,
+while the sparse KNN attractive probabilities, early exaggeration,
+momentum/gains, and zero-mean updates remain in the
+fastEmbedR/Rtsne-neighbors-compatible optimizer. The faster pair-symmetric CPU
+loop remains the default unless this path is explicitly selected for testing.
+
+TorchDR design reference
+------------------------
+
+The InfoTSNE optimizer and experimental Metal UMAP optimizer selector
+`FASTEMBEDR_METAL_UMAP_OPTIMIZER=torchdr` were informed by TorchDR's
+negative-sampling neighbor-embedding structure:
+
+  TorchDR
+  Repository: https://github.com/TorchDR/TorchDR
+  License: BSD-3-Clause
+
+The fastEmbedR implementations are native C++ and Objective-C++/Metal code.
+They do not vendor TorchDR source files, link to TorchDR, or call
+Python/PyTorch at runtime.
+
+For `infotsne()`, fastEmbedR translates the InfoTSNE objective structure:
+sparse entropic KNN affinities for attraction and uniformly sampled negatives
+for the repulsive `logsumexp(log Q)` term. The implementation in
+`src/tsne_neighbors.cpp` uses closed-form native C++ gradients rather than
+PyTorch autograd.
+
+For the experimental Metal UMAP path, the translated idea is row-wise negative
+sampling proportional to the number of active attractive neighbours in a Metal
+kernel.
+
+openTSNE design reference
+-------------------------
+
+The native t-SNE-from-KNN optimizer and the fixed-reference transform used by
+`transform_tsne()` and `landmark_tsne()` were informed by openTSNE:
+
+  openTSNE
+  Repository: https://github.com/pavlin-policar/openTSNE
+  License: BSD-3-Clause
+
+For `embed_knn(method = "tsne")`, fastEmbedR now exposes an openTSNE-style
+`negative_gradient_method` selector for native C++ `"bh"` and `"exact"` paths.
+The implementation in `src/tsne_neighbors.cpp` follows openTSNE's separation
+of sparse positive KNN forces from approximate negative forces. The current
+native Barnes-Hut implementation is fastEmbedR C++ code; it does not call
+Python/Cython.
+
+For `transform_tsne()`, fastEmbedR follows the design of
+`TSNEEmbedding.transform()` and `prepare_partial()`: initialize query points
+from nearby reference embedding coordinates, compute asymmetric
+query-to-reference affinities, optimize only the query coordinates against the
+fixed reference embedding, and clip large transform gradients/steps.
+
+The openTSNE FFT/FIt-SNE interpolation kernels are not yet ported. Explicit
+requests for `negative_gradient_method = "fft"` fail clearly rather than
+falling back to Python.
+
+t-SNE-CUDA paper design reference
+---------------------------------
+
+The native Metal implementation of the fixed-reference transform also uses the
+n-body/device-resident optimization framing described in:
+
+  Chan DM, Rao R, Huang F, Canny J. t-SNE-CUDA: GPU-Accelerated t-SNE and its
+  Applications to Modern Data. arXiv:1807.11824v1, 2018.
+
+The corresponding implementation repository was also inspected:
+
+  CannyLab/tsne-cuda
+  Repository: https://github.com/CannyLab/tsne-cuda
+  Commit inspected: 44249b6
+  License: BSD-3-Clause
+
+The transferred idea is architectural: keep reference coordinates, query
+coordinates, gains, updates, and the repulsive-force loop on the GPU during
+optimization, returning only the final layout. fastEmbedR does not vendor,
+copy, link to, or call t-SNE-CUDA source code. The current Metal
+implementation is a kernel for the openTSNE-style fixed-reference transform,
+not a full Barnes-Hut/FFT t-SNE-CUDA port.
+
+The package also exposes a native fastEmbedR exact CUDA t-SNE-from-KNN kernel
+through `embed_knn(method = "tsne", backend = "cuda")` when CUDA support is
+compiled in. This is a dense exact parity path; the CannyLab-inspired scalable
+FFT/FIt-SNE repulsive-field port is retained as future CUDA/Metal work.

@@ -1,0 +1,166 @@
+#!/bin/sh
+
+set -eu
+
+use_cuda=${FASTEMBEDR_USE_CUDA:-auto}
+cuda_home=${CUDA_HOME:-}
+nvcc=${NVCC:-}
+if [ -z "$nvcc" ]; then
+  if [ -n "$cuda_home" ] && [ -x "$cuda_home/bin/nvcc" ]; then
+    nvcc="$cuda_home/bin/nvcc"
+  else
+    nvcc=$(command -v nvcc 2>/dev/null || true)
+  fi
+fi
+
+if [ -z "$cuda_home" ] && [ -n "$nvcc" ]; then
+  cuda_bin=$(dirname "$nvcc")
+  cuda_home=$(dirname "$cuda_bin")
+fi
+
+if [ "$use_cuda" = "1" ] && [ -z "$nvcc" ]; then
+  echo "FASTEMBEDR_USE_CUDA=1 was requested, but nvcc was not found." >&2
+  echo "Set CUDA_HOME or NVCC, or use FASTEMBEDR_USE_CUDA=0 for a non-CUDA build." >&2
+  exit 1
+fi
+
+if [ "$use_cuda" = "1" ] && [ -z "$cuda_home" ]; then
+  echo "FASTEMBEDR_USE_CUDA=1 was requested, but CUDA_HOME could not be resolved." >&2
+  echo "Set CUDA_HOME to the CUDA toolkit root." >&2
+  exit 1
+fi
+
+os_name=$(uname -s 2>/dev/null || echo unknown)
+
+metal_objects="nn_metal_bridge.o nn_metal_stub.o embedding_metal_bridge.o embedding_metal_stub.o"
+cppflags=""
+libs="-pthread"
+
+if [ "$os_name" = "Darwin" ]; then
+  metal_objects="nn_metal_bridge.o nn_metal_impl.o embedding_metal_bridge.o embedding_metal_impl.o"
+  cppflags="-DHAVE_METAL=1"
+  libs="-pthread -framework Foundation -framework Metal"
+fi
+
+use_faiss=${FASTEMBEDR_USE_FAISS:-auto}
+faiss_home=${FAISS_HOME:-}
+faiss_objects="nn_faiss_bridge.o nn_faiss_stub.o"
+faiss_cppflags=""
+faiss_libs=""
+
+if [ "$use_faiss" != "0" ]; then
+  if [ -n "$faiss_home" ] && [ -f "$faiss_home/include/faiss/IndexFlat.h" ]; then
+    faiss_cppflags="-I$faiss_home/include"
+    if [ -d "$faiss_home/lib64" ]; then
+      faiss_libs="-L$faiss_home/lib64 -lfaiss"
+    else
+      faiss_libs="-L$faiss_home/lib -lfaiss"
+    fi
+  elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists faiss 2>/dev/null; then
+    faiss_cppflags=$(pkg-config --cflags faiss)
+    faiss_libs=$(pkg-config --libs faiss)
+  elif [ -f /opt/homebrew/include/faiss/IndexFlat.h ] && \
+       { [ -f /opt/homebrew/lib/libfaiss.dylib ] || [ -f /opt/homebrew/lib/libfaiss.a ]; }; then
+    faiss_cppflags="-I/opt/homebrew/include"
+    faiss_libs="-L/opt/homebrew/lib -lfaiss"
+  elif [ -f /usr/local/include/faiss/IndexFlat.h ] && \
+       { [ -f /usr/local/lib/libfaiss.dylib ] || [ -f /usr/local/lib/libfaiss.so ] || [ -f /usr/local/lib/libfaiss.a ]; }; then
+    faiss_cppflags="-I/usr/local/include"
+    faiss_libs="-L/usr/local/lib -lfaiss"
+  fi
+
+  if [ -n "$faiss_cppflags" ] && [ -n "$faiss_libs" ]; then
+    faiss_objects="nn_faiss_bridge.o nn_faiss_impl.o"
+    cppflags="$cppflags -DFASTEMBEDR_HAS_FAISS $faiss_cppflags"
+    libs="$libs $faiss_libs"
+  elif [ "$use_faiss" = "1" ]; then
+    echo "FASTEMBEDR_USE_FAISS=1 was requested, but FAISS headers/library were not found." >&2
+    echo "Set FAISS_HOME to a prefix containing include/faiss and lib/libfaiss, or install a pkg-config faiss file." >&2
+    exit 1
+  fi
+fi
+
+cuda_objects="nn_cuda_stub.o embedding_cuda_stub.o"
+cuda_rule=""
+if [ "$use_cuda" != "0" ] && [ -n "$nvcc" ] && [ -n "$cuda_home" ]; then
+  cuda_arch_flags=""
+  for arch in ${FASTEMBEDR_CUDA_ARCH:-}; do
+    cuda_arch_flags="$cuda_arch_flags -gencode=arch=compute_$arch,code=sm_$arch"
+  done
+  cuda_extra_flags=${FASTEMBEDR_CUDA_FLAGS:-}
+  cuda_objects="nn_cuda_impl.o nn_cuda_kernels.o embedding_cuda_impl.o embedding_cuda_kernels.o"
+  cppflags="$cppflags -DFASTEMBEDR_HAS_CUDA -I$cuda_home/include"
+  libs="$libs -L$cuda_home/lib64 -L$cuda_home/lib -lcudart"
+  cuda_rule="
+.DEFAULT_GOAL := all
+
+CUDA_NVCCFLAGS = -std=c++14 -x cu -Xcompiler -fPIC$cuda_arch_flags $cuda_extra_flags
+
+nn_cuda_kernels.o: nn_cuda_kernels.cpp
+	\$(NVCC) \$(CUDA_NVCCFLAGS) -c \$< -o \$@
+
+embedding_cuda_kernels.o: embedding_cuda_kernels.cpp
+	\$(NVCC) \$(CUDA_NVCCFLAGS) -c \$< -o \$@
+"
+fi
+
+use_cuvs=${FASTEMBEDR_USE_CUVS:-auto}
+cuvs_home=${CUVS_HOME:-}
+cuvs_objects="nn_cuvs_bridge.o nn_cuvs_stub.o"
+cuvs_cppflags=""
+cuvs_libs=""
+
+if [ "$use_cuvs" != "0" ]; then
+  if [ "$cuda_objects" = "nn_cuda_stub.o embedding_cuda_stub.o" ]; then
+    if [ "$use_cuvs" = "1" ]; then
+      echo "FASTEMBEDR_USE_CUVS=1 was requested, but fastEmbedR is not being built with CUDA." >&2
+      echo "Set FASTEMBEDR_USE_CUDA=1 and CUDA_HOME/NVCC, or use FASTEMBEDR_USE_CUVS=0." >&2
+      exit 1
+    fi
+  else
+    if [ -z "$cuvs_home" ] && [ -n "${CONDA_PREFIX:-}" ] && \
+       [ -f "$CONDA_PREFIX/include/cuvs/neighbors/cagra.h" ]; then
+      cuvs_home=$CONDA_PREFIX
+    fi
+
+    if [ -n "$cuvs_home" ] && [ -f "$cuvs_home/include/cuvs/neighbors/cagra.h" ]; then
+      cuvs_cppflags="-I$cuvs_home/include"
+      if [ -d "$cuvs_home/lib64" ]; then
+        cuvs_libs="-L$cuvs_home/lib64 -Wl,-rpath,$cuvs_home/lib64 -lcuvs"
+      else
+        cuvs_libs="-L$cuvs_home/lib -Wl,-rpath,$cuvs_home/lib -lcuvs"
+      fi
+    elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists cuvs 2>/dev/null; then
+      cuvs_cppflags=$(pkg-config --cflags cuvs)
+      cuvs_libs=$(pkg-config --libs cuvs)
+    elif [ -f /usr/local/include/cuvs/neighbors/cagra.h ] && \
+         { [ -f /usr/local/lib/libcuvs.so ] || [ -f /usr/local/lib/libcuvs.a ]; }; then
+      cuvs_cppflags="-I/usr/local/include"
+      cuvs_libs="-L/usr/local/lib -Wl,-rpath,/usr/local/lib -lcuvs"
+    fi
+
+    if [ -n "$cuvs_cppflags" ] && [ -n "$cuvs_libs" ]; then
+      cuvs_objects="nn_cuvs_bridge.o nn_cuvs_impl.o"
+      cppflags="$cppflags -DFASTEMBEDR_HAS_CUVS $cuvs_cppflags"
+      libs="$libs $cuvs_libs"
+    elif [ "$use_cuvs" = "1" ]; then
+      echo "FASTEMBEDR_USE_CUVS=1 was requested, but RAPIDS cuVS headers/library were not found." >&2
+      echo "Set CUVS_HOME to a prefix containing include/cuvs and lib/libcuvs, or install a pkg-config cuvs file." >&2
+      exit 1
+    fi
+  fi
+fi
+
+{
+  echo "CXX_STD = CXX17"
+  echo "PKG_CXXFLAGS = -pthread"
+  if [ -n "$cppflags" ]; then
+    echo "PKG_CPPFLAGS = $cppflags"
+  fi
+  echo "PKG_LIBS = $libs"
+  if [ "$cuda_objects" != "nn_cuda_stub.o embedding_cuda_stub.o" ]; then
+    echo "NVCC = $nvcc"
+    printf "%s" "$cuda_rule"
+  fi
+  echo "OBJECTS = RcppExports.o fast_knn_umap.o tsne_neighbors.o embedding_utils.o nn.o nn_fortran.o $faiss_objects $cuvs_objects $metal_objects nn_cuda_bridge.o embedding_cuda_bridge.o $cuda_objects"
+} > src/Makevars

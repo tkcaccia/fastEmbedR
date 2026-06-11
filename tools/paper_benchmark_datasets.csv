@@ -1,0 +1,23 @@
+dataset,papers,n_reported,p_reported,domain,labels,preferred_no_login_source,auto_download_status,recommended_tier,notes
+S-curve,TriMap,5000,3,synthetic,continuous_position,sklearn.datasets.make_s_curve,available,smoke_global_structure,Synthetic manifold used in TriMap Figure 2; generate in code.
+MNIST,"TriMap; LocalMAP",70000,784,image,10_classes,Yann LeCun MNIST files or torchvision,available,core,Use 10k/30k/70k subsets plus full 70k.
+Fashion-MNIST,"TriMap; LocalMAP",70000,784,image,10_classes,Zalando Research GitHub or torchvision,available,core,Use 10k/30k/70k subsets plus full 70k.
+USPS,"TriMap; LocalMAP",9298,256,image,10_classes,"OpenML USPS by default; optional Kaggle bistaumanga/usps-dataset",available,core,Use OpenML/no-login source by default; Kaggle source is available for paper replication.
+COIL-20,"TriMap; LocalMAP",1440,16384,image,20_objects,Columbia CAVE COIL-20 or Hugging Face mirror,available,core_small,Good orientation/global-structure benchmark.
+20 Newsgroups,"TriMap; LocalMAP",18846,100,text,20_topics,sklearn.datasets.fetch_20newsgroups,available,core_text,Vectorize with TF-IDF then TruncatedSVD/PCA to 100 dimensions.
+Epileptic Seizure,TriMap,11500,178,tabular_signal,5_classes,UCI Epileptic Seizure Recognition,available,core_tabular,UCI no-login dataset.
+Tabula Muris,TriMap,54000,1000,single_cell,cell_type_or_tissue,Figshare/CZ Biohub Tabula Muris,available,core_biology,Use HVG/log-normalized counts then PCA or HVG matrix as paper-style preprocessing.
+Kang,LocalMAP,13999,1000,single_cell,cell_type_or_stimulation,Figshare PBMC scRNAseq Kang 2018 or GEO,available,core_biology,Use processed sparse RDS/H5 if possible; otherwise derive from GEO.
+Seurat,LocalMAP,30672,1000,single_cell,cell_type,best_match_SeuratData_pbmcsca,available_with_R_package,core_biology,Likely Stuart 2019 Seurat integration PBMC dataset; verify exact cell filtering.
+Human Cortex,LocalMAP,43349,1000,single_cell,cell_type,Allen Brain Map human cortical RNA-seq,available,biology_large,No-login source exists; exact LocalMAP preprocessing needs matching.
+CBMC,LocalMAP,67686,1000,single_cell,cell_type,GEO GSE100866 or SeuratData cbmc,ambiguous,biology_check,"Paper cites Stoeckius 2017; public SeuratData cbmc is 8617 cells, so 67686 exact source needs verification or skip strict replication."
+TV News,TriMap,129000,,tabular_multimedia,binary,UCI TV News Channel Commercial Detection,available,large_optional,Useful medium-large tabular benchmark.
+Covertype,TriMap,581000,54,tabular,7_classes,UCI Covertype or sklearn.fetch_covtype,available,large_core,Good large tabular scaling benchmark.
+RCV1,TriMap,800000,,text,multilabel,sklearn.datasets.fetch_rcv1,available,large_text,Use sparse TF-IDF and optionally SVD/PCA.
+Character Font Images,TriMap,1700000,400,image/tabular,character_label,UCI Character Font Images,available,large_optional,Very large no-login UCI dataset; good memory stress test.
+KDDCup99,TriMap,4900000,,tabular,attack_label,sklearn.datasets.fetch_kddcup99 or UCI,available,huge_optional,Very large; use only in scalability runs.
+HIGGS,TriMap,11000000,28,tabular,binary,UCI HIGGS,available,huge_optional,Very large; use streaming/subsets before full run.
+CIFAR-10 CNN features,TriMap,10000,1024,image_features,10_classes,torchvision CIFAR-10 plus local CNN feature extraction,available_with_feature_step,optional_deep_features,Paper embeds FC layer activations from trained CNN; exact replication needs training or pretrained feature extraction.
+PBMC 1M,LocalMAP,1263676,1000,single_cell,cell_type_or_disease,CZ CELLxGENE Perez 2022 lupus PBMC,available,huge_biology,Use cellxgene-census or direct H5AD download; full run requires remote/GPU memory planning.
+AIDA,LocalMAP,1058909,1000,single_cell,cell_type,CZ CELLxGENE AIDA Data Freeze v1,available,huge_biology,Use cellxgene-census or direct H5AD download; full run requires remote/GPU memory planning.
+360K Lyrics,TriMap,362000,,text,genre,Kaggle gyani95/380000-lyrics-from-metrolyrics,optional_kaggle_credentials,large_text_optional,Include only in authenticated paper-replication runs; preprocess with TF-IDF then SVD to 100 dimensions.

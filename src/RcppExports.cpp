@@ -10,9 +10,528 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// embedding_cuda_available_cpp
+bool embedding_cuda_available_cpp();
+RcppExport SEXP _fastEmbedR_embedding_cuda_available_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(embedding_cuda_available_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
+// spectral_knn_init_cuda_cpp
+NumericMatrix spectral_knn_init_cuda_cpp(IntegerMatrix indices, NumericMatrix distances, int n_components, int spectral_n_iter, int seed);
+RcppExport SEXP _fastEmbedR_spectral_knn_init_cuda_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP n_componentsSEXP, SEXP spectral_n_iterSEXP, SEXP seedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    Rcpp::traits::input_parameter< int >::type spectral_n_iter(spectral_n_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(spectral_knn_init_cuda_cpp(indices, distances, n_components, spectral_n_iter, seed));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_embed_cuda_cpp
+NumericMatrix knn_embed_cuda_cpp(IntegerMatrix indices, NumericMatrix distances, NumericMatrix init, std::string objective, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, int seed);
+RcppExport SEXP _fastEmbedR_knn_embed_cuda_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP initSEXP, SEXP objectiveSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP seedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type init(initSEXP);
+    Rcpp::traits::input_parameter< std::string >::type objective(objectiveSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_embed_cuda_cpp(indices, distances, init, objective, n_epochs, negative_sample_rate, learning_rate, min_dist, seed));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_umap_cuda_fused_cpp
+NumericMatrix knn_umap_cuda_fused_cpp(IntegerMatrix indices, NumericMatrix distances, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, int spectral_n_iter, int optimizer_mode, int seed);
+RcppExport SEXP _fastEmbedR_knn_umap_cuda_fused_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP spectral_n_iterSEXP, SEXP optimizer_modeSEXP, SEXP seedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< int >::type spectral_n_iter(spectral_n_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type optimizer_mode(optimizer_modeSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_umap_cuda_fused_cpp(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, spectral_n_iter, optimizer_mode, seed));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_tsne_exact_cuda_cpp
+NumericMatrix knn_tsne_exact_cuda_cpp(IntegerMatrix indices, NumericMatrix distances, NumericMatrix init, int n_epochs, double perplexity, double learning_rate, int stop_lying_iter, int mom_switch_iter, double momentum, double final_momentum, double exaggeration_factor, int seed);
+RcppExport SEXP _fastEmbedR_knn_tsne_exact_cuda_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP initSEXP, SEXP n_epochsSEXP, SEXP perplexitySEXP, SEXP learning_rateSEXP, SEXP stop_lying_iterSEXP, SEXP mom_switch_iterSEXP, SEXP momentumSEXP, SEXP final_momentumSEXP, SEXP exaggeration_factorSEXP, SEXP seedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type init(initSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< double >::type perplexity(perplexitySEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< int >::type stop_lying_iter(stop_lying_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type mom_switch_iter(mom_switch_iterSEXP);
+    Rcpp::traits::input_parameter< double >::type momentum(momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type final_momentum(final_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type exaggeration_factor(exaggeration_factorSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_tsne_exact_cuda_cpp(indices, distances, init, n_epochs, perplexity, learning_rate, stop_lying_iter, mom_switch_iter, momentum, final_momentum, exaggeration_factor, seed));
+    return rcpp_result_gen;
+END_RCPP
+}
+// standardize_cuda_cpp
+List standardize_cuda_cpp(NumericMatrix data);
+RcppExport SEXP _fastEmbedR_standardize_cuda_cpp(SEXP dataSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    rcpp_result_gen = Rcpp::wrap(standardize_cuda_cpp(data));
+    return rcpp_result_gen;
+END_RCPP
+}
+// project_embedding_knn_cuda_cpp
+NumericMatrix project_embedding_knn_cuda_cpp(NumericMatrix reference_layout, IntegerMatrix projection_indices, NumericMatrix projection_distances);
+RcppExport SEXP _fastEmbedR_project_embedding_knn_cuda_cpp(SEXP reference_layoutSEXP, SEXP projection_indicesSEXP, SEXP projection_distancesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type reference_layout(reference_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type projection_indices(projection_indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type projection_distances(projection_distancesSEXP);
+    rcpp_result_gen = Rcpp::wrap(project_embedding_knn_cuda_cpp(reference_layout, projection_indices, projection_distances));
+    return rcpp_result_gen;
+END_RCPP
+}
+// interpolate_landmark_layout_cuda_cpp
+NumericMatrix interpolate_landmark_layout_cuda_cpp(NumericMatrix landmark_layout, IntegerVector landmark_indices, IntegerMatrix projection_indices, NumericMatrix projection_distances, int n);
+RcppExport SEXP _fastEmbedR_interpolate_landmark_layout_cuda_cpp(SEXP landmark_layoutSEXP, SEXP landmark_indicesSEXP, SEXP projection_indicesSEXP, SEXP projection_distancesSEXP, SEXP nSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type landmark_layout(landmark_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type landmark_indices(landmark_indicesSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type projection_indices(projection_indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type projection_distances(projection_distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    rcpp_result_gen = Rcpp::wrap(interpolate_landmark_layout_cuda_cpp(landmark_layout, landmark_indices, projection_indices, projection_distances, n));
+    return rcpp_result_gen;
+END_RCPP
+}
+// landmark_project_interpolate_knn_confidence_cuda_cpp
+List landmark_project_interpolate_knn_confidence_cuda_cpp(NumericMatrix landmark_data, NumericMatrix query_data, NumericMatrix landmark_layout, IntegerVector landmark_indices, int k);
+RcppExport SEXP _fastEmbedR_landmark_project_interpolate_knn_confidence_cuda_cpp(SEXP landmark_dataSEXP, SEXP query_dataSEXP, SEXP landmark_layoutSEXP, SEXP landmark_indicesSEXP, SEXP kSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type landmark_data(landmark_dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type query_data(query_dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type landmark_layout(landmark_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type landmark_indices(landmark_indicesSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    rcpp_result_gen = Rcpp::wrap(landmark_project_interpolate_knn_confidence_cuda_cpp(landmark_data, query_data, landmark_layout, landmark_indices, k));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_structure_score_cuda_cpp
+NumericVector knn_structure_score_cuda_cpp(NumericMatrix layout, IntegerMatrix indices, IntegerVector keep, int preserve_k, IntegerVector labels, int n_label_levels);
+RcppExport SEXP _fastEmbedR_knn_structure_score_cuda_cpp(SEXP layoutSEXP, SEXP indicesSEXP, SEXP keepSEXP, SEXP preserve_kSEXP, SEXP labelsSEXP, SEXP n_label_levelsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type layout(layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type keep(keepSEXP);
+    Rcpp::traits::input_parameter< int >::type preserve_k(preserve_kSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type labels(labelsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_label_levels(n_label_levelsSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_structure_score_cuda_cpp(layout, indices, keep, preserve_k, labels, n_label_levels));
+    return rcpp_result_gen;
+END_RCPP
+}
+// silhouette_score_cuda_cpp
+double silhouette_score_cuda_cpp(NumericMatrix layout, IntegerVector labels, int n_label_levels);
+RcppExport SEXP _fastEmbedR_silhouette_score_cuda_cpp(SEXP layoutSEXP, SEXP labelsSEXP, SEXP n_label_levelsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type layout(layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type labels(labelsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_label_levels(n_label_levelsSEXP);
+    rcpp_result_gen = Rcpp::wrap(silhouette_score_cuda_cpp(layout, labels, n_label_levels));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rsvd_multiply_cuda_cpp
+NumericMatrix rsvd_multiply_cuda_cpp(NumericMatrix left, NumericMatrix right, bool transpose_left);
+RcppExport SEXP _fastEmbedR_rsvd_multiply_cuda_cpp(SEXP leftSEXP, SEXP rightSEXP, SEXP transpose_leftSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type left(leftSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type right(rightSEXP);
+    Rcpp::traits::input_parameter< bool >::type transpose_left(transpose_leftSEXP);
+    rcpp_result_gen = Rcpp::wrap(rsvd_multiply_cuda_cpp(left, right, transpose_left));
+    return rcpp_result_gen;
+END_RCPP
+}
+// embedding_metal_available_cpp
+bool embedding_metal_available_cpp();
+RcppExport SEXP _fastEmbedR_embedding_metal_available_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(embedding_metal_available_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
+// spectral_knn_init_metal_cpp
+NumericMatrix spectral_knn_init_metal_cpp(IntegerMatrix indices, NumericMatrix distances, int n_components, int spectral_n_iter, int seed);
+RcppExport SEXP _fastEmbedR_spectral_knn_init_metal_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP n_componentsSEXP, SEXP spectral_n_iterSEXP, SEXP seedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    Rcpp::traits::input_parameter< int >::type spectral_n_iter(spectral_n_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(spectral_knn_init_metal_cpp(indices, distances, n_components, spectral_n_iter, seed));
+    return rcpp_result_gen;
+END_RCPP
+}
+// standardize_metal_cpp
+List standardize_metal_cpp(NumericMatrix data);
+RcppExport SEXP _fastEmbedR_standardize_metal_cpp(SEXP dataSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    rcpp_result_gen = Rcpp::wrap(standardize_metal_cpp(data));
+    return rcpp_result_gen;
+END_RCPP
+}
+// project_embedding_knn_metal_cpp
+NumericMatrix project_embedding_knn_metal_cpp(NumericMatrix reference_layout, IntegerMatrix projection_indices, NumericMatrix projection_distances);
+RcppExport SEXP _fastEmbedR_project_embedding_knn_metal_cpp(SEXP reference_layoutSEXP, SEXP projection_indicesSEXP, SEXP projection_distancesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type reference_layout(reference_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type projection_indices(projection_indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type projection_distances(projection_distancesSEXP);
+    rcpp_result_gen = Rcpp::wrap(project_embedding_knn_metal_cpp(reference_layout, projection_indices, projection_distances));
+    return rcpp_result_gen;
+END_RCPP
+}
+// interpolate_landmark_layout_metal_cpp
+NumericMatrix interpolate_landmark_layout_metal_cpp(NumericMatrix landmark_layout, IntegerVector landmark_indices, IntegerMatrix projection_indices, NumericMatrix projection_distances, int n);
+RcppExport SEXP _fastEmbedR_interpolate_landmark_layout_metal_cpp(SEXP landmark_layoutSEXP, SEXP landmark_indicesSEXP, SEXP projection_indicesSEXP, SEXP projection_distancesSEXP, SEXP nSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type landmark_layout(landmark_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type landmark_indices(landmark_indicesSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type projection_indices(projection_indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type projection_distances(projection_distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    rcpp_result_gen = Rcpp::wrap(interpolate_landmark_layout_metal_cpp(landmark_layout, landmark_indices, projection_indices, projection_distances, n));
+    return rcpp_result_gen;
+END_RCPP
+}
+// landmark_project_interpolate_metal_cpp
+NumericMatrix landmark_project_interpolate_metal_cpp(NumericMatrix landmark_data, NumericMatrix query_data, NumericMatrix landmark_layout, IntegerVector landmark_indices, int k);
+RcppExport SEXP _fastEmbedR_landmark_project_interpolate_metal_cpp(SEXP landmark_dataSEXP, SEXP query_dataSEXP, SEXP landmark_layoutSEXP, SEXP landmark_indicesSEXP, SEXP kSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type landmark_data(landmark_dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type query_data(query_dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type landmark_layout(landmark_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type landmark_indices(landmark_indicesSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    rcpp_result_gen = Rcpp::wrap(landmark_project_interpolate_metal_cpp(landmark_data, query_data, landmark_layout, landmark_indices, k));
+    return rcpp_result_gen;
+END_RCPP
+}
+// landmark_project_interpolate_knn_confidence_metal_cpp
+List landmark_project_interpolate_knn_confidence_metal_cpp(NumericMatrix landmark_data, NumericMatrix query_data, NumericMatrix landmark_layout, IntegerVector landmark_indices, int k);
+RcppExport SEXP _fastEmbedR_landmark_project_interpolate_knn_confidence_metal_cpp(SEXP landmark_dataSEXP, SEXP query_dataSEXP, SEXP landmark_layoutSEXP, SEXP landmark_indicesSEXP, SEXP kSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type landmark_data(landmark_dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type query_data(query_dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type landmark_layout(landmark_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type landmark_indices(landmark_indicesSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    rcpp_result_gen = Rcpp::wrap(landmark_project_interpolate_knn_confidence_metal_cpp(landmark_data, query_data, landmark_layout, landmark_indices, k));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_structure_score_metal_cpp
+NumericVector knn_structure_score_metal_cpp(NumericMatrix layout, IntegerMatrix indices, IntegerVector keep, int preserve_k, IntegerVector labels, int n_label_levels);
+RcppExport SEXP _fastEmbedR_knn_structure_score_metal_cpp(SEXP layoutSEXP, SEXP indicesSEXP, SEXP keepSEXP, SEXP preserve_kSEXP, SEXP labelsSEXP, SEXP n_label_levelsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type layout(layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type keep(keepSEXP);
+    Rcpp::traits::input_parameter< int >::type preserve_k(preserve_kSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type labels(labelsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_label_levels(n_label_levelsSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_structure_score_metal_cpp(layout, indices, keep, preserve_k, labels, n_label_levels));
+    return rcpp_result_gen;
+END_RCPP
+}
+// silhouette_score_metal_cpp
+double silhouette_score_metal_cpp(NumericMatrix layout, IntegerVector labels, int n_label_levels);
+RcppExport SEXP _fastEmbedR_silhouette_score_metal_cpp(SEXP layoutSEXP, SEXP labelsSEXP, SEXP n_label_levelsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type layout(layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type labels(labelsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_label_levels(n_label_levelsSEXP);
+    rcpp_result_gen = Rcpp::wrap(silhouette_score_metal_cpp(layout, labels, n_label_levels));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_embed_metal_cpp
+NumericMatrix knn_embed_metal_cpp(IntegerMatrix indices, NumericMatrix distances, NumericMatrix init, std::string objective, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, int seed);
+RcppExport SEXP _fastEmbedR_knn_embed_metal_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP initSEXP, SEXP objectiveSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP seedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type init(initSEXP);
+    Rcpp::traits::input_parameter< std::string >::type objective(objectiveSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_embed_metal_cpp(indices, distances, init, objective, n_epochs, negative_sample_rate, learning_rate, min_dist, seed));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_embed_metal_csr_cpp
+NumericMatrix knn_embed_metal_csr_cpp(IntegerVector offsets, IntegerVector neighbors, NumericVector weights, NumericMatrix init, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double max_weight, int seed);
+RcppExport SEXP _fastEmbedR_knn_embed_metal_csr_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP initSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP max_weightSEXP, SEXP seedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type init(initSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< double >::type max_weight(max_weightSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_embed_metal_csr_cpp(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, seed));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rsvd_multiply_metal_cpp
+NumericMatrix rsvd_multiply_metal_cpp(NumericMatrix left, NumericMatrix right, bool transpose_left);
+RcppExport SEXP _fastEmbedR_rsvd_multiply_metal_cpp(SEXP leftSEXP, SEXP rightSEXP, SEXP transpose_leftSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type left(leftSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type right(rightSEXP);
+    Rcpp::traits::input_parameter< bool >::type transpose_left(transpose_leftSEXP);
+    rcpp_result_gen = Rcpp::wrap(rsvd_multiply_metal_cpp(left, right, transpose_left));
+    return rcpp_result_gen;
+END_RCPP
+}
+// transform_tsne_metal_cpp
+List transform_tsne_metal_cpp(NumericMatrix reference_layout, IntegerMatrix indices, NumericMatrix distances, NumericMatrix y_init, bool init, std::string initialization, double perplexity, int n_iter, int early_exaggeration_iter, double learning_rate, double early_exaggeration, double exaggeration, double initial_momentum, double final_momentum, double max_grad_norm, double max_step_norm, int n_negatives, int exact_repulsion_threshold, int seed);
+RcppExport SEXP _fastEmbedR_transform_tsne_metal_cpp(SEXP reference_layoutSEXP, SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP initSEXP, SEXP initializationSEXP, SEXP perplexitySEXP, SEXP n_iterSEXP, SEXP early_exaggeration_iterSEXP, SEXP learning_rateSEXP, SEXP early_exaggerationSEXP, SEXP exaggerationSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP max_grad_normSEXP, SEXP max_step_normSEXP, SEXP n_negativesSEXP, SEXP exact_repulsion_thresholdSEXP, SEXP seedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type reference_layout(reference_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type y_init(y_initSEXP);
+    Rcpp::traits::input_parameter< bool >::type init(initSEXP);
+    Rcpp::traits::input_parameter< std::string >::type initialization(initializationSEXP);
+    Rcpp::traits::input_parameter< double >::type perplexity(perplexitySEXP);
+    Rcpp::traits::input_parameter< int >::type n_iter(n_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type early_exaggeration_iter(early_exaggeration_iterSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type early_exaggeration(early_exaggerationSEXP);
+    Rcpp::traits::input_parameter< double >::type exaggeration(exaggerationSEXP);
+    Rcpp::traits::input_parameter< double >::type initial_momentum(initial_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type final_momentum(final_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type max_grad_norm(max_grad_normSEXP);
+    Rcpp::traits::input_parameter< double >::type max_step_norm(max_step_normSEXP);
+    Rcpp::traits::input_parameter< int >::type n_negatives(n_negativesSEXP);
+    Rcpp::traits::input_parameter< int >::type exact_repulsion_threshold(exact_repulsion_thresholdSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(transform_tsne_metal_cpp(reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, seed));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_structure_score_cpp
+Rcpp::NumericVector knn_structure_score_cpp(NumericMatrix layout, IntegerMatrix indices, Rcpp::IntegerVector keep, int preserve_k, Rcpp::IntegerVector labels, int n_label_levels);
+RcppExport SEXP _fastEmbedR_knn_structure_score_cpp(SEXP layoutSEXP, SEXP indicesSEXP, SEXP keepSEXP, SEXP preserve_kSEXP, SEXP labelsSEXP, SEXP n_label_levelsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type layout(layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type keep(keepSEXP);
+    Rcpp::traits::input_parameter< int >::type preserve_k(preserve_kSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type labels(labelsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_label_levels(n_label_levelsSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_structure_score_cpp(layout, indices, keep, preserve_k, labels, n_label_levels));
+    return rcpp_result_gen;
+END_RCPP
+}
+// silhouette_score_cpp
+double silhouette_score_cpp(NumericMatrix layout, Rcpp::IntegerVector labels);
+RcppExport SEXP _fastEmbedR_silhouette_score_cpp(SEXP layoutSEXP, SEXP labelsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type layout(layoutSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type labels(labelsSEXP);
+    rcpp_result_gen = Rcpp::wrap(silhouette_score_cpp(layout, labels));
+    return rcpp_result_gen;
+END_RCPP
+}
+// interpolate_landmark_layout_cpp
+NumericMatrix interpolate_landmark_layout_cpp(NumericMatrix landmark_layout, Rcpp::IntegerVector landmark_indices, IntegerMatrix projection_indices, NumericMatrix projection_distances, int n);
+RcppExport SEXP _fastEmbedR_interpolate_landmark_layout_cpp(SEXP landmark_layoutSEXP, SEXP landmark_indicesSEXP, SEXP projection_indicesSEXP, SEXP projection_distancesSEXP, SEXP nSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type landmark_layout(landmark_layoutSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type landmark_indices(landmark_indicesSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type projection_indices(projection_indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type projection_distances(projection_distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    rcpp_result_gen = Rcpp::wrap(interpolate_landmark_layout_cpp(landmark_layout, landmark_indices, projection_indices, projection_distances, n));
+    return rcpp_result_gen;
+END_RCPP
+}
+// select_low_confidence_rows_cpp
+List select_low_confidence_rows_cpp(NumericVector confidence, IntegerVector landmark_indices, double fraction);
+RcppExport SEXP _fastEmbedR_select_low_confidence_rows_cpp(SEXP confidenceSEXP, SEXP landmark_indicesSEXP, SEXP fractionSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type confidence(confidenceSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type landmark_indices(landmark_indicesSEXP);
+    Rcpp::traits::input_parameter< double >::type fraction(fractionSEXP);
+    rcpp_result_gen = Rcpp::wrap(select_low_confidence_rows_cpp(confidence, landmark_indices, fraction));
+    return rcpp_result_gen;
+END_RCPP
+}
+// project_embedding_knn_cpp
+NumericMatrix project_embedding_knn_cpp(NumericMatrix reference_layout, IntegerMatrix projection_indices, NumericMatrix projection_distances);
+RcppExport SEXP _fastEmbedR_project_embedding_knn_cpp(SEXP reference_layoutSEXP, SEXP projection_indicesSEXP, SEXP projection_distancesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type reference_layout(reference_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type projection_indices(projection_indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type projection_distances(projection_distancesSEXP);
+    rcpp_result_gen = Rcpp::wrap(project_embedding_knn_cpp(reference_layout, projection_indices, projection_distances));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_connectivity_range_cpp
+Rcpp::List knn_connectivity_range_cpp(IntegerMatrix indices, int col_start, int n_cols);
+RcppExport SEXP _fastEmbedR_knn_connectivity_range_cpp(SEXP indicesSEXP, SEXP col_startSEXP, SEXP n_colsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< int >::type col_start(col_startSEXP);
+    Rcpp::traits::input_parameter< int >::type n_cols(n_colsSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_connectivity_range_cpp(indices, col_start, n_cols));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_connectivity_cpp
+Rcpp::List knn_connectivity_cpp(IntegerMatrix indices);
+RcppExport SEXP _fastEmbedR_knn_connectivity_cpp(SEXP indicesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_connectivity_cpp(indices));
+    return rcpp_result_gen;
+END_RCPP
+}
+// umap_graph_csr_cpp
+Rcpp::List umap_graph_csr_cpp(IntegerMatrix indices, NumericMatrix distances, int col_start, int n_cols, int edge_budget, int n_threads);
+RcppExport SEXP _fastEmbedR_umap_graph_csr_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP col_startSEXP, SEXP n_colsSEXP, SEXP edge_budgetSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type col_start(col_startSEXP);
+    Rcpp::traits::input_parameter< int >::type n_cols(n_colsSEXP);
+    Rcpp::traits::input_parameter< int >::type edge_budget(edge_budgetSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(umap_graph_csr_cpp(indices, distances, col_start, n_cols, edge_budget, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fast_knn_umap_range_cpp
+NumericMatrix fast_knn_umap_range_cpp(IntegerMatrix indices, NumericMatrix distances, int col_start, int n_cols, int n_components, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int spectral_n_iter, int n_threads, double init_scale, int seed, bool verbose);
+RcppExport SEXP _fastEmbedR_fast_knn_umap_range_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP col_startSEXP, SEXP n_colsSEXP, SEXP n_componentsSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP spectral_n_iterSEXP, SEXP n_threadsSEXP, SEXP init_scaleSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type col_start(col_startSEXP);
+    Rcpp::traits::input_parameter< int >::type n_cols(n_colsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
+    Rcpp::traits::input_parameter< int >::type spectral_n_iter(spectral_n_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< double >::type init_scale(init_scaleSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
+    rcpp_result_gen = Rcpp::wrap(fast_knn_umap_range_cpp(indices, distances, col_start, n_cols, n_components, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, spectral_n_iter, n_threads, init_scale, seed, verbose));
+    return rcpp_result_gen;
+END_RCPP
+}
 // fast_knn_umap_cpp
-NumericMatrix fast_knn_umap_cpp(IntegerMatrix indices, NumericMatrix distances, int n_components, int n_epochs, double min_dist, double spread, double local_connectivity, double set_op_mix_ratio, int negative_sample_rate, double learning_rate, double curve_a, double curve_b, double repulsion_strength, std::string mode, std::string init, std::string init_sdev_mode, double init_sdev_value, bool prune_epochs, int spectral_n_iter, int seed, bool verbose);
-RcppExport SEXP _fastknnumap_fast_knn_umap_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP n_componentsSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP spreadSEXP, SEXP local_connectivitySEXP, SEXP set_op_mix_ratioSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP curve_aSEXP, SEXP curve_bSEXP, SEXP repulsion_strengthSEXP, SEXP modeSEXP, SEXP initSEXP, SEXP init_sdev_modeSEXP, SEXP init_sdev_valueSEXP, SEXP prune_epochsSEXP, SEXP spectral_n_iterSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
+NumericMatrix fast_knn_umap_cpp(IntegerMatrix indices, NumericMatrix distances, int n_components, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int spectral_n_iter, int n_threads, double init_scale, int seed, bool verbose);
+RcppExport SEXP _fastEmbedR_fast_knn_umap_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP n_componentsSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP spectral_n_iterSEXP, SEXP n_threadsSEXP, SEXP init_scaleSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -21,51 +540,133 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
     Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
     Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
-    Rcpp::traits::input_parameter< double >::type spread(spreadSEXP);
-    Rcpp::traits::input_parameter< double >::type local_connectivity(local_connectivitySEXP);
-    Rcpp::traits::input_parameter< double >::type set_op_mix_ratio(set_op_mix_ratioSEXP);
     Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
     Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
-    Rcpp::traits::input_parameter< double >::type curve_a(curve_aSEXP);
-    Rcpp::traits::input_parameter< double >::type curve_b(curve_bSEXP);
     Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
-    Rcpp::traits::input_parameter< std::string >::type mode(modeSEXP);
-    Rcpp::traits::input_parameter< std::string >::type init(initSEXP);
-    Rcpp::traits::input_parameter< std::string >::type init_sdev_mode(init_sdev_modeSEXP);
-    Rcpp::traits::input_parameter< double >::type init_sdev_value(init_sdev_valueSEXP);
-    Rcpp::traits::input_parameter< bool >::type prune_epochs(prune_epochsSEXP);
     Rcpp::traits::input_parameter< int >::type spectral_n_iter(spectral_n_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< double >::type init_scale(init_scaleSEXP);
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
-    rcpp_result_gen = Rcpp::wrap(fast_knn_umap_cpp(indices, distances, n_components, n_epochs, min_dist, spread, local_connectivity, set_op_mix_ratio, negative_sample_rate, learning_rate, curve_a, curve_b, repulsion_strength, mode, init, init_sdev_mode, init_sdev_value, prune_epochs, spectral_n_iter, seed, verbose));
+    rcpp_result_gen = Rcpp::wrap(fast_knn_umap_cpp(indices, distances, n_components, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, spectral_n_iter, n_threads, init_scale, seed, verbose));
     return rcpp_result_gen;
 END_RCPP
 }
-// knn_objective_embed_cpp
-NumericMatrix knn_objective_embed_cpp(IntegerMatrix indices, NumericMatrix distances, std::string objective, NumericMatrix init_embedding, bool use_init, int n_components, int n_epochs, int negative_sample_rate, double learning_rate, int n_threads, int seed, bool verbose);
-RcppExport SEXP _fastknnumap_knn_objective_embed_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP objectiveSEXP, SEXP init_embeddingSEXP, SEXP use_initSEXP, SEXP n_componentsSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
+// knn_umap_refine_range_cpp
+NumericMatrix knn_umap_refine_range_cpp(IntegerMatrix indices, NumericMatrix distances, NumericMatrix init_embedding, int col_start, int n_cols, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, bool verbose);
+RcppExport SEXP _fastEmbedR_knn_umap_refine_range_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP init_embeddingSEXP, SEXP col_startSEXP, SEXP n_colsSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
     Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
-    Rcpp::traits::input_parameter< std::string >::type objective(objectiveSEXP);
     Rcpp::traits::input_parameter< NumericMatrix >::type init_embedding(init_embeddingSEXP);
-    Rcpp::traits::input_parameter< bool >::type use_init(use_initSEXP);
-    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    Rcpp::traits::input_parameter< int >::type col_start(col_startSEXP);
+    Rcpp::traits::input_parameter< int >::type n_cols(n_colsSEXP);
     Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
     Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
     Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
     Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
-    rcpp_result_gen = Rcpp::wrap(knn_objective_embed_cpp(indices, distances, objective, init_embedding, use_init, n_components, n_epochs, negative_sample_rate, learning_rate, n_threads, seed, verbose));
+    rcpp_result_gen = Rcpp::wrap(knn_umap_refine_range_cpp(indices, distances, init_embedding, col_start, n_cols, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, verbose));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_umap_refine_cpp
+NumericMatrix knn_umap_refine_cpp(IntegerMatrix indices, NumericMatrix distances, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, bool verbose);
+RcppExport SEXP _fastEmbedR_knn_umap_refine_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP init_embeddingSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type init_embedding(init_embeddingSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_umap_refine_cpp(indices, distances, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, verbose));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_umap_refine_masked_cpp
+NumericMatrix knn_umap_refine_masked_cpp(IntegerMatrix indices, NumericMatrix distances, NumericMatrix init_embedding, IntegerVector update_rows, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, bool verbose);
+RcppExport SEXP _fastEmbedR_knn_umap_refine_masked_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP init_embeddingSEXP, SEXP update_rowsSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type init_embedding(init_embeddingSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type update_rows(update_rowsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_umap_refine_masked_cpp(indices, distances, init_embedding, update_rows, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, verbose));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_umap_refine_rows_cpp
+NumericMatrix knn_umap_refine_rows_cpp(IntegerMatrix indices, NumericMatrix distances, IntegerVector row_ids, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, bool verbose);
+RcppExport SEXP _fastEmbedR_knn_umap_refine_rows_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP row_idsSEXP, SEXP init_embeddingSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type row_ids(row_idsSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type init_embedding(init_embeddingSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_umap_refine_rows_cpp(indices, distances, row_ids, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, verbose));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fast_knn_umap_csr_cpp
+NumericMatrix fast_knn_umap_csr_cpp(IntegerVector offsets, IntegerVector neighbors, NumericVector weights, int n_components, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int spectral_n_iter, int n_threads, double init_scale, int seed, bool verbose);
+RcppExport SEXP _fastEmbedR_fast_knn_umap_csr_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP n_componentsSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP spectral_n_iterSEXP, SEXP n_threadsSEXP, SEXP init_scaleSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
+    Rcpp::traits::input_parameter< int >::type spectral_n_iter(spectral_n_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< double >::type init_scale(init_scaleSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
+    rcpp_result_gen = Rcpp::wrap(fast_knn_umap_csr_cpp(offsets, neighbors, weights, n_components, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, spectral_n_iter, n_threads, init_scale, seed, verbose));
     return rcpp_result_gen;
 END_RCPP
 }
 // nn_cpp
-List nn_cpp(NumericMatrix data, NumericMatrix points, int k, std::string method, bool square, bool sorted, double p, bool parallel, int cores);
-RcppExport SEXP _fastknnumap_nn_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP squareSEXP, SEXP sortedSEXP, SEXP pSEXP, SEXP parallelSEXP, SEXP coresSEXP) {
+List nn_cpp(NumericMatrix data, NumericMatrix points, int k, std::string method, bool square, bool sorted, double p, bool parallel, int cores, bool exclude_self);
+RcppExport SEXP _fastEmbedR_nn_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP squareSEXP, SEXP sortedSEXP, SEXP pSEXP, SEXP parallelSEXP, SEXP coresSEXP, SEXP exclude_selfSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -78,13 +679,164 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type p(pSEXP);
     Rcpp::traits::input_parameter< bool >::type parallel(parallelSEXP);
     Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
-    rcpp_result_gen = Rcpp::wrap(nn_cpp(data, points, k, method, square, sorted, p, parallel, cores));
+    Rcpp::traits::input_parameter< bool >::type exclude_self(exclude_selfSEXP);
+    rcpp_result_gen = Rcpp::wrap(nn_cpp(data, points, k, method, square, sorted, p, parallel, cores, exclude_self));
+    return rcpp_result_gen;
+END_RCPP
+}
+// nndescent_candidate_matrix_cpp
+IntegerMatrix nndescent_candidate_matrix_cpp(IntegerMatrix indices, int n_sources, int n_neighbors);
+RcppExport SEXP _fastEmbedR_nndescent_candidate_matrix_cpp(SEXP indicesSEXP, SEXP n_sourcesSEXP, SEXP n_neighborsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_sources(n_sourcesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_neighbors(n_neighborsSEXP);
+    rcpp_result_gen = Rcpp::wrap(nndescent_candidate_matrix_cpp(indices, n_sources, n_neighbors));
+    return rcpp_result_gen;
+END_RCPP
+}
+// nndescent_candidate_matrix_mlx_cpp
+IntegerMatrix nndescent_candidate_matrix_mlx_cpp(IntegerMatrix indices, LogicalMatrix flags, int n_sources, int n_neighbors, bool use_reverse, bool active_only);
+RcppExport SEXP _fastEmbedR_nndescent_candidate_matrix_mlx_cpp(SEXP indicesSEXP, SEXP flagsSEXP, SEXP n_sourcesSEXP, SEXP n_neighborsSEXP, SEXP use_reverseSEXP, SEXP active_onlySEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< LogicalMatrix >::type flags(flagsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_sources(n_sourcesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_neighbors(n_neighborsSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_reverse(use_reverseSEXP);
+    Rcpp::traits::input_parameter< bool >::type active_only(active_onlySEXP);
+    rcpp_result_gen = Rcpp::wrap(nndescent_candidate_matrix_mlx_cpp(indices, flags, n_sources, n_neighbors, use_reverse, active_only));
+    return rcpp_result_gen;
+END_RCPP
+}
+// landmark_candidate_knn_cpp
+List landmark_candidate_knn_cpp(NumericMatrix data, IntegerMatrix projection_indices, int k, int bucket_cols, int query_cols, bool parallel, int cores);
+RcppExport SEXP _fastEmbedR_landmark_candidate_knn_cpp(SEXP dataSEXP, SEXP projection_indicesSEXP, SEXP kSEXP, SEXP bucket_colsSEXP, SEXP query_colsSEXP, SEXP parallelSEXP, SEXP coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type projection_indices(projection_indicesSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type bucket_cols(bucket_colsSEXP);
+    Rcpp::traits::input_parameter< int >::type query_cols(query_colsSEXP);
+    Rcpp::traits::input_parameter< bool >::type parallel(parallelSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(landmark_candidate_knn_cpp(data, projection_indices, k, bucket_cols, query_cols, parallel, cores));
+    return rcpp_result_gen;
+END_RCPP
+}
+// landmark_candidate_knn_subset_cpp
+List landmark_candidate_knn_subset_cpp(NumericMatrix data, IntegerMatrix projection_indices, IntegerVector query_rows, int k, int bucket_cols, int query_cols, bool parallel, int cores);
+RcppExport SEXP _fastEmbedR_landmark_candidate_knn_subset_cpp(SEXP dataSEXP, SEXP projection_indicesSEXP, SEXP query_rowsSEXP, SEXP kSEXP, SEXP bucket_colsSEXP, SEXP query_colsSEXP, SEXP parallelSEXP, SEXP coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type projection_indices(projection_indicesSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type query_rows(query_rowsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type bucket_cols(bucket_colsSEXP);
+    Rcpp::traits::input_parameter< int >::type query_cols(query_colsSEXP);
+    Rcpp::traits::input_parameter< bool >::type parallel(parallelSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(landmark_candidate_knn_subset_cpp(data, projection_indices, query_rows, k, bucket_cols, query_cols, parallel, cores));
+    return rcpp_result_gen;
+END_RCPP
+}
+// landmark_projection_knn_approx_cpp
+List landmark_projection_knn_approx_cpp(NumericMatrix landmarks, NumericMatrix queries, int k, int n_projections, int window, int seed, bool parallel, int cores);
+RcppExport SEXP _fastEmbedR_landmark_projection_knn_approx_cpp(SEXP landmarksSEXP, SEXP queriesSEXP, SEXP kSEXP, SEXP n_projectionsSEXP, SEXP windowSEXP, SEXP seedSEXP, SEXP parallelSEXP, SEXP coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type landmarks(landmarksSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type queries(queriesSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type n_projections(n_projectionsSEXP);
+    Rcpp::traits::input_parameter< int >::type window(windowSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type parallel(parallelSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(landmark_projection_knn_approx_cpp(landmarks, queries, k, n_projections, window, seed, parallel, cores));
+    return rcpp_result_gen;
+END_RCPP
+}
+// nndescent_self_knn_cpp
+List nndescent_self_knn_cpp(NumericMatrix data, int k, int pool_size, int n_iters, int max_candidates, int n_random_projections, int seed, bool parallel, int cores);
+RcppExport SEXP _fastEmbedR_nndescent_self_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP pool_sizeSEXP, SEXP n_itersSEXP, SEXP max_candidatesSEXP, SEXP n_random_projectionsSEXP, SEXP seedSEXP, SEXP parallelSEXP, SEXP coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type pool_size(pool_sizeSEXP);
+    Rcpp::traits::input_parameter< int >::type n_iters(n_itersSEXP);
+    Rcpp::traits::input_parameter< int >::type max_candidates(max_candidatesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_random_projections(n_random_projectionsSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type parallel(parallelSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(nndescent_self_knn_cpp(data, k, pool_size, n_iters, max_candidates, n_random_projections, seed, parallel, cores));
+    return rcpp_result_gen;
+END_RCPP
+}
+// ivf_self_knn_cpp
+List ivf_self_knn_cpp(NumericMatrix data, int k, int nlist, int nprobe, int seed, bool parallel, int cores);
+RcppExport SEXP _fastEmbedR_ivf_self_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP nlistSEXP, SEXP nprobeSEXP, SEXP seedSEXP, SEXP parallelSEXP, SEXP coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type nlist(nlistSEXP);
+    Rcpp::traits::input_parameter< int >::type nprobe(nprobeSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type parallel(parallelSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(ivf_self_knn_cpp(data, k, nlist, nprobe, seed, parallel, cores));
+    return rcpp_result_gen;
+END_RCPP
+}
+// annoy_self_knn_cpp
+List annoy_self_knn_cpp(NumericMatrix data, int k, int n_trees, int leaf_size, int search_k, int seed, bool parallel, int cores);
+RcppExport SEXP _fastEmbedR_annoy_self_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP n_treesSEXP, SEXP leaf_sizeSEXP, SEXP search_kSEXP, SEXP seedSEXP, SEXP parallelSEXP, SEXP coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type n_trees(n_treesSEXP);
+    Rcpp::traits::input_parameter< int >::type leaf_size(leaf_sizeSEXP);
+    Rcpp::traits::input_parameter< int >::type search_k(search_kSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type parallel(parallelSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(annoy_self_knn_cpp(data, k, n_trees, leaf_size, search_k, seed, parallel, cores));
+    return rcpp_result_gen;
+END_RCPP
+}
+// vptree_self_knn_cpp
+List vptree_self_knn_cpp(NumericMatrix data, int k, bool parallel, int cores);
+RcppExport SEXP _fastEmbedR_vptree_self_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP parallelSEXP, SEXP coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< bool >::type parallel(parallelSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(vptree_self_knn_cpp(data, k, parallel, cores));
     return rcpp_result_gen;
 END_RCPP
 }
 // cuda_available_cpp
 bool cuda_available_cpp();
-RcppExport SEXP _fastknnumap_cuda_available_cpp() {
+RcppExport SEXP _fastEmbedR_cuda_available_cpp() {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -92,9 +844,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// cuda_device_info_json_cpp
+std::string cuda_device_info_json_cpp();
+RcppExport SEXP _fastEmbedR_cuda_device_info_json_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(cuda_device_info_json_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
 // nn_cuda_cpp
 List nn_cuda_cpp(NumericMatrix data, NumericMatrix points, int k, bool square);
-RcppExport SEXP _fastknnumap_nn_cuda_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP squareSEXP) {
+RcppExport SEXP _fastEmbedR_nn_cuda_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP squareSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -106,9 +868,156 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// landmark_candidate_knn_cuda_cpp
+List landmark_candidate_knn_cuda_cpp(NumericMatrix data, IntegerMatrix projection_indices, int k, int bucket_cols, int query_cols);
+RcppExport SEXP _fastEmbedR_landmark_candidate_knn_cuda_cpp(SEXP dataSEXP, SEXP projection_indicesSEXP, SEXP kSEXP, SEXP bucket_colsSEXP, SEXP query_colsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type projection_indices(projection_indicesSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type bucket_cols(bucket_colsSEXP);
+    Rcpp::traits::input_parameter< int >::type query_cols(query_colsSEXP);
+    rcpp_result_gen = Rcpp::wrap(landmark_candidate_knn_cuda_cpp(data, projection_indices, k, bucket_cols, query_cols));
+    return rcpp_result_gen;
+END_RCPP
+}
+// row_candidate_knn_cuda_cpp
+List row_candidate_knn_cuda_cpp(NumericMatrix data, IntegerMatrix candidate_indices, int k);
+RcppExport SEXP _fastEmbedR_row_candidate_knn_cuda_cpp(SEXP dataSEXP, SEXP candidate_indicesSEXP, SEXP kSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type candidate_indices(candidate_indicesSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    rcpp_result_gen = Rcpp::wrap(row_candidate_knn_cuda_cpp(data, candidate_indices, k));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cuvs_available_cpp
+bool cuvs_available_cpp();
+RcppExport SEXP _fastEmbedR_cuvs_available_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(cuvs_available_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
+// cuvs_info_json_cpp
+std::string cuvs_info_json_cpp();
+RcppExport SEXP _fastEmbedR_cuvs_info_json_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(cuvs_info_json_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
+// nn_cuvs_bruteforce_cpp
+List nn_cuvs_bruteforce_cpp(NumericMatrix data, NumericMatrix points, int k, bool exclude_self);
+RcppExport SEXP _fastEmbedR_nn_cuvs_bruteforce_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP exclude_selfSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type points(pointsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< bool >::type exclude_self(exclude_selfSEXP);
+    rcpp_result_gen = Rcpp::wrap(nn_cuvs_bruteforce_cpp(data, points, k, exclude_self));
+    return rcpp_result_gen;
+END_RCPP
+}
+// nn_cuvs_cagra_cpp
+List nn_cuvs_cagra_cpp(NumericMatrix data, NumericMatrix points, int k, bool exclude_self, int graph_degree, int intermediate_graph_degree, int search_width, int itopk_size);
+RcppExport SEXP _fastEmbedR_nn_cuvs_cagra_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP exclude_selfSEXP, SEXP graph_degreeSEXP, SEXP intermediate_graph_degreeSEXP, SEXP search_widthSEXP, SEXP itopk_sizeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type points(pointsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< bool >::type exclude_self(exclude_selfSEXP);
+    Rcpp::traits::input_parameter< int >::type graph_degree(graph_degreeSEXP);
+    Rcpp::traits::input_parameter< int >::type intermediate_graph_degree(intermediate_graph_degreeSEXP);
+    Rcpp::traits::input_parameter< int >::type search_width(search_widthSEXP);
+    Rcpp::traits::input_parameter< int >::type itopk_size(itopk_sizeSEXP);
+    rcpp_result_gen = Rcpp::wrap(nn_cuvs_cagra_cpp(data, points, k, exclude_self, graph_degree, intermediate_graph_degree, search_width, itopk_size));
+    return rcpp_result_gen;
+END_RCPP
+}
+// nn_cuvs_nndescent_self_cpp
+List nn_cuvs_nndescent_self_cpp(NumericMatrix data, int k, int graph_degree, int intermediate_graph_degree, int max_iterations);
+RcppExport SEXP _fastEmbedR_nn_cuvs_nndescent_self_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP graph_degreeSEXP, SEXP intermediate_graph_degreeSEXP, SEXP max_iterationsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type graph_degree(graph_degreeSEXP);
+    Rcpp::traits::input_parameter< int >::type intermediate_graph_degree(intermediate_graph_degreeSEXP);
+    Rcpp::traits::input_parameter< int >::type max_iterations(max_iterationsSEXP);
+    rcpp_result_gen = Rcpp::wrap(nn_cuvs_nndescent_self_cpp(data, k, graph_degree, intermediate_graph_degree, max_iterations));
+    return rcpp_result_gen;
+END_RCPP
+}
+// faiss_available_cpp
+bool faiss_available_cpp();
+RcppExport SEXP _fastEmbedR_faiss_available_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(faiss_available_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
+// faiss_info_json_cpp
+std::string faiss_info_json_cpp();
+RcppExport SEXP _fastEmbedR_faiss_info_json_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(faiss_info_json_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
+// nn_faiss_flat_cpp
+List nn_faiss_flat_cpp(NumericMatrix data, NumericMatrix points, int k, bool exclude_self, int n_threads);
+RcppExport SEXP _fastEmbedR_nn_faiss_flat_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP exclude_selfSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type points(pointsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< bool >::type exclude_self(exclude_selfSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(nn_faiss_flat_cpp(data, points, k, exclude_self, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
+// nn_faiss_ivf_cpp
+List nn_faiss_ivf_cpp(NumericMatrix data, NumericMatrix points, int k, int nlist, int nprobe, bool exclude_self, int n_threads);
+RcppExport SEXP _fastEmbedR_nn_faiss_ivf_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP nlistSEXP, SEXP nprobeSEXP, SEXP exclude_selfSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type points(pointsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type nlist(nlistSEXP);
+    Rcpp::traits::input_parameter< int >::type nprobe(nprobeSEXP);
+    Rcpp::traits::input_parameter< bool >::type exclude_self(exclude_selfSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(nn_faiss_ivf_cpp(data, points, k, nlist, nprobe, exclude_self, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
 // metal_available_cpp
 bool metal_available_cpp();
-RcppExport SEXP _fastknnumap_metal_available_cpp() {
+RcppExport SEXP _fastEmbedR_metal_available_cpp() {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -118,7 +1027,7 @@ END_RCPP
 }
 // nn_metal_cpp
 List nn_metal_cpp(NumericMatrix data, NumericMatrix points, int k, bool square);
-RcppExport SEXP _fastknnumap_nn_metal_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP squareSEXP) {
+RcppExport SEXP _fastEmbedR_nn_metal_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP squareSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -130,19 +1039,213 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// landmark_candidate_knn_metal_cpp
+List landmark_candidate_knn_metal_cpp(NumericMatrix data, IntegerMatrix projection_indices, int k, int bucket_cols, int query_cols);
+RcppExport SEXP _fastEmbedR_landmark_candidate_knn_metal_cpp(SEXP dataSEXP, SEXP projection_indicesSEXP, SEXP kSEXP, SEXP bucket_colsSEXP, SEXP query_colsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type projection_indices(projection_indicesSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type bucket_cols(bucket_colsSEXP);
+    Rcpp::traits::input_parameter< int >::type query_cols(query_colsSEXP);
+    rcpp_result_gen = Rcpp::wrap(landmark_candidate_knn_metal_cpp(data, projection_indices, k, bucket_cols, query_cols));
+    return rcpp_result_gen;
+END_RCPP
+}
+// grid_knn_metal_cpp
+List grid_knn_metal_cpp(NumericMatrix data, int k, int grid_dims, int bins_per_dim, int radius);
+RcppExport SEXP _fastEmbedR_grid_knn_metal_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP grid_dimsSEXP, SEXP bins_per_dimSEXP, SEXP radiusSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type grid_dims(grid_dimsSEXP);
+    Rcpp::traits::input_parameter< int >::type bins_per_dim(bins_per_dimSEXP);
+    Rcpp::traits::input_parameter< int >::type radius(radiusSEXP);
+    rcpp_result_gen = Rcpp::wrap(grid_knn_metal_cpp(data, k, grid_dims, bins_per_dim, radius));
+    return rcpp_result_gen;
+END_RCPP
+}
+// row_candidate_knn_metal_cpp
+List row_candidate_knn_metal_cpp(NumericMatrix data, IntegerMatrix candidate_indices, int k);
+RcppExport SEXP _fastEmbedR_row_candidate_knn_metal_cpp(SEXP dataSEXP, SEXP candidate_indicesSEXP, SEXP kSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type candidate_indices(candidate_indicesSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    rcpp_result_gen = Rcpp::wrap(row_candidate_knn_metal_cpp(data, candidate_indices, k));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_tsne_rtsne_cpp
+List knn_tsne_rtsne_cpp(IntegerMatrix indices, NumericMatrix distances, NumericMatrix y_init, bool init, int n_components, double perplexity, double theta, int max_iter, int stop_lying_iter, int mom_switch_iter, double momentum, double final_momentum, double eta, double exaggeration_factor, std::string negative_gradient_method, int n_threads, int seed, bool verbose);
+RcppExport SEXP _fastEmbedR_knn_tsne_rtsne_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP initSEXP, SEXP n_componentsSEXP, SEXP perplexitySEXP, SEXP thetaSEXP, SEXP max_iterSEXP, SEXP stop_lying_iterSEXP, SEXP mom_switch_iterSEXP, SEXP momentumSEXP, SEXP final_momentumSEXP, SEXP etaSEXP, SEXP exaggeration_factorSEXP, SEXP negative_gradient_methodSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type y_init(y_initSEXP);
+    Rcpp::traits::input_parameter< bool >::type init(initSEXP);
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    Rcpp::traits::input_parameter< double >::type perplexity(perplexitySEXP);
+    Rcpp::traits::input_parameter< double >::type theta(thetaSEXP);
+    Rcpp::traits::input_parameter< int >::type max_iter(max_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type stop_lying_iter(stop_lying_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type mom_switch_iter(mom_switch_iterSEXP);
+    Rcpp::traits::input_parameter< double >::type momentum(momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type final_momentum(final_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type eta(etaSEXP);
+    Rcpp::traits::input_parameter< double >::type exaggeration_factor(exaggeration_factorSEXP);
+    Rcpp::traits::input_parameter< std::string >::type negative_gradient_method(negative_gradient_methodSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_tsne_rtsne_cpp(indices, distances, y_init, init, n_components, perplexity, theta, max_iter, stop_lying_iter, mom_switch_iter, momentum, final_momentum, eta, exaggeration_factor, negative_gradient_method, n_threads, seed, verbose));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_infotsne_cpp
+List knn_infotsne_cpp(IntegerMatrix indices, NumericMatrix distances, NumericMatrix y_init, bool init, int n_components, double perplexity, int max_iter, int early_exaggeration_iter, double momentum, double final_momentum, double learning_rate, double early_exaggeration_coeff, double repulsion_strength, int n_negatives, int n_threads, int seed, bool verbose);
+RcppExport SEXP _fastEmbedR_knn_infotsne_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP initSEXP, SEXP n_componentsSEXP, SEXP perplexitySEXP, SEXP max_iterSEXP, SEXP early_exaggeration_iterSEXP, SEXP momentumSEXP, SEXP final_momentumSEXP, SEXP learning_rateSEXP, SEXP early_exaggeration_coeffSEXP, SEXP repulsion_strengthSEXP, SEXP n_negativesSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type y_init(y_initSEXP);
+    Rcpp::traits::input_parameter< bool >::type init(initSEXP);
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    Rcpp::traits::input_parameter< double >::type perplexity(perplexitySEXP);
+    Rcpp::traits::input_parameter< int >::type max_iter(max_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type early_exaggeration_iter(early_exaggeration_iterSEXP);
+    Rcpp::traits::input_parameter< double >::type momentum(momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type final_momentum(final_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type early_exaggeration_coeff(early_exaggeration_coeffSEXP);
+    Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
+    Rcpp::traits::input_parameter< int >::type n_negatives(n_negativesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_infotsne_cpp(indices, distances, y_init, init, n_components, perplexity, max_iter, early_exaggeration_iter, momentum, final_momentum, learning_rate, early_exaggeration_coeff, repulsion_strength, n_negatives, n_threads, seed, verbose));
+    return rcpp_result_gen;
+END_RCPP
+}
+// transform_tsne_cpp
+List transform_tsne_cpp(NumericMatrix reference_layout, IntegerMatrix indices, NumericMatrix distances, NumericMatrix y_init, bool init, std::string initialization, double perplexity, int n_iter, int early_exaggeration_iter, double learning_rate, double early_exaggeration, double exaggeration, double initial_momentum, double final_momentum, double max_grad_norm, double max_step_norm, int n_negatives, int exact_repulsion_threshold, int n_threads, int seed, bool verbose);
+RcppExport SEXP _fastEmbedR_transform_tsne_cpp(SEXP reference_layoutSEXP, SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP initSEXP, SEXP initializationSEXP, SEXP perplexitySEXP, SEXP n_iterSEXP, SEXP early_exaggeration_iterSEXP, SEXP learning_rateSEXP, SEXP early_exaggerationSEXP, SEXP exaggerationSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP max_grad_normSEXP, SEXP max_step_normSEXP, SEXP n_negativesSEXP, SEXP exact_repulsion_thresholdSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type reference_layout(reference_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type y_init(y_initSEXP);
+    Rcpp::traits::input_parameter< bool >::type init(initSEXP);
+    Rcpp::traits::input_parameter< std::string >::type initialization(initializationSEXP);
+    Rcpp::traits::input_parameter< double >::type perplexity(perplexitySEXP);
+    Rcpp::traits::input_parameter< int >::type n_iter(n_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type early_exaggeration_iter(early_exaggeration_iterSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type early_exaggeration(early_exaggerationSEXP);
+    Rcpp::traits::input_parameter< double >::type exaggeration(exaggerationSEXP);
+    Rcpp::traits::input_parameter< double >::type initial_momentum(initial_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type final_momentum(final_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type max_grad_norm(max_grad_normSEXP);
+    Rcpp::traits::input_parameter< double >::type max_step_norm(max_step_normSEXP);
+    Rcpp::traits::input_parameter< int >::type n_negatives(n_negativesSEXP);
+    Rcpp::traits::input_parameter< int >::type exact_repulsion_threshold(exact_repulsion_thresholdSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
+    rcpp_result_gen = Rcpp::wrap(transform_tsne_cpp(reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, n_threads, seed, verbose));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_fastknnumap_fast_knn_umap_cpp", (DL_FUNC) &_fastknnumap_fast_knn_umap_cpp, 21},
-    {"_fastknnumap_knn_objective_embed_cpp", (DL_FUNC) &_fastknnumap_knn_objective_embed_cpp, 12},
-    {"_fastknnumap_nn_cpp", (DL_FUNC) &_fastknnumap_nn_cpp, 9},
-    {"_fastknnumap_cuda_available_cpp", (DL_FUNC) &_fastknnumap_cuda_available_cpp, 0},
-    {"_fastknnumap_nn_cuda_cpp", (DL_FUNC) &_fastknnumap_nn_cuda_cpp, 4},
-    {"_fastknnumap_metal_available_cpp", (DL_FUNC) &_fastknnumap_metal_available_cpp, 0},
-    {"_fastknnumap_nn_metal_cpp", (DL_FUNC) &_fastknnumap_nn_metal_cpp, 4},
+    {"_fastEmbedR_embedding_cuda_available_cpp", (DL_FUNC) &_fastEmbedR_embedding_cuda_available_cpp, 0},
+    {"_fastEmbedR_spectral_knn_init_cuda_cpp", (DL_FUNC) &_fastEmbedR_spectral_knn_init_cuda_cpp, 5},
+    {"_fastEmbedR_knn_embed_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_cuda_cpp, 9},
+    {"_fastEmbedR_knn_umap_cuda_fused_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_cuda_fused_cpp, 9},
+    {"_fastEmbedR_knn_tsne_exact_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_exact_cuda_cpp, 12},
+    {"_fastEmbedR_standardize_cuda_cpp", (DL_FUNC) &_fastEmbedR_standardize_cuda_cpp, 1},
+    {"_fastEmbedR_project_embedding_knn_cuda_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_knn_cuda_cpp, 3},
+    {"_fastEmbedR_interpolate_landmark_layout_cuda_cpp", (DL_FUNC) &_fastEmbedR_interpolate_landmark_layout_cuda_cpp, 5},
+    {"_fastEmbedR_landmark_project_interpolate_knn_confidence_cuda_cpp", (DL_FUNC) &_fastEmbedR_landmark_project_interpolate_knn_confidence_cuda_cpp, 5},
+    {"_fastEmbedR_knn_structure_score_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_structure_score_cuda_cpp, 6},
+    {"_fastEmbedR_silhouette_score_cuda_cpp", (DL_FUNC) &_fastEmbedR_silhouette_score_cuda_cpp, 3},
+    {"_fastEmbedR_rsvd_multiply_cuda_cpp", (DL_FUNC) &_fastEmbedR_rsvd_multiply_cuda_cpp, 3},
+    {"_fastEmbedR_embedding_metal_available_cpp", (DL_FUNC) &_fastEmbedR_embedding_metal_available_cpp, 0},
+    {"_fastEmbedR_spectral_knn_init_metal_cpp", (DL_FUNC) &_fastEmbedR_spectral_knn_init_metal_cpp, 5},
+    {"_fastEmbedR_standardize_metal_cpp", (DL_FUNC) &_fastEmbedR_standardize_metal_cpp, 1},
+    {"_fastEmbedR_project_embedding_knn_metal_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_knn_metal_cpp, 3},
+    {"_fastEmbedR_interpolate_landmark_layout_metal_cpp", (DL_FUNC) &_fastEmbedR_interpolate_landmark_layout_metal_cpp, 5},
+    {"_fastEmbedR_landmark_project_interpolate_metal_cpp", (DL_FUNC) &_fastEmbedR_landmark_project_interpolate_metal_cpp, 5},
+    {"_fastEmbedR_landmark_project_interpolate_knn_confidence_metal_cpp", (DL_FUNC) &_fastEmbedR_landmark_project_interpolate_knn_confidence_metal_cpp, 5},
+    {"_fastEmbedR_knn_structure_score_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_structure_score_metal_cpp, 6},
+    {"_fastEmbedR_silhouette_score_metal_cpp", (DL_FUNC) &_fastEmbedR_silhouette_score_metal_cpp, 3},
+    {"_fastEmbedR_knn_embed_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_metal_cpp, 9},
+    {"_fastEmbedR_knn_embed_metal_csr_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_metal_csr_cpp, 10},
+    {"_fastEmbedR_rsvd_multiply_metal_cpp", (DL_FUNC) &_fastEmbedR_rsvd_multiply_metal_cpp, 3},
+    {"_fastEmbedR_transform_tsne_metal_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_metal_cpp, 19},
+    {"_fastEmbedR_knn_structure_score_cpp", (DL_FUNC) &_fastEmbedR_knn_structure_score_cpp, 6},
+    {"_fastEmbedR_silhouette_score_cpp", (DL_FUNC) &_fastEmbedR_silhouette_score_cpp, 2},
+    {"_fastEmbedR_interpolate_landmark_layout_cpp", (DL_FUNC) &_fastEmbedR_interpolate_landmark_layout_cpp, 5},
+    {"_fastEmbedR_select_low_confidence_rows_cpp", (DL_FUNC) &_fastEmbedR_select_low_confidence_rows_cpp, 3},
+    {"_fastEmbedR_project_embedding_knn_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_knn_cpp, 3},
+    {"_fastEmbedR_knn_connectivity_range_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_range_cpp, 3},
+    {"_fastEmbedR_knn_connectivity_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_cpp, 1},
+    {"_fastEmbedR_umap_graph_csr_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_cpp, 6},
+    {"_fastEmbedR_fast_knn_umap_range_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_range_cpp, 15},
+    {"_fastEmbedR_fast_knn_umap_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_cpp, 13},
+    {"_fastEmbedR_knn_umap_refine_range_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_range_cpp, 13},
+    {"_fastEmbedR_knn_umap_refine_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_cpp, 11},
+    {"_fastEmbedR_knn_umap_refine_masked_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_masked_cpp, 12},
+    {"_fastEmbedR_knn_umap_refine_rows_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_rows_cpp, 12},
+    {"_fastEmbedR_fast_knn_umap_csr_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_csr_cpp, 14},
+    {"_fastEmbedR_nn_cpp", (DL_FUNC) &_fastEmbedR_nn_cpp, 10},
+    {"_fastEmbedR_nndescent_candidate_matrix_cpp", (DL_FUNC) &_fastEmbedR_nndescent_candidate_matrix_cpp, 3},
+    {"_fastEmbedR_nndescent_candidate_matrix_mlx_cpp", (DL_FUNC) &_fastEmbedR_nndescent_candidate_matrix_mlx_cpp, 6},
+    {"_fastEmbedR_landmark_candidate_knn_cpp", (DL_FUNC) &_fastEmbedR_landmark_candidate_knn_cpp, 7},
+    {"_fastEmbedR_landmark_candidate_knn_subset_cpp", (DL_FUNC) &_fastEmbedR_landmark_candidate_knn_subset_cpp, 8},
+    {"_fastEmbedR_landmark_projection_knn_approx_cpp", (DL_FUNC) &_fastEmbedR_landmark_projection_knn_approx_cpp, 8},
+    {"_fastEmbedR_nndescent_self_knn_cpp", (DL_FUNC) &_fastEmbedR_nndescent_self_knn_cpp, 9},
+    {"_fastEmbedR_ivf_self_knn_cpp", (DL_FUNC) &_fastEmbedR_ivf_self_knn_cpp, 7},
+    {"_fastEmbedR_annoy_self_knn_cpp", (DL_FUNC) &_fastEmbedR_annoy_self_knn_cpp, 8},
+    {"_fastEmbedR_vptree_self_knn_cpp", (DL_FUNC) &_fastEmbedR_vptree_self_knn_cpp, 4},
+    {"_fastEmbedR_cuda_available_cpp", (DL_FUNC) &_fastEmbedR_cuda_available_cpp, 0},
+    {"_fastEmbedR_cuda_device_info_json_cpp", (DL_FUNC) &_fastEmbedR_cuda_device_info_json_cpp, 0},
+    {"_fastEmbedR_nn_cuda_cpp", (DL_FUNC) &_fastEmbedR_nn_cuda_cpp, 4},
+    {"_fastEmbedR_landmark_candidate_knn_cuda_cpp", (DL_FUNC) &_fastEmbedR_landmark_candidate_knn_cuda_cpp, 5},
+    {"_fastEmbedR_row_candidate_knn_cuda_cpp", (DL_FUNC) &_fastEmbedR_row_candidate_knn_cuda_cpp, 3},
+    {"_fastEmbedR_cuvs_available_cpp", (DL_FUNC) &_fastEmbedR_cuvs_available_cpp, 0},
+    {"_fastEmbedR_cuvs_info_json_cpp", (DL_FUNC) &_fastEmbedR_cuvs_info_json_cpp, 0},
+    {"_fastEmbedR_nn_cuvs_bruteforce_cpp", (DL_FUNC) &_fastEmbedR_nn_cuvs_bruteforce_cpp, 4},
+    {"_fastEmbedR_nn_cuvs_cagra_cpp", (DL_FUNC) &_fastEmbedR_nn_cuvs_cagra_cpp, 8},
+    {"_fastEmbedR_nn_cuvs_nndescent_self_cpp", (DL_FUNC) &_fastEmbedR_nn_cuvs_nndescent_self_cpp, 5},
+    {"_fastEmbedR_faiss_available_cpp", (DL_FUNC) &_fastEmbedR_faiss_available_cpp, 0},
+    {"_fastEmbedR_faiss_info_json_cpp", (DL_FUNC) &_fastEmbedR_faiss_info_json_cpp, 0},
+    {"_fastEmbedR_nn_faiss_flat_cpp", (DL_FUNC) &_fastEmbedR_nn_faiss_flat_cpp, 5},
+    {"_fastEmbedR_nn_faiss_ivf_cpp", (DL_FUNC) &_fastEmbedR_nn_faiss_ivf_cpp, 7},
+    {"_fastEmbedR_metal_available_cpp", (DL_FUNC) &_fastEmbedR_metal_available_cpp, 0},
+    {"_fastEmbedR_nn_metal_cpp", (DL_FUNC) &_fastEmbedR_nn_metal_cpp, 4},
+    {"_fastEmbedR_landmark_candidate_knn_metal_cpp", (DL_FUNC) &_fastEmbedR_landmark_candidate_knn_metal_cpp, 5},
+    {"_fastEmbedR_grid_knn_metal_cpp", (DL_FUNC) &_fastEmbedR_grid_knn_metal_cpp, 5},
+    {"_fastEmbedR_row_candidate_knn_metal_cpp", (DL_FUNC) &_fastEmbedR_row_candidate_knn_metal_cpp, 3},
+    {"_fastEmbedR_knn_tsne_rtsne_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_rtsne_cpp, 18},
+    {"_fastEmbedR_knn_infotsne_cpp", (DL_FUNC) &_fastEmbedR_knn_infotsne_cpp, 17},
+    {"_fastEmbedR_transform_tsne_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_cpp, 21},
     {NULL, NULL, 0}
 };
 
-RcppExport void R_init_fastknnumap(DllInfo *dll) {
+RcppExport void R_init_fastEmbedR(DllInfo *dll) {
     R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
     R_useDynamicSymbols(dll, FALSE);
 }

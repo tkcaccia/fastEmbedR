@@ -1,0 +1,3686 @@
+#import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
+
+#include <Rcpp.h>
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <cctype>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <random>
+#include <string>
+#include <utility>
+#include <vector>
+
+using Rcpp::IntegerMatrix;
+using Rcpp::IntegerVector;
+using Rcpp::List;
+using Rcpp::NumericMatrix;
+using Rcpp::NumericVector;
+
+namespace {
+
+struct EmbedParams {
+  std::uint32_t n;
+  std::uint32_t k;
+  std::uint32_t n_epochs;
+  std::uint32_t negative_sample_rate;
+  std::uint32_t objective;
+  std::uint32_t seed;
+  float learning_rate;
+  float a;
+  float b;
+  float max_weight;
+};
+
+struct MetalEmbeddingState {
+  id<MTLDevice> device;
+  id<MTLLibrary> library;
+  id<MTLComputePipelineState> embed_pipeline;
+  id<MTLComputePipelineState> embed_scheduled_pipeline;
+  id<MTLComputePipelineState> embed_torchdr_pipeline;
+  id<MTLComputePipelineState> embed_atomic_delta_pipeline;
+  id<MTLComputePipelineState> clear_atomic_delta_pipeline;
+  id<MTLComputePipelineState> apply_atomic_delta_pipeline;
+  id<MTLComputePipelineState> standardize_stats_pipeline;
+  id<MTLComputePipelineState> standardize_apply_pipeline;
+  id<MTLComputePipelineState> project_pipeline;
+  id<MTLComputePipelineState> landmark_project_interpolate_pipeline;
+  id<MTLComputePipelineState> landmark_project_interpolate_knn_confidence_pipeline;
+  id<MTLComputePipelineState> overwrite_landmarks_pipeline;
+  id<MTLComputePipelineState> structure_score_pipeline;
+  id<MTLComputePipelineState> silhouette_pipeline;
+  id<MTLComputePipelineState> matrix_multiply_pipeline;
+  id<MTLComputePipelineState> spectral_random_pipeline;
+  id<MTLComputePipelineState> spectral_diffuse_pipeline;
+  id<MTLComputePipelineState> spectral_stats_pipeline;
+  id<MTLComputePipelineState> spectral_normalize_pipeline;
+  id<MTLComputePipelineState> tsne_transform_pipeline;
+  id<MTLCommandQueue> queue;
+};
+
+struct MatrixMultiplyParams {
+  std::uint32_t left_rows;
+  std::uint32_t left_cols;
+  std::uint32_t right_cols;
+  std::uint32_t transpose_left;
+};
+
+struct TsneTransformParams {
+  std::uint32_t n_reference;
+  std::uint32_t n_query;
+  std::uint32_t k;
+  std::uint32_t n_negatives;
+  std::uint32_t seed;
+  std::uint32_t exact_repulsion;
+  float learning_rate;
+  float exaggeration;
+  float momentum;
+  float max_grad_norm;
+  float max_step_norm;
+};
+
+struct WeightedEdge {
+  std::uint64_t key;
+  float weight;
+  std::uint8_t direction;
+};
+
+enum ObjectiveId : std::uint32_t {
+  kObjectiveUmap = 0,
+  kObjectiveTsne = 1,
+  kObjectivePacmap = 2,
+  kObjectiveTrimap = 3,
+  kObjectiveLocalmap = 4
+};
+
+constexpr int kMaxMetalNeighbors = 256;
+constexpr int kMaxMetalProjectionNeighbors = 128;
+constexpr int kMaxMetalTsneTransformNeighbors = 256;
+constexpr int kMaxMetalScoreNeighbors = 64;
+constexpr int kMaxMetalSilhouetteLabels = 128;
+constexpr int kMetalScoreWidth = 6;
+constexpr std::uint32_t kMetalEmbeddingEpochsPerCommand = 64u;
+
+const char* metal_embed_kernel_source();
+
+std::uint64_t edge_key(const int a, const int b) {
+  return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(a)) << 32) |
+         static_cast<std::uint32_t>(b);
+}
+
+int key_head(const std::uint64_t key) {
+  return static_cast<int>(key >> 32);
+}
+
+int key_tail(const std::uint64_t key) {
+  return static_cast<int>(key & 0xffffffffu);
+}
+
+bool weighted_edge_less(const WeightedEdge& a, const WeightedEdge& b) {
+  return a.key < b.key;
+}
+
+std::string ns_error_message(NSError* error) {
+  if (error == nil) return "";
+  NSString* description = [error localizedDescription];
+  if (description == nil) return "unknown Metal error";
+  return std::string([description UTF8String]);
+}
+
+id<MTLComputePipelineState> make_pipeline(MetalEmbeddingState& state,
+                                          const char* function_name) {
+  NSError* error = nil;
+  NSString* name = [NSString stringWithUTF8String:function_name];
+  id<MTLFunction> function = [state.library newFunctionWithName:name];
+  if (function == nil) {
+    Rcpp::stop("Failed to load Metal function `%s`.", function_name);
+  }
+  id<MTLComputePipelineState> pipeline =
+    [state.device newComputePipelineStateWithFunction:function error:&error];
+  [function release];
+  if (pipeline == nil) {
+    Rcpp::stop(
+      "Failed to create Metal pipeline `%s`: %s",
+      function_name,
+      ns_error_message(error).c_str()
+    );
+  }
+  return pipeline;
+}
+
+MetalEmbeddingState& metal_embedding_state() {
+  static MetalEmbeddingState state{};
+  if (state.device != nil && state.embed_pipeline != nil &&
+      state.embed_scheduled_pipeline != nil &&
+      state.embed_torchdr_pipeline != nil &&
+      state.embed_atomic_delta_pipeline != nil &&
+      state.clear_atomic_delta_pipeline != nil &&
+      state.apply_atomic_delta_pipeline != nil &&
+      state.queue != nil) {
+    return state;
+  }
+
+  state.device = MTLCreateSystemDefaultDevice();
+  if (state.device == nil) {
+    Rcpp::stop("No Metal device is available.");
+  }
+
+  NSError* error = nil;
+  NSString* source = [NSString stringWithUTF8String:metal_embed_kernel_source()];
+  state.library = [state.device newLibraryWithSource:source options:nil error:&error];
+  if (state.library == nil) {
+    Rcpp::stop("Failed to compile Metal embedding kernel: %s", ns_error_message(error).c_str());
+  }
+
+  state.embed_pipeline = make_pipeline(state, "embed_epoch");
+  state.embed_scheduled_pipeline = make_pipeline(state, "embed_epoch_scheduled");
+  state.embed_torchdr_pipeline = make_pipeline(state, "embed_epoch_torchdr_row_negatives");
+  state.embed_atomic_delta_pipeline = make_pipeline(state, "embed_epoch_atomic_delta");
+  state.clear_atomic_delta_pipeline = make_pipeline(state, "clear_atomic_delta");
+  state.apply_atomic_delta_pipeline = make_pipeline(state, "apply_atomic_delta");
+  state.standardize_stats_pipeline = make_pipeline(state, "standardize_stats");
+  state.standardize_apply_pipeline = make_pipeline(state, "standardize_apply");
+  state.project_pipeline = make_pipeline(state, "project_membership");
+  state.landmark_project_interpolate_pipeline = make_pipeline(state, "landmark_project_interpolate");
+  state.landmark_project_interpolate_knn_confidence_pipeline =
+    make_pipeline(state, "landmark_project_interpolate_knn_confidence");
+  state.overwrite_landmarks_pipeline = make_pipeline(state, "overwrite_landmark_rows");
+  state.structure_score_pipeline = make_pipeline(state, "structure_score_rows");
+  state.silhouette_pipeline = make_pipeline(state, "silhouette_rows");
+  state.matrix_multiply_pipeline = make_pipeline(state, "matrix_multiply");
+  state.spectral_random_pipeline = make_pipeline(state, "spectral_random_init");
+  state.spectral_diffuse_pipeline = make_pipeline(state, "spectral_diffuse");
+  state.spectral_stats_pipeline = make_pipeline(state, "spectral_init_stats");
+  state.spectral_normalize_pipeline = make_pipeline(state, "spectral_normalize");
+  state.tsne_transform_pipeline = make_pipeline(state, "tsne_transform_epoch");
+
+  state.queue = [state.device newCommandQueue];
+  if (state.queue == nil) {
+    Rcpp::stop("Failed to create Metal embedding command queue.");
+  }
+
+  return state;
+}
+
+std::uint32_t objective_id(const std::string& objective) {
+  if (objective == "umap") return kObjectiveUmap;
+  if (objective == "tsne") return kObjectiveTsne;
+  if (objective == "pacmap") return kObjectivePacmap;
+  if (objective == "trimap") return kObjectiveTrimap;
+  if (objective == "localmap") return kObjectiveLocalmap;
+  Rcpp::stop("Unknown Metal embedding objective: %s", objective.c_str());
+}
+
+void smooth_knn_weights(const NumericMatrix& distances,
+                        std::vector<float>& weights) {
+  const int n = distances.nrow();
+  const int k = distances.ncol();
+  const double target = std::log2(static_cast<double>(std::max(2, k)));
+  weights.assign(static_cast<std::size_t>(n) * k, 0.0f);
+
+  for (int i = 0; i < n; ++i) {
+    double rho = std::numeric_limits<double>::infinity();
+    for (int j = 0; j < k; ++j) {
+      const double d = distances(i, j);
+      if (d > 0.0 && d < rho) rho = d;
+    }
+    if (!std::isfinite(rho)) rho = 0.0;
+
+    double lo = 0.0;
+    double hi = std::numeric_limits<double>::infinity();
+    double sigma = 1.0;
+    for (int iter = 0; iter < 48; ++iter) {
+      double psum = 0.0;
+      for (int j = 0; j < k; ++j) {
+        const double d = distances(i, j) - rho;
+        psum += d <= 0.0 ? 1.0 : std::exp(-d / sigma);
+      }
+      if (std::abs(psum - target) < 1e-5) break;
+      if (psum > target) {
+        hi = sigma;
+        sigma = (lo + hi) / 2.0;
+      } else {
+        lo = sigma;
+        sigma = std::isinf(hi) ? sigma * 2.0 : (lo + hi) / 2.0;
+      }
+    }
+    sigma = std::max(sigma, 1e-6);
+
+    for (int j = 0; j < k; ++j) {
+      const double d = distances(i, j);
+      const double value = d <= rho ? 1.0 : std::exp(-(d - rho) / sigma);
+      weights[static_cast<std::size_t>(i) * k + j] = static_cast<float>(value);
+    }
+  }
+}
+
+std::pair<double, double> find_ab_params(const double spread, const double min_dist) {
+  if (std::abs(spread - 1.0) < 1e-12 && std::abs(min_dist - 0.1) < 1e-12) {
+    return {1.5769434601962196, 0.8950608781227859};
+  }
+
+  std::vector<double> xs;
+  std::vector<double> ys;
+  xs.reserve(300);
+  ys.reserve(300);
+  for (int i = 0; i < 300; ++i) {
+    const double x = (spread * 3.0) * static_cast<double>(i) / 299.0;
+    xs.push_back(x);
+    ys.push_back(x < min_dist ? 1.0 : std::exp(-(x - min_dist) / spread));
+  }
+
+  double best_a = 1.5769434601962196;
+  double best_b = 0.8950608781227859;
+  double best_loss = std::numeric_limits<double>::infinity();
+
+  for (double loga = -4.0; loga <= 4.0001; loga += 0.2) {
+    for (double b = 0.25; b <= 2.0001; b += 0.05) {
+      const double a = std::exp(loga);
+      double loss = 0.0;
+      for (std::size_t i = 0; i < xs.size(); ++i) {
+        const double x2b = std::pow(xs[i], 2.0 * b);
+        const double yhat = 1.0 / (1.0 + a * x2b);
+        const double e = yhat - ys[i];
+        loss += e * e;
+      }
+      if (loss < best_loss) {
+        best_loss = loss;
+        best_a = a;
+        best_b = b;
+      }
+    }
+  }
+
+  for (int iter = 0; iter < 80; ++iter) {
+    double ga = 0.0;
+    double gb = 0.0;
+    for (std::size_t i = 0; i < xs.size(); ++i) {
+      const double x = std::max(xs[i], 1e-6);
+      const double x2b = std::pow(x, 2.0 * best_b);
+      const double denom = 1.0 + best_a * x2b;
+      const double yhat = 1.0 / denom;
+      const double e = yhat - ys[i];
+      ga += e * (-x2b / (denom * denom));
+      gb += e * (-(best_a * x2b * 2.0 * std::log(x)) / (denom * denom));
+    }
+    best_a = std::max(1e-4, best_a - 0.01 * ga);
+    best_b = std::max(0.1, best_b - 0.01 * gb);
+  }
+
+  return {best_a, best_b};
+}
+
+void prepare_knn(const IntegerMatrix& indices,
+                 const NumericMatrix& distances,
+                 std::vector<std::int32_t>& neighbors,
+                 std::vector<float>& weights) {
+  const int n = indices.nrow();
+  const int k = indices.ncol();
+  int min_idx = std::numeric_limits<int>::max();
+  int max_idx = std::numeric_limits<int>::min();
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < k; ++j) {
+      min_idx = std::min(min_idx, indices(i, j));
+      max_idx = std::max(max_idx, indices(i, j));
+    }
+  }
+  const int offset = (min_idx >= 1 && max_idx <= n) ? 1 : 0;
+
+  neighbors.resize(static_cast<std::size_t>(n) * k);
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < k; ++j) {
+      int nb = indices(i, j) - offset;
+      if (nb < 0 || nb >= n || nb == i) nb = i;
+      neighbors[static_cast<std::size_t>(i) * k + j] = nb;
+    }
+  }
+
+  smooth_knn_weights(distances, weights);
+}
+
+void prepare_umap_graph_adjacency(const IntegerMatrix& indices,
+                                  const NumericMatrix& distances,
+                                  const int n_epochs,
+                                  std::vector<std::int32_t>& neighbors,
+                                  std::vector<float>& weights) {
+  const int n = indices.nrow();
+  const int k = indices.ncol();
+  int min_idx = std::numeric_limits<int>::max();
+  int max_idx = std::numeric_limits<int>::min();
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < k; ++j) {
+      min_idx = std::min(min_idx, indices(i, j));
+      max_idx = std::max(max_idx, indices(i, j));
+    }
+  }
+  const int offset = (min_idx >= 1 && max_idx <= n) ? 1 : 0;
+
+  const double target = std::log2(static_cast<double>(std::max(2, k)));
+  std::vector<double> sigmas(static_cast<std::size_t>(n), 1.0);
+  std::vector<double> rhos(static_cast<std::size_t>(n), 0.0);
+  for (int i = 0; i < n; ++i) {
+    double rho = std::numeric_limits<double>::infinity();
+    for (int j = 0; j < k; ++j) {
+      const double d = distances(i, j);
+      if (d > 0.0 && d < rho) rho = d;
+    }
+    if (!std::isfinite(rho)) rho = 0.0;
+    rhos[static_cast<std::size_t>(i)] = rho;
+
+    double lo = 0.0;
+    double hi = std::numeric_limits<double>::infinity();
+    double sigma = 1.0;
+    for (int iter = 0; iter < 48; ++iter) {
+      double psum = 0.0;
+      for (int j = 0; j < k; ++j) {
+        const double d = distances(i, j) - rho;
+        psum += d <= 0.0 ? 1.0 : std::exp(-d / sigma);
+      }
+      if (std::abs(psum - target) < 1e-5) break;
+      if (psum > target) {
+        hi = sigma;
+        sigma = (lo + hi) / 2.0;
+      } else {
+        lo = sigma;
+        sigma = std::isinf(hi) ? sigma * 2.0 : (lo + hi) / 2.0;
+      }
+    }
+    sigmas[static_cast<std::size_t>(i)] = std::max(sigma, 1e-6);
+  }
+
+  std::vector<WeightedEdge> directed;
+  directed.reserve(static_cast<std::size_t>(n) * k);
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < k; ++j) {
+      const int nb = indices(i, j) - offset;
+      if (nb < 0 || nb >= n || nb == i) continue;
+      const double d = distances(i, j);
+      const double rho = rhos[static_cast<std::size_t>(i)];
+      const double sigma = sigmas[static_cast<std::size_t>(i)];
+      const float w = static_cast<float>(d <= rho ? 1.0 : std::exp(-(d - rho) / sigma));
+      if (w > 0.0f) directed.push_back({edge_key(i, nb), w, 0u});
+    }
+  }
+
+  std::sort(directed.begin(), directed.end(), weighted_edge_less);
+  std::size_t write = 0;
+  for (std::size_t read = 0; read < directed.size(); ++read) {
+    if (write > 0 && directed[write - 1].key == directed[read].key) {
+      directed[write - 1].weight = std::max(directed[write - 1].weight, directed[read].weight);
+    } else {
+      if (write != read) directed[write] = directed[read];
+      ++write;
+    }
+  }
+  directed.resize(write);
+  std::vector<double>().swap(sigmas);
+  std::vector<double>().swap(rhos);
+
+  for (auto& edge : directed) {
+    const int head = key_head(edge.key);
+    const int tail = key_tail(edge.key);
+    edge.direction = head <= tail ? 1u : 0u;
+    edge.key = edge_key(std::min(head, tail), std::max(head, tail));
+  }
+  std::sort(directed.begin(), directed.end(), weighted_edge_less);
+
+  write = 0;
+  for (std::size_t pos = 0; pos < directed.size();) {
+    const std::uint64_t key = directed[pos].key;
+    const int a = key_head(key);
+    const int b = key_tail(key);
+    float forward = 0.0f;
+    float reverse = 0.0f;
+    while (pos < directed.size() && directed[pos].key == key) {
+      if (directed[pos].direction == 1u) {
+        forward = std::max(forward, directed[pos].weight);
+      } else {
+        reverse = std::max(reverse, directed[pos].weight);
+      }
+      ++pos;
+    }
+    const float w = forward + reverse - forward * reverse;
+    if (w > 1.0e-6f) {
+      directed[write++] = {key, w, 0u};
+    }
+  }
+  directed.resize(write);
+
+  float max_weight = 0.0f;
+  for (const auto& edge : directed) {
+    max_weight = std::max(max_weight, edge.weight);
+  }
+  const float min_sample_weight = n_epochs > 0 ?
+    max_weight / static_cast<float>(n_epochs) :
+    0.0f;
+
+  std::vector<int> row_counts(static_cast<std::size_t>(n), 0);
+  for (const auto& edge : directed) {
+    if (edge.weight < min_sample_weight) continue;
+    const int head = key_head(edge.key);
+    const int tail = key_tail(edge.key);
+    ++row_counts[static_cast<std::size_t>(head)];
+    ++row_counts[static_cast<std::size_t>(tail)];
+  }
+
+  std::vector<int> offsets(static_cast<std::size_t>(n) + 1u, 0);
+  for (int i = 0; i < n; ++i) {
+    offsets[static_cast<std::size_t>(i + 1)] =
+      offsets[static_cast<std::size_t>(i)] + row_counts[static_cast<std::size_t>(i)];
+  }
+  const int flat_size = offsets[static_cast<std::size_t>(n)];
+  std::vector<int> flat_neighbors(static_cast<std::size_t>(flat_size));
+  std::vector<float> flat_weights(static_cast<std::size_t>(flat_size));
+  std::vector<int> fill = offsets;
+
+  for (const auto& edge : directed) {
+    if (edge.weight < min_sample_weight) continue;
+    const int head = key_head(edge.key);
+    const int tail = key_tail(edge.key);
+    int pos = fill[static_cast<std::size_t>(head)]++;
+    flat_neighbors[static_cast<std::size_t>(pos)] = tail;
+    flat_weights[static_cast<std::size_t>(pos)] = edge.weight;
+    pos = fill[static_cast<std::size_t>(tail)]++;
+    flat_neighbors[static_cast<std::size_t>(pos)] = head;
+    flat_weights[static_cast<std::size_t>(pos)] = edge.weight;
+  }
+  std::vector<WeightedEdge>().swap(directed);
+
+  int width = 1;
+  std::vector<std::pair<int, float>> row;
+  for (int i = 0; i < n; ++i) {
+    const int begin = offsets[static_cast<std::size_t>(i)];
+    const int end = offsets[static_cast<std::size_t>(i + 1)];
+    row.clear();
+    row.reserve(static_cast<std::size_t>(end - begin));
+    for (int pos = begin; pos < end; ++pos) {
+      row.push_back({
+        flat_neighbors[static_cast<std::size_t>(pos)],
+        flat_weights[static_cast<std::size_t>(pos)]
+      });
+    }
+    auto row_less = [](const auto& a, const auto& b) {
+      if (a.second == b.second) return a.first < b.first;
+      return a.second > b.second;
+    };
+    if (static_cast<int>(row.size()) > kMaxMetalNeighbors) {
+      std::nth_element(
+        row.begin(),
+        row.begin() + kMaxMetalNeighbors,
+        row.end(),
+        row_less
+      );
+      row.resize(kMaxMetalNeighbors);
+    }
+    std::sort(row.begin(), row.end(), row_less);
+    const int row_size = static_cast<int>(row.size());
+    row_counts[static_cast<std::size_t>(i)] = row_size;
+    width = std::max(width, row_size);
+    for (int j = 0; j < row_size; ++j) {
+      flat_neighbors[static_cast<std::size_t>(begin + j)] = row[static_cast<std::size_t>(j)].first;
+      flat_weights[static_cast<std::size_t>(begin + j)] = row[static_cast<std::size_t>(j)].second;
+    }
+  }
+
+  neighbors.assign(static_cast<std::size_t>(n) * width, 0);
+  weights.assign(static_cast<std::size_t>(n) * width, 0.0f);
+  for (int i = 0; i < n; ++i) {
+    const int begin = offsets[static_cast<std::size_t>(i)];
+    const int row_size = row_counts[static_cast<std::size_t>(i)];
+    for (int j = 0; j < width; ++j) {
+      const std::size_t out = static_cast<std::size_t>(i) * width + j;
+      if (j < row_size) {
+        neighbors[out] = flat_neighbors[static_cast<std::size_t>(begin + j)];
+        weights[out] = flat_weights[static_cast<std::size_t>(begin + j)];
+      } else {
+        neighbors[out] = i;
+      }
+    }
+  }
+}
+
+void prepare_embedding_neighbors(const IntegerMatrix& indices,
+                                 const NumericMatrix& distances,
+                                 const std::uint32_t objective,
+                                 const int n_epochs,
+                                 std::vector<std::int32_t>& neighbors,
+                                 std::vector<float>& weights) {
+  if (objective == kObjectiveUmap) {
+    prepare_umap_graph_adjacency(indices, distances, n_epochs, neighbors, weights);
+  } else {
+    prepare_knn(indices, distances, neighbors, weights);
+  }
+}
+
+std::vector<float> init_to_float_2d(const NumericMatrix& init) {
+  const int n = init.nrow();
+  std::vector<float> out(static_cast<std::size_t>(n) * 2u);
+  for (int i = 0; i < n; ++i) {
+    out[static_cast<std::size_t>(i) * 2u] = static_cast<float>(init(i, 0));
+    out[static_cast<std::size_t>(i) * 2u + 1u] = static_cast<float>(init(i, 1));
+  }
+  return out;
+}
+
+const char* metal_embed_kernel_source() {
+  return R"METAL(
+#include <metal_stdlib>
+using namespace metal;
+
+struct EmbedParams {
+  uint n;
+  uint k;
+  uint n_epochs;
+  uint negative_sample_rate;
+  uint objective;
+  uint seed;
+  float learning_rate;
+  float a;
+  float b;
+  float max_weight;
+};
+
+struct MatrixMultiplyParams {
+  uint left_rows;
+  uint left_cols;
+  uint right_cols;
+  uint transpose_left;
+};
+
+struct TsneTransformParams {
+  uint n_reference;
+  uint n_query;
+  uint k;
+  uint n_negatives;
+  uint seed;
+  uint exact_repulsion;
+  float learning_rate;
+  float exaggeration;
+  float momentum;
+  float max_grad_norm;
+  float max_step_norm;
+};
+
+uint mix_uint(uint x) {
+  x ^= x >> 16;
+  x *= 0x7feb352du;
+  x ^= x >> 15;
+  x *= 0x846ca68bu;
+  x ^= x >> 16;
+  return x;
+}
+
+uint deterministic_vertex(uint n, uint seed, uint epoch, uint i, uint edge, uint sample) {
+  uint x = seed;
+  x ^= epoch * 0x9e3779b9u;
+  x ^= (i + 1u) * 0x85ebca6bu;
+  x ^= (edge + 1u) * 0xc2b2ae35u;
+  x ^= (sample + 1u) * 0x27d4eb2du;
+  return mix_uint(x) % n;
+}
+
+uint deterministic_reference(uint n, uint seed, uint epoch, uint row, uint sample) {
+  uint x = seed;
+  x ^= (epoch + 1u) * 0x9e3779b9u;
+  x ^= (row + 1u) * 0x85ebca6bu;
+  x ^= (sample + 1u) * 0xc2b2ae35u;
+  return mix_uint(x) % n;
+}
+
+float sign_component(float x) {
+  if (x > 0.0f) return 1.0f;
+  if (x < 0.0f) return -1.0f;
+  return 0.0f;
+}
+
+float deterministic_unit_signed(uint seed, uint row, uint component) {
+  uint x = seed;
+  x ^= (row + 1u) * 0x9e3779b9u;
+  x ^= (component + 1u) * 0x85ebca6bu;
+  x = mix_uint(x);
+  return (float(x & 0x00ffffffu) / 8388608.0f) - 1.0f;
+}
+
+float clip4(float x) {
+  return clamp(x, -4.0f, 4.0f);
+}
+
+float attractive_coeff(float d2, float weight, constant EmbedParams& p) {
+  if (p.objective == 0u) {
+    if (d2 <= 0.0f) return 0.0f;
+    float d2b = pow(d2, p.b);
+    return -2.0f * p.a * p.b * (d2b / d2) / (p.a * d2b + 1.0f);
+  }
+  if (p.objective == 1u) return -2.0f * weight / (1.0f + d2);
+  if (p.objective == 2u) return -2.0f * weight / (10.0f + d2);
+  if (p.objective == 4u) return -2.5f * weight / (0.15f + d2);
+  return -2.0f * weight / (1.0f + d2);
+}
+
+float repulsive_coeff(float d2, constant EmbedParams& p) {
+  if (d2 <= 0.0f) return 0.0f;
+  if (p.objective == 0u) {
+    float d2b = pow(d2, p.b);
+    return 2.0f * p.b / ((0.001f + d2) * (p.a * d2b + 1.0f));
+  }
+  if (p.objective == 1u) return 2.0f / ((1.0f + d2) * (1.0f + d2));
+  if (p.objective == 2u) return 0.2f * 2.0f / (1.0f + d2);
+  if (p.objective == 4u) return 0.8125f / ((0.15f + d2) * (1.0f + d2));
+  return 2.0f / (1.0f + d2);
+}
+
+int positive_samples_this_epoch(float weight, constant EmbedParams& p, uint epoch) {
+  if (p.objective != 0u) return 1;
+  if (weight <= 0.0f) return 0;
+  float period = p.max_weight / max(weight, 1.0e-6f);
+  float now = float(epoch + 1u);
+  float previous = float(epoch);
+  int current_sample = int(floor(now / period));
+  int previous_sample = int(floor(previous / period));
+  int samples = current_sample - previous_sample;
+  return samples > 0 ? samples : 0;
+}
+
+int cumulative_umap_negative_samples(float active_epoch, float negative_period) {
+  if (negative_period <= 0.0f || !isfinite(negative_period)) return 0;
+  int samples = int(floor(((active_epoch - negative_period) / negative_period) + 1.0e-6f));
+  return samples > 0 ? samples : 0;
+}
+
+int negative_samples_this_epoch(float weight, constant EmbedParams& p, uint epoch) {
+  if (p.objective != 0u) return int(p.negative_sample_rate);
+  if (weight <= 0.0f || p.negative_sample_rate == 0u) return 0;
+  float period = p.max_weight / max(weight, 1.0e-6f);
+  float now = float(epoch + 1u);
+  float previous = float(epoch);
+  int current_sample = int(floor(now / period));
+  int previous_sample = int(floor(previous / period));
+  if (current_sample <= previous_sample) return 0;
+
+  float negative_period = period / float(p.negative_sample_rate);
+  int current_total = cumulative_umap_negative_samples(now, negative_period);
+  int previous_total = 0;
+  if (previous_sample > 0) {
+    float previous_active_epoch = ceil(float(previous_sample) * period);
+    previous_total = cumulative_umap_negative_samples(previous_active_epoch, negative_period);
+  }
+  int samples = current_total - previous_total;
+  return samples > 0 ? samples : 0;
+}
+
+int positive_samples_this_epoch_period(float period, constant EmbedParams& p, uint epoch) {
+  if (p.objective != 0u) return 1;
+  if (period <= 0.0f || !isfinite(period)) return 0;
+  float now = float(epoch + 1u);
+  float previous = float(epoch);
+  int current_sample = int(floor(now / period));
+  int previous_sample = int(floor(previous / period));
+  int samples = current_sample - previous_sample;
+  return samples > 0 ? samples : 0;
+}
+
+int negative_samples_this_epoch_period(float period, constant EmbedParams& p, uint epoch) {
+  if (p.objective != 0u) return int(p.negative_sample_rate);
+  if (period <= 0.0f || !isfinite(period) || p.negative_sample_rate == 0u) return 0;
+  float now = float(epoch + 1u);
+  float previous = float(epoch);
+  int current_sample = int(floor(now / period));
+  int previous_sample = int(floor(previous / period));
+  if (current_sample <= previous_sample) return 0;
+
+  float negative_period = period / float(p.negative_sample_rate);
+  int current_total = cumulative_umap_negative_samples(now, negative_period);
+  int previous_total = 0;
+  if (previous_sample > 0) {
+    float previous_active_epoch = ceil(float(previous_sample) * period);
+    previous_total = cumulative_umap_negative_samples(previous_active_epoch, negative_period);
+  }
+  int samples = current_total - previous_total;
+  return samples > 0 ? samples : 0;
+}
+
+kernel void embed_epoch(
+  device const float2* current [[buffer(0)]],
+  device float2* next [[buffer(1)]],
+  device const int* neighbors [[buffer(2)]],
+  device const float* weights [[buffer(3)]],
+  constant EmbedParams& p [[buffer(4)]],
+  constant uint& epoch [[buffer(5)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= p.n) return;
+
+  float2 yi = current[gid];
+  float2 delta = float2(0.0f, 0.0f);
+
+  for (uint e = 0; e < p.k; ++e) {
+    int nb = neighbors[gid * p.k + e];
+    if (nb < 0 || uint(nb) >= p.n || uint(nb) == gid) continue;
+    float w = weights[gid * p.k + e];
+    int positive_samples = positive_samples_this_epoch(w, p, epoch);
+    if (positive_samples <= 0) continue;
+    float2 diff = yi - current[uint(nb)];
+    float d2 = dot(diff, diff);
+
+    if (p.objective == 3u) {
+      uint samples = max(1u, p.negative_sample_rate);
+      float triplet_w = w / float(samples);
+      float pos_d2 = d2 + 1.0e-4f;
+      for (uint s = 0; s < samples; ++s) {
+        uint neg = deterministic_vertex(p.n, p.seed, epoch, gid, e, s);
+        if (neg == gid || neg == uint(nb)) continue;
+        float2 ndiff = yi - current[neg];
+        float neg_d2 = dot(ndiff, ndiff) + 1.0e-4f;
+        float denom = pos_d2 + neg_d2 + 1.0e-6f;
+        float scale = triplet_w / (denom * denom);
+        float pos_coeff = -2.0f * scale * neg_d2;
+        float neg_coeff =  2.0f * scale * pos_d2;
+        delta += float2(
+          clip4(pos_coeff * diff.x) + clip4(neg_coeff * ndiff.x),
+          clip4(pos_coeff * diff.y) + clip4(neg_coeff * ndiff.y)
+        );
+      }
+      continue;
+    }
+
+    float coeff = attractive_coeff(d2, w, p);
+    delta += float2(clip4(coeff * diff.x), clip4(coeff * diff.y));
+
+    uint neg_samples = uint(negative_samples_this_epoch(w, p, epoch));
+    for (uint s = 0; s < neg_samples; ++s) {
+      uint neg = deterministic_vertex(p.n, p.seed, epoch, gid, e, s);
+      if (neg == gid || neg == uint(nb)) continue;
+      float2 ndiff = yi - current[neg];
+      float nd2 = dot(ndiff, ndiff);
+      float rcoeff = repulsive_coeff(nd2, p);
+      delta += float2(clip4(rcoeff * ndiff.x), clip4(rcoeff * ndiff.y));
+    }
+  }
+
+  float alpha = p.learning_rate * (1.0f - float(epoch) / max(1.0f, float(p.n_epochs)));
+  next[gid] = yi + alpha * delta;
+}
+
+kernel void embed_epoch_scheduled(
+  device const float2* current [[buffer(0)]],
+  device float2* next [[buffer(1)]],
+  device const int* neighbors [[buffer(2)]],
+  device const float* weights [[buffer(3)]],
+  device const float* epochs_per_sample [[buffer(4)]],
+  constant EmbedParams& p [[buffer(5)]],
+  constant uint& epoch [[buffer(6)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= p.n) return;
+
+  float2 yi = current[gid];
+  float2 delta = float2(0.0f, 0.0f);
+
+  for (uint e = 0; e < p.k; ++e) {
+    uint pos = gid * p.k + e;
+    int nb = neighbors[pos];
+    if (nb < 0 || uint(nb) >= p.n || uint(nb) == gid) continue;
+    float w = weights[pos];
+    float period = epochs_per_sample[pos];
+    int positive_samples = positive_samples_this_epoch_period(period, p, epoch);
+    if (positive_samples <= 0) continue;
+    float2 diff = yi - current[uint(nb)];
+    float d2 = dot(diff, diff);
+
+    if (p.objective == 3u) {
+      uint samples = max(1u, p.negative_sample_rate);
+      float triplet_w = w / float(samples);
+      float pos_d2 = d2 + 1.0e-4f;
+      for (uint s = 0; s < samples; ++s) {
+        uint neg = deterministic_vertex(p.n, p.seed, epoch, gid, e, s);
+        if (neg == gid || neg == uint(nb)) continue;
+        float2 ndiff = yi - current[neg];
+        float neg_d2 = dot(ndiff, ndiff) + 1.0e-4f;
+        float denom = pos_d2 + neg_d2 + 1.0e-6f;
+        float scale = triplet_w / (denom * denom);
+        float pos_coeff = -2.0f * scale * neg_d2;
+        float neg_coeff =  2.0f * scale * pos_d2;
+        delta += float2(
+          clip4(pos_coeff * diff.x) + clip4(neg_coeff * ndiff.x),
+          clip4(pos_coeff * diff.y) + clip4(neg_coeff * ndiff.y)
+        );
+      }
+      continue;
+    }
+
+    float coeff = attractive_coeff(d2, w, p);
+    delta += float2(clip4(coeff * diff.x), clip4(coeff * diff.y));
+
+    uint neg_samples = uint(negative_samples_this_epoch_period(period, p, epoch));
+    for (uint s = 0; s < neg_samples; ++s) {
+      uint neg = deterministic_vertex(p.n, p.seed, epoch, gid, e, s);
+      if (neg == gid || neg == uint(nb)) continue;
+      float2 ndiff = yi - current[neg];
+      float nd2 = dot(ndiff, ndiff);
+      float rcoeff = repulsive_coeff(nd2, p);
+      delta += float2(clip4(rcoeff * ndiff.x), clip4(rcoeff * ndiff.y));
+    }
+  }
+
+  float alpha = p.learning_rate * (1.0f - float(epoch) / max(1.0f, float(p.n_epochs)));
+  next[gid] = yi + alpha * delta;
+}
+
+// TorchDR-style experimental variant: keep attractive edge scheduling, but
+// draw negatives per row from the active attractive-neighbour count.
+kernel void embed_epoch_torchdr_row_negatives(
+  device const float2* current [[buffer(0)]],
+  device float2* next [[buffer(1)]],
+  device const int* neighbors [[buffer(2)]],
+  device const float* weights [[buffer(3)]],
+  device const float* epochs_per_sample [[buffer(4)]],
+  constant EmbedParams& p [[buffer(5)]],
+  constant uint& epoch [[buffer(6)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= p.n) return;
+
+  float2 yi = current[gid];
+  float2 delta = float2(0.0f, 0.0f);
+  uint active_positive_edges = 0u;
+
+  for (uint e = 0; e < p.k; ++e) {
+    uint pos = gid * p.k + e;
+    int nb = neighbors[pos];
+    if (nb < 0 || uint(nb) >= p.n || uint(nb) == gid) continue;
+    float period = epochs_per_sample[pos];
+    int positive_samples = positive_samples_this_epoch_period(period, p, epoch);
+    if (positive_samples <= 0) continue;
+
+    ++active_positive_edges;
+    float w = weights[pos];
+    float2 diff = yi - current[uint(nb)];
+    float d2 = dot(diff, diff);
+    float coeff = attractive_coeff(d2, w, p);
+    delta += float2(clip4(coeff * diff.x), clip4(coeff * diff.y));
+  }
+
+  uint neg_samples = active_positive_edges * p.negative_sample_rate;
+  for (uint s = 0u; s < neg_samples; ++s) {
+    uint neg = deterministic_vertex(p.n, p.seed, epoch, gid, s, 0u);
+    if (neg == gid) continue;
+    float2 ndiff = yi - current[neg];
+    float nd2 = dot(ndiff, ndiff);
+    float rcoeff = repulsive_coeff(nd2, p);
+    delta += float2(clip4(rcoeff * ndiff.x), clip4(rcoeff * ndiff.y));
+  }
+
+  float alpha = p.learning_rate * (1.0f - float(epoch) / max(1.0f, float(p.n_epochs)));
+  next[gid] = yi + alpha * delta;
+}
+
+int fixed_delta(float value) {
+  constexpr float scale = 65536.0f;
+  return int(clamp(value * scale, -2140000000.0f, 2140000000.0f));
+}
+
+kernel void clear_atomic_delta(
+  device atomic_int* delta [[buffer(0)]],
+  constant uint& count [[buffer(1)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= count) return;
+  atomic_store_explicit(&delta[gid], 0, memory_order_relaxed);
+}
+
+kernel void embed_epoch_atomic_delta(
+  device const float2* current [[buffer(0)]],
+  device atomic_int* delta [[buffer(1)]],
+  device const int* neighbors [[buffer(2)]],
+  device const float* weights [[buffer(3)]],
+  device const float* epochs_per_sample [[buffer(4)]],
+  constant EmbedParams& p [[buffer(5)]],
+  constant uint& epoch [[buffer(6)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= p.n) return;
+
+  float2 yi = current[gid];
+  float alpha = p.learning_rate * (1.0f - float(epoch) / max(1.0f, float(p.n_epochs)));
+
+  for (uint e = 0; e < p.k; ++e) {
+    uint pos = gid * p.k + e;
+    int nb_i = neighbors[pos];
+    if (nb_i < 0 || uint(nb_i) >= p.n || uint(nb_i) == gid) continue;
+    float period = epochs_per_sample[pos];
+    int positive_samples = positive_samples_this_epoch_period(period, p, epoch);
+    if (positive_samples <= 0) continue;
+
+    uint nb = uint(nb_i);
+    float w = weights[pos];
+    float2 diff = yi - current[nb];
+    float d2 = dot(diff, diff);
+    float coeff = attractive_coeff(d2, w, p);
+    float2 attractive = alpha * float2(clip4(coeff * diff.x), clip4(coeff * diff.y));
+
+    atomic_fetch_add_explicit(&delta[gid * 2u], fixed_delta(attractive.x), memory_order_relaxed);
+    atomic_fetch_add_explicit(&delta[gid * 2u + 1u], fixed_delta(attractive.y), memory_order_relaxed);
+    atomic_fetch_add_explicit(&delta[nb * 2u], fixed_delta(-attractive.x), memory_order_relaxed);
+    atomic_fetch_add_explicit(&delta[nb * 2u + 1u], fixed_delta(-attractive.y), memory_order_relaxed);
+
+    uint neg_samples = uint(negative_samples_this_epoch_period(period, p, epoch));
+    for (uint s = 0; s < neg_samples; ++s) {
+      uint neg = deterministic_vertex(p.n, p.seed, epoch, gid, e, s);
+      if (neg == gid || neg == nb) continue;
+      float2 ndiff = yi - current[neg];
+      float nd2 = dot(ndiff, ndiff);
+      float rcoeff = repulsive_coeff(nd2, p);
+      float2 repulsive = alpha * float2(clip4(rcoeff * ndiff.x), clip4(rcoeff * ndiff.y));
+      atomic_fetch_add_explicit(&delta[gid * 2u], fixed_delta(repulsive.x), memory_order_relaxed);
+      atomic_fetch_add_explicit(&delta[gid * 2u + 1u], fixed_delta(repulsive.y), memory_order_relaxed);
+    }
+  }
+}
+
+kernel void apply_atomic_delta(
+  device const float2* current [[buffer(0)]],
+  device float2* next [[buffer(1)]],
+  device atomic_int* delta [[buffer(2)]],
+  constant uint& n [[buffer(3)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= n) return;
+  constexpr float inv_scale = 1.0f / 65536.0f;
+  int dx = atomic_load_explicit(&delta[gid * 2u], memory_order_relaxed);
+  int dy = atomic_load_explicit(&delta[gid * 2u + 1u], memory_order_relaxed);
+  next[gid] = current[gid] + float2(float(dx) * inv_scale, float(dy) * inv_scale);
+}
+
+kernel void matrix_multiply(
+  device const float* left [[buffer(0)]],
+  device const float* right [[buffer(1)]],
+  device float* out [[buffer(2)]],
+  constant MatrixMultiplyParams& p [[buffer(3)]],
+  uint2 gid [[thread_position_in_grid]]
+) {
+  uint row = gid.y;
+  uint col = gid.x;
+  uint out_rows = p.transpose_left == 0u ? p.left_rows : p.left_cols;
+  uint inner = p.transpose_left == 0u ? p.left_cols : p.left_rows;
+  if (row >= out_rows || col >= p.right_cols) return;
+
+  float total = 0.0f;
+  if (p.transpose_left != 0u) {
+    for (uint t = 0u; t < inner; ++t) {
+      total += left[t + row * p.left_rows] * right[t + col * p.left_rows];
+    }
+  } else {
+    for (uint t = 0u; t < inner; ++t) {
+      total += left[row + t * p.left_rows] * right[t + col * p.left_cols];
+    }
+  }
+  out[row + col * out_rows] = total;
+}
+
+kernel void spectral_random_init(
+  device float2* values [[buffer(0)]],
+  constant uint& n [[buffer(1)]],
+  constant uint& seed [[buffer(2)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= n) return;
+  values[row] = float2(
+    deterministic_unit_signed(seed, row, 0u),
+    deterministic_unit_signed(seed, row, 1u)
+  );
+}
+
+kernel void spectral_diffuse(
+  device const int* neighbors [[buffer(0)]],
+  device const float* weights [[buffer(1)]],
+  device const float2* current [[buffer(2)]],
+  device float2* next [[buffer(3)]],
+  constant uint& n [[buffer(4)]],
+  constant uint& width [[buffer(5)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= n) return;
+  float2 total = float2(0.0f, 0.0f);
+  float weight_sum = 0.0f;
+  for (uint j = 0u; j < width; ++j) {
+    uint pos = row * width + j;
+    int nb = neighbors[pos];
+    float w = weights[pos];
+    if (nb < 0 || uint(nb) >= n || uint(nb) == row || w <= 0.0f) continue;
+    total += w * current[uint(nb)];
+    weight_sum += w;
+  }
+  next[row] = weight_sum > 0.0f ? total / weight_sum : current[row];
+}
+
+kernel void spectral_init_stats(
+  device const float2* values [[buffer(0)]],
+  device float* stats [[buffer(1)]],
+  constant uint& n [[buffer(2)]],
+  constant uint& threads [[buffer(3)]],
+  uint tid [[thread_index_in_threadgroup]]
+) {
+  threadgroup float sx[256];
+  threadgroup float sy[256];
+  threadgroup float sx2[256];
+  threadgroup float sxy[256];
+  threadgroup float sy2[256];
+
+  float ax = 0.0f;
+  float ay = 0.0f;
+  float ax2 = 0.0f;
+  float axy = 0.0f;
+  float ay2 = 0.0f;
+  for (uint row = tid; row < n; row += threads) {
+    float2 v = values[row];
+    ax += v.x;
+    ay += v.y;
+    ax2 += v.x * v.x;
+    axy += v.x * v.y;
+    ay2 += v.y * v.y;
+  }
+  sx[tid] = ax;
+  sy[tid] = ay;
+  sx2[tid] = ax2;
+  sxy[tid] = axy;
+  sy2[tid] = ay2;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  for (uint stride = threads >> 1; stride > 0u; stride >>= 1) {
+    if (tid < stride) {
+      sx[tid] += sx[tid + stride];
+      sy[tid] += sy[tid + stride];
+      sx2[tid] += sx2[tid + stride];
+      sxy[tid] += sxy[tid + stride];
+      sy2[tid] += sy2[tid + stride];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+
+  if (tid == 0u) {
+    float dn = max(float(n), 1.0f);
+    float mean_x = sx[0] / dn;
+    float mean_y = sy[0] / dn;
+    float x_center_ss = max(sx2[0] - sx[0] * sx[0] / dn, 1.0e-24f);
+    float y_center_ss = max(sy2[0] - sy[0] * sy[0] / dn, 1.0e-24f);
+    float xy_center = sxy[0] - sx[0] * sy[0] / dn;
+    float norm_x = sqrt(x_center_ss);
+    if (!isfinite(norm_x) || norm_x <= 0.0f) norm_x = 1.0f;
+    float proj_y_on_x = xy_center / norm_x;
+    float y_resid_ss = max(y_center_ss - proj_y_on_x * proj_y_on_x, 1.0e-24f);
+    float norm_y = sqrt(y_resid_ss);
+    if (!isfinite(norm_y) || norm_y <= 0.0f) norm_y = 1.0f;
+    stats[0] = mean_x;
+    stats[1] = mean_y;
+    stats[2] = 1.0f / norm_x;
+    stats[3] = proj_y_on_x;
+    stats[4] = 1.0f / norm_y;
+  }
+}
+
+kernel void spectral_normalize(
+  device float2* values [[buffer(0)]],
+  device const float* stats [[buffer(1)]],
+  constant uint& n [[buffer(2)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= n) return;
+  float2 v = values[row];
+  float x = (v.x - stats[0]) * stats[2];
+  float y_centered = v.y - stats[1];
+  float y = (y_centered - stats[3] * x) * stats[4];
+  values[row] = float2(x, y);
+}
+
+#define FASTEMBEDR_METAL_PROJECTION_MAX_K 128
+#define FASTEMBEDR_METAL_SCORE_MAX_K 64
+#define FASTEMBEDR_METAL_SCORE_WIDTH 6
+#define FASTEMBEDR_METAL_MAX_LABELS 128
+
+float median_local(thread float* values, int count) {
+  if (count <= 0) return 0.0f;
+  for (int i = 1; i < count; ++i) {
+    float v = values[i];
+    int j = i - 1;
+    while (j >= 0 && values[j] > v) {
+      values[j + 1] = values[j];
+      --j;
+    }
+    values[j + 1] = v;
+  }
+  int mid = count / 2;
+  if ((count & 1) != 0) return values[mid];
+  return 0.5f * (values[mid - 1] + values[mid]);
+}
+
+bool pair_less_metal(float d, int idx, float other_d, int other_idx) {
+  if (d < other_d) return true;
+  if (d > other_d) return false;
+  return idx < other_idx;
+}
+
+void insert_top_neighbor_metal(thread float* distances,
+                               thread int* indices,
+                               thread int& count,
+                               int k,
+                               float distance,
+                               int index) {
+  if (count < k) {
+    int pos = count;
+    ++count;
+    while (pos > 0 && pair_less_metal(distance, index, distances[pos - 1], indices[pos - 1])) {
+      distances[pos] = distances[pos - 1];
+      indices[pos] = indices[pos - 1];
+      --pos;
+    }
+    distances[pos] = distance;
+    indices[pos] = index;
+    return;
+  }
+  if (!pair_less_metal(distance, index, distances[k - 1], indices[k - 1])) return;
+  int pos = k - 1;
+  while (pos > 0 && pair_less_metal(distance, index, distances[pos - 1], indices[pos - 1])) {
+    distances[pos] = distances[pos - 1];
+    indices[pos] = indices[pos - 1];
+    --pos;
+  }
+  distances[pos] = distance;
+  indices[pos] = index;
+}
+
+float layout_d2_2d_metal(device const float* layout, uint n, int a, int b) {
+  float dx = layout[uint(a)] - layout[uint(b)];
+  float dy = layout[n + uint(a)] - layout[n + uint(b)];
+  return dx * dx + dy * dy;
+}
+
+int high_rank_metal(device const int* indices,
+                    uint index_rows,
+                    int index_row,
+                    int candidate,
+                    int high_rank_limit) {
+  for (int r = 0; r < high_rank_limit; ++r) {
+    if (indices[uint(r) * index_rows + uint(index_row)] - 1 == candidate) return r + 1;
+  }
+  return high_rank_limit + 1;
+}
+
+kernel void standardize_stats(
+  device const float* values [[buffer(0)]],
+  device float* centers [[buffer(1)]],
+  device float* scales [[buffer(2)]],
+  constant uint& n [[buffer(3)]],
+  constant uint& threads [[buffer(4)]],
+  uint col [[threadgroup_position_in_grid]],
+  uint tid [[thread_index_in_threadgroup]]
+) {
+  threadgroup float sums[256];
+  threadgroup float sums2[256];
+
+  float sum = 0.0f;
+  float sum2 = 0.0f;
+  uint base = col * n;
+  for (uint row = tid; row < n; row += threads) {
+    float x = values[base + row];
+    sum += x;
+    sum2 += x * x;
+  }
+  sums[tid] = sum;
+  sums2[tid] = sum2;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  for (uint stride = threads >> 1; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      sums[tid] += sums[tid + stride];
+      sums2[tid] += sums2[tid + stride];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+
+  if (tid == 0u) {
+    float dn = max(float(n), 1.0f);
+    float mean = sums[0] / dn;
+    float denom = max(float(n > 0u ? n - 1u : 1u), 1.0f);
+    float variance = (sums2[0] - sums[0] * sums[0] / dn) / denom;
+    if (!isfinite(variance) || variance <= 0.0f) variance = 1.0f;
+    float scale = sqrt(variance);
+    if (!isfinite(scale) || scale <= 0.0f) scale = 1.0f;
+    centers[col] = mean;
+    scales[col] = scale;
+  }
+}
+
+kernel void standardize_apply(
+  device float* values [[buffer(0)]],
+  device const float* centers [[buffer(1)]],
+  device const float* scales [[buffer(2)]],
+  constant uint& n [[buffer(3)]],
+  constant uint& total [[buffer(4)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= total) return;
+  uint col = gid / n;
+  values[gid] = (values[gid] - centers[col]) / scales[col];
+}
+
+kernel void project_membership(
+  device const float* reference_layout [[buffer(0)]],
+  device const int* projection_indices [[buffer(1)]],
+  device const float* projection_distances [[buffer(2)]],
+  device float* out [[buffer(3)]],
+  constant uint& n_reference [[buffer(4)]],
+  constant uint& n_query [[buffer(5)]],
+  constant uint& k [[buffer(6)]],
+  constant uint& n_components [[buffer(7)]],
+  constant uint& average_zeros [[buffer(8)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= n_query) return;
+
+  constexpr float eps = 1.4901161193847656e-8f;
+  constexpr float inf = 3.4028234663852886e+38f;
+  float adjusted[FASTEMBEDR_METAL_PROJECTION_MAX_K];
+  float scratch[FASTEMBEDR_METAL_PROJECTION_MAX_K];
+  int zero_count = 0;
+  int first_zero = -1;
+  float rho = inf;
+
+  for (uint j = 0u; j < k; ++j) {
+    int idx = projection_indices[j * n_query + row] - 1;
+    float d = projection_distances[j * n_query + row];
+    if (!isfinite(d) || d < 0.0f) d = 0.0f;
+    if (idx < 0 || uint(idx) >= n_reference) d = inf;
+    if (d <= eps) {
+      ++zero_count;
+      if (first_zero < 0) first_zero = int(j);
+    }
+    if (d < rho) rho = d;
+  }
+
+  if (zero_count > 0) {
+    float inv_zero = average_zeros != 0u ? 1.0f / float(zero_count) : 1.0f;
+    for (uint c = 0u; c < n_components; ++c) {
+      float value = 0.0f;
+      for (uint j = 0u; j < k; ++j) {
+        float d = projection_distances[j * n_query + row];
+        if (!isfinite(d) || d < 0.0f) d = 0.0f;
+        if ((average_zeros != 0u && d <= eps) || (average_zeros == 0u && int(j) == first_zero)) {
+          int idx = projection_indices[j * n_query + row] - 1;
+          if (idx >= 0 && uint(idx) < n_reference) {
+            value += inv_zero * reference_layout[c * n_reference + uint(idx)];
+          }
+        }
+      }
+      out[c * n_query + row] = value;
+    }
+    return;
+  }
+
+  int positive_count = 0;
+  for (uint j = 0u; j < k; ++j) {
+    float d = projection_distances[j * n_query + row];
+    if (!isfinite(d) || d < 0.0f) d = 0.0f;
+    float value = max(0.0f, d - rho);
+    adjusted[j] = value;
+    if (value > eps) scratch[positive_count++] = value;
+  }
+  if (positive_count == 0) {
+    for (uint j = 0u; j < k; ++j) {
+      float d = projection_distances[j * n_query + row];
+      if (!isfinite(d) || d < 0.0f) d = 0.0f;
+      scratch[j] = d;
+    }
+    positive_count = int(k);
+  }
+
+  float sigma = median_local(scratch, positive_count);
+  if (!isfinite(sigma) || sigma < eps) sigma = eps;
+
+  float weight_sum = 0.0f;
+  for (uint j = 0u; j < k; ++j) {
+    float w = exp(-adjusted[j] / sigma);
+    adjusted[j] = w;
+    weight_sum += w;
+  }
+  if (!isfinite(weight_sum) || weight_sum <= 0.0f) {
+    weight_sum = float(k);
+    for (uint j = 0u; j < k; ++j) adjusted[j] = 1.0f;
+  }
+
+  for (uint c = 0u; c < n_components; ++c) {
+    float value = 0.0f;
+    for (uint j = 0u; j < k; ++j) {
+      int idx = projection_indices[j * n_query + row] - 1;
+      if (idx >= 0 && uint(idx) < n_reference) {
+        value += adjusted[j] * reference_layout[c * n_reference + uint(idx)];
+      }
+    }
+    out[c * n_query + row] = value / weight_sum;
+  }
+}
+
+kernel void tsne_transform_epoch(
+  device const float* reference_layout [[buffer(0)]],
+  device const int* indices [[buffer(1)]],
+  device const float* probabilities [[buffer(2)]],
+  device float2* current [[buffer(3)]],
+  device float2* gains [[buffer(4)]],
+  device float2* updates [[buffer(5)]],
+  constant TsneTransformParams& p [[buffer(6)]],
+  constant uint& epoch [[buffer(7)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= p.n_query) return;
+
+  constexpr float eps = 1.0e-12f;
+  float2 yi = current[row];
+  float2 grad = float2(0.0f, 0.0f);
+  float sum_q = eps;
+
+  if (p.exact_repulsion != 0u || p.n_negatives >= p.n_reference) {
+    for (uint ref = 0u; ref < p.n_reference; ++ref) {
+      float2 yr = float2(reference_layout[ref], reference_layout[p.n_reference + ref]);
+      float2 diff = yi - yr;
+      float d2 = dot(diff, diff);
+      float q = 1.0f / (1.0f + d2);
+      sum_q += q;
+    }
+    for (uint ref = 0u; ref < p.n_reference; ++ref) {
+      float2 yr = float2(reference_layout[ref], reference_layout[p.n_reference + ref]);
+      float2 diff = yi - yr;
+      float d2 = dot(diff, diff);
+      float q = 1.0f / (1.0f + d2);
+      float coeff = -(q * q) / sum_q;
+      grad += coeff * diff;
+    }
+  } else {
+    for (uint sample = 0u; sample < p.n_negatives; ++sample) {
+      uint ref = deterministic_reference(p.n_reference, p.seed, epoch, row, sample);
+      float2 yr = float2(reference_layout[ref], reference_layout[p.n_reference + ref]);
+      float2 diff = yi - yr;
+      float d2 = dot(diff, diff);
+      float q = 1.0f / (1.0f + d2);
+      sum_q += q;
+    }
+    for (uint sample = 0u; sample < p.n_negatives; ++sample) {
+      uint ref = deterministic_reference(p.n_reference, p.seed, epoch, row, sample);
+      float2 yr = float2(reference_layout[ref], reference_layout[p.n_reference + ref]);
+      float2 diff = yi - yr;
+      float d2 = dot(diff, diff);
+      float q = 1.0f / (1.0f + d2);
+      float coeff = -(q * q) / sum_q;
+      grad += coeff * diff;
+    }
+  }
+
+  for (uint j = 0u; j < p.k; ++j) {
+    uint pos = j * p.n_query + row;
+    int ref_i = indices[pos];
+    if (ref_i < 0 || uint(ref_i) >= p.n_reference) continue;
+    uint ref = uint(ref_i);
+    float2 yr = float2(reference_layout[ref], reference_layout[p.n_reference + ref]);
+    float2 diff = yi - yr;
+    float d2 = dot(diff, diff);
+    float q = 1.0f / (1.0f + d2);
+    float coeff = p.exaggeration * probabilities[pos] * q;
+    grad += coeff * diff;
+  }
+
+  float grad_norm2 = dot(grad, grad);
+  float max_grad2 = p.max_grad_norm * p.max_grad_norm;
+  if (isfinite(max_grad2) && max_grad2 > 0.0f && grad_norm2 > max_grad2) {
+    grad *= p.max_grad_norm / (sqrt(grad_norm2) + eps);
+  }
+
+  float2 gain = gains[row];
+  float2 update = updates[row];
+  float sx0 = sign_component(update.x);
+  float sx1 = sign_component(update.y);
+  float sg0 = sign_component(grad.x);
+  float sg1 = sign_component(grad.y);
+  gain.x = sx0 != sg0 ? gain.x + 0.2f : gain.x * 0.8f + 0.01f;
+  gain.y = sx1 != sg1 ? gain.y + 0.2f : gain.y * 0.8f + 0.01f;
+  gain = max(gain, float2(0.01f, 0.01f));
+
+  update = p.momentum * update - p.learning_rate * gain * grad;
+  float step_norm2 = dot(update, update);
+  float max_step2 = p.max_step_norm * p.max_step_norm;
+  if (isfinite(max_step2) && max_step2 > 0.0f && step_norm2 > max_step2) {
+    update *= p.max_step_norm / (sqrt(step_norm2) + eps);
+  }
+
+  current[row] = yi + update;
+  gains[row] = gain;
+  updates[row] = update;
+}
+
+kernel void landmark_project_interpolate(
+  device const float* landmark_data [[buffer(0)]],
+  device const float* query_data [[buffer(1)]],
+  device const float* landmark_layout [[buffer(2)]],
+  device float* out [[buffer(3)]],
+  constant uint& n_landmarks [[buffer(4)]],
+  constant uint& n_query [[buffer(5)]],
+  constant uint& n_features [[buffer(6)]],
+  constant uint& k [[buffer(7)]],
+  constant uint& n_components [[buffer(8)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= n_query) return;
+
+  constexpr float eps = 1.4901161193847656e-8f;
+  constexpr float inf = 3.4028234663852886e+38f;
+  float best_sq[FASTEMBEDR_METAL_PROJECTION_MAX_K];
+  int best_idx[FASTEMBEDR_METAL_PROJECTION_MAX_K];
+
+  for (uint j = 0u; j < k; ++j) {
+    best_sq[j] = inf;
+    best_idx[j] = INT_MAX;
+  }
+
+  const uint query_offset = row * n_features;
+  for (uint i = 0u; i < n_landmarks; ++i) {
+    const uint landmark_offset = i * n_features;
+    float dist = 0.0f;
+    for (uint c = 0u; c < n_features; ++c) {
+      float diff = landmark_data[landmark_offset + c] - query_data[query_offset + c];
+      dist += diff * diff;
+    }
+
+    if (dist < best_sq[k - 1u] ||
+        (dist == best_sq[k - 1u] && int(i) < best_idx[k - 1u])) {
+      uint pos = k - 1u;
+      while (pos > 0u &&
+             (dist < best_sq[pos - 1u] ||
+              (dist == best_sq[pos - 1u] && int(i) < best_idx[pos - 1u]))) {
+        best_sq[pos] = best_sq[pos - 1u];
+        best_idx[pos] = best_idx[pos - 1u];
+        --pos;
+      }
+      best_sq[pos] = dist;
+      best_idx[pos] = int(i);
+    }
+  }
+
+  float distances[FASTEMBEDR_METAL_PROJECTION_MAX_K];
+  float adjusted[FASTEMBEDR_METAL_PROJECTION_MAX_K];
+  float scratch[FASTEMBEDR_METAL_PROJECTION_MAX_K];
+  int zero_count = 0;
+  int first_zero = -1;
+  float rho = inf;
+
+  for (uint j = 0u; j < k; ++j) {
+    float d = sqrt(max(best_sq[j], 0.0f));
+    distances[j] = d;
+    if (d <= eps) {
+      ++zero_count;
+      if (first_zero < 0) first_zero = int(j);
+    }
+    if (d < rho) rho = d;
+  }
+
+  if (zero_count > 0) {
+    for (uint c = 0u; c < n_components; ++c) {
+      float value = 0.0f;
+      int idx = best_idx[uint(first_zero)];
+      if (idx >= 0 && uint(idx) < n_landmarks) {
+        value = landmark_layout[c * n_landmarks + uint(idx)];
+      }
+      out[c * n_query + row] = value;
+    }
+    return;
+  }
+
+  int positive_count = 0;
+  for (uint j = 0u; j < k; ++j) {
+    float value = max(0.0f, distances[j] - rho);
+    adjusted[j] = value;
+    if (value > eps) scratch[positive_count++] = value;
+  }
+  if (positive_count == 0) {
+    for (uint j = 0u; j < k; ++j) scratch[j] = distances[j];
+    positive_count = int(k);
+  }
+
+  float sigma = median_local(scratch, positive_count);
+  if (!isfinite(sigma) || sigma < eps) sigma = eps;
+
+  float weight_sum = 0.0f;
+  for (uint j = 0u; j < k; ++j) {
+    float w = exp(-adjusted[j] / sigma);
+    adjusted[j] = w;
+    weight_sum += w;
+  }
+  if (!isfinite(weight_sum) || weight_sum <= 0.0f) {
+    weight_sum = float(k);
+    for (uint j = 0u; j < k; ++j) adjusted[j] = 1.0f;
+  }
+
+  for (uint c = 0u; c < n_components; ++c) {
+    float value = 0.0f;
+    for (uint j = 0u; j < k; ++j) {
+      int idx = best_idx[j];
+      if (idx >= 0 && uint(idx) < n_landmarks) {
+        value += adjusted[j] * landmark_layout[c * n_landmarks + uint(idx)];
+      }
+    }
+    out[c * n_query + row] = value / weight_sum;
+  }
+}
+
+kernel void landmark_project_interpolate_knn_confidence(
+  device const float* landmark_data [[buffer(0)]],
+  device const float* query_data [[buffer(1)]],
+  device const float* landmark_layout [[buffer(2)]],
+  device float* out [[buffer(3)]],
+  device int* out_indices [[buffer(4)]],
+  device float* out_distances [[buffer(5)]],
+  device float* out_confidence [[buffer(6)]],
+  constant uint& n_landmarks [[buffer(7)]],
+  constant uint& n_query [[buffer(8)]],
+  constant uint& n_features [[buffer(9)]],
+  constant uint& k [[buffer(10)]],
+  constant uint& n_components [[buffer(11)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= n_query) return;
+
+  constexpr float eps = 1.4901161193847656e-8f;
+  constexpr float inf = 3.4028234663852886e+38f;
+  float best_sq[FASTEMBEDR_METAL_PROJECTION_MAX_K];
+  int best_idx[FASTEMBEDR_METAL_PROJECTION_MAX_K];
+
+  for (uint j = 0u; j < k; ++j) {
+    best_sq[j] = inf;
+    best_idx[j] = INT_MAX;
+  }
+
+  const uint query_offset = row * n_features;
+  for (uint i = 0u; i < n_landmarks; ++i) {
+    const uint landmark_offset = i * n_features;
+    float dist = 0.0f;
+    for (uint c = 0u; c < n_features; ++c) {
+      float diff = landmark_data[landmark_offset + c] - query_data[query_offset + c];
+      dist += diff * diff;
+    }
+
+    if (dist < best_sq[k - 1u] ||
+        (dist == best_sq[k - 1u] && int(i) < best_idx[k - 1u])) {
+      uint pos = k - 1u;
+      while (pos > 0u &&
+             (dist < best_sq[pos - 1u] ||
+              (dist == best_sq[pos - 1u] && int(i) < best_idx[pos - 1u]))) {
+        best_sq[pos] = best_sq[pos - 1u];
+        best_idx[pos] = best_idx[pos - 1u];
+        --pos;
+      }
+      best_sq[pos] = dist;
+      best_idx[pos] = int(i);
+    }
+  }
+
+  float distances[FASTEMBEDR_METAL_PROJECTION_MAX_K];
+  float adjusted[FASTEMBEDR_METAL_PROJECTION_MAX_K];
+  float scratch[FASTEMBEDR_METAL_PROJECTION_MAX_K];
+  int zero_count = 0;
+  int first_zero = -1;
+  float rho = inf;
+
+  for (uint j = 0u; j < k; ++j) {
+    float d = sqrt(max(best_sq[j], 0.0f));
+    distances[j] = d;
+    out_indices[j * n_query + row] = best_idx[j] + 1;
+    out_distances[j * n_query + row] = d;
+    if (d <= eps) {
+      ++zero_count;
+      if (first_zero < 0) first_zero = int(j);
+    }
+    if (d < rho) rho = d;
+  }
+
+  if (zero_count > 0) {
+    out_confidence[row] = 1.0f;
+    for (uint c = 0u; c < n_components; ++c) {
+      float value = 0.0f;
+      int idx = best_idx[uint(first_zero)];
+      if (idx >= 0 && uint(idx) < n_landmarks) {
+        value = landmark_layout[c * n_landmarks + uint(idx)];
+      }
+      out[c * n_query + row] = value;
+    }
+    return;
+  }
+
+  int positive_count = 0;
+  for (uint j = 0u; j < k; ++j) {
+    float value = max(0.0f, distances[j] - rho);
+    adjusted[j] = value;
+    if (value > eps) scratch[positive_count++] = value;
+  }
+  if (positive_count == 0) {
+    for (uint j = 0u; j < k; ++j) scratch[j] = distances[j];
+    positive_count = int(k);
+  }
+
+  float sigma = median_local(scratch, positive_count);
+  if (!isfinite(sigma) || sigma < eps) sigma = eps;
+
+  float weight_sum = 0.0f;
+  for (uint j = 0u; j < k; ++j) {
+    float w = exp(-adjusted[j] / sigma);
+    adjusted[j] = w;
+    weight_sum += w;
+  }
+  if (!isfinite(weight_sum) || weight_sum <= 0.0f) {
+    weight_sum = float(k);
+    for (uint j = 0u; j < k; ++j) adjusted[j] = 1.0f;
+  }
+
+  float max_probability = 0.0f;
+  float entropy = 0.0f;
+  for (uint j = 0u; j < k; ++j) {
+    float probability = adjusted[j] / weight_sum;
+    max_probability = max(max_probability, probability);
+    entropy -= probability * log(max(probability, eps));
+  }
+  float entropy_score = k > 1u ? 1.0f - min(1.0f, entropy / log(float(k))) : 1.0f;
+  float confidence = 0.65f * entropy_score + 0.35f * max_probability;
+  out_confidence[row] = clamp(confidence, 0.0f, 1.0f);
+
+  for (uint c = 0u; c < n_components; ++c) {
+    float value = 0.0f;
+    for (uint j = 0u; j < k; ++j) {
+      int idx = best_idx[j];
+      if (idx >= 0 && uint(idx) < n_landmarks) {
+        value += adjusted[j] * landmark_layout[c * n_landmarks + uint(idx)];
+      }
+    }
+    out[c * n_query + row] = value / weight_sum;
+  }
+}
+
+kernel void overwrite_landmark_rows(
+  device float* out [[buffer(0)]],
+  device const float* landmark_layout [[buffer(1)]],
+  device const int* landmark_indices [[buffer(2)]],
+  constant uint& n_landmarks [[buffer(3)]],
+  constant uint& n [[buffer(4)]],
+  constant uint& n_components [[buffer(5)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  uint total = n_landmarks * n_components;
+  if (gid >= total) return;
+  uint landmark = gid % n_landmarks;
+  uint component = gid / n_landmarks;
+  int row = landmark_indices[landmark] - 1;
+  if (row < 0 || uint(row) >= n) return;
+  out[component * n + uint(row)] = landmark_layout[component * n_landmarks + landmark];
+}
+
+kernel void structure_score_rows(
+  device const float* layout [[buffer(0)]],
+  device const int* indices [[buffer(1)]],
+  device const int* keep [[buffer(2)]],
+  device const int* labels [[buffer(3)]],
+  device float* row_scores [[buffer(4)]],
+  constant uint& n [[buffer(5)]],
+  constant uint& index_rows [[buffer(6)]],
+  constant uint& high_rank_limit [[buffer(7)]],
+  constant uint& preserve_k [[buffer(8)]],
+  constant uint& keep_n [[buffer(9)]],
+  constant uint& compact_indices [[buffer(10)]],
+  constant uint& n_label_levels [[buffer(11)]],
+  uint kk [[thread_position_in_grid]]
+) {
+  if (kk >= keep_n) return;
+  int query = keep[kk] - 1;
+  if (query < 0 || uint(query) >= n) return;
+  int index_row = compact_indices != 0u ? int(kk) : query;
+  if (index_row < 0 || uint(index_row) >= index_rows) return;
+
+  float low_dist[FASTEMBEDR_METAL_SCORE_MAX_K];
+  int low_idx[FASTEMBEDR_METAL_SCORE_MAX_K];
+  float high_dist[FASTEMBEDR_METAL_SCORE_MAX_K];
+  int high_idx[FASTEMBEDR_METAL_SCORE_MAX_K];
+  int low_count = 0;
+  int high_count = 0;
+
+  for (uint r = 0u; r < preserve_k; ++r) {
+    int high_nb = indices[r * index_rows + uint(index_row)] - 1;
+    if (high_nb < 0 || uint(high_nb) >= n) continue;
+    float d2 = layout_d2_2d_metal(layout, n, query, high_nb);
+    int pos = high_count;
+    ++high_count;
+    while (pos > 0 && pair_less_metal(d2, high_nb, high_dist[pos - 1], high_idx[pos - 1])) {
+      high_dist[pos] = high_dist[pos - 1];
+      high_idx[pos] = high_idx[pos - 1];
+      --pos;
+    }
+    high_dist[pos] = d2;
+    high_idx[pos] = high_nb;
+  }
+
+  for (uint candidate = 0u; candidate < n; ++candidate) {
+    if (int(candidate) == query) continue;
+    float d2 = layout_d2_2d_metal(layout, n, query, int(candidate));
+    insert_top_neighbor_metal(low_dist, low_idx, low_count, int(preserve_k), d2, int(candidate));
+  }
+  if (low_count < int(preserve_k)) return;
+
+  int shared = 0;
+  float trust_penalty = 0.0f;
+  for (uint r = 0u; r < preserve_k; ++r) {
+    int rank = high_rank_metal(indices, index_rows, index_row, low_idx[r], int(high_rank_limit));
+    if (rank <= int(preserve_k)) ++shared;
+    trust_penalty += max(0.0f, float(rank - int(preserve_k)));
+  }
+
+  float cont_penalty = 0.0f;
+  for (int t = 0; t < high_count; ++t) {
+    int lower_rank_count = 0;
+    for (uint candidate = 0u; candidate < n; ++candidate) {
+      if (int(candidate) == query) continue;
+      float d2 = layout_d2_2d_metal(layout, n, query, int(candidate));
+      if (pair_less_metal(d2, int(candidate), high_dist[t], high_idx[t])) ++lower_rank_count;
+    }
+    int low_rank = 1 + lower_rank_count;
+    cont_penalty += max(0.0f, float(low_rank - int(preserve_k)));
+  }
+
+  float label_accuracy = 0.0f;
+  float label_accuracy_n = 0.0f;
+  if (n_label_levels > 0u) {
+    int truth = labels[query];
+    if (truth >= 1 && uint(truth) <= n_label_levels) {
+      int best_label = 0;
+      int best_count = 0;
+      for (uint label = 1u; label <= n_label_levels; ++label) {
+        int count = 0;
+        for (uint r = 0u; r < preserve_k; ++r) {
+          if (labels[low_idx[r]] == int(label)) ++count;
+        }
+        if (count > best_count) {
+          best_count = count;
+          best_label = int(label);
+        }
+      }
+      if (best_count > 0) {
+        label_accuracy = best_label == truth ? 1.0f : 0.0f;
+        label_accuracy_n = 1.0f;
+      }
+    }
+  }
+
+  float trust_denom = float(preserve_k) * max(1.0f, float(high_rank_limit + 1u - preserve_k));
+  float cont_denom = float(preserve_k) * max(1.0f, float(n - preserve_k));
+  float preservation = float(shared) / float(preserve_k);
+  float trust = clamp(1.0f - trust_penalty / trust_denom, 0.0f, 1.0f);
+  float continuity = clamp(1.0f - cont_penalty / cont_denom, 0.0f, 1.0f);
+  uint base = kk * FASTEMBEDR_METAL_SCORE_WIDTH;
+  row_scores[base] = preservation;
+  row_scores[base + 1u] = trust;
+  row_scores[base + 2u] = continuity;
+  row_scores[base + 3u] = label_accuracy;
+  row_scores[base + 4u] = label_accuracy_n;
+  row_scores[base + 5u] = 1.0f;
+}
+
+kernel void silhouette_rows(
+  device const float* layout [[buffer(0)]],
+  device const int* labels [[buffer(1)]],
+  device const int* counts [[buffer(2)]],
+  device float* row_scores [[buffer(3)]],
+  constant uint& n [[buffer(4)]],
+  constant uint& n_label_levels [[buffer(5)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= n) return;
+  int own_label = labels[row];
+  if (own_label < 1 || uint(own_label) > n_label_levels) return;
+  float x0 = layout[row];
+  float x1 = layout[n + row];
+  if (!isfinite(x0) || !isfinite(x1)) return;
+
+  float sums[FASTEMBEDR_METAL_MAX_LABELS + 1];
+  for (uint label = 0u; label <= n_label_levels; ++label) sums[label] = 0.0f;
+
+  for (uint j = 0u; j < n; ++j) {
+    if (j == row) continue;
+    int label = labels[j];
+    if (label < 1 || uint(label) > n_label_levels) continue;
+    float y0 = layout[j];
+    float y1 = layout[n + j];
+    if (!isfinite(y0) || !isfinite(y1)) continue;
+    float dx = x0 - y0;
+    float dy = x1 - y1;
+    sums[label] += sqrt(dx * dx + dy * dy);
+  }
+
+  int own_count = counts[own_label] - 1;
+  float a = own_count > 0 ? sums[own_label] / float(own_count) : 0.0f;
+  float b = 3.4028234663852886e+38f;
+  for (uint label = 1u; label <= n_label_levels; ++label) {
+    if (int(label) == own_label || counts[label] <= 0) continue;
+    b = min(b, sums[label] / float(counts[label]));
+  }
+  float value = 0.0f;
+  if (isfinite(b)) {
+    float denom = max(a, b);
+    value = denom > 0.0f ? (b - a) / denom : 0.0f;
+  }
+  uint base = row * 2u;
+  row_scores[base] = value;
+  row_scores[base + 1u] = 1.0f;
+}
+)METAL";
+}
+
+NSUInteger bounded_threads(id<MTLComputePipelineState> pipeline,
+                           const NSUInteger cap = 256) {
+  const NSUInteger max_threads = [pipeline maxTotalThreadsPerThreadgroup];
+  if (max_threads < 1) Rcpp::stop("Metal pipeline reports no available threads.");
+  NSUInteger threads = std::min<NSUInteger>(max_threads, cap);
+  NSUInteger power = 1;
+  while ((power << 1u) <= threads) power <<= 1u;
+  return power;
+}
+
+void wait_for_command(id<MTLCommandBuffer> command_buffer,
+                      const char* stage) {
+  [command_buffer commit];
+  [command_buffer waitUntilCompleted];
+  if (command_buffer.status == MTLCommandBufferStatusError) {
+    Rcpp::stop("Metal %s command failed: %s", stage, ns_error_message(command_buffer.error).c_str());
+  }
+}
+
+void dispatch_rows(id<MTLComputeCommandEncoder> encoder,
+                   id<MTLComputePipelineState> pipeline,
+                   const int n) {
+  const NSUInteger threads = bounded_threads(pipeline);
+  [encoder dispatchThreads:MTLSizeMake(static_cast<NSUInteger>(n), 1, 1)
+    threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
+}
+
+std::vector<float> numeric_matrix_to_float(const NumericMatrix& x) {
+  const std::size_t size = static_cast<std::size_t>(x.nrow()) * x.ncol();
+  std::vector<float> out(size);
+  const double* begin = x.begin();
+  for (std::size_t i = 0; i < size; ++i) {
+    out[i] = static_cast<float>(begin[i]);
+  }
+  return out;
+}
+
+std::vector<float> numeric_matrix_to_row_major_float(const NumericMatrix& x) {
+  std::vector<float> out(static_cast<std::size_t>(x.nrow()) * x.ncol());
+  for (int c = 0; c < x.ncol(); ++c) {
+    for (int r = 0; r < x.nrow(); ++r) {
+      out[static_cast<std::size_t>(r) * x.ncol() + c] = static_cast<float>(x(r, c));
+    }
+  }
+  return out;
+}
+
+NumericMatrix float_to_numeric_matrix(const std::vector<float>& values,
+                                      const int nrow,
+                                      const int ncol) {
+  NumericMatrix out(nrow, ncol);
+  const std::size_t size = static_cast<std::size_t>(nrow) * ncol;
+  for (std::size_t i = 0; i < size; ++i) {
+    out.begin()[i] = static_cast<double>(values[i]);
+  }
+  return out;
+}
+
+NumericMatrix run_rsvd_multiply_metal(NumericMatrix left,
+                                      NumericMatrix right,
+                                      bool transpose_left) {
+  if (left.nrow() < 1 || left.ncol() < 1 || right.nrow() < 1 || right.ncol() < 1) {
+    Rcpp::stop("Metal RSVD matrix multiply requires non-empty matrices.");
+  }
+  if (transpose_left) {
+    if (left.nrow() != right.nrow()) {
+      Rcpp::stop("Metal RSVD cross-product received non-conformable matrices.");
+    }
+  } else if (left.ncol() != right.nrow()) {
+    Rcpp::stop("Metal RSVD matrix multiply received non-conformable matrices.");
+  }
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    const int out_rows = transpose_left ? left.ncol() : left.nrow();
+    const int out_cols = right.ncol();
+    std::vector<float> left_values = numeric_matrix_to_float(left);
+    std::vector<float> right_values = numeric_matrix_to_float(right);
+    std::vector<float> out_values(static_cast<std::size_t>(out_rows) * out_cols, 0.0f);
+    MatrixMultiplyParams params{
+      static_cast<std::uint32_t>(left.nrow()),
+      static_cast<std::uint32_t>(left.ncol()),
+      static_cast<std::uint32_t>(right.ncol()),
+      transpose_left ? 1u : 0u
+    };
+
+    id<MTLBuffer> left_buffer = [state.device newBufferWithBytes:left_values.data()
+                                                          length:left_values.size() * sizeof(float)
+                                                         options:MTLResourceStorageModeShared];
+    id<MTLBuffer> right_buffer = [state.device newBufferWithBytes:right_values.data()
+                                                           length:right_values.size() * sizeof(float)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> out_buffer = [state.device newBufferWithBytes:out_values.data()
+                                                         length:out_values.size() * sizeof(float)
+                                                        options:MTLResourceStorageModeShared];
+    id<MTLBuffer> params_buffer = [state.device newBufferWithBytes:&params
+                                                            length:sizeof(MatrixMultiplyParams)
+                                                           options:MTLResourceStorageModeShared];
+    if (left_buffer == nil || right_buffer == nil || out_buffer == nil || params_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal RSVD matrix multiply buffers.");
+    }
+
+    id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    [encoder setComputePipelineState:state.matrix_multiply_pipeline];
+    [encoder setBuffer:left_buffer offset:0 atIndex:0];
+    [encoder setBuffer:right_buffer offset:0 atIndex:1];
+    [encoder setBuffer:out_buffer offset:0 atIndex:2];
+    [encoder setBuffer:params_buffer offset:0 atIndex:3];
+    const NSUInteger width = std::min<NSUInteger>(16, [state.matrix_multiply_pipeline threadExecutionWidth]);
+    const NSUInteger height = std::max<NSUInteger>(
+      1,
+      std::min<NSUInteger>(16, [state.matrix_multiply_pipeline maxTotalThreadsPerThreadgroup] / width)
+    );
+    [encoder dispatchThreads:MTLSizeMake(static_cast<NSUInteger>(out_cols), static_cast<NSUInteger>(out_rows), 1)
+       threadsPerThreadgroup:MTLSizeMake(width, height, 1)];
+    [encoder endEncoding];
+    wait_for_command(command_buffer, "RSVD matrix multiply");
+
+    std::memcpy(out_values.data(), [out_buffer contents], out_values.size() * sizeof(float));
+    [left_buffer release];
+    [right_buffer release];
+    [out_buffer release];
+    [params_buffer release];
+    return float_to_numeric_matrix(out_values, out_rows, out_cols);
+  }
+}
+
+int knn_index_offset(const IntegerMatrix& indices, const int n) {
+  int min_idx = std::numeric_limits<int>::max();
+  int max_idx = std::numeric_limits<int>::min();
+  for (int j = 0; j < indices.ncol(); ++j) {
+    for (int i = 0; i < indices.nrow(); ++i) {
+      min_idx = std::min(min_idx, indices(i, j));
+      max_idx = std::max(max_idx, indices(i, j));
+    }
+  }
+  return (min_idx >= 1 && max_idx <= n) ? 1 : 0;
+}
+
+void validate_projection_inputs(const NumericMatrix& reference_layout,
+                                const IntegerMatrix& projection_indices,
+                                const NumericMatrix& projection_distances) {
+  const int n_reference = reference_layout.nrow();
+  const int n_components = reference_layout.ncol();
+  const int n_query = projection_indices.nrow();
+  const int k = projection_indices.ncol();
+  if (n_reference < 1) Rcpp::stop("reference_layout must have at least one row");
+  if (n_components < 1) Rcpp::stop("reference_layout must have at least one column");
+  if (n_query < 1) Rcpp::stop("projection_indices must have at least one row");
+  if (k < 1) Rcpp::stop("projection_indices must have at least one column");
+  if (k > kMaxMetalProjectionNeighbors) {
+    Rcpp::stop("Metal projection currently supports at most %d neighbors.", kMaxMetalProjectionNeighbors);
+  }
+  if (projection_distances.nrow() != n_query || projection_distances.ncol() != k) {
+    Rcpp::stop("projection_indices and projection_distances must have the same dimensions");
+  }
+  for (int i = 0; i < n_query; ++i) {
+    for (int j = 0; j < k; ++j) {
+      const int idx = projection_indices(i, j);
+      const double d = projection_distances(i, j);
+      if (idx < 1 || idx > n_reference) Rcpp::stop("projection indices out of range");
+      if (!std::isfinite(d) || d < 0.0) {
+        Rcpp::stop("projection distances must be finite and non-negative");
+      }
+    }
+  }
+}
+
+NumericVector structure_score_na() {
+  return NumericVector::create(
+    Rcpp::Named("knn_preservation") = NA_REAL,
+    Rcpp::Named("local_trustworthiness") = NA_REAL,
+    Rcpp::Named("local_continuity") = NA_REAL,
+    Rcpp::Named("structure_score") = NA_REAL,
+    Rcpp::Named("embedding_knn_accuracy") = NA_REAL
+  );
+}
+
+std::vector<float> run_projection_metal(MetalEmbeddingState& state,
+                                        const NumericMatrix& reference_layout,
+                                        const IntegerMatrix& projection_indices,
+                                        const NumericMatrix& projection_distances,
+                                        const bool average_zeros) {
+  const int n_reference = reference_layout.nrow();
+  const int n_query = projection_indices.nrow();
+  const int k = projection_indices.ncol();
+  const int n_components = reference_layout.ncol();
+
+  std::vector<float> reference = numeric_matrix_to_float(reference_layout);
+  std::vector<float> distances = numeric_matrix_to_float(projection_distances);
+  std::vector<float> out(static_cast<std::size_t>(n_query) * n_components, 0.0f);
+
+  id<MTLBuffer> reference_buffer = [state.device newBufferWithBytes:reference.data()
+                                                             length:reference.size() * sizeof(float)
+                                                            options:MTLResourceStorageModeShared];
+  id<MTLBuffer> index_buffer = [state.device newBufferWithBytes:projection_indices.begin()
+                                                         length:static_cast<std::size_t>(n_query) * k * sizeof(int)
+                                                        options:MTLResourceStorageModeShared];
+  id<MTLBuffer> distance_buffer = [state.device newBufferWithBytes:distances.data()
+                                                            length:distances.size() * sizeof(float)
+                                                           options:MTLResourceStorageModeShared];
+  id<MTLBuffer> out_buffer = [state.device newBufferWithLength:out.size() * sizeof(float)
+                                                       options:MTLResourceStorageModeShared];
+  if (reference_buffer == nil || index_buffer == nil || distance_buffer == nil || out_buffer == nil) {
+    Rcpp::stop("Failed to allocate Metal projection buffers.");
+  }
+
+  const std::uint32_t n_reference_u = static_cast<std::uint32_t>(n_reference);
+  const std::uint32_t n_query_u = static_cast<std::uint32_t>(n_query);
+  const std::uint32_t k_u = static_cast<std::uint32_t>(k);
+  const std::uint32_t n_components_u = static_cast<std::uint32_t>(n_components);
+  const std::uint32_t average_zeros_u = average_zeros ? 1u : 0u;
+
+  id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+  id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+  [encoder setComputePipelineState:state.project_pipeline];
+  [encoder setBuffer:reference_buffer offset:0 atIndex:0];
+  [encoder setBuffer:index_buffer offset:0 atIndex:1];
+  [encoder setBuffer:distance_buffer offset:0 atIndex:2];
+  [encoder setBuffer:out_buffer offset:0 atIndex:3];
+  [encoder setBytes:&n_reference_u length:sizeof(std::uint32_t) atIndex:4];
+  [encoder setBytes:&n_query_u length:sizeof(std::uint32_t) atIndex:5];
+  [encoder setBytes:&k_u length:sizeof(std::uint32_t) atIndex:6];
+  [encoder setBytes:&n_components_u length:sizeof(std::uint32_t) atIndex:7];
+  [encoder setBytes:&average_zeros_u length:sizeof(std::uint32_t) atIndex:8];
+  dispatch_rows(encoder, state.project_pipeline, n_query);
+  [encoder endEncoding];
+  wait_for_command(command_buffer, "projection");
+
+  std::memcpy(out.data(), [out_buffer contents], out.size() * sizeof(float));
+  [reference_buffer release];
+  [index_buffer release];
+  [distance_buffer release];
+  [out_buffer release];
+  return out;
+}
+
+void encode_spectral_normalize(MetalEmbeddingState& state,
+                               id<MTLCommandBuffer> command_buffer,
+                               id<MTLBuffer> value_buffer,
+                               id<MTLBuffer> stats_buffer,
+                               const std::uint32_t n_u) {
+  const NSUInteger stats_threads = bounded_threads(state.spectral_stats_pipeline);
+  const std::uint32_t stats_threads_u = static_cast<std::uint32_t>(stats_threads);
+
+  id<MTLComputeCommandEncoder> stats_encoder = [command_buffer computeCommandEncoder];
+  [stats_encoder setComputePipelineState:state.spectral_stats_pipeline];
+  [stats_encoder setBuffer:value_buffer offset:0 atIndex:0];
+  [stats_encoder setBuffer:stats_buffer offset:0 atIndex:1];
+  [stats_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
+  [stats_encoder setBytes:&stats_threads_u length:sizeof(std::uint32_t) atIndex:3];
+  [stats_encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(stats_threads, 1, 1)];
+  [stats_encoder endEncoding];
+
+  id<MTLComputeCommandEncoder> normalize_encoder = [command_buffer computeCommandEncoder];
+  [normalize_encoder setComputePipelineState:state.spectral_normalize_pipeline];
+  [normalize_encoder setBuffer:value_buffer offset:0 atIndex:0];
+  [normalize_encoder setBuffer:stats_buffer offset:0 atIndex:1];
+  [normalize_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
+  dispatch_rows(normalize_encoder, state.spectral_normalize_pipeline, static_cast<int>(n_u));
+  [normalize_encoder endEncoding];
+}
+
+std::vector<int> zero_based_reference_indices_metal(const IntegerMatrix& indices,
+                                                    const NumericMatrix& distances,
+                                                    const int n_reference) {
+  const int n_query = indices.nrow();
+  const int k = indices.ncol();
+  int min_idx = std::numeric_limits<int>::max();
+  int max_idx = std::numeric_limits<int>::min();
+  for (int j = 0; j < k; ++j) {
+    for (int i = 0; i < n_query; ++i) {
+      min_idx = std::min(min_idx, indices(i, j));
+      max_idx = std::max(max_idx, indices(i, j));
+    }
+  }
+  const int offset = (min_idx >= 1 && max_idx <= n_reference) ? 1 : 0;
+  std::vector<int> out(static_cast<std::size_t>(n_query) * k);
+  for (int j = 0; j < k; ++j) {
+    for (int i = 0; i < n_query; ++i) {
+      const int ref = indices(i, j) - offset;
+      if (ref < 0 || ref >= n_reference) {
+        Rcpp::stop("KNN indices are out of range for `reference_layout`.");
+      }
+      const double d = distances(i, j);
+      if (!std::isfinite(d) || d < 0.0) {
+        Rcpp::stop("KNN distances must be finite and non-negative.");
+      }
+      out[static_cast<std::size_t>(j) * n_query + i] = ref;
+    }
+  }
+  return out;
+}
+
+std::vector<float> tsne_transform_probabilities_metal(const NumericMatrix& distances,
+                                                      const double perplexity) {
+  const int n_query = distances.nrow();
+  const int k = distances.ncol();
+  std::vector<float> out(static_cast<std::size_t>(n_query) * k, 0.0f);
+  std::vector<double> row(static_cast<std::size_t>(k), 0.0);
+  const double target_entropy = std::log(perplexity);
+  const double tol = 1e-5;
+
+  for (int i = 0; i < n_query; ++i) {
+    bool found = false;
+    double beta = 1.0;
+    double min_beta = -std::numeric_limits<double>::max();
+    double max_beta = std::numeric_limits<double>::max();
+    double sum_p = std::numeric_limits<double>::min();
+
+    for (int iter = 0; !found && iter < 200; ++iter) {
+      sum_p = std::numeric_limits<double>::min();
+      for (int j = 0; j < k; ++j) {
+        const double d = distances(i, j);
+        const double p = std::exp(-beta * d * d);
+        row[static_cast<std::size_t>(j)] = p;
+        sum_p += p;
+      }
+      double entropy = 0.0;
+      for (int j = 0; j < k; ++j) {
+        const double d = distances(i, j);
+        entropy += beta * (d * d * row[static_cast<std::size_t>(j)]);
+      }
+      entropy = entropy / sum_p + std::log(sum_p);
+      const double diff = entropy - target_entropy;
+      if (std::abs(diff) < tol) {
+        found = true;
+      } else if (diff > 0.0) {
+        min_beta = beta;
+        beta = max_beta == std::numeric_limits<double>::max() ?
+          beta * 2.0 :
+          (beta + max_beta) / 2.0;
+      } else {
+        max_beta = beta;
+        beta = min_beta == -std::numeric_limits<double>::max() ?
+          beta / 2.0 :
+          (beta + min_beta) / 2.0;
+      }
+    }
+    for (int j = 0; j < k; ++j) {
+      out[static_cast<std::size_t>(j) * n_query + i] =
+        static_cast<float>(row[static_cast<std::size_t>(j)] / sum_p);
+    }
+  }
+  return out;
+}
+
+std::vector<float> initialize_tsne_transform_metal(const NumericMatrix& reference_layout,
+                                                   const std::vector<int>& indices,
+                                                   const NumericMatrix& distances,
+                                                   const NumericMatrix& y_init,
+                                                   const bool init,
+                                                   const std::string& initialization,
+                                                   const int seed) {
+  const int n_reference = reference_layout.nrow();
+  const int n_query = distances.nrow();
+  const int k = distances.ncol();
+  std::vector<float> out(static_cast<std::size_t>(n_query) * 2u, 0.0f);
+  if (init) {
+    if (y_init.nrow() != n_query || y_init.ncol() != 2) {
+      Rcpp::stop("`Y_init` must have one row per query and two columns for Metal transform.");
+    }
+    for (int i = 0; i < n_query; ++i) {
+      out[static_cast<std::size_t>(i) * 2u] = static_cast<float>(y_init(i, 0));
+      out[static_cast<std::size_t>(i) * 2u + 1u] = static_cast<float>(y_init(i, 1));
+    }
+    return out;
+  }
+
+  if (initialization == "random") {
+    const unsigned int resolved_seed = seed == NA_INTEGER ?
+      5489u :
+      static_cast<unsigned int>(seed);
+    std::mt19937 rng(resolved_seed);
+    std::normal_distribution<float> normal(0.0f, 1.0e-4f);
+    for (float& value : out) value = normal(rng);
+    return out;
+  }
+
+  std::vector<float> values(static_cast<std::size_t>(k), 0.0f);
+  for (int i = 0; i < n_query; ++i) {
+    for (int dim = 0; dim < 2; ++dim) {
+      if (initialization == "weighted") {
+        double numerator = 0.0;
+        double denominator = std::numeric_limits<double>::min();
+        for (int j = 0; j < k; ++j) {
+          const int ref = indices[static_cast<std::size_t>(j) * n_query + i];
+          const double d = std::max(0.0, distances(i, j));
+          const double w = 1.0 / (d + 1e-6);
+          numerator += w * reference_layout(ref, dim);
+          denominator += w;
+        }
+        out[static_cast<std::size_t>(i) * 2u + dim] = static_cast<float>(numerator / denominator);
+      } else {
+        for (int j = 0; j < k; ++j) {
+          const int ref = indices[static_cast<std::size_t>(j) * n_query + i];
+          if (ref < 0 || ref >= n_reference) Rcpp::stop("KNN indices are out of range.");
+          values[static_cast<std::size_t>(j)] = static_cast<float>(reference_layout(ref, dim));
+        }
+        const int mid = k / 2;
+        std::nth_element(values.begin(), values.begin() + mid, values.end());
+        float median = values[static_cast<std::size_t>(mid)];
+        if ((k & 1) == 0) {
+          std::nth_element(values.begin(), values.begin() + mid - 1, values.begin() + mid);
+          median = 0.5f * (median + values[static_cast<std::size_t>(mid - 1)]);
+        }
+        out[static_cast<std::size_t>(i) * 2u + dim] = median;
+      }
+    }
+  }
+  return out;
+}
+
+std::string metal_umap_optimizer_mode() {
+  const char* value = std::getenv("FASTEMBEDR_METAL_UMAP_OPTIMIZER");
+  if (value == nullptr) return "scheduled";
+  std::string mode(value);
+  std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  if (mode == "torchdr" || mode == "row" || mode == "row_negatives") {
+    return "torchdr_row_negatives";
+  }
+  if (mode == "atomic" || mode == "atomic_delta" || mode == "endpoint") {
+    return "atomic_delta";
+  }
+  return "scheduled";
+}
+
+} // namespace
+
+NumericMatrix spectral_knn_init_metal_impl(IntegerMatrix indices,
+                                          NumericMatrix distances,
+                                          int n_components,
+                                          int spectral_n_iter,
+                                          int seed) {
+  if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
+    Rcpp::stop("indices and distances must have the same dimensions");
+  }
+  if (n_components != 2) {
+    Rcpp::stop("Metal spectral initialization currently supports exactly two components.");
+  }
+  if (indices.ncol() > kMaxMetalNeighbors) {
+    Rcpp::stop("Metal spectral initialization currently supports at most %d neighbors.", kMaxMetalNeighbors);
+  }
+  if (spectral_n_iter < 1) Rcpp::stop("spectral_n_iter must be positive");
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    const int n = indices.nrow();
+    std::vector<std::int32_t> neighbors;
+    std::vector<float> weights;
+    prepare_umap_graph_adjacency(indices, distances, 0, neighbors, weights);
+    const int width = static_cast<int>(neighbors.size() / static_cast<std::size_t>(n));
+    if (width < 1) Rcpp::stop("Metal spectral initialization produced an empty graph.");
+
+    std::vector<float> current(static_cast<std::size_t>(n) * 2u, 0.0f);
+    const std::uint32_t n_u = static_cast<std::uint32_t>(n);
+    const std::uint32_t width_u = static_cast<std::uint32_t>(width);
+    const std::uint32_t seed_u = static_cast<std::uint32_t>(seed);
+
+    id<MTLBuffer> neighbor_buffer = [state.device newBufferWithBytes:neighbors.data()
+                                                              length:neighbors.size() * sizeof(std::int32_t)
+                                                             options:MTLResourceStorageModeShared];
+    id<MTLBuffer> weight_buffer = [state.device newBufferWithBytes:weights.data()
+                                                            length:weights.size() * sizeof(float)
+                                                           options:MTLResourceStorageModeShared];
+    id<MTLBuffer> current_buffer = [state.device newBufferWithLength:current.size() * sizeof(float)
+                                                             options:MTLResourceStorageModeShared];
+    id<MTLBuffer> next_buffer = [state.device newBufferWithLength:current.size() * sizeof(float)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> stats_buffer = [state.device newBufferWithLength:5u * sizeof(float)
+                                                           options:MTLResourceStorageModeShared];
+    if (neighbor_buffer == nil || weight_buffer == nil || current_buffer == nil ||
+        next_buffer == nil || stats_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal spectral initialization buffers.");
+    }
+
+    id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+
+    id<MTLComputeCommandEncoder> random_encoder = [command_buffer computeCommandEncoder];
+    [random_encoder setComputePipelineState:state.spectral_random_pipeline];
+    [random_encoder setBuffer:current_buffer offset:0 atIndex:0];
+    [random_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:1];
+    [random_encoder setBytes:&seed_u length:sizeof(std::uint32_t) atIndex:2];
+    dispatch_rows(random_encoder, state.spectral_random_pipeline, n);
+    [random_encoder endEncoding];
+    encode_spectral_normalize(state, command_buffer, current_buffer, stats_buffer, n_u);
+
+    for (int iter = 0; iter < spectral_n_iter; ++iter) {
+      id<MTLComputeCommandEncoder> diffuse_encoder = [command_buffer computeCommandEncoder];
+      [diffuse_encoder setComputePipelineState:state.spectral_diffuse_pipeline];
+      [diffuse_encoder setBuffer:neighbor_buffer offset:0 atIndex:0];
+      [diffuse_encoder setBuffer:weight_buffer offset:0 atIndex:1];
+      [diffuse_encoder setBuffer:current_buffer offset:0 atIndex:2];
+      [diffuse_encoder setBuffer:next_buffer offset:0 atIndex:3];
+      [diffuse_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:4];
+      [diffuse_encoder setBytes:&width_u length:sizeof(std::uint32_t) atIndex:5];
+      dispatch_rows(diffuse_encoder, state.spectral_diffuse_pipeline, n);
+      [diffuse_encoder endEncoding];
+      encode_spectral_normalize(state, command_buffer, next_buffer, stats_buffer, n_u);
+      std::swap(current_buffer, next_buffer);
+    }
+
+    wait_for_command(command_buffer, "spectral initialization");
+    std::memcpy(current.data(), [current_buffer contents], current.size() * sizeof(float));
+
+    NumericMatrix out(n, 2);
+    for (int i = 0; i < n; ++i) {
+      out(i, 0) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u]);
+      out(i, 1) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u + 1u]);
+    }
+    [neighbor_buffer release];
+    [weight_buffer release];
+    [current_buffer release];
+    [next_buffer release];
+    [stats_buffer release];
+    return out;
+  }
+}
+
+NumericMatrix rsvd_multiply_metal_impl(NumericMatrix left,
+                                       NumericMatrix right,
+                                       bool transpose_left) {
+  return run_rsvd_multiply_metal(left, right, transpose_left);
+}
+
+bool embedding_metal_available_impl() {
+  @autoreleasepool {
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    return device != nil;
+  }
+}
+
+List standardize_metal_impl(NumericMatrix data) {
+  const int n = data.nrow();
+  const int p = data.ncol();
+  if (n < 2 || p < 1) Rcpp::stop("data must have at least two rows and one column");
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    std::vector<float> values = numeric_matrix_to_float(data);
+    std::vector<float> centers(static_cast<std::size_t>(p), 0.0f);
+    std::vector<float> scales(static_cast<std::size_t>(p), 1.0f);
+
+    id<MTLBuffer> value_buffer = [state.device newBufferWithBytes:values.data()
+                                                           length:values.size() * sizeof(float)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> center_buffer = [state.device newBufferWithBytes:centers.data()
+                                                            length:centers.size() * sizeof(float)
+                                                           options:MTLResourceStorageModeShared];
+    id<MTLBuffer> scale_buffer = [state.device newBufferWithBytes:scales.data()
+                                                           length:scales.size() * sizeof(float)
+                                                          options:MTLResourceStorageModeShared];
+    if (value_buffer == nil || center_buffer == nil || scale_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal standardization buffers.");
+    }
+
+    const std::uint32_t n_u = static_cast<std::uint32_t>(n);
+    const std::uint32_t total_u = static_cast<std::uint32_t>(values.size());
+    const NSUInteger stats_threads = bounded_threads(state.standardize_stats_pipeline);
+    const std::uint32_t stats_threads_u = static_cast<std::uint32_t>(stats_threads);
+
+    id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+    id<MTLComputeCommandEncoder> stats_encoder = [command_buffer computeCommandEncoder];
+    [stats_encoder setComputePipelineState:state.standardize_stats_pipeline];
+    [stats_encoder setBuffer:value_buffer offset:0 atIndex:0];
+    [stats_encoder setBuffer:center_buffer offset:0 atIndex:1];
+    [stats_encoder setBuffer:scale_buffer offset:0 atIndex:2];
+    [stats_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:3];
+    [stats_encoder setBytes:&stats_threads_u length:sizeof(std::uint32_t) atIndex:4];
+    [stats_encoder dispatchThreadgroups:MTLSizeMake(static_cast<NSUInteger>(p), 1, 1)
+                  threadsPerThreadgroup:MTLSizeMake(stats_threads, 1, 1)];
+    [stats_encoder endEncoding];
+
+    id<MTLComputeCommandEncoder> apply_encoder = [command_buffer computeCommandEncoder];
+    [apply_encoder setComputePipelineState:state.standardize_apply_pipeline];
+    [apply_encoder setBuffer:value_buffer offset:0 atIndex:0];
+    [apply_encoder setBuffer:center_buffer offset:0 atIndex:1];
+    [apply_encoder setBuffer:scale_buffer offset:0 atIndex:2];
+    [apply_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:3];
+    [apply_encoder setBytes:&total_u length:sizeof(std::uint32_t) atIndex:4];
+    dispatch_rows(apply_encoder, state.standardize_apply_pipeline, static_cast<int>(values.size()));
+    [apply_encoder endEncoding];
+    wait_for_command(command_buffer, "standardization");
+
+    std::memcpy(values.data(), [value_buffer contents], values.size() * sizeof(float));
+    std::memcpy(centers.data(), [center_buffer contents], centers.size() * sizeof(float));
+    std::memcpy(scales.data(), [scale_buffer contents], scales.size() * sizeof(float));
+    [value_buffer release];
+    [center_buffer release];
+    [scale_buffer release];
+
+    NumericVector center_out(p);
+    NumericVector scale_out(p);
+    for (int j = 0; j < p; ++j) {
+      center_out[j] = static_cast<double>(centers[static_cast<std::size_t>(j)]);
+      scale_out[j] = static_cast<double>(scales[static_cast<std::size_t>(j)]);
+    }
+    return List::create(
+      Rcpp::Named("data") = float_to_numeric_matrix(values, n, p),
+      Rcpp::Named("center") = center_out,
+      Rcpp::Named("scale") = scale_out
+    );
+  }
+}
+
+List transform_tsne_metal_impl(NumericMatrix reference_layout,
+                               IntegerMatrix indices,
+                               NumericMatrix distances,
+                               NumericMatrix y_init,
+                               bool init,
+                               std::string initialization,
+                               double perplexity,
+                               int n_iter,
+                               int early_exaggeration_iter,
+                               double learning_rate,
+                               double early_exaggeration,
+                               double exaggeration,
+                               double initial_momentum,
+                               double final_momentum,
+                               double max_grad_norm,
+                               double max_step_norm,
+                               int n_negatives,
+                               int exact_repulsion_threshold,
+                               int seed) {
+  const int n_reference = reference_layout.nrow();
+  const int n_query = indices.nrow();
+  const int k = indices.ncol();
+  if (n_reference < 1 || reference_layout.ncol() != 2) {
+    Rcpp::stop("Metal t-SNE transform requires a two-dimensional non-empty reference layout.");
+  }
+  if (n_query < 1 || k < 1) {
+    Rcpp::stop("KNN input must have at least one query row and one neighbor column.");
+  }
+  if (k > kMaxMetalTsneTransformNeighbors) {
+    Rcpp::stop("Metal t-SNE transform currently supports at most %d neighbors.", kMaxMetalTsneTransformNeighbors);
+  }
+  if (distances.nrow() != n_query || distances.ncol() != k) {
+    Rcpp::stop("KNN `indices` and `distances` must have the same dimensions.");
+  }
+  if (perplexity <= 0.0 || !std::isfinite(perplexity)) {
+    Rcpp::stop("`perplexity` must be positive.");
+  }
+  if (n_iter < 0 || early_exaggeration_iter < 0 || n_iter + early_exaggeration_iter < 1) {
+    Rcpp::stop("Metal t-SNE transform iteration counts must sum to at least one.");
+  }
+  if (learning_rate <= 0.0 || !std::isfinite(learning_rate)) {
+    Rcpp::stop("`learning_rate` must be positive.");
+  }
+  if (early_exaggeration <= 0.0 || exaggeration <= 0.0 ||
+      !std::isfinite(early_exaggeration) || !std::isfinite(exaggeration)) {
+    Rcpp::stop("exaggeration values must be positive.");
+  }
+  if (initial_momentum < 0.0 || final_momentum < 0.0 ||
+      !std::isfinite(initial_momentum) || !std::isfinite(final_momentum)) {
+    Rcpp::stop("momentum values must be non-negative.");
+  }
+  if (initialization != "median" && initialization != "weighted" && initialization != "random") {
+    Rcpp::stop("`initialization` must be 'median', 'weighted', or 'random'.");
+  }
+  if (exact_repulsion_threshold < 1) exact_repulsion_threshold = 1;
+  if (n_negatives < 1) n_negatives = 1;
+  n_negatives = std::min(n_negatives, n_reference);
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    std::vector<int> ref_indices = zero_based_reference_indices_metal(
+      indices,
+      distances,
+      n_reference
+    );
+    std::vector<float> probabilities = tsne_transform_probabilities_metal(
+      distances,
+      perplexity
+    );
+    std::vector<float> reference = numeric_matrix_to_float(reference_layout);
+    std::vector<float> current = initialize_tsne_transform_metal(
+      reference_layout,
+      ref_indices,
+      distances,
+      y_init,
+      init,
+      initialization,
+      seed
+    );
+    std::vector<float> gains(current.size(), 1.0f);
+    std::vector<float> updates(current.size(), 0.0f);
+
+    id<MTLBuffer> reference_buffer = [state.device newBufferWithBytes:reference.data()
+                                                               length:reference.size() * sizeof(float)
+                                                              options:MTLResourceStorageModeShared];
+    id<MTLBuffer> index_buffer = [state.device newBufferWithBytes:ref_indices.data()
+                                                           length:ref_indices.size() * sizeof(int)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> probability_buffer = [state.device newBufferWithBytes:probabilities.data()
+                                                                 length:probabilities.size() * sizeof(float)
+                                                                options:MTLResourceStorageModeShared];
+    id<MTLBuffer> current_buffer = [state.device newBufferWithBytes:current.data()
+                                                             length:current.size() * sizeof(float)
+                                                            options:MTLResourceStorageModeShared];
+    id<MTLBuffer> gain_buffer = [state.device newBufferWithBytes:gains.data()
+                                                          length:gains.size() * sizeof(float)
+                                                         options:MTLResourceStorageModeShared];
+    id<MTLBuffer> update_buffer = [state.device newBufferWithBytes:updates.data()
+                                                            length:updates.size() * sizeof(float)
+                                                           options:MTLResourceStorageModeShared];
+    if (reference_buffer == nil || index_buffer == nil || probability_buffer == nil ||
+        current_buffer == nil || gain_buffer == nil || update_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal t-SNE transform buffers.");
+    }
+
+    const bool exact_repulsion = n_reference <= exact_repulsion_threshold ||
+      n_negatives >= n_reference;
+    const NSUInteger threads_per_group = bounded_threads(state.tsne_transform_pipeline);
+    const MTLSize grid_size = MTLSizeMake(static_cast<NSUInteger>(n_query), 1, 1);
+    const MTLSize threadgroup_size = MTLSizeMake(threads_per_group, 1, 1);
+    const std::uint32_t epochs_per_command = kMetalEmbeddingEpochsPerCommand;
+    const int total_iter = n_iter + early_exaggeration_iter;
+    const float grad_clip = (max_grad_norm > 0.0 && std::isfinite(max_grad_norm)) ?
+      static_cast<float>(max_grad_norm) :
+      std::numeric_limits<float>::max();
+    const float step_clip = (max_step_norm > 0.0 && std::isfinite(max_step_norm)) ?
+      static_cast<float>(max_step_norm) :
+      std::numeric_limits<float>::max();
+
+    for (std::uint32_t epoch0 = 0; epoch0 < static_cast<std::uint32_t>(total_iter); epoch0 += epochs_per_command) {
+      id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+      const std::uint32_t epoch_end = std::min<std::uint32_t>(
+        static_cast<std::uint32_t>(total_iter),
+        epoch0 + epochs_per_command
+      );
+      for (std::uint32_t epoch = epoch0; epoch < epoch_end; ++epoch) {
+        const bool in_early = epoch < static_cast<std::uint32_t>(early_exaggeration_iter);
+        TsneTransformParams params{
+          static_cast<std::uint32_t>(n_reference),
+          static_cast<std::uint32_t>(n_query),
+          static_cast<std::uint32_t>(k),
+          static_cast<std::uint32_t>(n_negatives),
+          static_cast<std::uint32_t>(seed == NA_INTEGER ? 5489 : seed),
+          exact_repulsion ? 1u : 0u,
+          static_cast<float>(learning_rate),
+          static_cast<float>(in_early ? early_exaggeration : exaggeration),
+          static_cast<float>(in_early ? initial_momentum : final_momentum),
+          grad_clip,
+          step_clip
+        };
+
+        id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+        [encoder setComputePipelineState:state.tsne_transform_pipeline];
+        [encoder setBuffer:reference_buffer offset:0 atIndex:0];
+        [encoder setBuffer:index_buffer offset:0 atIndex:1];
+        [encoder setBuffer:probability_buffer offset:0 atIndex:2];
+        [encoder setBuffer:current_buffer offset:0 atIndex:3];
+        [encoder setBuffer:gain_buffer offset:0 atIndex:4];
+        [encoder setBuffer:update_buffer offset:0 atIndex:5];
+        [encoder setBytes:&params length:sizeof(TsneTransformParams) atIndex:6];
+        [encoder setBytes:&epoch length:sizeof(std::uint32_t) atIndex:7];
+        [encoder dispatchThreads:grid_size threadsPerThreadgroup:threadgroup_size];
+        [encoder endEncoding];
+      }
+      [command_buffer commit];
+      [command_buffer waitUntilCompleted];
+      if (command_buffer.status == MTLCommandBufferStatusError) {
+        Rcpp::stop("Metal t-SNE transform command failed: %s", ns_error_message(command_buffer.error).c_str());
+      }
+    }
+
+    std::memcpy(current.data(), [current_buffer contents], current.size() * sizeof(float));
+    NumericMatrix layout(n_query, 2);
+    for (int i = 0; i < n_query; ++i) {
+      layout(i, 0) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u]);
+      layout(i, 1) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u + 1u]);
+    }
+
+    [reference_buffer release];
+    [index_buffer release];
+    [probability_buffer release];
+    [current_buffer release];
+    [gain_buffer release];
+    [update_buffer release];
+
+    return List::create(
+      Rcpp::Named("Y") = layout,
+      Rcpp::Named("optimizer") = "opentsne_style_fixed_reference_transform_metal",
+      Rcpp::Named("initialization") = initialization,
+      Rcpp::Named("repulsion") = exact_repulsion ? "exact_reference_metal" : "sampled_reference_metal",
+      Rcpp::Named("n_negatives") = n_negatives,
+      Rcpp::Named("backend") = "metal"
+    );
+  }
+}
+
+NumericMatrix project_embedding_knn_metal_impl(NumericMatrix reference_layout,
+                                               IntegerMatrix projection_indices,
+                                               NumericMatrix projection_distances) {
+  validate_projection_inputs(reference_layout, projection_indices, projection_distances);
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    std::vector<float> out = run_projection_metal(
+      state,
+      reference_layout,
+      projection_indices,
+      projection_distances,
+      true
+    );
+    return float_to_numeric_matrix(
+      out,
+      projection_indices.nrow(),
+      reference_layout.ncol()
+    );
+  }
+}
+
+NumericMatrix interpolate_landmark_layout_metal_impl(NumericMatrix landmark_layout,
+                                                     IntegerVector landmark_indices,
+                                                     IntegerMatrix projection_indices,
+                                                     NumericMatrix projection_distances,
+                                                     int n) {
+  validate_projection_inputs(landmark_layout, projection_indices, projection_distances);
+  const int n_landmarks = landmark_layout.nrow();
+  const int n_components = landmark_layout.ncol();
+  const int k = projection_indices.ncol();
+  if (landmark_indices.size() != n_landmarks) {
+    Rcpp::stop("landmark_indices length must match landmark_layout rows");
+  }
+  if (n < 1 || projection_indices.nrow() != n) {
+    Rcpp::stop("projection_indices row count must equal n");
+  }
+  for (int i = 0; i < landmark_indices.size(); ++i) {
+    if (landmark_indices[i] < 1 || landmark_indices[i] > n) {
+      Rcpp::stop("landmark indices out of range");
+    }
+  }
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    std::vector<float> reference = numeric_matrix_to_float(landmark_layout);
+    std::vector<float> distances = numeric_matrix_to_float(projection_distances);
+    std::vector<float> out(static_cast<std::size_t>(n) * n_components, 0.0f);
+
+    id<MTLBuffer> reference_buffer = [state.device newBufferWithBytes:reference.data()
+                                                               length:reference.size() * sizeof(float)
+                                                              options:MTLResourceStorageModeShared];
+    id<MTLBuffer> index_buffer = [state.device newBufferWithBytes:projection_indices.begin()
+                                                           length:static_cast<std::size_t>(n) * k * sizeof(int)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> distance_buffer = [state.device newBufferWithBytes:distances.data()
+                                                              length:distances.size() * sizeof(float)
+                                                             options:MTLResourceStorageModeShared];
+    id<MTLBuffer> landmark_index_buffer = [state.device newBufferWithBytes:landmark_indices.begin()
+                                                                    length:static_cast<std::size_t>(n_landmarks) * sizeof(int)
+                                                                   options:MTLResourceStorageModeShared];
+    id<MTLBuffer> out_buffer = [state.device newBufferWithLength:out.size() * sizeof(float)
+                                                         options:MTLResourceStorageModeShared];
+    if (reference_buffer == nil || index_buffer == nil || distance_buffer == nil ||
+        landmark_index_buffer == nil || out_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal landmark interpolation buffers.");
+    }
+
+    const std::uint32_t n_landmarks_u = static_cast<std::uint32_t>(n_landmarks);
+    const std::uint32_t n_u = static_cast<std::uint32_t>(n);
+    const std::uint32_t k_u = static_cast<std::uint32_t>(k);
+    const std::uint32_t n_components_u = static_cast<std::uint32_t>(n_components);
+    const std::uint32_t average_zeros_u = 0u;
+
+    id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+    id<MTLComputeCommandEncoder> project_encoder = [command_buffer computeCommandEncoder];
+    [project_encoder setComputePipelineState:state.project_pipeline];
+    [project_encoder setBuffer:reference_buffer offset:0 atIndex:0];
+    [project_encoder setBuffer:index_buffer offset:0 atIndex:1];
+    [project_encoder setBuffer:distance_buffer offset:0 atIndex:2];
+    [project_encoder setBuffer:out_buffer offset:0 atIndex:3];
+    [project_encoder setBytes:&n_landmarks_u length:sizeof(std::uint32_t) atIndex:4];
+    [project_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:5];
+    [project_encoder setBytes:&k_u length:sizeof(std::uint32_t) atIndex:6];
+    [project_encoder setBytes:&n_components_u length:sizeof(std::uint32_t) atIndex:7];
+    [project_encoder setBytes:&average_zeros_u length:sizeof(std::uint32_t) atIndex:8];
+    dispatch_rows(project_encoder, state.project_pipeline, n);
+    [project_encoder endEncoding];
+
+    id<MTLComputeCommandEncoder> overwrite_encoder = [command_buffer computeCommandEncoder];
+    [overwrite_encoder setComputePipelineState:state.overwrite_landmarks_pipeline];
+    [overwrite_encoder setBuffer:out_buffer offset:0 atIndex:0];
+    [overwrite_encoder setBuffer:reference_buffer offset:0 atIndex:1];
+    [overwrite_encoder setBuffer:landmark_index_buffer offset:0 atIndex:2];
+    [overwrite_encoder setBytes:&n_landmarks_u length:sizeof(std::uint32_t) atIndex:3];
+    [overwrite_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:4];
+    [overwrite_encoder setBytes:&n_components_u length:sizeof(std::uint32_t) atIndex:5];
+    dispatch_rows(overwrite_encoder, state.overwrite_landmarks_pipeline, n_landmarks * n_components);
+    [overwrite_encoder endEncoding];
+    wait_for_command(command_buffer, "landmark interpolation");
+
+    std::memcpy(out.data(), [out_buffer contents], out.size() * sizeof(float));
+    [reference_buffer release];
+    [index_buffer release];
+    [distance_buffer release];
+    [landmark_index_buffer release];
+    [out_buffer release];
+    return float_to_numeric_matrix(out, n, n_components);
+  }
+}
+
+NumericMatrix landmark_project_interpolate_metal_impl(NumericMatrix landmark_data,
+                                                      NumericMatrix query_data,
+                                                      NumericMatrix landmark_layout,
+                                                      IntegerVector landmark_indices,
+                                                      int k) {
+  const int n_landmarks = landmark_data.nrow();
+  const int n = query_data.nrow();
+  const int n_features = landmark_data.ncol();
+  const int n_components = landmark_layout.ncol();
+  if (n_landmarks < 1) Rcpp::stop("landmark_data must have at least one row");
+  if (n < 1) Rcpp::stop("query_data must have at least one row");
+  if (n_features < 1) Rcpp::stop("landmark_data must have at least one column");
+  if (query_data.ncol() != n_features) {
+    Rcpp::stop("landmark_data and query_data must have the same number of columns");
+  }
+  if (landmark_layout.nrow() != n_landmarks) {
+    Rcpp::stop("landmark_layout rows must match landmark_data rows");
+  }
+  if (n_components < 1) Rcpp::stop("landmark_layout must have at least one column");
+  if (landmark_indices.size() != n_landmarks) {
+    Rcpp::stop("landmark_indices length must match landmark_data rows");
+  }
+  if (k < 1) Rcpp::stop("k must be positive");
+  if (k > n_landmarks) Rcpp::stop("k cannot exceed the number of landmarks");
+  if (k > kMaxMetalProjectionNeighbors) {
+    Rcpp::stop("Metal fused landmark projection currently supports at most %d neighbors.", kMaxMetalProjectionNeighbors);
+  }
+  for (int i = 0; i < landmark_indices.size(); ++i) {
+    if (landmark_indices[i] < 1 || landmark_indices[i] > n) {
+      Rcpp::stop("landmark indices out of range");
+    }
+  }
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    std::vector<float> landmark_values = numeric_matrix_to_row_major_float(landmark_data);
+    std::vector<float> query_values = numeric_matrix_to_row_major_float(query_data);
+    std::vector<float> layout_values = numeric_matrix_to_float(landmark_layout);
+    std::vector<float> out(static_cast<std::size_t>(n) * n_components, 0.0f);
+
+    id<MTLBuffer> landmark_data_buffer = [state.device newBufferWithBytes:landmark_values.data()
+                                                                length:landmark_values.size() * sizeof(float)
+                                                               options:MTLResourceStorageModeShared];
+    id<MTLBuffer> query_data_buffer = [state.device newBufferWithBytes:query_values.data()
+                                                             length:query_values.size() * sizeof(float)
+                                                            options:MTLResourceStorageModeShared];
+    id<MTLBuffer> layout_buffer = [state.device newBufferWithBytes:layout_values.data()
+                                                        length:layout_values.size() * sizeof(float)
+                                                       options:MTLResourceStorageModeShared];
+    id<MTLBuffer> out_buffer = [state.device newBufferWithLength:out.size() * sizeof(float)
+                                                        options:MTLResourceStorageModeShared];
+    id<MTLBuffer> landmark_index_buffer = [state.device newBufferWithBytes:landmark_indices.begin()
+                                                                 length:static_cast<std::size_t>(n_landmarks) * sizeof(int)
+                                                                options:MTLResourceStorageModeShared];
+    if (landmark_data_buffer == nil || query_data_buffer == nil || layout_buffer == nil ||
+        out_buffer == nil || landmark_index_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal fused landmark projection buffers.");
+    }
+
+    const std::uint32_t n_landmarks_u = static_cast<std::uint32_t>(n_landmarks);
+    const std::uint32_t n_u = static_cast<std::uint32_t>(n);
+    const std::uint32_t n_features_u = static_cast<std::uint32_t>(n_features);
+    const std::uint32_t k_u = static_cast<std::uint32_t>(k);
+    const std::uint32_t n_components_u = static_cast<std::uint32_t>(n_components);
+
+    id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+    id<MTLComputeCommandEncoder> project_encoder = [command_buffer computeCommandEncoder];
+    [project_encoder setComputePipelineState:state.landmark_project_interpolate_pipeline];
+    [project_encoder setBuffer:landmark_data_buffer offset:0 atIndex:0];
+    [project_encoder setBuffer:query_data_buffer offset:0 atIndex:1];
+    [project_encoder setBuffer:layout_buffer offset:0 atIndex:2];
+    [project_encoder setBuffer:out_buffer offset:0 atIndex:3];
+    [project_encoder setBytes:&n_landmarks_u length:sizeof(std::uint32_t) atIndex:4];
+    [project_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:5];
+    [project_encoder setBytes:&n_features_u length:sizeof(std::uint32_t) atIndex:6];
+    [project_encoder setBytes:&k_u length:sizeof(std::uint32_t) atIndex:7];
+    [project_encoder setBytes:&n_components_u length:sizeof(std::uint32_t) atIndex:8];
+    dispatch_rows(project_encoder, state.landmark_project_interpolate_pipeline, n);
+    [project_encoder endEncoding];
+
+    id<MTLComputeCommandEncoder> overwrite_encoder = [command_buffer computeCommandEncoder];
+    [overwrite_encoder setComputePipelineState:state.overwrite_landmarks_pipeline];
+    [overwrite_encoder setBuffer:out_buffer offset:0 atIndex:0];
+    [overwrite_encoder setBuffer:layout_buffer offset:0 atIndex:1];
+    [overwrite_encoder setBuffer:landmark_index_buffer offset:0 atIndex:2];
+    [overwrite_encoder setBytes:&n_landmarks_u length:sizeof(std::uint32_t) atIndex:3];
+    [overwrite_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:4];
+    [overwrite_encoder setBytes:&n_components_u length:sizeof(std::uint32_t) atIndex:5];
+    dispatch_rows(overwrite_encoder, state.overwrite_landmarks_pipeline, n_landmarks * n_components);
+    [overwrite_encoder endEncoding];
+    wait_for_command(command_buffer, "fused landmark projection");
+
+    std::memcpy(out.data(), [out_buffer contents], out.size() * sizeof(float));
+    [landmark_data_buffer release];
+    [query_data_buffer release];
+    [layout_buffer release];
+    [out_buffer release];
+    [landmark_index_buffer release];
+    return float_to_numeric_matrix(out, n, n_components);
+  }
+}
+
+List landmark_project_interpolate_knn_confidence_metal_impl(NumericMatrix landmark_data,
+                                                            NumericMatrix query_data,
+                                                            NumericMatrix landmark_layout,
+                                                            IntegerVector landmark_indices,
+                                                            int k) {
+  const int n_landmarks = landmark_data.nrow();
+  const int n = query_data.nrow();
+  const int n_features = landmark_data.ncol();
+  const int n_components = landmark_layout.ncol();
+  if (n_landmarks < 1) Rcpp::stop("landmark_data must have at least one row");
+  if (n < 1) Rcpp::stop("query_data must have at least one row");
+  if (n_features < 1) Rcpp::stop("landmark_data must have at least one column");
+  if (query_data.ncol() != n_features) {
+    Rcpp::stop("landmark_data and query_data must have the same number of columns");
+  }
+  if (landmark_layout.nrow() != n_landmarks) {
+    Rcpp::stop("landmark_layout rows must match landmark_data rows");
+  }
+  if (n_components < 1) Rcpp::stop("landmark_layout must have at least one column");
+  if (landmark_indices.size() != n_landmarks) {
+    Rcpp::stop("landmark_indices length must match landmark_data rows");
+  }
+  if (k < 1) Rcpp::stop("k must be positive");
+  if (k > n_landmarks) Rcpp::stop("k cannot exceed the number of landmarks");
+  if (k > kMaxMetalProjectionNeighbors) {
+    Rcpp::stop("Metal fused landmark projection currently supports at most %d neighbors.", kMaxMetalProjectionNeighbors);
+  }
+  for (int i = 0; i < landmark_indices.size(); ++i) {
+    if (landmark_indices[i] < 1 || landmark_indices[i] > n) {
+      Rcpp::stop("landmark indices out of range");
+    }
+  }
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    std::vector<float> landmark_values = numeric_matrix_to_row_major_float(landmark_data);
+    std::vector<float> query_values = numeric_matrix_to_row_major_float(query_data);
+    std::vector<float> layout_values = numeric_matrix_to_float(landmark_layout);
+    std::vector<float> out(static_cast<std::size_t>(n) * n_components, 0.0f);
+    std::vector<int> projection_indices(static_cast<std::size_t>(n) * k, 1);
+    std::vector<float> projection_distances(static_cast<std::size_t>(n) * k, 0.0f);
+    std::vector<float> confidence(static_cast<std::size_t>(n), 0.0f);
+
+    id<MTLBuffer> landmark_data_buffer = [state.device newBufferWithBytes:landmark_values.data()
+                                                              length:landmark_values.size() * sizeof(float)
+                                                             options:MTLResourceStorageModeShared];
+    id<MTLBuffer> query_data_buffer = [state.device newBufferWithBytes:query_values.data()
+                                                           length:query_values.size() * sizeof(float)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> layout_buffer = [state.device newBufferWithBytes:layout_values.data()
+                                                      length:layout_values.size() * sizeof(float)
+                                                     options:MTLResourceStorageModeShared];
+    id<MTLBuffer> out_buffer = [state.device newBufferWithLength:out.size() * sizeof(float)
+                                                    options:MTLResourceStorageModeShared];
+    id<MTLBuffer> projection_index_buffer =
+      [state.device newBufferWithLength:projection_indices.size() * sizeof(int)
+                                options:MTLResourceStorageModeShared];
+    id<MTLBuffer> projection_distance_buffer =
+      [state.device newBufferWithLength:projection_distances.size() * sizeof(float)
+                                options:MTLResourceStorageModeShared];
+    id<MTLBuffer> confidence_buffer =
+      [state.device newBufferWithLength:confidence.size() * sizeof(float)
+                                options:MTLResourceStorageModeShared];
+    id<MTLBuffer> landmark_index_buffer = [state.device newBufferWithBytes:landmark_indices.begin()
+                                                               length:static_cast<std::size_t>(n_landmarks) * sizeof(int)
+                                                              options:MTLResourceStorageModeShared];
+    if (landmark_data_buffer == nil || query_data_buffer == nil || layout_buffer == nil ||
+        out_buffer == nil || projection_index_buffer == nil || projection_distance_buffer == nil ||
+        confidence_buffer == nil || landmark_index_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal fused landmark projection/confidence buffers.");
+    }
+
+    const std::uint32_t n_landmarks_u = static_cast<std::uint32_t>(n_landmarks);
+    const std::uint32_t n_u = static_cast<std::uint32_t>(n);
+    const std::uint32_t n_features_u = static_cast<std::uint32_t>(n_features);
+    const std::uint32_t k_u = static_cast<std::uint32_t>(k);
+    const std::uint32_t n_components_u = static_cast<std::uint32_t>(n_components);
+
+    id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+    id<MTLComputeCommandEncoder> project_encoder = [command_buffer computeCommandEncoder];
+    [project_encoder setComputePipelineState:state.landmark_project_interpolate_knn_confidence_pipeline];
+    [project_encoder setBuffer:landmark_data_buffer offset:0 atIndex:0];
+    [project_encoder setBuffer:query_data_buffer offset:0 atIndex:1];
+    [project_encoder setBuffer:layout_buffer offset:0 atIndex:2];
+    [project_encoder setBuffer:out_buffer offset:0 atIndex:3];
+    [project_encoder setBuffer:projection_index_buffer offset:0 atIndex:4];
+    [project_encoder setBuffer:projection_distance_buffer offset:0 atIndex:5];
+    [project_encoder setBuffer:confidence_buffer offset:0 atIndex:6];
+    [project_encoder setBytes:&n_landmarks_u length:sizeof(std::uint32_t) atIndex:7];
+    [project_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:8];
+    [project_encoder setBytes:&n_features_u length:sizeof(std::uint32_t) atIndex:9];
+    [project_encoder setBytes:&k_u length:sizeof(std::uint32_t) atIndex:10];
+    [project_encoder setBytes:&n_components_u length:sizeof(std::uint32_t) atIndex:11];
+    dispatch_rows(project_encoder, state.landmark_project_interpolate_knn_confidence_pipeline, n);
+    [project_encoder endEncoding];
+
+    id<MTLComputeCommandEncoder> overwrite_encoder = [command_buffer computeCommandEncoder];
+    [overwrite_encoder setComputePipelineState:state.overwrite_landmarks_pipeline];
+    [overwrite_encoder setBuffer:out_buffer offset:0 atIndex:0];
+    [overwrite_encoder setBuffer:layout_buffer offset:0 atIndex:1];
+    [overwrite_encoder setBuffer:landmark_index_buffer offset:0 atIndex:2];
+    [overwrite_encoder setBytes:&n_landmarks_u length:sizeof(std::uint32_t) atIndex:3];
+    [overwrite_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:4];
+    [overwrite_encoder setBytes:&n_components_u length:sizeof(std::uint32_t) atIndex:5];
+    dispatch_rows(overwrite_encoder, state.overwrite_landmarks_pipeline, n_landmarks * n_components);
+    [overwrite_encoder endEncoding];
+    wait_for_command(command_buffer, "fused landmark projection with confidence");
+
+    std::memcpy(out.data(), [out_buffer contents], out.size() * sizeof(float));
+    std::memcpy(projection_indices.data(), [projection_index_buffer contents],
+                projection_indices.size() * sizeof(int));
+    std::memcpy(projection_distances.data(), [projection_distance_buffer contents],
+                projection_distances.size() * sizeof(float));
+    std::memcpy(confidence.data(), [confidence_buffer contents],
+                confidence.size() * sizeof(float));
+
+    [landmark_data_buffer release];
+    [query_data_buffer release];
+    [layout_buffer release];
+    [out_buffer release];
+    [projection_index_buffer release];
+    [projection_distance_buffer release];
+    [confidence_buffer release];
+    [landmark_index_buffer release];
+
+    NumericMatrix layout = float_to_numeric_matrix(out, n, n_components);
+    IntegerMatrix indices(n, k);
+    std::memcpy(indices.begin(), projection_indices.data(), projection_indices.size() * sizeof(int));
+    NumericMatrix distances(n, k);
+    for (std::size_t i = 0; i < projection_distances.size(); ++i) {
+      distances.begin()[i] = static_cast<double>(projection_distances[i]);
+    }
+    NumericVector confidence_out(n);
+    for (int i = 0; i < n; ++i) {
+      confidence_out[i] = static_cast<double>(confidence[static_cast<std::size_t>(i)]);
+    }
+
+    return List::create(
+      Rcpp::Named("layout") = layout,
+      Rcpp::Named("indices") = indices,
+      Rcpp::Named("distances") = distances,
+      Rcpp::Named("confidence") = confidence_out
+    );
+  }
+}
+
+NumericVector knn_structure_score_metal_impl(NumericMatrix layout,
+                                             IntegerMatrix indices,
+                                             IntegerVector keep,
+                                             int preserve_k,
+                                             IntegerVector labels,
+                                             int n_label_levels) {
+  const int n = layout.nrow();
+  const bool compact_indices = indices.nrow() == keep.size();
+  if (layout.ncol() != 2) {
+    Rcpp::stop("Metal structure scoring currently supports two-dimensional embeddings.");
+  }
+  if (indices.nrow() != n && !compact_indices) {
+    Rcpp::stop("indices row count must match layout row count or keep length");
+  }
+  if (preserve_k < 1 || preserve_k > indices.ncol()) Rcpp::stop("invalid preserve_k");
+  if (preserve_k > kMaxMetalScoreNeighbors) {
+    Rcpp::stop("Metal structure scoring currently supports at most %d neighbors.", kMaxMetalScoreNeighbors);
+  }
+  if (labels.size() != 0 && labels.size() != n) Rcpp::stop("labels length must match layout row count");
+  if (keep.size() == 0) return structure_score_na();
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    const int keep_n = keep.size();
+    const int index_rows = indices.nrow();
+    const int high_rank_limit = indices.ncol();
+    std::vector<float> layout_values = numeric_matrix_to_float(layout);
+    std::vector<int> labels_values(static_cast<std::size_t>(n), 0);
+    if (labels.size() == n && n_label_levels > 0) {
+      for (int i = 0; i < n; ++i) labels_values[static_cast<std::size_t>(i)] = labels[i];
+    }
+    std::vector<float> row_scores(static_cast<std::size_t>(keep_n) * kMetalScoreWidth, 0.0f);
+
+    id<MTLBuffer> layout_buffer = [state.device newBufferWithBytes:layout_values.data()
+                                                            length:layout_values.size() * sizeof(float)
+                                                           options:MTLResourceStorageModeShared];
+    id<MTLBuffer> index_buffer = [state.device newBufferWithBytes:indices.begin()
+                                                           length:static_cast<std::size_t>(index_rows) * high_rank_limit * sizeof(int)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> keep_buffer = [state.device newBufferWithBytes:keep.begin()
+                                                         length:static_cast<std::size_t>(keep_n) * sizeof(int)
+                                                        options:MTLResourceStorageModeShared];
+    id<MTLBuffer> label_buffer = [state.device newBufferWithBytes:labels_values.data()
+                                                          length:labels_values.size() * sizeof(int)
+                                                         options:MTLResourceStorageModeShared];
+    id<MTLBuffer> row_buffer = [state.device newBufferWithBytes:row_scores.data()
+                                                        length:row_scores.size() * sizeof(float)
+                                                       options:MTLResourceStorageModeShared];
+    if (layout_buffer == nil || index_buffer == nil || keep_buffer == nil ||
+        label_buffer == nil || row_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal structure scoring buffers.");
+    }
+
+    const std::uint32_t n_u = static_cast<std::uint32_t>(n);
+    const std::uint32_t index_rows_u = static_cast<std::uint32_t>(index_rows);
+    const std::uint32_t high_rank_limit_u = static_cast<std::uint32_t>(high_rank_limit);
+    const std::uint32_t preserve_k_u = static_cast<std::uint32_t>(preserve_k);
+    const std::uint32_t keep_n_u = static_cast<std::uint32_t>(keep_n);
+    const std::uint32_t compact_u = compact_indices ? 1u : 0u;
+    const std::uint32_t n_label_levels_u = labels.size() == n ? static_cast<std::uint32_t>(n_label_levels) : 0u;
+
+    id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    [encoder setComputePipelineState:state.structure_score_pipeline];
+    [encoder setBuffer:layout_buffer offset:0 atIndex:0];
+    [encoder setBuffer:index_buffer offset:0 atIndex:1];
+    [encoder setBuffer:keep_buffer offset:0 atIndex:2];
+    [encoder setBuffer:label_buffer offset:0 atIndex:3];
+    [encoder setBuffer:row_buffer offset:0 atIndex:4];
+    [encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:5];
+    [encoder setBytes:&index_rows_u length:sizeof(std::uint32_t) atIndex:6];
+    [encoder setBytes:&high_rank_limit_u length:sizeof(std::uint32_t) atIndex:7];
+    [encoder setBytes:&preserve_k_u length:sizeof(std::uint32_t) atIndex:8];
+    [encoder setBytes:&keep_n_u length:sizeof(std::uint32_t) atIndex:9];
+    [encoder setBytes:&compact_u length:sizeof(std::uint32_t) atIndex:10];
+    [encoder setBytes:&n_label_levels_u length:sizeof(std::uint32_t) atIndex:11];
+    dispatch_rows(encoder, state.structure_score_pipeline, keep_n);
+    [encoder endEncoding];
+    wait_for_command(command_buffer, "structure scoring");
+
+    std::memcpy(row_scores.data(), [row_buffer contents], row_scores.size() * sizeof(float));
+    [layout_buffer release];
+    [index_buffer release];
+    [keep_buffer release];
+    [label_buffer release];
+    [row_buffer release];
+
+    double totals[kMetalScoreWidth] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    for (int row = 0; row < keep_n; ++row) {
+      const std::size_t base = static_cast<std::size_t>(row) * kMetalScoreWidth;
+      for (int c = 0; c < kMetalScoreWidth; ++c) {
+        totals[c] += static_cast<double>(row_scores[base + static_cast<std::size_t>(c)]);
+      }
+    }
+    const int scored = static_cast<int>(totals[5]);
+    if (scored == 0) return structure_score_na();
+    const double preservation = totals[0] / scored;
+    const double trustworthiness = totals[1] / scored;
+    const double continuity = totals[2] / scored;
+    const double structure = (preservation + trustworthiness + continuity) / 3.0;
+    const double label_accuracy = totals[4] > 0.0 ? totals[3] / totals[4] : R_NaN;
+    return NumericVector::create(
+      Rcpp::Named("knn_preservation") = preservation,
+      Rcpp::Named("local_trustworthiness") = trustworthiness,
+      Rcpp::Named("local_continuity") = continuity,
+      Rcpp::Named("structure_score") = structure,
+      Rcpp::Named("embedding_knn_accuracy") = label_accuracy
+    );
+  }
+}
+
+double silhouette_score_metal_impl(NumericMatrix layout,
+                                   IntegerVector labels,
+                                   int n_label_levels) {
+  const int n = layout.nrow();
+  if (layout.ncol() != 2) {
+    Rcpp::stop("Metal silhouette scoring currently supports two-dimensional embeddings.");
+  }
+  if (labels.size() != n) Rcpp::stop("labels length must match layout row count");
+  if (n_label_levels < 2 || n_label_levels > kMaxMetalSilhouetteLabels) {
+    Rcpp::stop("Metal silhouette scoring supports between 2 and %d label levels.", kMaxMetalSilhouetteLabels);
+  }
+  std::vector<int> counts(static_cast<std::size_t>(n_label_levels) + 1u, 0);
+  for (int i = 0; i < n; ++i) {
+    const int label = labels[i];
+    if (label >= 1 && label <= n_label_levels) {
+      ++counts[static_cast<std::size_t>(label)];
+    }
+  }
+  int non_empty = 0;
+  for (int label = 1; label <= n_label_levels; ++label) {
+    if (counts[static_cast<std::size_t>(label)] > 0) ++non_empty;
+  }
+  if (non_empty < 2) return NA_REAL;
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    std::vector<float> layout_values = numeric_matrix_to_float(layout);
+    std::vector<float> row_scores(static_cast<std::size_t>(n) * 2u, 0.0f);
+
+    id<MTLBuffer> layout_buffer = [state.device newBufferWithBytes:layout_values.data()
+                                                            length:layout_values.size() * sizeof(float)
+                                                           options:MTLResourceStorageModeShared];
+    id<MTLBuffer> label_buffer = [state.device newBufferWithBytes:labels.begin()
+                                                          length:static_cast<std::size_t>(n) * sizeof(int)
+                                                         options:MTLResourceStorageModeShared];
+    id<MTLBuffer> count_buffer = [state.device newBufferWithBytes:counts.data()
+                                                          length:counts.size() * sizeof(int)
+                                                         options:MTLResourceStorageModeShared];
+    id<MTLBuffer> row_buffer = [state.device newBufferWithBytes:row_scores.data()
+                                                        length:row_scores.size() * sizeof(float)
+                                                       options:MTLResourceStorageModeShared];
+    if (layout_buffer == nil || label_buffer == nil || count_buffer == nil || row_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal silhouette scoring buffers.");
+    }
+
+    const std::uint32_t n_u = static_cast<std::uint32_t>(n);
+    const std::uint32_t n_label_levels_u = static_cast<std::uint32_t>(n_label_levels);
+
+    id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    [encoder setComputePipelineState:state.silhouette_pipeline];
+    [encoder setBuffer:layout_buffer offset:0 atIndex:0];
+    [encoder setBuffer:label_buffer offset:0 atIndex:1];
+    [encoder setBuffer:count_buffer offset:0 atIndex:2];
+    [encoder setBuffer:row_buffer offset:0 atIndex:3];
+    [encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:4];
+    [encoder setBytes:&n_label_levels_u length:sizeof(std::uint32_t) atIndex:5];
+    dispatch_rows(encoder, state.silhouette_pipeline, n);
+    [encoder endEncoding];
+    wait_for_command(command_buffer, "silhouette scoring");
+
+    std::memcpy(row_scores.data(), [row_buffer contents], row_scores.size() * sizeof(float));
+    [layout_buffer release];
+    [label_buffer release];
+    [count_buffer release];
+    [row_buffer release];
+
+    double total = 0.0;
+    double scored = 0.0;
+    for (int i = 0; i < n; ++i) {
+      const std::size_t base = static_cast<std::size_t>(i) * 2u;
+      total += static_cast<double>(row_scores[base]);
+      scored += static_cast<double>(row_scores[base + 1u]);
+    }
+    return scored > 0.0 ? total / scored : NA_REAL;
+  }
+}
+
+void pack_umap_csr_for_metal(const IntegerVector& offsets,
+                             const IntegerVector& csr_neighbors,
+                             const NumericVector& csr_weights,
+                             const int n,
+                             const int n_epochs,
+                             const double max_weight_input,
+                             std::vector<std::int32_t>& neighbors,
+                             std::vector<float>& weights,
+                             float& max_weight,
+                             int& truncated_edges) {
+  if (offsets.size() != n + 1) {
+    Rcpp::stop("CSR offsets length must be n + 1.");
+  }
+  if (csr_neighbors.size() != csr_weights.size()) {
+    Rcpp::stop("CSR neighbors and weights must have the same length.");
+  }
+  if (offsets[0] != 0) {
+    Rcpp::stop("CSR offsets must be zero-based.");
+  }
+  const int nnz = csr_neighbors.size();
+  for (int i = 0; i < n; ++i) {
+    const int begin = offsets[i];
+    const int end = offsets[i + 1];
+    if (begin < 0 || end < begin || end > nnz) {
+      Rcpp::stop("CSR offsets are not monotone or are out of range.");
+    }
+  }
+
+  max_weight = std::isfinite(max_weight_input) && max_weight_input > 0.0 ?
+    static_cast<float>(max_weight_input) :
+    0.0f;
+  if (max_weight <= 0.0f) {
+    for (int pos = 0; pos < nnz; ++pos) {
+      const double w = csr_weights[pos];
+      if (std::isfinite(w) && w > 0.0) {
+        max_weight = std::max(max_weight, static_cast<float>(w));
+      }
+    }
+  }
+  if (max_weight <= 0.0f) Rcpp::stop("The CSR graph has no positive UMAP weights.");
+
+  const float min_sample_weight = n_epochs > 0 ?
+    max_weight / static_cast<float>(n_epochs) :
+    0.0f;
+  std::vector<int> row_counts(static_cast<std::size_t>(n), 0);
+  int width = 1;
+  int active_edges = 0;
+  for (int i = 0; i < n; ++i) {
+    int count = 0;
+    for (int pos = offsets[i]; pos < offsets[i + 1]; ++pos) {
+      const int nb = csr_neighbors[pos];
+      const double w = csr_weights[pos];
+      if (nb < 0 || nb >= n || nb == i || !std::isfinite(w) || w <= 0.0) continue;
+      if (w < min_sample_weight) continue;
+      ++count;
+    }
+    row_counts[static_cast<std::size_t>(i)] = count;
+    active_edges += count;
+    width = std::max(width, std::min(count, kMaxMetalNeighbors));
+  }
+  if (active_edges == 0) {
+    Rcpp::stop("The CSR graph has no edges sampled by n_epochs.");
+  }
+
+  neighbors.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(width), 0);
+  weights.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(width), 0.0f);
+  truncated_edges = 0;
+
+  std::vector<std::pair<int, float>> row;
+  for (int i = 0; i < n; ++i) {
+    row.clear();
+    const int count = row_counts[static_cast<std::size_t>(i)];
+    row.reserve(static_cast<std::size_t>(std::min(count, kMaxMetalNeighbors)));
+    for (int pos = offsets[i]; pos < offsets[i + 1]; ++pos) {
+      const int nb = csr_neighbors[pos];
+      const double wd = csr_weights[pos];
+      if (nb < 0 || nb >= n || nb == i || !std::isfinite(wd) || wd <= 0.0) continue;
+      if (wd < min_sample_weight) continue;
+      row.push_back({nb, static_cast<float>(wd)});
+    }
+    if (static_cast<int>(row.size()) > kMaxMetalNeighbors) {
+      auto row_less = [](const auto& a, const auto& b) {
+        if (a.second == b.second) return a.first < b.first;
+        return a.second > b.second;
+      };
+      std::nth_element(
+        row.begin(),
+        row.begin() + kMaxMetalNeighbors,
+        row.end(),
+        row_less
+      );
+      truncated_edges += static_cast<int>(row.size()) - kMaxMetalNeighbors;
+      row.resize(kMaxMetalNeighbors);
+      std::sort(row.begin(), row.end(), row_less);
+    }
+    const int row_size = static_cast<int>(row.size());
+    for (int j = 0; j < width; ++j) {
+      const std::size_t out =
+        static_cast<std::size_t>(i) * static_cast<std::size_t>(width) +
+        static_cast<std::size_t>(j);
+      if (j < row_size) {
+        neighbors[out] = row[static_cast<std::size_t>(j)].first;
+        weights[out] = row[static_cast<std::size_t>(j)].second;
+      } else {
+        neighbors[out] = i;
+      }
+    }
+  }
+}
+
+NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
+                                       IntegerVector csr_neighbors,
+                                       NumericVector csr_weights,
+                                       NumericMatrix init,
+                                       int n_epochs,
+                                       int negative_sample_rate,
+                                       double learning_rate,
+                                       double min_dist,
+                                       double max_weight_input,
+                                       int seed) {
+  const int n = init.nrow();
+  if (n < 1 || init.ncol() != 2) {
+    Rcpp::stop("Metal CSR embedding currently requires a two-dimensional initialization.");
+  }
+  if (n_epochs < 1) Rcpp::stop("n_epochs must be positive");
+  if (negative_sample_rate < 0) Rcpp::stop("negative_sample_rate must be non-negative");
+  if (learning_rate <= 0.0) Rcpp::stop("learning_rate must be positive");
+  if (min_dist < 0.0) Rcpp::stop("min_dist must be non-negative");
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+
+    std::vector<std::int32_t> neighbors;
+    std::vector<float> weights;
+    float max_weight = 0.0f;
+    int truncated_edges = 0;
+    pack_umap_csr_for_metal(
+      offsets,
+      csr_neighbors,
+      csr_weights,
+      n,
+      n_epochs,
+      max_weight_input,
+      neighbors,
+      weights,
+      max_weight,
+      truncated_edges
+    );
+
+    const int k = static_cast<int>(neighbors.size() / static_cast<std::size_t>(n));
+    std::vector<float> current = init_to_float_2d(init);
+    std::vector<float> next(current.size());
+    const auto ab = find_ab_params(1.0, min_dist);
+    std::vector<float> epochs_per_sample(weights.size(), 0.0f);
+    for (std::size_t i = 0; i < weights.size(); ++i) {
+      const float w = weights[i];
+      epochs_per_sample[i] = w > 0.0f ? max_weight / std::max(w, 1.0e-6f) : 0.0f;
+    }
+
+    EmbedParams params{
+      static_cast<std::uint32_t>(n),
+      static_cast<std::uint32_t>(k),
+      static_cast<std::uint32_t>(n_epochs),
+      static_cast<std::uint32_t>(negative_sample_rate),
+      kObjectiveUmap,
+      static_cast<std::uint32_t>(seed),
+      static_cast<float>(learning_rate),
+      static_cast<float>(ab.first),
+      static_cast<float>(ab.second),
+      max_weight
+    };
+
+    id<MTLBuffer> current_buffer = [state.device newBufferWithBytes:current.data()
+                                                             length:current.size() * sizeof(float)
+                                                            options:MTLResourceStorageModeShared];
+    id<MTLBuffer> next_buffer = [state.device newBufferWithLength:next.size() * sizeof(float)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> neighbors_buffer = [state.device newBufferWithBytes:neighbors.data()
+                                                               length:neighbors.size() * sizeof(std::int32_t)
+                                                              options:MTLResourceStorageModeShared];
+    id<MTLBuffer> weights_buffer = [state.device newBufferWithBytes:weights.data()
+                                                             length:weights.size() * sizeof(float)
+                                                            options:MTLResourceStorageModeShared];
+    id<MTLBuffer> epochs_buffer = [state.device newBufferWithBytes:epochs_per_sample.data()
+                                                            length:epochs_per_sample.size() * sizeof(float)
+                                                           options:MTLResourceStorageModeShared];
+    id<MTLBuffer> params_buffer = [state.device newBufferWithBytes:&params
+                                                            length:sizeof(EmbedParams)
+                                                           options:MTLResourceStorageModeShared];
+    if (current_buffer == nil || next_buffer == nil || neighbors_buffer == nil ||
+        weights_buffer == nil || epochs_buffer == nil || params_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal CSR embedding buffers.");
+    }
+
+    const std::string metal_optimizer = metal_umap_optimizer_mode();
+    id<MTLComputePipelineState> embed_pipeline =
+      metal_optimizer == "atomic_delta" ?
+        state.embed_atomic_delta_pipeline :
+        (metal_optimizer == "torchdr_row_negatives" ?
+          state.embed_torchdr_pipeline :
+          state.embed_scheduled_pipeline);
+    const MTLSize grid_size = MTLSizeMake(static_cast<NSUInteger>(n), 1, 1);
+    const std::uint32_t epochs_per_command = kMetalEmbeddingEpochsPerCommand;
+
+    id<MTLBuffer> delta_buffer = nil;
+    if (metal_optimizer == "atomic_delta") {
+      const std::uint32_t delta_count = static_cast<std::uint32_t>(n * 2);
+      delta_buffer = [state.device newBufferWithLength:static_cast<std::size_t>(delta_count) * sizeof(int)
+                                               options:MTLResourceStorageModeShared];
+      if (delta_buffer == nil) Rcpp::stop("Failed to allocate Metal atomic delta buffer.");
+
+      const NSUInteger clear_threads = bounded_threads(state.clear_atomic_delta_pipeline);
+      const NSUInteger embed_threads = bounded_threads(state.embed_atomic_delta_pipeline);
+      const NSUInteger apply_threads = bounded_threads(state.apply_atomic_delta_pipeline);
+      const MTLSize clear_grid_size = MTLSizeMake(static_cast<NSUInteger>(delta_count), 1, 1);
+      const MTLSize clear_threadgroup_size = MTLSizeMake(clear_threads, 1, 1);
+      const MTLSize embed_threadgroup_size = MTLSizeMake(embed_threads, 1, 1);
+      const MTLSize apply_threadgroup_size = MTLSizeMake(apply_threads, 1, 1);
+      const std::uint32_t n_u = static_cast<std::uint32_t>(n);
+
+      for (std::uint32_t epoch0 = 0; epoch0 < static_cast<std::uint32_t>(n_epochs); epoch0 += epochs_per_command) {
+        id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+        const std::uint32_t epoch_end = std::min<std::uint32_t>(
+          static_cast<std::uint32_t>(n_epochs),
+          epoch0 + epochs_per_command
+        );
+        for (std::uint32_t epoch = epoch0; epoch < epoch_end; ++epoch) {
+          id<MTLComputeCommandEncoder> clear_encoder = [command_buffer computeCommandEncoder];
+          [clear_encoder setComputePipelineState:state.clear_atomic_delta_pipeline];
+          [clear_encoder setBuffer:delta_buffer offset:0 atIndex:0];
+          [clear_encoder setBytes:&delta_count length:sizeof(std::uint32_t) atIndex:1];
+          [clear_encoder dispatchThreads:clear_grid_size threadsPerThreadgroup:clear_threadgroup_size];
+          [clear_encoder endEncoding];
+
+          id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+          [encoder setComputePipelineState:state.embed_atomic_delta_pipeline];
+          [encoder setBuffer:current_buffer offset:0 atIndex:0];
+          [encoder setBuffer:delta_buffer offset:0 atIndex:1];
+          [encoder setBuffer:neighbors_buffer offset:0 atIndex:2];
+          [encoder setBuffer:weights_buffer offset:0 atIndex:3];
+          [encoder setBuffer:epochs_buffer offset:0 atIndex:4];
+          [encoder setBuffer:params_buffer offset:0 atIndex:5];
+          [encoder setBytes:&epoch length:sizeof(std::uint32_t) atIndex:6];
+          [encoder dispatchThreads:grid_size threadsPerThreadgroup:embed_threadgroup_size];
+          [encoder endEncoding];
+
+          id<MTLComputeCommandEncoder> apply_encoder = [command_buffer computeCommandEncoder];
+          [apply_encoder setComputePipelineState:state.apply_atomic_delta_pipeline];
+          [apply_encoder setBuffer:current_buffer offset:0 atIndex:0];
+          [apply_encoder setBuffer:next_buffer offset:0 atIndex:1];
+          [apply_encoder setBuffer:delta_buffer offset:0 atIndex:2];
+          [apply_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:3];
+          [apply_encoder dispatchThreads:grid_size threadsPerThreadgroup:apply_threadgroup_size];
+          [apply_encoder endEncoding];
+
+          std::swap(current_buffer, next_buffer);
+        }
+        [command_buffer commit];
+        [command_buffer waitUntilCompleted];
+        if (command_buffer.status == MTLCommandBufferStatusError) {
+          Rcpp::stop("Metal CSR atomic embedding command failed: %s", ns_error_message(command_buffer.error).c_str());
+        }
+      }
+    } else {
+      const NSUInteger threads_per_group = bounded_threads(embed_pipeline);
+      const MTLSize threadgroup_size = MTLSizeMake(threads_per_group, 1, 1);
+      for (std::uint32_t epoch0 = 0; epoch0 < static_cast<std::uint32_t>(n_epochs); epoch0 += epochs_per_command) {
+        id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+        const std::uint32_t epoch_end = std::min<std::uint32_t>(
+          static_cast<std::uint32_t>(n_epochs),
+          epoch0 + epochs_per_command
+        );
+        for (std::uint32_t epoch = epoch0; epoch < epoch_end; ++epoch) {
+          id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+          [encoder setComputePipelineState:embed_pipeline];
+          [encoder setBuffer:current_buffer offset:0 atIndex:0];
+          [encoder setBuffer:next_buffer offset:0 atIndex:1];
+          [encoder setBuffer:neighbors_buffer offset:0 atIndex:2];
+          [encoder setBuffer:weights_buffer offset:0 atIndex:3];
+          [encoder setBuffer:epochs_buffer offset:0 atIndex:4];
+          [encoder setBuffer:params_buffer offset:0 atIndex:5];
+          [encoder setBytes:&epoch length:sizeof(std::uint32_t) atIndex:6];
+          [encoder dispatchThreads:grid_size threadsPerThreadgroup:threadgroup_size];
+          [encoder endEncoding];
+          std::swap(current_buffer, next_buffer);
+        }
+        [command_buffer commit];
+        [command_buffer waitUntilCompleted];
+        if (command_buffer.status == MTLCommandBufferStatusError) {
+          Rcpp::stop("Metal CSR embedding command failed: %s", ns_error_message(command_buffer.error).c_str());
+        }
+      }
+    }
+
+    std::memcpy(current.data(), [current_buffer contents], current.size() * sizeof(float));
+    NumericMatrix out(n, 2);
+    for (int i = 0; i < n; ++i) {
+      out(i, 0) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u]);
+      out(i, 1) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u + 1u]);
+    }
+    out.attr("metal_epoch_schedule") = "precomputed_epochs_per_sample";
+    out.attr("metal_optimizer") = metal_optimizer;
+    out.attr("metal_graph_input") = "cpu_csr_fuzzy_graph";
+    out.attr("metal_csr_width") = k;
+    out.attr("metal_truncated_edges") = truncated_edges;
+    [current_buffer release];
+    [next_buffer release];
+    [neighbors_buffer release];
+    [weights_buffer release];
+    [epochs_buffer release];
+    [params_buffer release];
+    if (delta_buffer != nil) [delta_buffer release];
+    return out;
+  }
+}
+
+NumericMatrix knn_embed_metal_impl(IntegerMatrix indices,
+                                   NumericMatrix distances,
+                                   NumericMatrix init,
+                                   std::string objective,
+                                   int n_epochs,
+                                   int negative_sample_rate,
+                                   double learning_rate,
+                                   double min_dist,
+                                   int seed) {
+  if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
+    Rcpp::stop("indices and distances must have the same dimensions");
+  }
+  if (init.nrow() != indices.nrow() || init.ncol() != 2) {
+    Rcpp::stop("Metal embedding currently requires a two-dimensional initialization.");
+  }
+  if (indices.ncol() > kMaxMetalNeighbors) {
+    Rcpp::stop("Metal embedding backend currently supports at most %d neighbors.", kMaxMetalNeighbors);
+  }
+  if (n_epochs < 1) Rcpp::stop("n_epochs must be positive");
+  if (negative_sample_rate < 0) Rcpp::stop("negative_sample_rate must be non-negative");
+  if (learning_rate <= 0.0) Rcpp::stop("learning_rate must be positive");
+  if (min_dist < 0.0) Rcpp::stop("min_dist must be non-negative");
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+
+    const int n = indices.nrow();
+    const std::uint32_t objective_code = objective_id(objective);
+    std::vector<std::int32_t> neighbors;
+    std::vector<float> weights;
+    prepare_embedding_neighbors(indices, distances, objective_code, n_epochs, neighbors, weights);
+    const int k = static_cast<int>(neighbors.size() / static_cast<std::size_t>(n));
+    std::vector<float> current = init_to_float_2d(init);
+    std::vector<float> next(current.size());
+    const auto ab = find_ab_params(1.0, min_dist);
+    const float max_weight = weights.empty() ? 1.0f :
+      std::max(*std::max_element(weights.begin(), weights.end()), 1.0e-6f);
+    const bool use_precomputed_schedule = objective_code == kObjectiveUmap;
+    std::vector<float> epochs_per_sample;
+    if (use_precomputed_schedule) {
+      epochs_per_sample.resize(weights.size(), 0.0f);
+      for (std::size_t i = 0; i < weights.size(); ++i) {
+        const float w = weights[i];
+        epochs_per_sample[i] = w > 0.0f ? max_weight / std::max(w, 1.0e-6f) : 0.0f;
+      }
+    }
+
+    EmbedParams params{
+      static_cast<std::uint32_t>(n),
+      static_cast<std::uint32_t>(k),
+      static_cast<std::uint32_t>(n_epochs),
+      static_cast<std::uint32_t>(negative_sample_rate),
+      objective_code,
+      static_cast<std::uint32_t>(seed),
+      static_cast<float>(learning_rate),
+      static_cast<float>(ab.first),
+      static_cast<float>(ab.second),
+      max_weight
+    };
+
+    id<MTLBuffer> current_buffer = [state.device newBufferWithBytes:current.data()
+                                                             length:current.size() * sizeof(float)
+                                                            options:MTLResourceStorageModeShared];
+    id<MTLBuffer> next_buffer = [state.device newBufferWithLength:next.size() * sizeof(float)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> neighbors_buffer = [state.device newBufferWithBytes:neighbors.data()
+                                                               length:neighbors.size() * sizeof(std::int32_t)
+                                                              options:MTLResourceStorageModeShared];
+    id<MTLBuffer> weights_buffer = [state.device newBufferWithBytes:weights.data()
+                                                             length:weights.size() * sizeof(float)
+                                                            options:MTLResourceStorageModeShared];
+    id<MTLBuffer> epochs_buffer = nil;
+    if (use_precomputed_schedule) {
+      epochs_buffer = [state.device newBufferWithBytes:epochs_per_sample.data()
+                                                length:epochs_per_sample.size() * sizeof(float)
+                                               options:MTLResourceStorageModeShared];
+    }
+    id<MTLBuffer> params_buffer = [state.device newBufferWithBytes:&params
+                                                            length:sizeof(EmbedParams)
+                                                           options:MTLResourceStorageModeShared];
+    if (current_buffer == nil || next_buffer == nil || neighbors_buffer == nil ||
+        weights_buffer == nil || params_buffer == nil ||
+        (use_precomputed_schedule && epochs_buffer == nil)) {
+      Rcpp::stop("Failed to allocate Metal embedding buffers.");
+    }
+
+    const std::string metal_optimizer =
+      use_precomputed_schedule ? metal_umap_optimizer_mode() : "scheduled";
+    id<MTLComputePipelineState> embed_pipeline =
+      use_precomputed_schedule && metal_optimizer == "torchdr_row_negatives" ?
+        state.embed_torchdr_pipeline :
+        (use_precomputed_schedule ? state.embed_scheduled_pipeline : state.embed_pipeline);
+    const NSUInteger threads_per_group = bounded_threads(embed_pipeline);
+    const MTLSize grid_size = MTLSizeMake(static_cast<NSUInteger>(n), 1, 1);
+    const MTLSize threadgroup_size = MTLSizeMake(threads_per_group, 1, 1);
+    const std::uint32_t epochs_per_command = kMetalEmbeddingEpochsPerCommand;
+
+    for (std::uint32_t epoch0 = 0; epoch0 < static_cast<std::uint32_t>(n_epochs); epoch0 += epochs_per_command) {
+      id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+      const std::uint32_t epoch_end = std::min<std::uint32_t>(
+        static_cast<std::uint32_t>(n_epochs),
+        epoch0 + epochs_per_command
+      );
+      for (std::uint32_t epoch = epoch0; epoch < epoch_end; ++epoch) {
+        id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+        [encoder setComputePipelineState:embed_pipeline];
+        [encoder setBuffer:current_buffer offset:0 atIndex:0];
+        [encoder setBuffer:next_buffer offset:0 atIndex:1];
+        [encoder setBuffer:neighbors_buffer offset:0 atIndex:2];
+        [encoder setBuffer:weights_buffer offset:0 atIndex:3];
+        if (use_precomputed_schedule) {
+          [encoder setBuffer:epochs_buffer offset:0 atIndex:4];
+          [encoder setBuffer:params_buffer offset:0 atIndex:5];
+          [encoder setBytes:&epoch length:sizeof(std::uint32_t) atIndex:6];
+        } else {
+          [encoder setBuffer:params_buffer offset:0 atIndex:4];
+          [encoder setBytes:&epoch length:sizeof(std::uint32_t) atIndex:5];
+        }
+        [encoder dispatchThreads:grid_size threadsPerThreadgroup:threadgroup_size];
+        [encoder endEncoding];
+        std::swap(current_buffer, next_buffer);
+      }
+      [command_buffer commit];
+      [command_buffer waitUntilCompleted];
+      if (command_buffer.status == MTLCommandBufferStatusError) {
+        Rcpp::stop("Metal embedding command failed: %s", ns_error_message(command_buffer.error).c_str());
+      }
+    }
+
+    std::memcpy(current.data(), [current_buffer contents], current.size() * sizeof(float));
+    NumericMatrix out(n, 2);
+    for (int i = 0; i < n; ++i) {
+      out(i, 0) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u]);
+      out(i, 1) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u + 1u]);
+    }
+    if (use_precomputed_schedule) {
+      out.attr("metal_epoch_schedule") = "precomputed_epochs_per_sample";
+      out.attr("metal_optimizer") = metal_optimizer;
+    }
+    [current_buffer release];
+    [next_buffer release];
+    [neighbors_buffer release];
+    [weights_buffer release];
+    if (epochs_buffer != nil) [epochs_buffer release];
+    [params_buffer release];
+    return out;
+  }
+}

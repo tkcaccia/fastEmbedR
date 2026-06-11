@@ -12,20 +12,17 @@ src/*.dylib
 .Ruserdata
 .DS_Store
 
-# Python cache and environments
+# Cache and local environments
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
 venv/
 
-# Downloaded data and generated benchmark outputs
+# Downloaded data and generated outputs
 data/
 cache/
-benchmark/*.rds
-benchmark/*_plots/
-benchmark/python_*/
-benchmark/plots/
+results/
 
 # Local IDE/editor files
 .vscode/

@@ -1,0 +1,108 @@
+#include <Rcpp.h>
+
+using Rcpp::IntegerMatrix;
+using Rcpp::IntegerVector;
+using Rcpp::List;
+using Rcpp::NumericMatrix;
+using Rcpp::NumericVector;
+
+bool embedding_metal_available_impl() {
+  return false;
+}
+
+NumericMatrix spectral_knn_init_metal_impl(IntegerMatrix,
+                                           NumericMatrix,
+                                           int,
+                                           int,
+                                           int) {
+  Rcpp::stop("Metal spectral initialization is only available on macOS with Metal support.");
+}
+
+List standardize_metal_impl(NumericMatrix) {
+  Rcpp::stop("Metal preprocessing backend is only available on macOS with Metal support.");
+}
+
+NumericMatrix project_embedding_knn_metal_impl(NumericMatrix,
+                                               IntegerMatrix,
+                                               NumericMatrix) {
+  Rcpp::stop("Metal projection backend is only available on macOS with Metal support.");
+}
+
+NumericMatrix interpolate_landmark_layout_metal_impl(NumericMatrix,
+                                                     IntegerVector,
+                                                     IntegerMatrix,
+                                                     NumericMatrix,
+                                                     int) {
+  Rcpp::stop("Metal landmark interpolation backend is only available on macOS with Metal support.");
+}
+
+NumericMatrix landmark_project_interpolate_metal_impl(NumericMatrix,
+                                                      NumericMatrix,
+                                                      NumericMatrix,
+                                                      IntegerVector,
+                                                      int) {
+  Rcpp::stop("Metal fused landmark projection backend is only available on macOS with Metal support.");
+}
+
+List landmark_project_interpolate_knn_confidence_metal_impl(NumericMatrix,
+                                                            NumericMatrix,
+                                                            NumericMatrix,
+                                                            IntegerVector,
+                                                            int) {
+  Rcpp::stop("Metal fused landmark projection/confidence backend is only available on macOS with Metal support.");
+}
+
+NumericVector knn_structure_score_metal_impl(NumericMatrix,
+                                             IntegerMatrix,
+                                             IntegerVector,
+                                             int,
+                                             IntegerVector,
+                                             int) {
+  Rcpp::stop("Metal structure scoring backend is only available on macOS with Metal support.");
+}
+
+double silhouette_score_metal_impl(NumericMatrix,
+                                   IntegerVector,
+                                   int) {
+  Rcpp::stop("Metal silhouette scoring backend is only available on macOS with Metal support.");
+}
+
+NumericMatrix knn_embed_metal_impl(IntegerMatrix,
+                                   NumericMatrix,
+                                   NumericMatrix,
+                                   std::string,
+                                   int,
+                                   int,
+                                   double,
+                                   double,
+                                   int) {
+  Rcpp::stop("Metal embedding backend is only available on macOS with Metal support.");
+}
+
+NumericMatrix rsvd_multiply_metal_impl(NumericMatrix,
+                                       NumericMatrix,
+                                       bool) {
+  Rcpp::stop("Metal RSVD matrix multiply is only available on macOS with Metal support.");
+}
+
+List transform_tsne_metal_impl(NumericMatrix,
+                               IntegerMatrix,
+                               NumericMatrix,
+                               NumericMatrix,
+                               bool,
+                               std::string,
+                               double,
+                               int,
+                               int,
+                               double,
+                               double,
+                               double,
+                               double,
+                               double,
+                               double,
+                               double,
+                               int,
+                               int,
+                               int) {
+  Rcpp::stop("Metal t-SNE transform is only available on macOS with Metal support.");
+}

@@ -1,0 +1,174 @@
+---
+title: "Getting Started With fastEmbedR"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting Started With fastEmbedR}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+`fastEmbedR` focuses on fast UMAP from nearest-neighbour matrices. The two most
+important functions are `nn()` and `embed_knn()`.
+
+```{r}
+library(fastEmbedR)
+
+x <- scale(as.matrix(iris[, 1:4]))
+labels <- iris$Species
+
+knn <- nn(x, k = 16)
+layout <- embed_knn(knn, method = "umap", seed = 4)
+head(layout)
+```
+
+The same workflow can be run with `umap()`, which computes KNN internally.
+
+```{r}
+fit <- umap(
+  x,
+  labels = labels,
+  n_neighbors = 15,
+  seed = 4,
+  silhouette_sample = NULL,
+  preserve_sample = NULL
+)
+fit$metrics[, c("method", "n", "n_neighbors", "elapsed")]
+```
+
+If fastEmbedR was built against the FAISS C++ library, `nn()` can use FAISS
+directly:
+
+```{r, eval = FALSE}
+faiss_available()
+
+knn_faiss <- nn(x, k = 16, backend = "faiss")
+knn_faiss_ivf <- nn(x, k = 16, backend = "faiss_ivf")
+```
+
+These are real FAISS library calls. They are deliberately separate from
+`backend = "cpu_faiss_ivf"`, which is the package-native FAISS-style IVF
+approximation.
+
+To compare with `uwot`, use the same KNN and the same UMAP settings:
+
+```{r, eval = FALSE}
+library(uwot)
+
+idx <- knn$indices[, -1, drop = FALSE]
+dst <- knn$distances[, -1, drop = FALSE]
+
+fast <- fastEmbedR::embed_knn(list(indices = idx, distances = dst), seed = 4)
+ref <- uwot::umap(
+  x,
+  nn_method = list(idx = idx, dist = dst),
+  n_neighbors = ncol(idx),
+  n_epochs = 200,
+  min_dist = 0.01,
+  negative_sample_rate = 5,
+  learning_rate = 1,
+  fast_sgd = TRUE,
+  n_threads = 4,
+  n_sgd_threads = 4
+)
+```
+
+For large landmark embeddings, you can opt into confidence-gated refinement.
+The package first embeds landmarks, projects all rows, then refines only rows
+whose projection weights are diffuse or far from their nearest landmark.
+
+```{r, eval = FALSE}
+options(fastEmbedR.selective_landmark_refinement = TRUE)
+
+fit <- umap(
+  x_large,
+  landmarks = 0.5,
+  seed = 4,
+  backend = "cpu"
+)
+
+fit$parameters[c(
+  "landmark_refinement_policy",
+  "landmark_refinement_selected",
+  "landmark_refinement_backend"
+)]
+```
+
+The default remains full landmark refinement because the selective mode can
+reduce refinement work but should be checked for each dataset's neighbourhood
+quality.
+
+## Landmark t-SNE
+
+`landmark_tsne()` follows the same idea used by openTSNE for adding new points:
+embed a reference subset, initialize non-landmarks from nearby reference
+coordinates, then optimize each non-landmark against the fixed reference map.
+The implementation is native fastEmbedR code and does not call Python.
+
+```{r}
+tsne_landmark <- landmark_tsne(
+  x,
+  labels = labels,
+  landmarks = 0.5,
+  reference_method = "infotsne",
+  n_neighbors = 15,
+  perplexity = 5,
+  max_iter = 25,
+  n_negatives = 10,
+  transform_iter = 10,
+  transform_n_negatives = 10,
+  standardize = FALSE,
+  silhouette_sample = NULL,
+  preserve_sample = NULL
+)
+
+tsne_landmark$metrics[, c(
+  "method",
+  "reference_method",
+  "n",
+  "n_landmarks",
+  "elapsed",
+  "reference_embedding_elapsed",
+  "landmark_projection_knn_elapsed",
+  "transform_elapsed"
+)]
+```
+
+When a reference embedding is already available, `transform_tsne()` can be used
+directly with a query-to-reference KNN object.
+
+```{r}
+ref <- x[1:100, , drop = FALSE]
+qry <- x[101:110, , drop = FALSE]
+ref_fit <- infotsne(
+  ref,
+  n_neighbors = 15,
+  perplexity = 5,
+  max_iter = 25,
+  n_negatives = 10,
+  standardize = FALSE,
+  silhouette_sample = NULL,
+  preserve_sample = NULL
+)
+query_knn <- nn(ref, qry, k = 15, backend = "cpu")
+query_layout <- transform_tsne(
+  ref_fit$layout,
+  query_knn,
+  perplexity = 5,
+  n_iter = 10,
+  n_negatives = 10
+)
+head(query_layout)
+```
+
+GPU backends are explicit:
+
+```{r}
+backend_info()
+```
+
+If CUDA or Metal is requested but unavailable, `fastEmbedR` does not silently
+run CPU code and label it as GPU.
