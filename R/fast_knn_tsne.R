@@ -341,6 +341,353 @@ fast_knn_tsne_core <- function(indices,
   layout
 }
 
+normalize_opentsne_learning_rate <- function(learning_rate) {
+  if (is.character(learning_rate) && length(learning_rate) == 1L) {
+    value <- tolower(learning_rate)
+    if (identical(value, "auto")) {
+      return(list(auto = TRUE, value = 1))
+    }
+  }
+  value <- suppressWarnings(as.numeric(learning_rate))
+  if (length(value) != 1L || is.na(value) || !is.finite(value) || value <= 0) {
+    stop("`learning_rate` must be a positive number or \"auto\".", call. = FALSE)
+  }
+  list(auto = FALSE, value = value)
+}
+
+normalize_opentsne_exaggeration <- function(early_exaggeration, exaggeration) {
+  normal <- if (is.null(exaggeration)) 1 else {
+    value <- suppressWarnings(as.numeric(exaggeration))
+    if (length(value) != 1L || is.na(value) || !is.finite(value) || value <= 0) {
+      stop("`exaggeration` must be NULL or a positive number.", call. = FALSE)
+    }
+    value
+  }
+  early <- if (is.character(early_exaggeration) &&
+               length(early_exaggeration) == 1L &&
+               identical(tolower(early_exaggeration), "auto")) {
+    if (is.null(exaggeration)) 12 else max(12, normal)
+  } else {
+    value <- suppressWarnings(as.numeric(early_exaggeration))
+    if (length(value) != 1L || is.na(value) || !is.finite(value) || value <= 0) {
+      stop("`early_exaggeration` must be a positive number or \"auto\".", call. = FALSE)
+    }
+    value
+  }
+  list(early = early, normal = normal)
+}
+
+normalize_opentsne_knn_input <- function(indices, distances = NULL, n_neighbors = NULL) {
+  knn <- coerce_knn_input(indices, distances)
+  n <- nrow(knn$indices)
+  available <- knn$n_neighbors
+  if (is.null(n_neighbors)) {
+    n_neighbors <- available
+  } else {
+    n_neighbors <- as.integer(n_neighbors)
+    if (length(n_neighbors) != 1L || is.na(n_neighbors) ||
+        !is.finite(n_neighbors) || n_neighbors < 1L || n_neighbors >= n) {
+      stop("`n_neighbors` must be a positive integer smaller than the number of rows.", call. = FALSE)
+    }
+    if (n_neighbors > available) {
+      stop("`n_neighbors` is larger than the supplied KNN width.", call. = FALSE)
+    }
+  }
+  materialized <- materialize_knn_range(
+    knn$indices,
+    knn$distances,
+    knn$col_start,
+    n_neighbors
+  )
+  list(
+    indices = materialized$indices,
+    distances = materialized$distances,
+    n = n,
+    n_neighbors = as.integer(n_neighbors),
+    has_self = isTRUE(knn$has_self),
+    input_backend = knn$input_backend
+  )
+}
+
+fast_knn_opentsne_materialized <- function(indices,
+                                           distances,
+                                           n_components = 2L,
+                                           perplexity = NULL,
+                                           theta = 0.5,
+                                           early_exaggeration_iter = 250L,
+                                           n_iter = 500L,
+                                           learning_rate = "auto",
+                                           early_exaggeration = "auto",
+                                           exaggeration = NULL,
+                                           Y_init = NULL,
+                                           initial_momentum = 0.8,
+                                           final_momentum = 0.8,
+                                           min_gain = 0.01,
+                                           max_step_norm = 5,
+                                           negative_gradient_method = "auto",
+                                           record_costs = FALSE,
+                                           n_threads = NULL,
+                                           seed = 42L,
+                                           verbose = FALSE,
+                                           backend = c("auto", "cpu", "gpu", "metal", "cuda"),
+                                           input_had_self = FALSE,
+                                           input_backend = NA_character_) {
+  backend <- match.arg(backend)
+  if (!backend %in% c("auto", "cpu")) {
+    stop(
+      "Native openTSNE-style full t-SNE from KNN currently supports only ",
+      "`backend = \"cpu\"`. GPU requests do not fall back silently.",
+      call. = FALSE
+    )
+  }
+  n <- nrow(indices)
+  k <- ncol(indices)
+  if (is.null(perplexity)) {
+    perplexity <- auto_tsne_perplexity(n, k)
+  }
+  if (is.null(n_threads)) {
+    n_threads <- default_tsne_threads()
+  }
+  early_exaggeration_iter <- as.integer(early_exaggeration_iter)
+  n_iter <- as.integer(n_iter)
+  if (length(early_exaggeration_iter) != 1L || is.na(early_exaggeration_iter) || early_exaggeration_iter < 0L) {
+    stop("`early_exaggeration_iter` must be a non-negative integer.", call. = FALSE)
+  }
+  if (length(n_iter) != 1L || is.na(n_iter) || n_iter < 0L) {
+    stop("`n_iter` must be a non-negative integer.", call. = FALSE)
+  }
+  if (early_exaggeration_iter + n_iter < 1L) {
+    stop("At least one optimization iteration is required.", call. = FALSE)
+  }
+  negative_gradient_method <- normalize_tsne_negative_gradient_method(negative_gradient_method)
+  if (identical(negative_gradient_method, "auto")) {
+    negative_gradient_method <- "bh"
+  }
+  if (identical(negative_gradient_method, "fft")) {
+    stop(
+      "openTSNE FFT/FIt-SNE interpolation is not yet ported to native C++. ",
+      "The native openTSNE-style path currently supports `\"bh\"` and `\"exact\"`.",
+      call. = FALSE
+    )
+  }
+  if (identical(negative_gradient_method, "keops_blocked")) {
+    stop(
+      "`negative_gradient_method = \"keops_blocked\"` belongs to the ",
+      "experimental `method = \"tsne\"` path, not the openTSNE-style path.",
+      call. = FALSE
+    )
+  }
+  args <- check_tsne_neighbor_params(
+    n = n,
+    n_components = n_components,
+    perplexity = perplexity,
+    theta = theta,
+    max_iter = early_exaggeration_iter + n_iter,
+    verbose = verbose,
+    Y_init = Y_init,
+    stop_lying_iter = 0L,
+    mom_switch_iter = 0L,
+    momentum = initial_momentum,
+    final_momentum = final_momentum,
+    eta = 1,
+    exaggeration_factor = 1
+  )
+  lr <- normalize_opentsne_learning_rate(learning_rate)
+  ex <- normalize_opentsne_exaggeration(early_exaggeration, exaggeration)
+  min_gain <- as.numeric(min_gain)
+  if (length(min_gain) != 1L || is.na(min_gain) || !is.finite(min_gain) || min_gain <= 0) {
+    stop("`min_gain` must be a positive number.", call. = FALSE)
+  }
+  record_costs <- isTRUE(record_costs) || isTRUE(verbose)
+  max_step_norm <- if (is.null(max_step_norm) || (length(max_step_norm) == 1L && is.na(max_step_norm))) {
+    NA_real_
+  } else {
+    value <- suppressWarnings(as.numeric(max_step_norm))
+    if (length(value) != 1L || is.na(value) || !is.finite(value) || value <= 0) {
+      stop("`max_step_norm` must be NULL/NA or a positive number.", call. = FALSE)
+    }
+    value
+  }
+
+  out <- knn_tsne_opentsne_cpp(
+    indices,
+    distances,
+    args$Y_init,
+    args$init,
+    args$n_components,
+    args$perplexity,
+    args$theta,
+    early_exaggeration_iter,
+    n_iter,
+    ex$early,
+    ex$normal,
+    lr$value,
+    lr$auto,
+    args$momentum,
+    args$final_momentum,
+    min_gain,
+    max_step_norm,
+    negative_gradient_method,
+    as.integer(n_threads),
+    as.integer(seed),
+    args$verbose,
+    record_costs
+  )
+  layout <- set_embedding_colnames(out$Y, "openTSNE")
+  cfg <- list(
+    method = "opentsne",
+    backend = "cpu",
+    n = n,
+    n_neighbors = as.integer(k),
+    perplexity = args$perplexity,
+    theta = args$theta,
+    early_exaggeration_iter = early_exaggeration_iter,
+    n_iter = n_iter,
+    max_iter = early_exaggeration_iter + n_iter,
+    learning_rate = if (isTRUE(lr$auto)) "auto" else lr$value,
+    learning_rate_early = out$learning_rate_early,
+    learning_rate_normal = out$learning_rate_normal,
+    early_exaggeration = ex$early,
+    exaggeration = ex$normal,
+    initial_momentum = args$momentum,
+    final_momentum = args$final_momentum,
+    min_gain = min_gain,
+    max_step_norm = max_step_norm,
+    negative_gradient_method = negative_gradient_method,
+    record_costs = record_costs,
+    optimizer = out$optimizer,
+    repulsion = out$repulsion,
+    repulsion_block_size = out$repulsion_block_size,
+    n_threads = out$n_threads,
+    input_had_self = isTRUE(input_had_self),
+    knn_backend = input_backend,
+    provenance = "openTSNE_native_cpp_two_phase_optimizer_bsd3_informed"
+  )
+  attr(layout, "fastEmbedR_config") <- cfg
+  attr(layout, "costs") <- out$costs
+  attr(layout, "itercosts") <- out$itercosts
+  layout
+}
+
+fast_knn_opentsne_core <- function(indices,
+                                   distances = NULL,
+                                   n_components = 2L,
+                                   perplexity = NULL,
+                                   theta = 0.5,
+                                   early_exaggeration_iter = 250L,
+                                   n_iter = 500L,
+                                   learning_rate = "auto",
+                                   early_exaggeration = "auto",
+                                   exaggeration = NULL,
+                                   Y_init = NULL,
+                                   initial_momentum = 0.8,
+                                   final_momentum = 0.8,
+                                   min_gain = 0.01,
+                                   max_step_norm = 5,
+                                   negative_gradient_method = "auto",
+                                   record_costs = FALSE,
+                                   n_threads = NULL,
+                                   seed = 42L,
+                                   verbose = FALSE,
+                                   backend = c("auto", "cpu", "gpu", "metal", "cuda")) {
+  backend <- match.arg(backend)
+  knn <- normalize_opentsne_knn_input(indices, distances)
+  fast_knn_opentsne_materialized(
+    knn$indices,
+    knn$distances,
+    n_components = n_components,
+    perplexity = perplexity,
+    theta = theta,
+    early_exaggeration_iter = early_exaggeration_iter,
+    n_iter = n_iter,
+    learning_rate = learning_rate,
+    early_exaggeration = early_exaggeration,
+    exaggeration = exaggeration,
+    Y_init = Y_init,
+    initial_momentum = initial_momentum,
+    final_momentum = final_momentum,
+    min_gain = min_gain,
+    max_step_norm = max_step_norm,
+    negative_gradient_method = negative_gradient_method,
+    record_costs = record_costs,
+    n_threads = n_threads,
+    seed = seed,
+    verbose = verbose,
+    backend = backend,
+    input_had_self = knn$has_self,
+    input_backend = knn$input_backend
+  )
+}
+
+#' Run native openTSNE-style t-SNE from precomputed KNN
+#'
+#' `opentsne_knn()` is the direct KNN-input entry point for the native
+#' openTSNE-style optimizer. It accepts either an object returned by [nn()] or
+#' separate KNN index and distance matrices. No neighbour search, scaling, or
+#' PCA is done inside this function.
+#'
+#' @param indices A KNN object returned by [nn()], or an integer KNN index
+#'   matrix.
+#' @param distances Numeric KNN distance matrix matching `indices`. Leave
+#'   `NULL` when `indices` is an [nn()] result.
+#' @param n_neighbors Optional number of non-self neighbor columns to use from
+#'   the supplied KNN graph. This lets you compute a wide KNN once and reuse
+#'   its first columns for comparable tests.
+#' @inheritParams opentsne
+#' @return A numeric embedding matrix with settings stored in
+#'   `attr(layout, "fastEmbedR_config")`.
+#' @examples
+#' x <- scale(as.matrix(iris[, 1:4]))
+#' knn <- nn(x, k = 31)
+#' layout <- opentsne_knn(knn, perplexity = 10,
+#'   early_exaggeration_iter = 100, n_iter = 250)
+#' plot(layout, pch = 21, bg = iris$Species)
+#' @export
+opentsne_knn <- function(indices,
+                         distances = NULL,
+                         n_neighbors = NULL,
+                         perplexity = NULL,
+                         n_components = 2L,
+                         seed = 4L,
+                         verbose = FALSE,
+                         backend = c("auto", "cpu", "gpu", "metal", "cuda"),
+                         learning_rate = "auto",
+                         early_exaggeration_iter = 250L,
+                         early_exaggeration = "auto",
+                         n_iter = 500L,
+                         exaggeration = NULL,
+                         initial_momentum = 0.8,
+                         final_momentum = 0.8,
+                         max_step_norm = 5,
+                         negative_gradient_method = "auto",
+                         record_costs = FALSE,
+                         ...) {
+  backend <- match.arg(backend)
+  knn <- normalize_opentsne_knn_input(indices, distances, n_neighbors)
+  fast_knn_opentsne_materialized(
+    knn$indices,
+    knn$distances,
+    n_components = n_components,
+    perplexity = perplexity,
+    seed = seed,
+    verbose = verbose,
+    backend = backend,
+    learning_rate = learning_rate,
+    early_exaggeration_iter = early_exaggeration_iter,
+    early_exaggeration = early_exaggeration,
+    n_iter = n_iter,
+    exaggeration = exaggeration,
+    initial_momentum = initial_momentum,
+    final_momentum = final_momentum,
+    max_step_norm = max_step_norm,
+    negative_gradient_method = negative_gradient_method,
+    record_costs = record_costs,
+    input_had_self = knn$has_self,
+    input_backend = knn$input_backend,
+    ...
+  )
+}
+
 fast_knn_infotsne_core <- function(indices,
                                    distances = NULL,
                                    n_components = 2L,
@@ -607,6 +954,295 @@ tsne <- function(data,
     layout = layout,
     labels = labels,
     method = "tsne",
+    metrics = metrics,
+    parameters = parameters,
+    timings = timings,
+    knn = if (isTRUE(keep_knn)) {
+      list(indices = knn_result$indices, distances = knn_result$distances)
+    } else {
+      NULL
+    },
+    knn_with_self = if (isTRUE(keep_knn)) knn_result$knn_with_self else NULL,
+    preprocess = prepared$preprocess
+  )
+  class(out) <- "fastEmbedR_embedding"
+  out
+}
+
+#' Run native openTSNE-style t-SNE from a data matrix
+#'
+#' `opentsne()` uses the same KNN-first workflow as `tsne()`, but its optimizer
+#' follows openTSNE's two-phase contract: an early-exaggeration phase followed
+#' by a normal optimization phase, `learning_rate = n / exaggeration` when
+#' `learning_rate = "auto"`, openTSNE-style gains, and max-step clipping.
+#' The implementation is native fastEmbedR C++ and does not call Python.
+#'
+#' @inheritParams tsne
+#' @param learning_rate Positive number or `"auto"`. With `"auto"`, the native
+#'   optimizer uses `n / exaggeration` separately for each phase.
+#' @param early_exaggeration_iter Number of early-exaggeration iterations.
+#' @param early_exaggeration Early-exaggeration multiplier, or `"auto"` for
+#'   openTSNE's default rule.
+#' @param n_iter Number of normal optimization iterations after early
+#'   exaggeration.
+#' @param exaggeration Normal-phase exaggeration. `NULL` means 1.
+#' @param initial_momentum Momentum during early exaggeration.
+#' @param final_momentum Momentum during normal optimization.
+#' @param max_step_norm Maximum per-point update norm. Use `NULL` or `NA` to
+#'   disable clipping.
+#' @param negative_gradient_method `"auto"`, `"bh"`, or `"exact"`. Native FFT
+#'   interpolation is not ported yet and fails clearly.
+#' @param record_costs If `TRUE`, compute diagnostic KL/cost traces. This does
+#'   not affect the embedding, but costs extra time because it evaluates the
+#'   objective for reporting.
+#' @return A `fastEmbedR_embedding` object.
+#' @export
+opentsne <- function(data,
+                     labels = NULL,
+                     n_neighbors = NULL,
+                     perplexity = NULL,
+                     n_components = 2L,
+                     standardize = TRUE,
+                     pca_dims = NULL,
+                     nn = NULL,
+                     seed = 4L,
+                     backend = c("auto", "cpu", "gpu", "metal", "cuda",
+                                 "cuvs", "gpu_cuvs", "cuda_cuvs",
+                                 "cuda_cuvs_cagra", "cuda_cuvs_bruteforce",
+                                 "cuda_cuvs_exact", "cuda_cuvs_nndescent",
+                                 "cuvs_bruteforce", "cuvs_nndescent"),
+                     silhouette_sample = NULL,
+                     preserve_sample = NULL,
+                     preserve_k = NULL,
+                     keep_knn = FALSE,
+                     verbose = FALSE,
+                     learning_rate = "auto",
+                     early_exaggeration_iter = 250L,
+                     early_exaggeration = "auto",
+                     n_iter = 500L,
+                     exaggeration = NULL,
+                     initial_momentum = 0.8,
+                     final_momentum = 0.8,
+                     max_step_norm = 5,
+                     negative_gradient_method = "auto",
+	                     record_costs = FALSE,
+	                     ...) {
+	  backend <- match.arg(backend)
+  if (is_knn_input(data)) {
+    if (!is.null(nn)) {
+      stop("When `data` is a KNN object, do not also pass `nn`.", call. = FALSE)
+    }
+    knn_result <- normalize_opentsne_knn_input(data, NULL, n_neighbors)
+    n <- knn_result$n
+    if (!is.null(labels) && length(labels) != n) {
+      stop("`labels` must have one entry per KNN row.", call. = FALSE)
+    }
+
+    embedding_time <- system.time({
+      layout <- fast_knn_opentsne_materialized(
+        knn_result$indices,
+        knn_result$distances,
+        n_components = n_components,
+        perplexity = perplexity,
+        seed = seed,
+        verbose = verbose,
+        backend = backend,
+        learning_rate = learning_rate,
+        early_exaggeration_iter = early_exaggeration_iter,
+        early_exaggeration = early_exaggeration,
+        n_iter = n_iter,
+        exaggeration = exaggeration,
+        initial_momentum = initial_momentum,
+        final_momentum = final_momentum,
+        max_step_norm = max_step_norm,
+        negative_gradient_method = negative_gradient_method,
+        record_costs = record_costs,
+        input_had_self = knn_result$has_self,
+        input_backend = knn_result$input_backend,
+        ...
+      )
+    })
+    cfg <- attr(layout, "fastEmbedR_config")
+    score_preserve_k <- if (is.null(preserve_k)) ncol(knn_result$indices) else {
+      min(as.integer(preserve_k), ncol(knn_result$indices))
+    }
+    scores <- embedding_scores(
+      layout,
+      labels,
+      knn_result$indices,
+      silhouette_sample,
+      preserve_sample,
+      score_preserve_k,
+      seed,
+      backend = "cpu"
+    )
+    zero_time <- embedding_time
+    zero_time[] <- 0
+    timings <- rbind(
+      preprocess = zero_time,
+      knn = zero_time,
+      embedding = embedding_time
+    )
+    knn_backend <- knn_result$input_backend
+    if (is.na(knn_backend) || is.null(knn_backend)) knn_backend <- "supplied"
+    metrics <- data.frame(
+      method = "opentsne",
+      n = n,
+      p = NA_integer_,
+      n_neighbors = knn_result$n_neighbors,
+      perplexity = cfg$perplexity,
+      elapsed = sum(timings[, "elapsed"]),
+      preprocess_elapsed = 0,
+      knn_elapsed = 0,
+      embedding_elapsed = embedding_time["elapsed"],
+      scores,
+      stringsAsFactors = FALSE
+    )
+    parameters <- c(
+      list(
+        method = "opentsne",
+        input = "knn",
+        n = n,
+        p = NA_integer_,
+        n_neighbors = knn_result$n_neighbors,
+        k = knn_result$n_neighbors + 1L,
+        n_components = as.integer(n_components),
+        seed = as.integer(seed),
+        nn_backend = knn_backend,
+        keep_knn = keep_knn
+      ),
+      cfg,
+      list(preprocess = "none_precomputed_knn")
+    )
+    out <- list(
+      layout = layout,
+      labels = labels,
+      method = "opentsne",
+      metrics = metrics,
+      parameters = parameters,
+      timings = timings,
+      knn = if (isTRUE(keep_knn)) {
+        list(indices = knn_result$indices, distances = knn_result$distances)
+      } else {
+        NULL
+      },
+      knn_with_self = NULL,
+      preprocess = list(input = "precomputed_knn")
+    )
+    class(out) <- "fastEmbedR_embedding"
+    return(out)
+  }
+
+	  preprocess_time <- system.time({
+	    prepared <- prepare_embedding_data(
+	      data,
+      standardize,
+      pca_dims,
+      seed,
+      backend = "cpu"
+    )
+  })
+  x <- prepared$data
+  n <- nrow(x)
+  if (!is.null(labels) && length(labels) != n) {
+    stop("`labels` must have one entry per row of `data`.", call. = FALSE)
+  }
+  if (is.null(n_neighbors)) {
+    n_neighbors <- auto_tsne_k(n, perplexity)
+  } else {
+    n_neighbors <- as.integer(n_neighbors)
+    if (length(n_neighbors) != 1L || is.na(n_neighbors) || n_neighbors < 1L || n_neighbors >= n) {
+      stop("`n_neighbors` must be a positive integer smaller than `nrow(data)`.", call. = FALSE)
+    }
+  }
+
+  knn_time <- system.time({
+    if (is.null(nn)) {
+      raw_knn <- nn_without_self(x, k = n_neighbors, backend = backend)
+      knn_result <- normalize_supplied_knn(raw_knn, n, n_neighbors)
+      knn_result$nn_backend <- attr(raw_knn, "backend")
+    } else {
+      knn_result <- normalize_supplied_knn(nn, n, n_neighbors, keep_self = keep_knn)
+      knn_result$nn_backend <- attr(nn, "backend")
+      if (is.null(knn_result$nn_backend)) knn_result$nn_backend <- "supplied"
+    }
+  })
+
+  embedding_time <- system.time({
+    layout <- fast_knn_opentsne_materialized(
+      knn_result$indices,
+      knn_result$distances,
+      n_components = n_components,
+      perplexity = perplexity,
+      seed = seed,
+      verbose = verbose,
+      backend = "cpu",
+      learning_rate = learning_rate,
+      early_exaggeration_iter = early_exaggeration_iter,
+      early_exaggeration = early_exaggeration,
+      n_iter = n_iter,
+      exaggeration = exaggeration,
+      initial_momentum = initial_momentum,
+      final_momentum = final_momentum,
+      max_step_norm = max_step_norm,
+      negative_gradient_method = negative_gradient_method,
+      record_costs = record_costs,
+      input_had_self = knn_result$has_self,
+      input_backend = knn_result$nn_backend,
+      ...
+    )
+  })
+  cfg <- attr(layout, "fastEmbedR_config")
+  score_preserve_k <- if (is.null(preserve_k)) ncol(knn_result$indices) else {
+    min(as.integer(preserve_k), ncol(knn_result$indices))
+  }
+  scores <- embedding_scores(
+    layout,
+    labels,
+    knn_result$indices,
+    silhouette_sample,
+    preserve_sample,
+    score_preserve_k,
+    seed,
+    backend = "cpu"
+  )
+  timings <- rbind(
+    preprocess = preprocess_time,
+    knn = knn_time,
+    embedding = embedding_time
+  )
+  metrics <- data.frame(
+    method = "opentsne",
+    n = n,
+    p = ncol(x),
+    n_neighbors = knn_result$n_neighbors,
+    perplexity = cfg$perplexity,
+    elapsed = sum(timings[, "elapsed"]),
+    preprocess_elapsed = preprocess_time["elapsed"],
+    knn_elapsed = knn_time["elapsed"],
+    embedding_elapsed = embedding_time["elapsed"],
+    scores,
+    stringsAsFactors = FALSE
+  )
+  parameters <- c(
+    list(
+      method = "opentsne",
+      n = n,
+      p = ncol(x),
+      n_neighbors = knn_result$n_neighbors,
+      k = knn_result$n_neighbors + 1L,
+      n_components = as.integer(n_components),
+      seed = as.integer(seed),
+      nn_backend = knn_result$nn_backend,
+      keep_knn = keep_knn
+    ),
+    cfg,
+    prepared$preprocess
+  )
+  out <- list(
+    layout = layout,
+    labels = labels,
+    method = "opentsne",
     metrics = metrics,
     parameters = parameters,
     timings = timings,

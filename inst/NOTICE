@@ -170,19 +170,27 @@ kernel.
 openTSNE design reference
 -------------------------
 
-The native t-SNE-from-KNN optimizer and the fixed-reference transform used by
-`transform_tsne()` and `landmark_tsne()` were informed by openTSNE:
+The native openTSNE-style full t-SNE optimizer and the fixed-reference
+transform used by `transform_tsne()` and `landmark_tsne()` were informed by
+openTSNE:
 
   openTSNE
   Repository: https://github.com/pavlin-policar/openTSNE
   License: BSD-3-Clause
 
-For `embed_knn(method = "tsne")`, fastEmbedR now exposes an openTSNE-style
+For `embed_knn(method = "opentsne")` and `opentsne()`, fastEmbedR implements a
+native C++ two-phase optimizer matching openTSNE's high-level contract: early
+exaggeration followed by normal optimization, `learning_rate = n /
+exaggeration` when automatic learning-rate selection is requested,
+openTSNE-style momentum/gain updates, max-step clipping, sparse positive KNN
+forces, and native `"bh"`/`"exact"` negative-gradient choices. This is
+fastEmbedR C++ code and does not vendor, link to, or call openTSNE's Python or
+Cython implementation.
+
+For `embed_knn(method = "tsne")`, fastEmbedR also exposes an openTSNE-style
 `negative_gradient_method` selector for native C++ `"bh"` and `"exact"` paths.
 The implementation in `src/tsne_neighbors.cpp` follows openTSNE's separation
-of sparse positive KNN forces from approximate negative forces. The current
-native Barnes-Hut implementation is fastEmbedR C++ code; it does not call
-Python/Cython.
+of sparse positive KNN forces from approximate negative forces.
 
 For `transform_tsne()`, fastEmbedR follows the design of
 `TSNEEmbedding.transform()` and `prepare_partial()`: initialize query points

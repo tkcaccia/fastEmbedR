@@ -6,7 +6,8 @@
 #' @param distances Numeric KNN distance matrix matching `indices`. Leave as
 #'   `NULL` when `indices` is an `nn()` result.
 #' @param method Embedding method. Use `"umap"` for the package's focused UMAP
-#'   path, `"tsne"` for an `Rtsne_neighbors()`-style exact t-SNE optimizer, or
+#'   path, `"tsne"` for an `Rtsne_neighbors()`-style t-SNE optimizer,
+#'   `"opentsne"` for a native openTSNE-style two-phase optimizer, or
 #'   `"infotsne"` for a TorchDR-inspired negative-sampling t-SNE objective from
 #'   precomputed neighbors.
 #' @param n_components Output dimensionality.
@@ -14,9 +15,9 @@
 #' @param verbose Print native optimizer progress.
 #' @param backend Execution backend. `"gpu"` explicitly requests a real native
 #'   GPU backend and errors if CUDA or Metal is unavailable.
-#' @param ... Additional method-specific parameters. For `method = "tsne"` or
-#'   `"infotsne"`, supported parameters include `perplexity`, `max_iter`,
-#'   `Y_init`, learning-rate controls, exaggeration controls, and `n_threads`.
+#' @param ... Additional method-specific parameters. For t-SNE methods,
+#'   supported parameters include `perplexity`, iteration controls, `Y_init`,
+#'   learning-rate controls, exaggeration controls, and `n_threads`.
 #' @return A numeric embedding matrix with resolved settings stored in
 #'   `attr(layout, "fastEmbedR_config")`.
 #' @export
@@ -28,7 +29,7 @@ embed_knn <- function(indices,
                       verbose = FALSE,
                       backend = c("auto", "cpu", "gpu", "metal", "cuda"),
                       ...) {
-  method <- match.arg(method, c("umap", "tsne", "infotsne"))
+  method <- match.arg(method, c("umap", "tsne", "opentsne", "infotsne"))
   backend <- match.arg(backend)
   n_components <- validate_n_components(n_components)
 
@@ -44,6 +45,17 @@ embed_knn <- function(indices,
   }
   if (identical(method, "tsne")) {
     return(fast_knn_tsne_core(
+      indices,
+      distances,
+      n_components = n_components,
+      seed = seed,
+      verbose = verbose,
+      backend = backend,
+      ...
+    ))
+  }
+  if (identical(method, "opentsne")) {
+    return(fast_knn_opentsne_core(
       indices,
       distances,
       n_components = n_components,

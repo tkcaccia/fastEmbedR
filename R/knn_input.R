@@ -51,6 +51,10 @@ coerce_knn_input <- function(indices,
   )
 }
 
+is_knn_input <- function(x) {
+  is.list(x) && all(c("indices", "distances") %in% names(x))
+}
+
 knn_index_base <- function(indices, n = nrow(indices)) {
   min_idx <- suppressWarnings(min(indices, na.rm = TRUE))
   max_idx <- suppressWarnings(max(indices, na.rm = TRUE))

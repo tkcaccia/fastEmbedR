@@ -4,6 +4,7 @@
 ^\.gitignore$
 ^LICENSE[.]md$
 ^LICENSE-IMPLICATIONS[.]md$
+^BENCHMARK_SUMMARY[.]md$
 ^_pkgdown[.]yml$
 ^\.Rcheck$
 ^\.Rcheck/

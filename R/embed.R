@@ -397,6 +397,7 @@ normalize_supplied_knn <- function(nn, n, n_neighbors = NULL, keep_self = FALSE)
     indices = indices,
     distances = distances,
     n_neighbors = as.integer(n_neighbors),
+    has_self = isTRUE(has_self),
     knn_with_self = knn_with_self
   )
 }

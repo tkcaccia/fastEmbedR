@@ -13,7 +13,7 @@ expect_embedding <- function(layout, n) {
 test_that("public API is UMAP, t-SNE, and KNN focused", {
   exports <- getNamespaceExports("fastEmbedR")
   expect_true(all(c(
-    "umap", "tsne", "embed_knn", "nn", "backend_info",
+    "umap", "tsne", "opentsne", "opentsne_knn", "embed_knn", "nn", "backend_info",
     "metal_available", "cuda_available", "cuvs_available", "evaluate_embedding",
     "transform_embedding", "transform_tsne", "landmark_tsne"
   ) %in% exports))
@@ -51,6 +51,14 @@ test_that("core exported functions have tiny smoke tests", {
   expect_embedding(layout_umap, n)
   layout_tsne <- embed_knn(knn, method = "tsne", perplexity = 1, max_iter = 5L)
   expect_embedding(layout_tsne, n)
+  layout_opentsne <- embed_knn(knn, method = "opentsne", perplexity = 1,
+    early_exaggeration_iter = 2L, n_iter = 3L)
+  expect_embedding(layout_opentsne, n)
+  expect_equal(attr(layout_opentsne, "fastEmbedR_config")$method, "opentsne")
+  layout_opentsne_knn <- opentsne_knn(knn, perplexity = 1,
+    early_exaggeration_iter = 2L, n_iter = 3L)
+  expect_embedding(layout_opentsne_knn, n)
+  expect_equal(attr(layout_opentsne_knn, "fastEmbedR_config")$method, "opentsne")
 
   fit <- umap(x, labels = labels, n_neighbors = 4L,
     silhouette_sample = NULL, preserve_sample = NULL)
@@ -63,6 +71,21 @@ test_that("core exported functions have tiny smoke tests", {
   expect_s3_class(fit_tsne, "fastEmbedR_embedding")
   expect_embedding(fit_tsne$layout, n)
   expect_equal(fit_tsne$parameters$method, "tsne")
+
+  fit_opentsne <- opentsne(x, labels = labels, n_neighbors = 4L, perplexity = 1,
+    early_exaggeration_iter = 2L, n_iter = 3L,
+    silhouette_sample = NULL, preserve_sample = NULL)
+  expect_s3_class(fit_opentsne, "fastEmbedR_embedding")
+  expect_embedding(fit_opentsne$layout, n)
+  expect_equal(fit_opentsne$parameters$method, "opentsne")
+
+  fit_opentsne_knn <- opentsne(knn, labels = labels, perplexity = 1,
+    early_exaggeration_iter = 2L, n_iter = 3L,
+    silhouette_sample = NULL, preserve_sample = NULL)
+  expect_s3_class(fit_opentsne_knn, "fastEmbedR_embedding")
+  expect_embedding(fit_opentsne_knn$layout, n)
+  expect_equal(fit_opentsne_knn$parameters$input, "knn")
+  expect_equal(fit_opentsne_knn$metrics$knn_elapsed, 0)
 
   sup <- supervised_umap(x, labels = labels, n_neighbors = 4L,
     silhouette_sample = NULL, preserve_sample = NULL)

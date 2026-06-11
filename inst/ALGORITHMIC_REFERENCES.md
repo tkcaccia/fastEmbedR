@@ -88,14 +88,19 @@ License decision:
 - Repository: <https://github.com/pavlin-policar/openTSNE>
 - License: BSD-3-Clause
 - Current use in `fastEmbedR`: design reference and API reference for native
-  C++ t-SNE-from-KNN and transform paths. No Python, Cython, or scikit-learn
-  runtime dependency is used by fastEmbedR.
+  C++ t-SNE-from-KNN, openTSNE-style two-phase optimization, and transform
+  paths. No Python, Cython, or scikit-learn runtime dependency is used by
+  fastEmbedR.
 
 Ideas/code behaviour used:
 
 - Expose a `negative_gradient_method` choice in the t-SNE API. The native C++
   implementation currently supports `"bh"` and `"exact"`; `"fft"` is reserved
   for the future FIt-SNE/openTSNE interpolation port and fails clearly for now.
+- Expose `opentsne()` and `embed_knn(method = "opentsne")` as a separate
+  native C++ path with openTSNE-style early exaggeration, normal optimization,
+  automatic learning-rate selection, momentum/gain updates, and max-step
+  clipping.
 - Separate sparse KNN attractive forces from approximate negative forces.
 - Barnes-Hut negative-force normalization follows the openTSNE structure:
   compute an approximate negative gradient and normalizer from a quadtree,

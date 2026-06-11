@@ -281,6 +281,10 @@ knn_tsne_rtsne_cpp <- function(indices, distances, y_init, init, n_components, p
     .Call(`_fastEmbedR_knn_tsne_rtsne_cpp`, indices, distances, y_init, init, n_components, perplexity, theta, max_iter, stop_lying_iter, mom_switch_iter, momentum, final_momentum, eta, exaggeration_factor, negative_gradient_method, n_threads, seed, verbose)
 }
 
+knn_tsne_opentsne_cpp <- function(indices, distances, y_init, init, n_components, perplexity, theta, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, n_threads, seed, verbose, record_costs) {
+    .Call(`_fastEmbedR_knn_tsne_opentsne_cpp`, indices, distances, y_init, init, n_components, perplexity, theta, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, n_threads, seed, verbose, record_costs)
+}
+
 knn_infotsne_cpp <- function(indices, distances, y_init, init, n_components, perplexity, max_iter, early_exaggeration_iter, momentum, final_momentum, learning_rate, early_exaggeration_coeff, repulsion_strength, n_negatives, n_threads, seed, verbose) {
     .Call(`_fastEmbedR_knn_infotsne_cpp`, indices, distances, y_init, init, n_components, perplexity, max_iter, early_exaggeration_iter, momentum, final_momentum, learning_rate, early_exaggeration_coeff, repulsion_strength, n_negatives, n_threads, seed, verbose)
 }

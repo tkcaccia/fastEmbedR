@@ -460,7 +460,8 @@ class BarnesHutTree2D {
     const double dist_sq = dx * dx + dy * dy;
     const double width = 2.0 * std::max(node.half_x, node.half_y);
 
-    if (node.leaf || width / std::sqrt(std::max(dist_sq, 1e-24)) < theta) {
+    const double effective_dist_sq = std::max(dist_sq, 1e-24);
+    if (node.leaf || width * width < theta * theta * effective_dist_sq) {
       if (dist_sq <= 1e-24) return 0.0;
       const double q = 1.0 / (1.0 + dist_sq);
       const double mass = static_cast<double>(node.count);
@@ -524,10 +525,16 @@ void add_sparse_attractive_gradient(const SparseProbabilities& p,
       for (int pos = row_begin; pos < row_end; ++pos) {
         const int j = p.col[static_cast<std::size_t>(pos)];
         const std::size_t jb = static_cast<std::size_t>(j) * dims;
-        const double q = 1.0 / (1.0 + squared_distance(y, i, j, dims));
+        double diff[3] = {0.0, 0.0, 0.0};
+        double d2 = 0.0;
+        for (int d = 0; d < dims; ++d) {
+          diff[d] = y[ib + d] - y[jb + d];
+          d2 += diff[d] * diff[d];
+        }
+        const double q = 1.0 / (1.0 + d2);
         const double coeff = exaggeration * p.val[static_cast<std::size_t>(pos)] * q;
         for (int d = 0; d < dims; ++d) {
-          grad[ib + d] += coeff * (y[ib + d] - y[jb + d]);
+          grad[ib + d] += coeff * diff[d];
         }
       }
     }
@@ -659,9 +666,7 @@ void compute_gradient_barnes_hut(const SparseProbabilities& p,
     return;
   }
 
-  std::fill(grad.begin(), grad.end(), 0.0);
   BarnesHutTree2D tree(y, n);
-  std::vector<double> repulsive(grad.size(), 0.0);
   std::vector<double> partial_sum_q(static_cast<std::size_t>(n_threads), 0.0);
 
   parallel_for(n, n_threads, [&](const int begin, const int end, const int thread_id) {
@@ -671,8 +676,8 @@ void compute_gradient_barnes_hut(const SparseProbabilities& p,
       double fy = 0.0;
       local_sum_q += tree.non_edge_force(i, theta, fx, fy);
       const std::size_t base = static_cast<std::size_t>(i) * 2u;
-      repulsive[base] = fx;
-      repulsive[base + 1u] = fy;
+      grad[base] = -fx;
+      grad[base + 1u] = -fy;
     }
     partial_sum_q[static_cast<std::size_t>(thread_id)] = local_sum_q;
   });
@@ -683,7 +688,7 @@ void compute_gradient_barnes_hut(const SparseProbabilities& p,
   );
   parallel_for(static_cast<int>(grad.size()), n_threads, [&](const int begin, const int end, const int) {
     for (int index = begin; index < end; ++index) {
-      grad[static_cast<std::size_t>(index)] = -repulsive[static_cast<std::size_t>(index)] * inv_sum_q;
+      grad[static_cast<std::size_t>(index)] *= inv_sum_q;
     }
   });
 
@@ -710,7 +715,7 @@ void compute_gradient(const SparseProbabilities& p,
 }
 
 void zero_mean(std::vector<double>& y, const int n, const int dims) {
-  std::vector<double> mean(static_cast<std::size_t>(dims), 0.0);
+  std::array<double, 3> mean{{0.0, 0.0, 0.0}};
   for (int i = 0; i < n; ++i) {
     const std::size_t base = static_cast<std::size_t>(i) * dims;
     for (int d = 0; d < dims; ++d) mean[static_cast<std::size_t>(d)] += y[base + d];
@@ -724,6 +729,47 @@ void zero_mean(std::vector<double>& y, const int n, const int dims) {
 
 double sign_tsne(double x) {
   return x == 0.0 ? 0.0 : (x < 0.0 ? -1.0 : 1.0);
+}
+
+void apply_open_tsne_update(std::vector<double>& y,
+                            std::vector<double>& update,
+                            std::vector<double>& gains,
+                            const std::vector<double>& grad,
+                            const int n,
+                            const int dims,
+                            const double learning_rate,
+                            const double momentum,
+                            const double min_gain,
+	                            const double max_step_norm,
+	                            const int n_threads) {
+	  const bool clip_steps = std::isfinite(max_step_norm) && max_step_norm > 0.0;
+	  const double max_step_norm_sq = max_step_norm * max_step_norm;
+	  parallel_for(n, n_threads, [&](const int begin, const int end, const int) {
+    for (int i = begin; i < end; ++i) {
+      const std::size_t base = static_cast<std::size_t>(i) * dims;
+      double step_norm_sq = 0.0;
+      for (int d = 0; d < dims; ++d) {
+        const std::size_t index = base + static_cast<std::size_t>(d);
+        if (sign_tsne(update[index]) != sign_tsne(grad[index])) {
+          gains[index] += 0.2;
+        } else {
+          gains[index] = gains[index] * 0.8 + min_gain;
+        }
+        if (gains[index] < min_gain) gains[index] = min_gain;
+        update[index] = momentum * update[index] - learning_rate * gains[index] * grad[index];
+        step_norm_sq += update[index] * update[index];
+      }
+      double scale = 1.0;
+	      if (clip_steps && step_norm_sq > max_step_norm_sq) {
+        scale = max_step_norm / std::sqrt(std::max(step_norm_sq, DBL_MIN));
+      }
+      for (int d = 0; d < dims; ++d) {
+        const std::size_t index = base + static_cast<std::size_t>(d);
+        update[index] *= scale;
+        y[index] += update[index];
+      }
+    }
+  });
 }
 
 int sample_nonself(std::mt19937& rng, const int n, const int self) {
@@ -1149,6 +1195,194 @@ List knn_tsne_rtsne_cpp(IntegerMatrix indices,
     Rcpp::Named("repulsion_block_size") = repulsion_block_size,
     Rcpp::Named("theta_requested") = theta,
     Rcpp::Named("n_threads") = threads
+  );
+}
+
+// Native openTSNE-style optimizer from precomputed KNN probabilities. This
+// follows openTSNE's two-phase optimization contract while keeping the
+// implementation in fastEmbedR C++ and using the same sparse KNN affinity
+// builder as the Rtsne-compatible path above.
+// [[Rcpp::export]]
+List knn_tsne_opentsne_cpp(IntegerMatrix indices,
+                           NumericMatrix distances,
+                           NumericMatrix y_init,
+                           bool init,
+                           int n_components,
+                           double perplexity,
+                           double theta,
+                           int early_exaggeration_iter,
+                           int n_iter,
+                           double early_exaggeration,
+                           double exaggeration,
+                           double learning_rate,
+                           bool learning_rate_auto,
+                           double initial_momentum,
+                           double final_momentum,
+                           double min_gain,
+                           double max_step_norm,
+                           std::string negative_gradient_method,
+                           int n_threads,
+                           int seed,
+                           bool verbose,
+                           bool record_costs) {
+  if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
+    Rcpp::stop("KNN `indices` and `distances` must have the same dimensions.");
+  }
+  const int n = indices.nrow();
+  const int k = indices.ncol();
+  if (n < 2 || k < 1) Rcpp::stop("KNN input must have at least two rows and one neighbor column.");
+  if (n - 1 < 3.0 * perplexity) Rcpp::stop("perplexity is too large for the number of samples.");
+  if (n_components < 1 || n_components > 3) Rcpp::stop("`n_components` must be 1, 2, or 3 for t-SNE.");
+  if (early_exaggeration_iter < 0 || n_iter < 0) Rcpp::stop("iteration counts must be non-negative.");
+  if (early_exaggeration_iter + n_iter < 1) Rcpp::stop("at least one optimization iteration is required.");
+  if (learning_rate <= 0.0 && !learning_rate_auto) Rcpp::stop("`learning_rate` must be positive or automatic.");
+  if (early_exaggeration <= 0.0 || exaggeration <= 0.0) Rcpp::stop("exaggeration values must be positive.");
+  if (initial_momentum < 0.0 || final_momentum < 0.0) Rcpp::stop("momentum values must be non-negative.");
+  if (min_gain <= 0.0) Rcpp::stop("`min_gain` must be positive.");
+  if (theta < 0.0 || theta > 1.0) Rcpp::stop("`theta` must lie in [0, 1].");
+
+  const int threads = resolve_threads(n_threads, n);
+  if (verbose) {
+    Rcpp::Rcout << "fastEmbedR openTSNE-style t-SNE from KNN: n=" << n
+                << ", k=" << k
+                << ", perplexity=" << perplexity
+                << ", threads=" << threads << "\n";
+  }
+
+  SparseProbabilities p = build_tsne_probabilities(indices, distances, perplexity, threads);
+  const std::string repulsion_mode = tsne_repulsion_mode(n, theta, negative_gradient_method);
+  if (repulsion_mode == "keops_blocked") {
+    Rcpp::stop("`negative_gradient_method = \"keops_blocked\"` is not part of the openTSNE-style native path; use `method = \"tsne\"` for that experimental reducer.");
+  }
+  const int repulsion_block_size = tsne_repulsion_block_size(n);
+  std::string optimizer_name = repulsion_mode == "barnes_hut" ?
+    "opentsne_barnes_hut_sparse_knn" :
+    "opentsne_exact_sparse_knn";
+  if (verbose) {
+    Rcpp::Rcout << "openTSNE-style repulsion: " << repulsion_mode
+                << ", block_size=" << repulsion_block_size << "\n";
+  }
+
+  std::vector<double> y(static_cast<std::size_t>(n) * n_components);
+  if (init) {
+    if (y_init.nrow() != n || y_init.ncol() != n_components) {
+      Rcpp::stop("`Y_init` has the wrong shape.");
+    }
+    for (int i = 0; i < n; ++i) {
+      for (int d = 0; d < n_components; ++d) {
+        y[static_cast<std::size_t>(i) * n_components + d] = y_init(i, d);
+      }
+    }
+  } else {
+    const unsigned int resolved_seed = seed == NA_INTEGER ?
+      5489u :
+      static_cast<unsigned int>(seed);
+    std::mt19937 rng(resolved_seed);
+    std::normal_distribution<double> normal(0.0, 1.0e-4);
+    for (double& value : y) value = normal(rng);
+  }
+  zero_mean(y, n, n_components);
+
+  std::vector<double> grad(y.size(), 0.0);
+  std::vector<double> update(y.size(), 0.0);
+  std::vector<double> gains(y.size(), 1.0);
+  const int total_iter = early_exaggeration_iter + n_iter;
+  const bool should_record_costs = record_costs || verbose;
+  NumericVector iter_costs(should_record_costs ?
+    static_cast<int>(std::ceil(static_cast<double>(total_iter) / 50.0)) :
+    0);
+  int cost_index = 0;
+
+  auto run_phase = [&](const int phase_iter,
+                       const double phase_exaggeration,
+                       const double phase_momentum,
+                       const char* phase_name,
+                       int& completed_iter) {
+    if (phase_iter <= 0) return;
+    const double phase_lr = learning_rate_auto ?
+      static_cast<double>(n) / std::max(phase_exaggeration, DBL_MIN) :
+      learning_rate;
+    if (verbose) {
+      Rcpp::Rcout << "openTSNE-style phase " << phase_name
+                  << ": iterations=" << phase_iter
+                  << ", exaggeration=" << phase_exaggeration
+                  << ", learning_rate=" << phase_lr
+                  << ", momentum=" << phase_momentum << "\n";
+    }
+    for (int iter = 0; iter < phase_iter; ++iter) {
+      if (((completed_iter + iter) & 7) == 0) Rcpp::checkUserInterrupt();
+      compute_gradient(
+        p,
+        y,
+        n,
+        n_components,
+        phase_exaggeration,
+        threads,
+        repulsion_mode,
+        repulsion_block_size,
+        theta,
+        grad
+      );
+      apply_open_tsne_update(
+        y,
+        update,
+        gains,
+        grad,
+        n,
+        n_components,
+        phase_lr,
+        phase_momentum,
+        min_gain,
+        max_step_norm,
+        threads
+      );
+      zero_mean(y, n, n_components);
+
+      const int global_iter = completed_iter + iter + 1;
+      if (should_record_costs && ((global_iter % 50 == 0) || global_iter == total_iter)) {
+        const double kl = evaluate_kl(p, y, n, n_components, threads);
+        if (cost_index < iter_costs.size()) iter_costs[cost_index++] = kl;
+        if (verbose) {
+          Rcpp::Rcout << "Iteration " << global_iter
+                      << ": error is " << kl << "\n";
+        }
+      }
+    }
+    completed_iter += phase_iter;
+  };
+
+  int completed_iter = 0;
+  run_phase(early_exaggeration_iter, early_exaggeration, initial_momentum, "early_exaggeration", completed_iter);
+  run_phase(n_iter, exaggeration, final_momentum, "normal", completed_iter);
+
+  NumericVector row_costs;
+  if (should_record_costs) {
+    std::vector<double> costs(static_cast<std::size_t>(n), 0.0);
+    evaluate_kl(p, y, n, n_components, threads, &costs);
+    row_costs = NumericVector(costs.begin(), costs.end());
+  } else {
+    row_costs = NumericVector(0);
+  }
+
+  NumericMatrix layout(n, n_components);
+  for (int i = 0; i < n; ++i) {
+    for (int d = 0; d < n_components; ++d) {
+      layout(i, d) = y[static_cast<std::size_t>(i) * n_components + d];
+    }
+  }
+
+  return List::create(
+    Rcpp::Named("Y") = layout,
+    Rcpp::Named("costs") = row_costs,
+    Rcpp::Named("itercosts") = iter_costs,
+    Rcpp::Named("optimizer") = optimizer_name,
+    Rcpp::Named("repulsion") = repulsion_mode,
+    Rcpp::Named("repulsion_block_size") = repulsion_block_size,
+    Rcpp::Named("theta_requested") = theta,
+    Rcpp::Named("n_threads") = threads,
+    Rcpp::Named("learning_rate") = learning_rate_auto ? NA_REAL : learning_rate,
+    Rcpp::Named("learning_rate_early") = static_cast<double>(n) / std::max(early_exaggeration, DBL_MIN),
+    Rcpp::Named("learning_rate_normal") = static_cast<double>(n) / std::max(exaggeration, DBL_MIN)
   );
 }
 

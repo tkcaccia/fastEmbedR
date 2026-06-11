@@ -86,6 +86,91 @@ test_that("native t-SNE exposes openTSNE-style negative gradient selection", {
   )
 })
 
+test_that("native openTSNE-style t-SNE uses two-phase optimizer", {
+  set.seed(321)
+  x <- matrix(rnorm(50L * 5L), 50L, 5L)
+  knn <- nn(x, k = 16L, backend = "cpu")
+
+  layout <- embed_knn(
+    knn,
+    method = "opentsne",
+    perplexity = 5,
+    early_exaggeration_iter = 3L,
+    n_iter = 4L,
+    learning_rate = "auto",
+    negative_gradient_method = "bh",
+    n_threads = 2L,
+    seed = 321L
+  )
+
+  expect_equal(dim(layout), c(nrow(x), 2L))
+  expect_true(all(is.finite(layout)))
+  cfg <- attr(layout, "fastEmbedR_config")
+  expect_equal(cfg$method, "opentsne")
+  expect_equal(cfg$optimizer, "opentsne_barnes_hut_sparse_knn")
+  expect_equal(cfg$repulsion, "barnes_hut")
+  expect_equal(cfg$early_exaggeration_iter, 3L)
+  expect_equal(cfg$n_iter, 4L)
+  expect_equal(cfg$learning_rate, "auto")
+  expect_equal(cfg$learning_rate_early, nrow(x) / cfg$early_exaggeration)
+  expect_equal(cfg$learning_rate_normal, nrow(x) / cfg$exaggeration)
+
+  expect_error(
+    embed_knn(
+      knn,
+      method = "opentsne",
+      perplexity = 5,
+      negative_gradient_method = "fft",
+      early_exaggeration_iter = 1L,
+      n_iter = 1L
+    ),
+    "not yet ported",
+    fixed = TRUE
+  )
+})
+
+test_that("opentsne has direct KNN input functions", {
+  set.seed(322)
+  x <- matrix(rnorm(54L * 5L), 54L, 5L)
+  labels <- rep(1:3, length.out = nrow(x))
+  knn <- nn(x, k = 19L, backend = "cpu")
+
+  layout <- opentsne_knn(
+    knn$indices,
+    knn$distances,
+    n_neighbors = 12L,
+    perplexity = 3,
+    early_exaggeration_iter = 2L,
+    n_iter = 3L,
+    n_threads = 2L,
+    seed = 322L
+  )
+  expect_equal(dim(layout), c(nrow(x), 2L))
+  expect_true(all(is.finite(layout)))
+  cfg <- attr(layout, "fastEmbedR_config")
+  expect_equal(cfg$method, "opentsne")
+  expect_equal(cfg$n_neighbors, 12L)
+  expect_equal(cfg$perplexity, 3)
+
+  fit <- opentsne(
+    knn,
+    labels = labels,
+    n_neighbors = 12L,
+    perplexity = 3,
+    early_exaggeration_iter = 2L,
+    n_iter = 3L,
+    silhouette_sample = NULL,
+    preserve_sample = NULL,
+    seed = 322L
+  )
+  expect_s3_class(fit, "fastEmbedR_embedding")
+  expect_equal(dim(fit$layout), c(nrow(x), 2L))
+  expect_equal(fit$parameters$input, "knn")
+  expect_equal(fit$metrics$n_neighbors, 12L)
+  expect_equal(fit$metrics$preprocess_elapsed, 0)
+  expect_equal(fit$metrics$knn_elapsed, 0)
+})
+
 test_that("t-SNE CUDA backend is explicit and never reports CPU as GPU", {
   set.seed(319)
   x <- matrix(rnorm(32L * 4L), 32L, 4L)

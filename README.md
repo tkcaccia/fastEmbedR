@@ -7,6 +7,9 @@ neighbours. The current package is intentionally focused on two public tasks:
 - `embed_knn()` and `umap()` run UMAP from the KNN graph.
 - `embed_knn(method = "tsne")` and `tsne()` run an `Rtsne_neighbors()`-style
   t-SNE path from precomputed neighbours.
+- `opentsne_knn()`, `embed_knn(method = "opentsne")`, and `opentsne()` run a
+  native C++, openTSNE-style two-phase t-SNE optimizer from precomputed
+  neighbours without calling Python.
 - `embed_knn(method = "infotsne")` and `infotsne()` run a native
   TorchDR-inspired negative-sampling t-SNE objective with better per-iteration
   scaling on large data.
@@ -111,12 +114,17 @@ native C++: sparse KNN affinities for attraction and uniformly sampled
 negatives for the repulsive `logsumexp(log Q)` term. It does not vendor
 TorchDR source, call Python, or depend on PyTorch.
 
-The landmark t-SNE transform path is informed by
+The native `opentsne()` optimizer and the landmark t-SNE transform path are
+informed by
 [`openTSNE`](https://github.com/pavlin-policar/openTSNE), distributed under
-BSD-3-Clause. The native implementation follows the design of
-`TSNEEmbedding.transform()`: initialize query points from reference neighbours,
-build row-wise query-to-reference affinities, and optimize query points against
-a fixed reference embedding. No openTSNE source is vendored, linked, or called.
+BSD-3-Clause. The full-embedding path follows openTSNE's two-phase optimizer:
+early exaggeration followed by normal optimization, `learning_rate = n /
+exaggeration` when requested, openTSNE-style momentum and gains, max-step
+clipping, sparse positive KNN forces, and native BH/exact negative gradients.
+The transform implementation follows the design of `TSNEEmbedding.transform()`:
+initialize query points from reference neighbours, build row-wise
+query-to-reference affinities, and optimize query points against a fixed
+reference embedding. No openTSNE source is vendored, linked, or called.
 The `backend = "metal"` transform optimizer is additionally informed by the
 device-resident n-body optimization structure described in t-SNE-CUDA
 (Chan, Rao, Huang, and Canny, 2018) and the BSD-3
@@ -168,6 +176,8 @@ should be checked on each dataset for local-neighbour quality.
 | `nn()` | Exact KNN for a data matrix or query matrix. |
 | `embed_knn()` | UMAP from a supplied KNN object or index/distance matrices. |
 | `tsne()` | t-SNE from data, using KNN input and Rtsne-style defaults. |
+| `opentsne_knn()` | Native openTSNE-style t-SNE directly from a supplied KNN object or KNN matrices. |
+| `opentsne()` | Native openTSNE-style two-phase t-SNE from data, or from an `nn()` result. |
 | `infotsne()` | InfoTSNE from data, using KNN attraction and sampled negative repulsion. |
 | `transform_tsne()` | Place query points into an existing t-SNE embedding with a fixed-reference optimizer. |
 | `landmark_tsne()` | Embed landmarks, then transform the remaining points into the reference t-SNE map. |
@@ -179,6 +189,19 @@ should be checked on each dataset for local-neighbour quality.
 
 `backend_info()` also reports whether the real FAISS C++ backend and RAPIDS
 cuVS CUDA backend were linked.
+
+Direct openTSNE-style t-SNE from precomputed neighbours:
+
+```r
+x <- scale(as.matrix(iris[, 1:4]))
+knn <- fastEmbedR::nn(x, k = 31)
+
+layout <- fastEmbedR::opentsne_knn(knn, perplexity = 10)
+plot(layout, pch = 21, bg = iris$Species)
+
+fit <- fastEmbedR::opentsne(knn, labels = iris$Species, perplexity = 10)
+plot(fit)
+```
 
 ## Comparison With uwot
 
@@ -211,6 +234,25 @@ ref <- uwot::umap(
 For large datasets, visual inspection matters. Benchmark scripts outside the
 package under `tools/` create side-by-side panels against `uwot_fast_sgd`, but
 those scripts are deliberately excluded from the package build.
+
+## Benchmark Snapshot
+
+The current local benchmark summary is in
+[`BENCHMARK_SUMMARY.md`](BENCHMARK_SUMMARY.md). It compares fastEmbedR with
+available R tools on MNIST, including `uwot`, `umap`, `Rtsne`, `tsne`,
+`Rdimtools`, and the `ReductionWrappers` Python openTSNE wrapper where that
+wrapper is available through `reticulate`.
+
+The short version is:
+
+- On MNIST 2.5k, fastEmbedR is the fastest group among the tested R/package
+  calls; `Rtsne_neighbors()` and the Python openTSNE wrapper retain slightly
+  higher t-SNE trustworthiness.
+- On full MNIST 70k, fastEmbedR's native openTSNE-style path gives the best
+  quality among the current fastEmbedR t-SNE/UMAP paths.
+- On the older full MNIST 70k UMAP-only comparison, `uwot_fast_sgd` remains
+  faster than current fastEmbedR CPU UMAP at essentially tied quality; this is
+  the main remaining UMAP optimization target.
 
 ## GPU Backends
 

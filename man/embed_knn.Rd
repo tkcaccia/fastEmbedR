@@ -11,17 +11,17 @@ embed_knn(indices, distances = NULL, method = "umap", n_components = 2L,
 matrix. If a self-neighbor first column is present it is removed automatically.}
 \item{distances}{Numeric KNN distance matrix matching \code{indices}. Leave as
 \code{NULL} when \code{indices} is an \code{nn()} result.}
-\item{method}{Embedding method. Use \code{"umap"}, \code{"tsne"}, or
-\code{"infotsne"}.}
+\item{method}{Embedding method. Use \code{"umap"}, \code{"tsne"},
+\code{"opentsne"}, or \code{"infotsne"}.}
 \item{n_components}{Output dimensionality.}
 \item{seed}{Random seed.}
 \item{verbose}{Print native optimizer progress.}
 \item{backend}{Execution backend. \code{"gpu"} explicitly requests a real
 native GPU backend and errors if CUDA or Metal is unavailable.}
-\item{...}{Additional method-specific parameters. For \code{method = "tsne"}
-or \code{"infotsne"}, supported parameters include \code{perplexity},
-\code{max_iter}, \code{Y_init}, learning-rate controls, exaggeration controls,
-and \code{n_threads}.}
+\item{...}{Additional method-specific parameters. For t-SNE methods,
+supported parameters include \code{perplexity}, iteration controls,
+\code{Y_init}, learning-rate controls, exaggeration controls, and
+\code{n_threads}.}
 }
 \value{
 A numeric embedding matrix with resolved settings stored in
@@ -39,6 +39,10 @@ plot(layout, pch = 21, bg = iris$Species)
 
 layout_tsne <- embed_knn(knn, method = "tsne", max_iter = 250, seed = 4)
 plot(layout_tsne, pch = 21, bg = iris$Species)
+
+layout_open <- embed_knn(knn, method = "opentsne",
+  early_exaggeration_iter = 100, n_iter = 250, seed = 4)
+plot(layout_open, pch = 21, bg = iris$Species)
 
 layout_info <- embed_knn(knn, method = "infotsne", max_iter = 250,
   n_negatives = 30, seed = 4)
