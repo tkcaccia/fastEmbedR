@@ -242,3 +242,113 @@ CUDA notes to keep for later:
   FFT/N-body repulsive field, and fused momentum/gains update.
 - Do not enable `backend = "cuda"` for `transform_tsne()` until it is tested on
   a CUDA machine; explicit CUDA requests must not fall back to CPU.
+
+## uwot / UMAP
+
+- Repository: <https://github.com/jlmelville/uwot>
+- CRAN: <https://cran.r-project.org/package=uwot>
+- License: GPL (>= 3)
+- Current use in `fastEmbedR`: behavioural and mathematical reference for the
+  public UMAP path, especially the KNN-input fuzzy graph construction and
+  fast-SGD schedule. The package license is GPL (>= 3), so adapting GPL
+  algorithmic structure is compatible with distribution, but the cleaned
+  implementation keeps fastEmbedR's native C++/Metal/CUDA API and does not
+  vendor uwot source files wholesale.
+
+Ideas/code behaviour used:
+
+- Smooth KNN bandwidth search with UMAP local connectivity.
+- Fuzzy simplicial set weights and fuzzy union graph behaviour.
+- `epochs_per_sample` edge scheduling for sampled attractive updates.
+- UMAP negative sampling, learning-rate decay, and fast asynchronous SGD
+  structure close to `uwot::umap(..., fast_sgd = TRUE)`.
+- Public benchmarks compare against both supplied-KNN and end-to-end
+  `uwot::umap(..., fast_sgd = TRUE)` runs where available.
+
+Implemented locations:
+
+- `R/fast_knn_umap.R::resolve_umap_auto_config`
+- `src/fast_knn_umap.cpp::umap_knn_cpp`
+- `src/embedding_metal_impl.mm::knn_embed_metal_csr_impl`
+- `src/embedding_cuda_impl.cpp::knn_embed_cuda_impl`
+
+## UMAP reference implementation
+
+- Repository: <https://github.com/lmcinnes/umap>
+- License: BSD-3-Clause
+- Current use in `fastEmbedR`: mathematical reference for UMAP fuzzy graph
+  construction and SGD objective. The Python implementation is not called at
+  runtime and source files are not vendored.
+
+Ideas used:
+
+- Fuzzy simplicial set formulation from KNN distances.
+- `a`/`b` curve parameters for the low-dimensional UMAP attraction curve.
+- Negative-sampling repulsive force objective.
+
+## RAPIDS cuML / cuVS
+
+- cuML repository: <https://github.com/rapidsai/cuml>
+- cuVS repository: <https://github.com/rapidsai/cuvs>
+- License: Apache-2.0
+- Current use in `fastEmbedR`: cuVS is an optional external KNN backend. cuML
+  and cuVS UMAP material were studied as design references for GPU-resident
+  KNN/graph/optimizer pipelines, but fastEmbedR does not vendor RAPIDS source
+  or call cuML UMAP/openTSNE at runtime.
+
+Implemented locations:
+
+- `src/nn_cuvs_impl.cpp`: optional native bridge to external cuVS brute-force,
+  CAGRA, and NN-descent KNN.
+- `src/embedding_cuda_impl.cpp`: package-native CUDA UMAP and openTSNE kernels
+  when CUDA support is compiled.
+
+## mlx-vis
+
+- Repository: <https://github.com/hanxiao/mlx-vis>
+- License: Apache-2.0
+- Current use in `fastEmbedR`: design reference for NN-descent candidate
+  scheduling and GPU-resident dimensionality-reduction pipelines. No mlx-vis
+  source files are vendored, linked, or called, and fastEmbedR does not depend
+  on Python/MLX at runtime.
+
+Ideas used:
+
+- NEW/OLD candidate expansion and reverse-candidate pruning for NN-descent.
+- GPU-resident KNN/embedding pipeline structure as a Metal design reference.
+- FFT-grid/scatter/gather architecture as a reference while validating the
+  native Metal openTSNE path.
+
+Implemented locations:
+
+- `src/nn.cpp::nndescent_candidate_matrix_mlx_cpp`
+- `src/nn_metal_impl.mm`: native Metal NN-descent implementation.
+- `src/embedding_metal_impl.mm`: native Metal UMAP/openTSNE kernels.
+
+## fastPLS
+
+- Repository: <https://github.com/tkcaccia/fastPLS>
+- Current use in `fastEmbedR`: design reference for randomized SVD/PCA style
+  initialization and backend-aware linear algebra. fastEmbedR does not require
+  fastPLS at runtime.
+
+Implemented locations:
+
+- `R/fast_knn_tsne.R::make_opentsne_pca_init`
+- `R/fast_knn_tsne.R::make_opentsne_pca_init_from_data`
+
+## Apple MPSGraph
+
+- Documentation: <https://developer.apple.com/documentation/metalperformanceshadersgraph>
+- Current use in `fastEmbedR`: diagnostic-only FFT and convolution comparison
+  for Metal openTSNE. It is not the default public openTSNE backend because the
+  MNIST 70k flattened-image benchmark showed only a small speed gain and a
+  small quality/plot shift compared with the package-native Metal FFT-grid
+  path.
+
+Implemented locations:
+
+- `src/embedding_metal_impl.mm::metal_mpsgraph_fft_diagnostic_impl`
+- `src/embedding_metal_impl.mm::metal_mpsgraph_convolution_diagnostic_impl`
+- `tools/diagnose_mpsgraph_fft.R`
+- `tools/diagnose_mpsgraph_convolution.R`
