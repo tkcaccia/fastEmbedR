@@ -13,8 +13,8 @@ knn_embed_cuda_cpp <- function(indices, distances, init, objective, n_epochs, ne
     .Call(`_fastEmbedR_knn_embed_cuda_cpp`, indices, distances, init, objective, n_epochs, negative_sample_rate, learning_rate, min_dist, seed)
 }
 
-knn_umap_cuda_fused_cpp <- function(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, spectral_n_iter, optimizer_mode, seed) {
-    .Call(`_fastEmbedR_knn_umap_cuda_fused_cpp`, indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, spectral_n_iter, optimizer_mode, seed)
+knn_umap_cuda_fused_cpp <- function(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, spectral_n_iter, seed) {
+    .Call(`_fastEmbedR_knn_umap_cuda_fused_cpp`, indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, spectral_n_iter, seed)
 }
 
 knn_tsne_exact_cuda_cpp <- function(indices, distances, init, n_epochs, perplexity, learning_rate, stop_lying_iter, mom_switch_iter, momentum, final_momentum, exaggeration_factor, seed) {

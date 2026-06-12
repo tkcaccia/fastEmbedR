@@ -120,7 +120,7 @@ A `fastEmbedR_embedding` object.
 \description{
 `opentsne()` computes or reuses a KNN graph, then runs the package-native
 openTSNE-style two-phase optimizer. The default optimizer is CPU-native.
-Explicit `backend = "metal"` requests use the package-native Metal optimizer
-and fail clearly if Metal is unavailable; CUDA optimizer requests are never
-silently relabelled as CPU.
+Explicit `backend = "metal"` and `backend = "cuda"` requests use the
+matching package-native GPU optimizer when compiled and fail clearly if the
+requested backend is unavailable.
 }

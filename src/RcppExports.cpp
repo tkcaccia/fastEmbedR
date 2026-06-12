@@ -55,8 +55,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // knn_umap_cuda_fused_cpp
-NumericMatrix knn_umap_cuda_fused_cpp(IntegerMatrix indices, NumericMatrix distances, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, int spectral_n_iter, int optimizer_mode, int seed);
-RcppExport SEXP _fastEmbedR_knn_umap_cuda_fused_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP spectral_n_iterSEXP, SEXP optimizer_modeSEXP, SEXP seedSEXP) {
+NumericMatrix knn_umap_cuda_fused_cpp(IntegerMatrix indices, NumericMatrix distances, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, int spectral_n_iter, int seed);
+RcppExport SEXP _fastEmbedR_knn_umap_cuda_fused_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP spectral_n_iterSEXP, SEXP seedSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -67,9 +67,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
     Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
     Rcpp::traits::input_parameter< int >::type spectral_n_iter(spectral_n_iterSEXP);
-    Rcpp::traits::input_parameter< int >::type optimizer_mode(optimizer_modeSEXP);
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
-    rcpp_result_gen = Rcpp::wrap(knn_umap_cuda_fused_cpp(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, spectral_n_iter, optimizer_mode, seed));
+    rcpp_result_gen = Rcpp::wrap(knn_umap_cuda_fused_cpp(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, spectral_n_iter, seed));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1419,7 +1418,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_embedding_cuda_available_cpp", (DL_FUNC) &_fastEmbedR_embedding_cuda_available_cpp, 0},
     {"_fastEmbedR_spectral_knn_init_cuda_cpp", (DL_FUNC) &_fastEmbedR_spectral_knn_init_cuda_cpp, 5},
     {"_fastEmbedR_knn_embed_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_cuda_cpp, 9},
-    {"_fastEmbedR_knn_umap_cuda_fused_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_cuda_fused_cpp, 9},
+    {"_fastEmbedR_knn_umap_cuda_fused_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_cuda_fused_cpp, 8},
     {"_fastEmbedR_knn_tsne_exact_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_exact_cuda_cpp, 12},
     {"_fastEmbedR_knn_tsne_opentsne_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cuda_cpp, 19},
     {"_fastEmbedR_standardize_cuda_cpp", (DL_FUNC) &_fastEmbedR_standardize_cuda_cpp, 1},

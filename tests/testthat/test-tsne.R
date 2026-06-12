@@ -200,7 +200,7 @@ test_that("native Metal openTSNE runs FFT-grid without CPU fallback", {
   expect_equal(cfg$repulsion_block_size, 32L)
 })
 
-test_that("openTSNE Metal optimizer is native and CUDA fails clearly", {
+test_that("openTSNE GPU optimizers are native and fail clearly when unavailable", {
   set.seed(319)
   x <- matrix(rnorm(32L * 4L), 32L, 4L)
   knn <- nn(x, k = 10L, backend = "cpu")
@@ -233,16 +233,33 @@ test_that("openTSNE Metal optimizer is native and CUDA fails clearly", {
       fixed = TRUE
     )
   }
-  expect_error(
-    opentsne(
+  if (isTRUE(fastEmbedR:::embedding_cuda_available_cpp()) &&
+      isTRUE(fastEmbedR:::cuda_opentsne_native_available())) {
+    cuda <- opentsne_knn(
       knn,
       perplexity = 3,
       early_exaggeration_iter = 1L,
       n_iter = 1L,
+      negative_gradient_method = "fft",
       backend = "cuda"
-    ),
-    "CUDA"
-  )
+    )
+    cfg <- attr(cuda, "fastEmbedR_config")
+    expect_equal(cfg$backend, "cuda")
+    expect_equal(cfg$optimizer, "opentsne_fitsne_fft_grid_native_cuda")
+    expect_equal(cfg$repulsion, "fft_grid_cuda_cufft")
+    expect_true(all(is.finite(cuda)))
+  } else {
+    expect_error(
+      opentsne(
+        knn,
+        perplexity = 3,
+        early_exaggeration_iter = 1L,
+        n_iter = 1L,
+        backend = "cuda"
+      ),
+      "CUDA"
+    )
+  }
 })
 
 test_that("opentsne can use cuVS for KNN without labelling the optimizer as GPU", {

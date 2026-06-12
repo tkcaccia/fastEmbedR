@@ -90,7 +90,7 @@ if [ "$use_cuda" != "0" ] && [ -n "$nvcc" ] && [ -n "$cuda_home" ]; then
   cuda_extra_flags=${FASTEMBEDR_CUDA_FLAGS:-}
   cuda_objects="nn_cuda_impl.o nn_cuda_kernels.o embedding_cuda_impl.o embedding_cuda_kernels.o"
   cppflags="$cppflags -DFASTEMBEDR_HAS_CUDA -I$cuda_home/include"
-  libs="$libs -L$cuda_home/lib64 -L$cuda_home/lib -lcudart"
+  libs="$libs -L$cuda_home/lib64 -L$cuda_home/lib -lcudart -lcufft"
   cuda_rule="
 .DEFAULT_GOAL := all
 

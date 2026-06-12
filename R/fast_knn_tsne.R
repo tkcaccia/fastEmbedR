@@ -138,7 +138,7 @@ normalize_tsne_negative_gradient_method <- function(method) {
       "`negative_gradient_method = \"sampled\"` is not part of the ",
       "standard GPU openTSNE path because it changes the optimization ",
       "mathematics. Use `\"exact\"` for small native GPU checks, or CPU ",
-      "`\"fft\"` until native Metal/CUDA FFT is implemented.",
+      "`\"fft\"`; native Metal/CUDA FFT paths are used when compiled.",
       call. = FALSE
     )
   }
@@ -439,14 +439,6 @@ fast_knn_opentsne_materialized <- function(indices,
   } else if (identical(optimizer_backend, "cuda")) {
     if (identical(negative_gradient_method, "auto")) {
       negative_gradient_method <- "fft"
-    }
-    if (identical(negative_gradient_method, "fft")) {
-      stop(
-        "openTSNE FFT/FIt-SNE interpolation is not yet ported to native CUDA. ",
-        "Use CPU `negative_gradient_method = \"fft\"` for large runs, or ",
-        "`\"exact\"` for small `backend = \"cuda\"` reference checks.",
-        call. = FALSE
-      )
     }
   } else if (identical(negative_gradient_method, "auto")) {
     negative_gradient_method <- "fft"
@@ -795,9 +787,9 @@ opentsne_knn <- function(indices,
 #'
 #' `opentsne()` computes or reuses a KNN graph, then runs the package-native
 #' openTSNE-style two-phase optimizer. The default optimizer is CPU-native.
-#' Explicit `backend = "metal"` requests use the package-native Metal optimizer
-#' and fail clearly if Metal is unavailable; CUDA optimizer requests are never
-#' silently relabelled as CPU.
+#' Explicit `backend = "metal"` and `backend = "cuda"` requests use the
+#' matching package-native GPU optimizer when compiled and fail clearly if the
+#' requested backend is unavailable.
 #'
 #' @param data Numeric matrix/data frame with observations in rows, or a KNN
 #'   object returned by [nn()].

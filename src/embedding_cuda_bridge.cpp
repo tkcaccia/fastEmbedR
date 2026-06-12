@@ -28,7 +28,6 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix indices,
                                        double learning_rate,
                                        double min_dist,
                                        int spectral_n_iter,
-                                       int optimizer_mode,
                                        int seed);
 NumericMatrix knn_tsne_exact_cuda_impl(IntegerMatrix indices,
                                        NumericMatrix distances,
@@ -128,7 +127,6 @@ NumericMatrix knn_umap_cuda_fused_cpp(IntegerMatrix indices,
                                       double learning_rate,
                                       double min_dist,
                                       int spectral_n_iter,
-                                      int optimizer_mode,
                                       int seed) {
   return knn_umap_cuda_fused_impl(
     indices,
@@ -138,7 +136,6 @@ NumericMatrix knn_umap_cuda_fused_cpp(IntegerMatrix indices,
     learning_rate,
     min_dist,
     spectral_n_iter,
-    optimizer_mode,
     seed
   );
 }

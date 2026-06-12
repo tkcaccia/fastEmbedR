@@ -129,8 +129,8 @@ Ideas/code behaviour used:
   implementation now supports `"exact"` and `"fft"` grid approximation; the
   older Barnes-Hut route was removed from the public path after it lost to
   FFT-grid in the MNIST 70k benchmark. The Metal backend has a package-native
-  FFT-grid path. CUDA FFT remains explicitly unsupported until real CUDA
-  kernels are ported.
+  FFT-grid path. The CUDA backend uses package-native kernels plus cuFFT for
+  the FFT-grid convolution.
 - Expose `opentsne()` and `embed_knn(method = "opentsne")` as a separate
   native C++ path with openTSNE-style early exaggeration, normal optimization,
   automatic learning-rate selection, momentum/gain updates, and max-step

@@ -167,41 +167,20 @@ fast_knn_umap_core <- function(indices,
       stop("Native GPU embedding backends currently support only `n_components = 2`.", call. = FALSE)
     }
     gpu_backend <- cfg$backend
-    hybrid <- fast_knn_umap_gpu_hybrid_plan(cfg)
-    if (!isTRUE(hybrid$enabled) && hybrid$gpu_epochs != cfg$n_epochs) {
-      cfg$n_epochs_requested_by_profile <- as.integer(cfg$n_epochs)
-      cfg$n_epochs <- as.integer(hybrid$gpu_epochs)
-      cfg$epoch_source <- paste0(cfg$epoch_source, "_pure_gpu_cap")
-    }
     cfg$gpu_transfer_policy <- "single_upload_optimizer"
     use_fused_cuda_umap <- identical(gpu_backend, "cuda")
-    cuda_optimizer_mode <- if (isTRUE(use_fused_cuda_umap)) {
-      fast_knn_umap_cuda_optimizer_mode()
-    } else {
-      NA_character_
-    }
-    metal_optimizer_mode <- if (identical(gpu_backend, "metal")) "atomic_inplace" else NA_character_
     cfg$gpu_optimizer_mode <- if (identical(gpu_backend, "metal")) {
-      metal_optimizer_mode
+      "atomic_inplace"
     } else {
-      cuda_optimizer_mode
-    }
-    cfg$gpu_optimizer_mode_code <- if (isTRUE(use_fused_cuda_umap)) {
-      if (identical(cuda_optimizer_mode, "deterministic")) 0L else 1L
-    } else {
-      NA_integer_
+      "atomic_coo"
     }
     cfg$gpu_optimizer_update_rule <- if (gpu_backend == "metal") {
       "native_metal_csr_atomic_inplace_edge_update"
-    } else if (identical(cuda_optimizer_mode, "deterministic")) {
-      "native_cuda_deterministic_csr_jacobi"
     } else {
       "native_cuda_atomic_coo_uwot_schedule"
     }
     cfg$gpu_optimizer_schedule <- if (gpu_backend == "metal") {
       "csr_precomputed_epochs_per_sample"
-    } else if (identical(cuda_optimizer_mode, "deterministic")) {
-      "csr_epochs_per_sample"
     } else {
       "coo_epochs_per_sample"
     }
@@ -231,20 +210,12 @@ fast_knn_umap_core <- function(indices,
       "cpu_csr_shared"
     }
     cfg$graph_storage <- if (gpu_backend == "cuda") {
-      if (identical(cuda_optimizer_mode, "deterministic")) {
-        "native_cuda_csr_fused"
-      } else {
-        "native_cuda_coo_fused"
-      }
+      "native_cuda_coo_fused"
     } else {
       "cpu_csr_packed_to_metal"
     }
     cfg$gpu_initial_backend <- gpu_backend
-    cfg$optimizer_backend <- if (isTRUE(hybrid$enabled)) {
-      paste0(gpu_backend, "+cpu_refine")
-    } else {
-      gpu_backend
-    }
+    cfg$optimizer_backend <- gpu_backend
     cfg <- add_gpu_transfer_metadata(
       cfg,
       indices,
@@ -255,23 +226,21 @@ fast_knn_umap_core <- function(indices,
       objective = "umap"
     )
     cfg$backend <- cfg$optimizer_backend
-    cfg$gpu_hybrid_refinement <- isTRUE(hybrid$enabled)
-    cfg$gpu_hybrid_reason <- hybrid$reason
-    cfg$gpu_initial_epochs <- as.integer(hybrid$gpu_epochs)
-    cfg$cpu_refinement_epochs <- as.integer(hybrid$cpu_epochs)
-    cfg$cpu_refinement_learning_rate <- as.numeric(hybrid$cpu_learning_rate)
-    cfg$cpu_refinement_negative_sample_rate <- as.integer(hybrid$cpu_negative_sample_rate)
-    cfg$cpu_refinement_backend <- if (isTRUE(hybrid$enabled)) "cpu" else NA_character_
+    cfg$gpu_umap_path <- if (identical(gpu_backend, "cuda")) {
+      "cuda_pure_atomic"
+    } else {
+      "metal_atomic_inplace"
+    }
+    cfg$gpu_initial_epochs <- as.integer(cfg$n_epochs)
     layout <- if (isTRUE(use_fused_cuda_umap)) {
       knn_umap_cuda_fused_cpp(
         indices,
         distances,
-        as.integer(hybrid$gpu_epochs),
+        as.integer(cfg$n_epochs),
         as.integer(cfg$negative_sample_rate),
         cfg$learning_rate,
         cfg$min_dist,
         as.integer(cfg$spectral_n_iter),
-        as.integer(cfg$gpu_optimizer_mode_code),
         as.integer(seed)
       )
     } else if (identical(gpu_backend, "metal")) {
@@ -290,7 +259,7 @@ fast_knn_umap_core <- function(indices,
         graph$neighbors,
         graph$weights,
         init,
-        as.integer(hybrid$gpu_epochs),
+        as.integer(cfg$n_epochs),
         as.integer(cfg$negative_sample_rate),
         cfg$learning_rate,
         cfg$min_dist,
@@ -308,26 +277,11 @@ fast_knn_umap_core <- function(indices,
         distances,
         init,
         "umap",
-        hybrid$gpu_epochs,
+        cfg$n_epochs,
         cfg$negative_sample_rate,
         cfg$learning_rate,
         min_dist = cfg$min_dist,
         seed = seed
-      )
-    }
-    if (isTRUE(hybrid$enabled)) {
-      layout <- knn_umap_refine_cpp(
-        indices,
-        distances,
-        layout,
-        as.integer(hybrid$cpu_epochs),
-        cfg$min_dist,
-        as.integer(hybrid$cpu_negative_sample_rate),
-        hybrid$cpu_learning_rate,
-        cfg$repulsion_strength,
-        as.integer(cfg$n_threads),
-        as.integer(seed + 10007L),
-        isTRUE(verbose)
       )
     }
     layout <- set_embedding_colnames(layout, "UMAP")
@@ -516,22 +470,6 @@ fast_knn_umap_auto_pilot_use_cache <- function() {
   !isFALSE(getOption("fastEmbedR.knn_pilot_use_cache", TRUE))
 }
 
-fast_knn_umap_cuda_optimizer_mode <- function() {
-  value <- getOption(
-    "fastEmbedR.cuda_optimizer",
-    Sys.getenv("FASTEMBEDR_CUDA_OPTIMIZER", "atomic")
-  )
-  value <- tolower(trimws(as.character(value[1L])))
-  if (value %in% c("deterministic", "csr", "jacobi", "test", "reproducible")) {
-    return("deterministic")
-  }
-  "atomic"
-}
-
-fast_knn_umap_metal_optimizer_mode <- function() {
-  "atomic_inplace"
-}
-
 scale_embedding_sdev_r <- function(embedding, target_sdev) {
   target_sdev <- as.numeric(target_sdev)
   if (length(target_sdev) != 1L || is.na(target_sdev) || !is.finite(target_sdev) || target_sdev <= 0) {
@@ -548,151 +486,6 @@ scale_embedding_sdev_r <- function(embedding, target_sdev) {
   embedding <- sweep(embedding, 2L, scale / target_sdev, "/")
   attr(embedding, "backend") <- attr_backend
   embedding
-}
-
-fast_knn_umap_gpu_hybrid_plan <- function(cfg) {
-  n_epochs <- validate_epoch_count(cfg$n_epochs)
-  backend <- as.character(cfg$backend)
-  empty <- list(
-    enabled = FALSE,
-    reason = "not_a_gpu_backend",
-    gpu_epochs = as.integer(n_epochs),
-    cpu_epochs = 0L,
-    cpu_learning_rate = NA_real_,
-    cpu_negative_sample_rate = NA_integer_
-  )
-  if (!backend %in% c("cuda", "metal")) {
-    return(empty)
-  }
-
-  n <- as.integer(cfg$n)
-  min_n <- fast_knn_umap_gpu_hybrid_min_n()
-  if (length(n) != 1L || is.na(n) || n < min_n) {
-    empty$reason <- paste0("below_hybrid_threshold_", min_n)
-    empty$gpu_epochs <- fast_knn_umap_gpu_pure_epochs(cfg, n_epochs)
-    empty$cpu_learning_rate <- min(0.5, as.numeric(cfg$learning_rate))
-    empty$cpu_negative_sample_rate <- as.integer(min(cfg$negative_sample_rate, 2L))
-    return(empty)
-  }
-  hybrid_mode <- fast_knn_umap_gpu_hybrid_mode()
-  if (identical(hybrid_mode, "off")) {
-    empty$reason <- "disabled_by_option"
-    empty$gpu_epochs <- fast_knn_umap_gpu_pure_epochs(cfg, n_epochs)
-    empty$cpu_learning_rate <- min(0.5, as.numeric(cfg$learning_rate))
-    empty$cpu_negative_sample_rate <- as.integer(min(cfg$negative_sample_rate, 2L))
-    return(empty)
-  }
-  if (n_epochs < 60L) {
-    empty$reason <- "too_few_epochs_for_refinement_split"
-    empty$gpu_epochs <- fast_knn_umap_gpu_pure_epochs(cfg, n_epochs)
-    empty$cpu_learning_rate <- min(0.5, as.numeric(cfg$learning_rate))
-    empty$cpu_negative_sample_rate <- as.integer(min(cfg$negative_sample_rate, 2L))
-    return(empty)
-  }
-
-  if (identical(hybrid_mode, "auto") && !fast_knn_umap_gpu_hybrid_auto_selected(cfg)) {
-    empty$reason <- "auto_policy_keeps_pure_gpu"
-    empty$gpu_epochs <- fast_knn_umap_gpu_pure_epochs(cfg, n_epochs)
-    empty$cpu_learning_rate <- min(0.5, as.numeric(cfg$learning_rate))
-    empty$cpu_negative_sample_rate <- as.integer(min(cfg$negative_sample_rate, 2L))
-    return(empty)
-  }
-
-  gpu_fraction <- fast_knn_umap_gpu_hybrid_gpu_fraction()
-  gpu_epochs <- as.integer(floor(n_epochs * gpu_fraction))
-  gpu_epochs <- max(20L, gpu_epochs)
-
-  min_cpu_epochs <- if (n_epochs >= 200L) 80L else 50L
-  cpu_epochs <- as.integer(n_epochs - gpu_epochs)
-  if (cpu_epochs < min_cpu_epochs) {
-    cpu_epochs <- min(as.integer(n_epochs - 1L), as.integer(min_cpu_epochs))
-    gpu_epochs <- as.integer(n_epochs - cpu_epochs)
-  }
-  gpu_epochs <- max(1L, min(as.integer(n_epochs - 1L), as.integer(gpu_epochs)))
-  cpu_epochs <- as.integer(n_epochs - gpu_epochs)
-
-  list(
-    enabled = TRUE,
-    reason = if (identical(hybrid_mode, "on")) {
-      "enabled_by_option"
-    } else {
-      "auto_cuda_quality_risk"
-    },
-    gpu_epochs = as.integer(gpu_epochs),
-    cpu_epochs = as.integer(cpu_epochs),
-    cpu_learning_rate = fast_knn_umap_gpu_hybrid_cpu_learning_rate(cfg),
-    cpu_negative_sample_rate = as.integer(min(cfg$negative_sample_rate, 2L))
-  )
-}
-
-fast_knn_umap_gpu_pure_epochs <- function(cfg, n_epochs) {
-  if (identical(cfg$epoch_source, "internal_override")) {
-    return(as.integer(n_epochs))
-  }
-  n <- suppressWarnings(as.integer(cfg$n))
-  as.integer(n_epochs)
-}
-
-fast_knn_umap_gpu_hybrid_mode <- function() {
-  value <- getOption("fastEmbedR.gpu_hybrid_refine", "auto")
-  if (is.logical(value) && length(value) == 1L && !is.na(value)) {
-    return(if (isTRUE(value)) "on" else "off")
-  }
-  value <- tolower(as.character(value[[1L]]))
-  if (length(value) != 1L || is.na(value)) return("auto")
-  if (value %in% c("1", "true", "yes", "on", "quality", "hybrid")) return("on")
-  if (value %in% c("0", "false", "no", "off", "speed", "pure")) return("off")
-  "auto"
-}
-
-fast_knn_umap_gpu_hybrid_auto_selected <- function(cfg) {
-  backend <- as.character(cfg$backend)
-  if (!identical(backend, "cuda")) {
-    return(FALSE)
-  }
-  rule <- if (is.null(cfg$knn_distance_profile_rule)) "" else as.character(cfg$knn_distance_profile_rule)
-  if (rule %in% c("high_variability_more_epochs", "wide_shell_balanced_quality_speed")) {
-    return(TRUE)
-  }
-  cv <- suppressWarnings(as.numeric(cfg$knn_distance_cv))
-  if (length(cv) != 1L || is.na(cv) || !is.finite(cv)) return(FALSE)
-  is.finite(cv) && cv >= fast_knn_umap_gpu_hybrid_cv_threshold()
-}
-
-fast_knn_umap_gpu_hybrid_cv_threshold <- function() {
-  value <- getOption("fastEmbedR.gpu_hybrid_cv_threshold", 0.35)
-  value <- suppressWarnings(as.numeric(value))
-  if (length(value) != 1L || is.na(value) || !is.finite(value) || value < 0) {
-    return(0.35)
-  }
-  value
-}
-
-fast_knn_umap_gpu_hybrid_min_n <- function() {
-  value <- getOption("fastEmbedR.gpu_hybrid_min_n", 10000L)
-  value <- suppressWarnings(as.integer(value))
-  if (length(value) != 1L || is.na(value) || !is.finite(value) || value < 100L) {
-    return(10000L)
-  }
-  value
-}
-
-fast_knn_umap_gpu_hybrid_gpu_fraction <- function() {
-  value <- getOption("fastEmbedR.gpu_hybrid_gpu_fraction", 0.35)
-  value <- suppressWarnings(as.numeric(value))
-  if (length(value) != 1L || is.na(value) || !is.finite(value) || value <= 0 || value >= 1) {
-    return(0.35)
-  }
-  value
-}
-
-fast_knn_umap_gpu_hybrid_cpu_learning_rate <- function(cfg) {
-  value <- getOption("fastEmbedR.gpu_hybrid_cpu_learning_rate", NA_real_)
-  value <- suppressWarnings(as.numeric(value))
-  if (length(value) == 1L && !is.na(value) && is.finite(value) && value > 0) {
-    return(value)
-  }
-  min(0.5, as.numeric(cfg$learning_rate))
 }
 
 fast_knn_umap_config <- function(n,

@@ -131,9 +131,9 @@ of separating sparse KNN attractive forces from interpolated negative forces on
 a 2D grid. It is implemented in package C++ and does not call Python.
 
 Native Metal FFT openTSNE is implemented in Objective-C++/Metal when the Metal
-backend is compiled. Native CUDA FFT openTSNE is still refused until the CUDA
-port exists; unsupported GPU requests fail clearly instead of falling back to
-CPU.
+backend is compiled. Native CUDA FFT openTSNE is implemented with CUDA kernels
+and cuFFT when the CUDA backend is compiled. Unsupported GPU requests fail
+clearly instead of falling back to CPU.
 
 ## Automatic Parameters
 

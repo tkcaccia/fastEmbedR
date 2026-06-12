@@ -107,17 +107,18 @@ normalization, gains/momentum updates, and the final layout in Metal kernels.
 The exact Metal path is O(n^2) in memory and time. Large-data Metal openTSNE
 uses a native FFT/FIt-SNE-style negative-gradient path: the interpolation-grid
 scatter, padded-grid FFT convolution, grid gather, sparse attractive forces,
-and gain/momentum update run in Objective-C++/Metal kernels. CUDA still needs
-the corresponding port. The earlier sampled full-embedding GPU repulsion path
-is not exposed as openTSNE because it changes the optimization mathematics.
+and gain/momentum update run in Objective-C++/Metal kernels. CUDA uses package
+CUDA kernels plus cuFFT for the corresponding FFT-grid path. The earlier
+sampled full-embedding GPU repulsion path is not exposed as openTSNE because it
+changes the optimization mathematics.
 
 The implementation is fastEmbedR C++ code and does not vendor, link to, or
 call openTSNE's Python or Cython implementation. CPU
 `negative_gradient_method = "fft"` is a native grid approximation inspired
 by FIt-SNE/openTSNE/t-SNE-CUDA. CPU uses C++ grid FFTs. Metal uses package-native
 Objective-C++/Metal grid scatter, FFT convolution, gather, and optimizer
-kernels. CUDA FFT requests fail clearly rather than falling back to CPU until
-the CUDA path is ported.
+kernels. CUDA uses package-native grid scatter/gather, sparse attractive
+forces, gain/momentum kernels, and cuFFT convolution.
 
 t-SNE-CUDA design reference
 ---------------------------

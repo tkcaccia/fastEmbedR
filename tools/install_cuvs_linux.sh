@@ -70,13 +70,13 @@ if ! "$prefix/bin/micromamba" env list | awk '{print $1}' | grep -qx "$env_name"
   "$prefix/bin/micromamba" create -y -n "$env_name" \
     --channel-priority "$channel_priority" \
     -c "$rapids_channel" -c "$conda_channel" -c "$nvidia_channel" \
-    "libcuvs" "cuda-nvcc" "cuda-cudart-dev" "cuda-version=$cuda_version"
+    "libcuvs" "cuda-nvcc" "cuda-cudart-dev" "libcufft-dev" "cuda-version=$cuda_version"
 else
   echo "Updating micromamba environment $env_name with libcuvs cuda-version=$cuda_version"
   "$prefix/bin/micromamba" install -y -n "$env_name" \
     --channel-priority "$channel_priority" \
     -c "$rapids_channel" -c "$conda_channel" -c "$nvidia_channel" \
-    "libcuvs" "cuda-nvcc" "cuda-cudart-dev" "cuda-version=$cuda_version"
+    "libcuvs" "cuda-nvcc" "cuda-cudart-dev" "libcufft-dev" "cuda-version=$cuda_version"
 fi
 
 env_prefix=$("$prefix/bin/micromamba" env list | awk -v name="$env_name" '$1 == name {print $NF}')

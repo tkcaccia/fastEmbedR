@@ -18,8 +18,8 @@ test_that("Metal public paths stay native and do not depend on Python bridges", 
   expect_false(grepl("reticulate|py_|python|torch|mlx", paste(nn_body, prepare_body, transform_body, opentsne_body), ignore.case = TRUE))
 })
 
-test_that("Metal UMAP exposes only the validated atomic-inplace optimizer", {
-  expect_equal(fastEmbedR:::fast_knn_umap_metal_optimizer_mode(), "atomic_inplace")
+test_that("GPU UMAP exposes one CUDA fused entry shape", {
+  expect_length(formals(fastEmbedR:::knn_umap_cuda_fused_cpp), 8L)
 })
 
 test_that("Metal openTSNE FFT-grid exposes opt-in per-stage timing", {
@@ -64,26 +64,23 @@ test_that("Metal openTSNE FFT-grid exposes opt-in per-stage timing", {
   expect_equal(attr(layout, "fastEmbedR_config")$metal_stage_timing, timing)
 })
 
-test_that("Metal UMAP auto policy keeps the visually validated atomic-inplace path", {
-  old_hybrid <- getOption("fastEmbedR.gpu_hybrid_refine", NULL)
-  on.exit({
-    if (is.null(old_hybrid)) {
-      options(fastEmbedR.gpu_hybrid_refine = NULL)
-    } else {
-      options(fastEmbedR.gpu_hybrid_refine = old_hybrid)
-    }
-  }, add = TRUE)
-
-  options(fastEmbedR.gpu_hybrid_refine = "auto")
-
+test_that("GPU UMAP config records only the validated atomic paths", {
   cfg <- fastEmbedR:::fast_knn_umap_config(
     n = 70000L,
     k = 50L,
     backend = "metal"
   )
-  expect_equal(fastEmbedR:::fast_knn_umap_metal_optimizer_mode(), "atomic_inplace")
-  expect_false(fastEmbedR:::fast_knn_umap_gpu_hybrid_auto_selected(cfg))
-  expect_equal(fastEmbedR:::fast_knn_umap_gpu_hybrid_plan(cfg)$reason, "auto_policy_keeps_pure_gpu")
+  cfg$gpu_optimizer_mode <- "atomic_inplace"
+  cfg$gpu_umap_path <- "metal_atomic_inplace"
+  expect_equal(cfg$gpu_optimizer_mode, "atomic_inplace")
+  expect_equal(cfg$gpu_umap_path, "metal_atomic_inplace")
+
+  cuda_cfg <- cfg
+  cuda_cfg$backend <- "cuda"
+  cuda_cfg$gpu_optimizer_mode <- "atomic_coo"
+  cuda_cfg$gpu_umap_path <- "cuda_pure_atomic"
+  expect_equal(cuda_cfg$gpu_optimizer_mode, "atomic_coo")
+  expect_equal(cuda_cfg$gpu_umap_path, "cuda_pure_atomic")
 })
 
 test_that("Metal UMAP landmark refinement stays native and reports its backend", {

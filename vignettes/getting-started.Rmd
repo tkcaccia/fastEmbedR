@@ -106,7 +106,7 @@ For CPU runs, `negative_gradient_method = "auto"` resolves to
 for the negative gradient. This is useful for large two-dimensional embeddings
 from a supplied KNN graph. The older Barnes-Hut route has been removed.
 Native Metal FFT openTSNE uses Objective-C++/Metal kernels when compiled.
-Native CUDA FFT openTSNE still fails clearly until the CUDA port is added.
+Native CUDA FFT openTSNE uses package CUDA kernels and cuFFT when compiled.
 
 ```{r, eval = fastEmbedR:::embedding_metal_available_cpp()}
 metal_layout <- umap_knn(

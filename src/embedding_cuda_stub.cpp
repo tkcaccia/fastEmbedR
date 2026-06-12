@@ -37,7 +37,6 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix,
                                        double,
                                        double,
                                        int,
-                                       int,
                                        int) {
   Rcpp::stop("CUDA fused UMAP is available only when the package is built with CUDA support.");
 }
