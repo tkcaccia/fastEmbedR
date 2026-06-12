@@ -4,6 +4,8 @@ Topic pages:
 
 - [Installation and backends](installation-backends.md)
 - [Usage and API](usage-api.md)
+- [Backend capabilities](backend-capabilities.md)
+- [Benchmark gallery](benchmark-gallery.md)
 - [Benchmarks](benchmarks.md)
 - [Implementation and library inventory](implementation-inventory.md)
 - [Function implementation details and literature](function-implementation-details.md)

@@ -2,6 +2,29 @@
 
 This page gives the main KNN-first workflows and the public API.
 
+## Which Function Should I Use?
+
+| Situation | Use |
+| --- | --- |
+| You already computed nearest neighbours | `umap_knn()` or `opentsne_knn()` |
+| You want one call from a data matrix | `umap()` or `opentsne()` |
+| You want to compare UMAP and openTSNE fairly | compute `knn <- nn(...)` once, then reuse it |
+| You want Apple GPU | set `backend = "metal"` explicitly |
+| You want NVIDIA GPU | build with CUDA/cuVS, then set `backend = "cuda"` or a CUDA KNN backend |
+| You want a fast approximation for very large data | use `landmark_umap()` or `landmark_tsne()` and report it as landmarking |
+| You want quality metrics | `evaluate_embedding(x, layout, labels = labels)` |
+
+The recommended workflow is KNN first:
+
+```r
+knn <- nn(x, k = 50, backend = "auto", n_threads = 4)
+layout_umap <- umap_knn(knn, seed = 1)
+layout_tsne <- opentsne_knn(knn, init_data = x, seed = 1)
+```
+
+This keeps nearest-neighbour time separate from embedding time and makes
+benchmarks easier to interpret.
+
 ## Basic KNN-First UMAP
 
 ```r
@@ -45,6 +68,26 @@ plot(layout_tsne, pch = 21, bg = labels)
 
 `init_data` is used only to compute PCA initialization for KNN-input runs. It
 is not used for neighbour search or optimization.
+
+## Explicit GPU Use
+
+GPU use is explicit. A request for Metal or CUDA must run that backend or fail
+clearly.
+
+```r
+knn <- nn(x, k = 50, backend = "metal")
+layout <- opentsne_knn(knn, init_data = x, backend = "metal", seed = 1)
+```
+
+For CUDA builds with RAPIDS cuVS available:
+
+```r
+knn <- nn(x, k = 50, backend = "cuda_cuvs_nndescent")
+layout <- opentsne_knn(knn, init_data = x, backend = "cuda", seed = 1)
+```
+
+The package does not silently run these examples on CPU and report them as GPU
+results.
 
 ## Landmark Workflow
 
@@ -119,4 +162,3 @@ defaults.
 | `landmark_umap()` | Embed landmarks with UMAP, then project/refine remaining rows. |
 | `evaluate_embedding()` | Embedding quality metrics. |
 | `backend_info()` | CPU/CUDA/Metal/FAISS/cuVS detection without silent fallback. |
-
