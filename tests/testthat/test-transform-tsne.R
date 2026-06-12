@@ -234,6 +234,65 @@ test_that("landmark_tsne returns a compact full embedding object", {
   expect_true(is.list(fit$landmarks$projection_knn))
 })
 
+test_that("native affine landmark projection returns finite local placements", {
+  reference_data <- matrix(
+    c(
+      0, 0,
+      1, 0,
+      0, 1,
+      1, 1,
+      2, 0
+    ),
+    ncol = 2,
+    byrow = TRUE
+  )
+  reference_layout <- reference_data
+  query_data <- matrix(
+    c(
+      0, 0,
+      0.8, 0.2,
+      1.2, 0.7
+    ),
+    ncol = 2,
+    byrow = TRUE
+  )
+  indices <- matrix(
+    c(
+      1, 2, 3, 4,
+      2, 4, 1, 3,
+      4, 5, 2, 3
+    ),
+    nrow = 3,
+    byrow = TRUE
+  )
+  distances <- matrix(
+    c(
+      0, 1, 1, sqrt(2),
+      sqrt(0.08), sqrt(0.68), sqrt(0.68), sqrt(1.28),
+      sqrt(0.13), sqrt(0.53), sqrt(0.53), sqrt(1.13)
+    ),
+    nrow = 3,
+    byrow = TRUE
+  )
+
+  projected <- fastEmbedR:::project_embedding_affine_cpp(
+    reference_data,
+    query_data,
+    reference_layout,
+    indices,
+    distances,
+    4L,
+    1e-3,
+    2.5
+  )
+
+  expect_equal(dim(projected$layout), c(3L, 2L))
+  expect_true(all(is.finite(projected$layout)))
+  expect_equal(as.numeric(projected$layout[1L, ]), c(0, 0), tolerance = 1e-12)
+  expect_true(all(projected$confidence >= 0 & projected$confidence <= 1))
+  expect_equal(projected$method, "local_affine_knn_projection")
+})
+
 test_that("landmark_tsne can use projection-specific approximate KNN", {
   old <- options(
     fastEmbedR.landmark_projection = "auto",
@@ -311,7 +370,7 @@ test_that("landmark_tsne uses fused Metal projection when requested", {
   expect_equal(attr(fit$landmarks$projection_knn, "metal_kernel"), "landmark_project_interpolate_knn_confidence")
 })
 
-test_that("landmark_tsne keeps Metal projection and transform resident when intermediates are not requested", {
+test_that("landmark_tsne keeps Metal projection and transform native when intermediates are not requested", {
   skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
   skip_if_not(fastEmbedR:::metal_opentsne_native_available())
   skip_if_not(metal_available())

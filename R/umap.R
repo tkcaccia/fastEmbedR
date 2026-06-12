@@ -317,6 +317,17 @@ landmark_umap <- function(data,
       query_rows = non_landmarks
     )
     projected <- attr(projection_knn, "projected_layout", exact = TRUE)
+    affine_projected <- landmark_affine_projection(
+      x_landmarks,
+      x[non_landmarks, , drop = FALSE],
+      reference_fit$layout,
+      projection_knn
+    )
+    if (is.matrix(affine_projected) &&
+        nrow(affine_projected) == length(non_landmarks) &&
+        ncol(affine_projected) == n_components) {
+      projected <- affine_projected
+    }
     if (is.null(projected)) {
       project_backend <- if (backend %in% c("metal", "gpu") && isTRUE(embedding_metal_available_cpp())) {
         "metal"
@@ -351,11 +362,53 @@ landmark_umap <- function(data,
   layout[non_landmarks, ] <- projected
   colnames(layout) <- colnames(reference_fit$layout)
 
+  refinement_time <- zero_proc_time()
+  refinement_epochs <- getOption("fastEmbedR.landmark_umap_refine_epochs", 50L)
+  refinement_epochs <- suppressWarnings(as.integer(refinement_epochs))
+  if (length(refinement_epochs) != 1L || is.na(refinement_epochs) || refinement_epochs < 0L) {
+    refinement_epochs <- 50L
+  }
+  if (refinement_epochs > 0L && length(non_landmarks) > 0L) {
+    refinement_time <- system.time({
+      projection_global_indices <- matrix(
+        as.integer(landmark_indices[as.integer(projection_knn$indices)]),
+        nrow = nrow(projection_knn$indices),
+        ncol = ncol(projection_knn$indices)
+      )
+      ref_params <- reference_fit$parameters
+      ref_min_dist <- as.numeric(ref_params$min_dist %||% 0.01)
+      ref_negative_sample_rate <- as.integer(ref_params$negative_sample_rate %||% 5L)
+      ref_learning_rate <- as.numeric(ref_params$learning_rate %||% 1)
+      ref_repulsion_strength <- as.numeric(ref_params$repulsion_strength %||% 1)
+      if (!is.finite(ref_min_dist) || ref_min_dist < 0) ref_min_dist <- 0.01
+      if (is.na(ref_negative_sample_rate) || ref_negative_sample_rate < 0L) ref_negative_sample_rate <- 5L
+      if (!is.finite(ref_learning_rate) || ref_learning_rate <= 0) ref_learning_rate <- 1
+      if (!is.finite(ref_repulsion_strength) || ref_repulsion_strength <= 0) ref_repulsion_strength <- 1
+      layout <- knn_umap_refine_rows_cpp(
+        projection_global_indices,
+        projection_knn$distances,
+        as.integer(non_landmarks),
+        layout,
+        as.integer(refinement_epochs),
+        ref_min_dist,
+        ref_negative_sample_rate,
+        ref_learning_rate,
+        ref_repulsion_strength,
+        as.integer(normalize_nn_threads(n_threads)),
+        as.integer(seed + 2003L),
+        isTRUE(verbose)
+      )
+      layout[landmark_indices, ] <- reference_fit$layout
+      colnames(layout) <- colnames(reference_fit$layout)
+    })
+  }
+
   zero <- zero_proc_time()
   timings <- rbind(
     preprocess = preprocess_time,
     reference_embedding = reference_time,
     landmark_projection_knn = projection_time,
+    landmark_refinement = refinement_time,
     transform = zero
   )
   reference_metrics <- reference_fit$metrics
@@ -380,6 +433,7 @@ landmark_umap <- function(data,
     reference_knn_elapsed = reference_knn_elapsed,
     reference_optimizer_elapsed = reference_optimizer_elapsed,
     landmark_projection_knn_elapsed = projection_time[["elapsed"]],
+    landmark_refinement_elapsed = refinement_time[["elapsed"]],
     transform_elapsed = 0,
     landmark = TRUE,
     n_landmarks = n_landmarks,
@@ -419,6 +473,9 @@ landmark_umap <- function(data,
       landmark_fraction = n_landmarks / n,
       landmark_selection = selection_method,
       transform_k = transform_k,
+      landmark_refinement = if (refinement_epochs > 0L) "fixed_landmark_umap_rows" else "none",
+      landmark_refinement_epochs = as.integer(refinement_epochs),
+      landmark_refinement_backend = if (refinement_epochs > 0L) "cpu" else NA_character_,
       keep_knn = keep_knn,
       provenance = "UMAP_landmark_projection_native_cpp"
     ),

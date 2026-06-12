@@ -161,6 +161,10 @@ project_embedding_knn_cpp <- function(reference_layout, projection_indices, proj
     .Call(`_fastEmbedR_project_embedding_knn_cpp`, reference_layout, projection_indices, projection_distances)
 }
 
+project_embedding_affine_cpp <- function(reference_data, query_data, reference_layout, projection_indices, projection_distances, max_neighbors = 12L, ridge = 1e-3, max_extrapolation = 2.5) {
+    .Call(`_fastEmbedR_project_embedding_affine_cpp`, reference_data, query_data, reference_layout, projection_indices, projection_distances, max_neighbors, ridge, max_extrapolation)
+}
+
 knn_connectivity_range_cpp <- function(indices, col_start, n_cols) {
     .Call(`_fastEmbedR_knn_connectivity_range_cpp`, indices, col_start, n_cols)
 }

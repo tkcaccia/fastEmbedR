@@ -552,6 +552,52 @@ landmark_projection_knn <- function(x_landmarks,
   )
 }
 
+landmark_affine_projection <- function(x_landmarks,
+                                       x_query,
+                                       landmark_layout,
+                                       projection_knn,
+                                       max_neighbors = NULL,
+                                       ridge = 1e-3,
+                                       max_extrapolation = 2.5) {
+  if (is.null(max_neighbors)) {
+    max_neighbors <- min(12L, ncol(projection_knn$indices))
+  }
+  max_neighbors <- as.integer(max_neighbors)
+  if (length(max_neighbors) != 1L || is.na(max_neighbors) || max_neighbors < 3L) {
+    max_neighbors <- min(12L, ncol(projection_knn$indices))
+  }
+  out <- tryCatch(
+    project_embedding_affine_cpp(
+      x_landmarks,
+      x_query,
+      landmark_layout,
+      projection_knn$indices,
+      projection_knn$distances,
+      as.integer(max_neighbors),
+      as.numeric(ridge),
+      as.numeric(max_extrapolation)
+    ),
+    error = function(e) NULL
+  )
+  if (is.null(out) || is.null(out$layout)) {
+    layout <- project_embedding_knn_cpp(
+      landmark_layout,
+      projection_knn$indices,
+      projection_knn$distances
+    )
+    attr(layout, "projection_method") <- "weighted_knn_fallback"
+    return(layout)
+  }
+  layout <- out$layout
+  attr(layout, "projection_method") <- out$method %||% "local_affine_knn_projection"
+  attr(layout, "projection_confidence") <- out$confidence
+  attr(layout, "projection_fallback") <- out$fallback
+  attr(layout, "projection_max_neighbors") <- out$max_neighbors
+  attr(layout, "projection_ridge") <- out$ridge
+  attr(layout, "projection_max_extrapolation") <- out$max_extrapolation
+  layout
+}
+
 zero_proc_time <- function() {
   structure(rep(0, 5), names = names(system.time({})))
 }
@@ -813,11 +859,7 @@ landmark_tsne <- function(data,
   if (length(transform_iter) != 1L || is.na(transform_iter) || transform_iter < 0L) {
     stop("`transform_iter` must be a non-negative integer.", call. = FALSE)
   }
-  resident_backend <- if (transform_iter > 0L) {
-    resident_transform_backend(backend, transform_k, keep_knn)
-  } else {
-    NA_character_
-  }
+  resident_backend <- NA_character_
   resident_exact_repulsion_threshold <- scalar_integer_or_default(
     dots,
     "exact_repulsion_threshold",
@@ -936,10 +978,20 @@ landmark_tsne <- function(data,
       )
     })
     projection_y_init <- attr(projection_knn, "projected_layout", exact = TRUE)
-    if (is.null(projection_y_init) ||
-        !is.matrix(projection_y_init) ||
-        nrow(projection_y_init) != length(non_landmarks) ||
-        ncol(projection_y_init) != n_components) {
+    affine_y_init <- landmark_affine_projection(
+      x_landmarks,
+      x[non_landmarks, , drop = FALSE],
+      reference_fit$layout,
+      projection_knn
+    )
+    if (is.matrix(affine_y_init) &&
+        nrow(affine_y_init) == length(non_landmarks) &&
+        ncol(affine_y_init) == n_components) {
+      projection_y_init <- affine_y_init
+    } else if (is.null(projection_y_init) ||
+               !is.matrix(projection_y_init) ||
+               nrow(projection_y_init) != length(non_landmarks) ||
+               ncol(projection_y_init) != n_components) {
       projection_y_init <- NULL
     }
     if (transform_iter == 0L) {
@@ -969,6 +1021,13 @@ landmark_tsne <- function(data,
           Y_init = projection_y_init,
           n_iter = transform_iter,
           early_exaggeration_iter = transform_early_exaggeration_iter,
+          learning_rate = resident_learning_rate,
+          early_exaggeration = resident_early_exaggeration,
+          exaggeration = resident_exaggeration,
+          initial_momentum = resident_initial_momentum,
+          final_momentum = resident_final_momentum,
+          max_grad_norm = resident_max_grad_norm,
+          max_step_norm = resident_max_step_norm,
           n_negatives = transform_n_negatives,
           n_threads = n_threads,
           seed = seed + 1009L,

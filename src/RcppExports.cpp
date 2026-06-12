@@ -627,6 +627,24 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// project_embedding_affine_cpp
+List project_embedding_affine_cpp(NumericMatrix reference_data, NumericMatrix query_data, NumericMatrix reference_layout, IntegerMatrix projection_indices, NumericMatrix projection_distances, int max_neighbors, double ridge, double max_extrapolation);
+RcppExport SEXP _fastEmbedR_project_embedding_affine_cpp(SEXP reference_dataSEXP, SEXP query_dataSEXP, SEXP reference_layoutSEXP, SEXP projection_indicesSEXP, SEXP projection_distancesSEXP, SEXP max_neighborsSEXP, SEXP ridgeSEXP, SEXP max_extrapolationSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type reference_data(reference_dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type query_data(query_dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type reference_layout(reference_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type projection_indices(projection_indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type projection_distances(projection_distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type max_neighbors(max_neighborsSEXP);
+    Rcpp::traits::input_parameter< double >::type ridge(ridgeSEXP);
+    Rcpp::traits::input_parameter< double >::type max_extrapolation(max_extrapolationSEXP);
+    rcpp_result_gen = Rcpp::wrap(project_embedding_affine_cpp(reference_data, query_data, reference_layout, projection_indices, projection_distances, max_neighbors, ridge, max_extrapolation));
+    return rcpp_result_gen;
+END_RCPP
+}
 // knn_connectivity_range_cpp
 Rcpp::List knn_connectivity_range_cpp(IntegerMatrix indices, int col_start, int n_cols);
 RcppExport SEXP _fastEmbedR_knn_connectivity_range_cpp(SEXP indicesSEXP, SEXP col_startSEXP, SEXP n_colsSEXP) {
@@ -1350,6 +1368,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_interpolate_landmark_layout_cpp", (DL_FUNC) &_fastEmbedR_interpolate_landmark_layout_cpp, 5},
     {"_fastEmbedR_select_low_confidence_rows_cpp", (DL_FUNC) &_fastEmbedR_select_low_confidence_rows_cpp, 3},
     {"_fastEmbedR_project_embedding_knn_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_knn_cpp, 3},
+    {"_fastEmbedR_project_embedding_affine_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_cpp, 8},
     {"_fastEmbedR_knn_connectivity_range_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_range_cpp, 3},
     {"_fastEmbedR_knn_connectivity_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_cpp, 1},
     {"_fastEmbedR_umap_graph_csr_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_cpp, 6},
