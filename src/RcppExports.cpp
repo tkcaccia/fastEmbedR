@@ -503,6 +503,32 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// metal_mpsgraph_fft_diagnostic_cpp
+List metal_mpsgraph_fft_diagnostic_cpp(int fft_size, int seed, int n_repeats);
+RcppExport SEXP _fastEmbedR_metal_mpsgraph_fft_diagnostic_cpp(SEXP fft_sizeSEXP, SEXP seedSEXP, SEXP n_repeatsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type fft_size(fft_sizeSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< int >::type n_repeats(n_repeatsSEXP);
+    rcpp_result_gen = Rcpp::wrap(metal_mpsgraph_fft_diagnostic_cpp(fft_size, seed, n_repeats));
+    return rcpp_result_gen;
+END_RCPP
+}
+// metal_mpsgraph_convolution_diagnostic_cpp
+List metal_mpsgraph_convolution_diagnostic_cpp(int fft_size, int seed, int n_repeats);
+RcppExport SEXP _fastEmbedR_metal_mpsgraph_convolution_diagnostic_cpp(SEXP fft_sizeSEXP, SEXP seedSEXP, SEXP n_repeatsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type fft_size(fft_sizeSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< int >::type n_repeats(n_repeatsSEXP);
+    rcpp_result_gen = Rcpp::wrap(metal_mpsgraph_convolution_diagnostic_cpp(fft_size, seed, n_repeats));
+    return rcpp_result_gen;
+END_RCPP
+}
 // standardize_cpu_cpp
 List standardize_cpu_cpp(NumericMatrix data);
 RcppExport SEXP _fastEmbedR_standardize_cpu_cpp(SEXP dataSEXP) {
@@ -1480,6 +1506,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_transform_tsne_metal_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_metal_cpp, 19},
     {"_fastEmbedR_knn_tsne_opentsne_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_metal_cpp, 19},
     {"_fastEmbedR_metal_fft512_stockham_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_metal_fft512_stockham_diagnostic_cpp, 3},
+    {"_fastEmbedR_metal_mpsgraph_fft_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_metal_mpsgraph_fft_diagnostic_cpp, 3},
+    {"_fastEmbedR_metal_mpsgraph_convolution_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_metal_mpsgraph_convolution_diagnostic_cpp, 3},
     {"_fastEmbedR_standardize_cpu_cpp", (DL_FUNC) &_fastEmbedR_standardize_cpu_cpp, 1},
     {"_fastEmbedR_strip_self_neighbors_cpp", (DL_FUNC) &_fastEmbedR_strip_self_neighbors_cpp, 2},
     {"_fastEmbedR_validate_projection_knn_cpp", (DL_FUNC) &_fastEmbedR_validate_projection_knn_cpp, 4},

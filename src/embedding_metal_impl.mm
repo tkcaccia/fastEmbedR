@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
 
 #include <Rcpp.h>
 #include <algorithm>
@@ -73,6 +74,8 @@ struct MetalEmbeddingState {
   id<MTLComputePipelineState> opentsne_fft_clear_pipeline;
   id<MTLComputePipelineState> opentsne_fft_scatter_pipeline;
   id<MTLComputePipelineState> opentsne_fft_load_pipeline;
+  id<MTLComputePipelineState> opentsne_mpsgraph_load_real_pipeline;
+  id<MTLComputePipelineState> opentsne_fft_pack_real4_pipeline;
   id<MTLComputePipelineState> opentsne_fft_bit_reverse_rows_pipeline;
   id<MTLComputePipelineState> opentsne_fft_bit_reverse_cols_pipeline;
   id<MTLComputePipelineState> opentsne_fft_butterfly_rows_pipeline;
@@ -232,6 +235,8 @@ MetalEmbeddingState& metal_embedding_state() {
       state.opentsne_fft_clear_pipeline != nil &&
       state.opentsne_fft_scatter_pipeline != nil &&
       state.opentsne_fft_load_pipeline != nil &&
+      state.opentsne_mpsgraph_load_real_pipeline != nil &&
+      state.opentsne_fft_pack_real4_pipeline != nil &&
       state.opentsne_fft_bit_reverse_rows_pipeline != nil &&
       state.opentsne_fft_bit_reverse_cols_pipeline != nil &&
       state.opentsne_fft_butterfly_rows_pipeline != nil &&
@@ -289,6 +294,8 @@ MetalEmbeddingState& metal_embedding_state() {
   state.opentsne_fft_clear_pipeline = make_pipeline(state, "opentsne_fft_clear_grids");
   state.opentsne_fft_scatter_pipeline = make_pipeline(state, "opentsne_fft_scatter_bilinear");
   state.opentsne_fft_load_pipeline = make_pipeline(state, "opentsne_fft_load_inputs");
+  state.opentsne_mpsgraph_load_real_pipeline = make_pipeline(state, "opentsne_mpsgraph_load_real_inputs");
+  state.opentsne_fft_pack_real4_pipeline = make_pipeline(state, "opentsne_fft_pack_real_to_complex4");
   state.opentsne_fft_bit_reverse_rows_pipeline = make_pipeline(state, "opentsne_fft_bit_reverse_rows");
   state.opentsne_fft_bit_reverse_cols_pipeline = make_pipeline(state, "opentsne_fft_bit_reverse_cols");
   state.opentsne_fft_butterfly_rows_pipeline = make_pipeline(state, "opentsne_fft_butterfly_rows");
@@ -2048,6 +2055,71 @@ kernel void opentsne_fft_load_inputs(
   kernel_q2[fft_pos] = float2(q2, 0.0f);
 }
 
+kernel void opentsne_mpsgraph_load_real_inputs(
+  device const atomic_float* mass [[buffer(0)]],
+  device const atomic_float* mass_x [[buffer(1)]],
+  device const atomic_float* mass_y [[buffer(2)]],
+  device float* mass_real [[buffer(3)]],
+  device float* mass_x_real [[buffer(4)]],
+  device float* mass_y_real [[buffer(5)]],
+  device float* kernel_q_real [[buffer(6)]],
+  device float* kernel_q2_real [[buffer(7)]],
+  constant OpenTsneFFTGridParams& g [[buffer(8)]],
+  uint2 gid [[thread_position_in_grid]]
+) {
+  if (gid.x >= g.fft_size || gid.y >= g.fft_size) return;
+  uint fft_pos = gid.y * g.fft_size + gid.x;
+  float m = 0.0f;
+  float mx = 0.0f;
+  float my = 0.0f;
+  if (gid.x < g.grid_size && gid.y < g.grid_size) {
+    uint grid_pos = gid.y * g.grid_size + gid.x;
+    m = atomic_load_explicit(&mass[grid_pos], memory_order_relaxed);
+    mx = atomic_load_explicit(&mass_x[grid_pos], memory_order_relaxed);
+    my = atomic_load_explicit(&mass_y[grid_pos], memory_order_relaxed);
+  }
+  mass_real[fft_pos] = m;
+  mass_x_real[fft_pos] = mx;
+  mass_y_real[fft_pos] = my;
+
+  bool x_ok = gid.x < g.grid_size || gid.x > g.grid_size;
+  bool y_ok = gid.y < g.grid_size || gid.y > g.grid_size;
+  float q = 0.0f;
+  float q2 = 0.0f;
+  if (x_ok && y_ok) {
+    int dx = gid.x < g.grid_size ? int(gid.x) : int(gid.x) - int(g.fft_size);
+    int dy = gid.y < g.grid_size ? int(gid.y) : int(gid.y) - int(g.fft_size);
+    if (abs(dx) < int(g.grid_size) && abs(dy) < int(g.grid_size)) {
+      float x_offset = float(dx) * g.spacing;
+      float y_offset = float(dy) * g.spacing;
+      float d2 = x_offset * x_offset + y_offset * y_offset;
+      q = 1.0f / (1.0f + d2);
+      q2 = q * q;
+    }
+  }
+  kernel_q_real[fft_pos] = q;
+  kernel_q2_real[fft_pos] = q2;
+}
+
+kernel void opentsne_fft_pack_real_to_complex4(
+  device const float* q_real [[buffer(0)]],
+  device const float* q2_real [[buffer(1)]],
+  device const float* xq2_real [[buffer(2)]],
+  device const float* yq2_real [[buffer(3)]],
+  device float2* q_complex [[buffer(4)]],
+  device float2* q2_complex [[buffer(5)]],
+  device float2* xq2_complex [[buffer(6)]],
+  device float2* yq2_complex [[buffer(7)]],
+  constant uint& n_total [[buffer(8)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= n_total) return;
+  q_complex[row] = float2(q_real[row], 0.0f);
+  q2_complex[row] = float2(q2_real[row], 0.0f);
+  xq2_complex[row] = float2(xq2_real[row], 0.0f);
+  yq2_complex[row] = float2(yq2_real[row], 0.0f);
+}
+
 kernel void opentsne_fft_bit_reverse_rows(
   device const float2* input [[buffer(0)]],
   device float2* output [[buffer(1)]],
@@ -3477,6 +3549,16 @@ int metal_env_positive_int(const char* name, const int fallback) {
   return static_cast<int>(parsed);
 }
 
+bool metal_env_flag(const char* name, const bool fallback) {
+  const char* raw = std::getenv(name);
+  if (raw == nullptr || raw[0] == '\0') return fallback;
+  std::string value(raw);
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value == "1" || value == "true" || value == "yes" || value == "on";
+}
+
 int metal_tsne_fft_grid_size(const int n) {
   // The native Metal path uses the same FFT-grid objective as the CPU path. On
   // MNIST-scale data, 128 cells is too coarse, while 512 costs too much without
@@ -4561,11 +4643,19 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
       const std::uint32_t grid_total = grid_n * grid_n;
       const std::uint32_t fft_total = fft_n * fft_n;
       const std::size_t grid_bytes = static_cast<std::size_t>(grid_total) * sizeof(float);
+      const std::size_t real_fft_bytes = static_cast<std::size_t>(fft_total) * sizeof(float);
       const std::size_t complex_bytes = static_cast<std::size_t>(fft_total) * sizeof(float) * 2u;
       std::vector<float> fft_twiddles = make_fft_twiddles(fft_n, log_fft);
       const std::uint32_t stats_block_size = 256u;
       const std::uint32_t stats_block_count =
         (static_cast<std::uint32_t>(n) + stats_block_size - 1u) / stats_block_size;
+      bool use_mpsgraph_convolution = false;
+      if (!record_costs) {
+        if (@available(macOS 14.0, *)) {
+          use_mpsgraph_convolution =
+            metal_env_flag("FASTEMBEDR_METAL_OPENTSNE_MPSGRAPH", false);
+        }
+      }
 
       id<MTLBuffer> mass_buffer = [state.device newBufferWithLength:grid_bytes
                                                             options:MTLResourceStorageModePrivate];
@@ -4591,6 +4681,35 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
                                                                 options:MTLResourceStorageModePrivate];
       id<MTLBuffer> yq2_grid_buffer = [state.device newBufferWithLength:complex_bytes
                                                                 options:MTLResourceStorageModePrivate];
+      id<MTLBuffer> mass_real_buffer = nil;
+      id<MTLBuffer> mass_x_real_buffer = nil;
+      id<MTLBuffer> mass_y_real_buffer = nil;
+      id<MTLBuffer> kernel_q_real_buffer = nil;
+      id<MTLBuffer> kernel_q2_real_buffer = nil;
+      id<MTLBuffer> q_grid_real_buffer = nil;
+      id<MTLBuffer> q2_grid_real_buffer = nil;
+      id<MTLBuffer> xq2_grid_real_buffer = nil;
+      id<MTLBuffer> yq2_grid_real_buffer = nil;
+      if (use_mpsgraph_convolution) {
+        mass_real_buffer = [state.device newBufferWithLength:real_fft_bytes
+                                                     options:MTLResourceStorageModePrivate];
+        mass_x_real_buffer = [state.device newBufferWithLength:real_fft_bytes
+                                                       options:MTLResourceStorageModePrivate];
+        mass_y_real_buffer = [state.device newBufferWithLength:real_fft_bytes
+                                                       options:MTLResourceStorageModePrivate];
+        kernel_q_real_buffer = [state.device newBufferWithLength:real_fft_bytes
+                                                         options:MTLResourceStorageModePrivate];
+        kernel_q2_real_buffer = [state.device newBufferWithLength:real_fft_bytes
+                                                          options:MTLResourceStorageModePrivate];
+        q_grid_real_buffer = [state.device newBufferWithLength:real_fft_bytes
+                                                       options:MTLResourceStorageModePrivate];
+        q2_grid_real_buffer = [state.device newBufferWithLength:real_fft_bytes
+                                                        options:MTLResourceStorageModePrivate];
+        xq2_grid_real_buffer = [state.device newBufferWithLength:real_fft_bytes
+                                                         options:MTLResourceStorageModePrivate];
+        yq2_grid_real_buffer = [state.device newBufferWithLength:real_fft_bytes
+                                                         options:MTLResourceStorageModePrivate];
+      }
       id<MTLBuffer> fft_scratch_buffer = [state.device newBufferWithLength:complex_bytes
                                                                    options:MTLResourceStorageModePrivate];
       id<MTLBuffer> fft_twiddle_buffer = [state.device newBufferWithBytes:fft_twiddles.data()
@@ -4621,6 +4740,11 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
           q2_grid_buffer == nil || xq2_grid_buffer == nil || yq2_grid_buffer == nil ||
           fft_scratch_buffer == nil || fft_twiddle_buffer == nil || layout_stats_buffer == nil ||
           fft_grid_params_buffer == nil || center_buffer == nil ||
+          (use_mpsgraph_convolution &&
+           (mass_real_buffer == nil || mass_x_real_buffer == nil || mass_y_real_buffer == nil ||
+            kernel_q_real_buffer == nil || kernel_q2_real_buffer == nil ||
+            q_grid_real_buffer == nil || q2_grid_real_buffer == nil ||
+            xq2_grid_real_buffer == nil || yq2_grid_real_buffer == nil)) ||
           (record_costs && (repulsive_norm_buffer == nil || attractive_norm_buffer == nil ||
                             gradient_norm_buffer == nil || update_norm_buffer == nil ||
                             layout_norm_buffer == nil))) {
@@ -4650,6 +4774,127 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
       NumericVector trace_update_norm(record_costs ? total_iter : 0);
       NumericVector trace_embedding_norm(record_costs ? total_iter : 0);
 
+      MPSGraph* mpsgraph = nil;
+      MPSGraphTensorDataDictionary* mpsgraph_feeds = nil;
+      MPSGraphTensorDataDictionary* mpsgraph_results = nil;
+      if (use_mpsgraph_convolution) {
+        if (@available(macOS 14.0, *)) {
+          mpsgraph = [[MPSGraph alloc] init];
+          MPSShape* real_shape = @[ @(static_cast<NSUInteger>(fft_n)),
+                                    @(static_cast<NSUInteger>(fft_n)) ];
+          MPSGraphTensor* mass_tensor = [mpsgraph placeholderWithShape:real_shape
+                                                               dataType:MPSDataTypeFloat32
+                                                                   name:@"mass"];
+          MPSGraphTensor* mass_x_tensor = [mpsgraph placeholderWithShape:real_shape
+                                                                 dataType:MPSDataTypeFloat32
+                                                                     name:@"mass_x"];
+          MPSGraphTensor* mass_y_tensor = [mpsgraph placeholderWithShape:real_shape
+                                                                 dataType:MPSDataTypeFloat32
+                                                                     name:@"mass_y"];
+          MPSGraphTensor* kernel_q_tensor = [mpsgraph placeholderWithShape:real_shape
+                                                                  dataType:MPSDataTypeFloat32
+                                                                      name:@"kernel_q"];
+          MPSGraphTensor* kernel_q2_tensor = [mpsgraph placeholderWithShape:real_shape
+                                                                   dataType:MPSDataTypeFloat32
+                                                                       name:@"kernel_q2"];
+          MPSGraphFFTDescriptor* forward_desc = [MPSGraphFFTDescriptor descriptor];
+          forward_desc.inverse = NO;
+          forward_desc.scalingMode = MPSGraphFFTScalingModeNone;
+          MPSGraphFFTDescriptor* inverse_desc = [MPSGraphFFTDescriptor descriptor];
+          inverse_desc.inverse = YES;
+          inverse_desc.scalingMode = MPSGraphFFTScalingModeSize;
+          MPSGraphTensor* mass_fft = [mpsgraph realToHermiteanFFTWithTensor:mass_tensor
+                                                                       axes:@[@0, @1]
+                                                                 descriptor:forward_desc
+                                                                       name:@"mass_rfft2"];
+          MPSGraphTensor* mass_x_fft = [mpsgraph realToHermiteanFFTWithTensor:mass_x_tensor
+                                                                         axes:@[@0, @1]
+                                                                   descriptor:forward_desc
+                                                                         name:@"mass_x_rfft2"];
+          MPSGraphTensor* mass_y_fft = [mpsgraph realToHermiteanFFTWithTensor:mass_y_tensor
+                                                                         axes:@[@0, @1]
+                                                                   descriptor:forward_desc
+                                                                         name:@"mass_y_rfft2"];
+          MPSGraphTensor* kernel_q_fft = [mpsgraph realToHermiteanFFTWithTensor:kernel_q_tensor
+                                                                           axes:@[@0, @1]
+                                                                     descriptor:forward_desc
+                                                                           name:@"kernel_q_rfft2"];
+          MPSGraphTensor* kernel_q2_fft = [mpsgraph realToHermiteanFFTWithTensor:kernel_q2_tensor
+                                                                            axes:@[@0, @1]
+                                                                      descriptor:forward_desc
+                                                                            name:@"kernel_q2_rfft2"];
+          MPSGraphTensor* q_spectrum = [mpsgraph multiplicationWithPrimaryTensor:mass_fft
+                                                                 secondaryTensor:kernel_q_fft
+                                                                            name:@"q_spectrum"];
+          MPSGraphTensor* q2_spectrum = [mpsgraph multiplicationWithPrimaryTensor:mass_fft
+                                                                  secondaryTensor:kernel_q2_fft
+                                                                             name:@"q2_spectrum"];
+          MPSGraphTensor* xq2_spectrum = [mpsgraph multiplicationWithPrimaryTensor:mass_x_fft
+                                                                   secondaryTensor:kernel_q2_fft
+                                                                              name:@"xq2_spectrum"];
+          MPSGraphTensor* yq2_spectrum = [mpsgraph multiplicationWithPrimaryTensor:mass_y_fft
+                                                                   secondaryTensor:kernel_q2_fft
+                                                                              name:@"yq2_spectrum"];
+          MPSGraphTensor* q_grid_tensor = [mpsgraph HermiteanToRealFFTWithTensor:q_spectrum
+                                                                            axes:@[@0, @1]
+                                                                      descriptor:inverse_desc
+                                                                            name:@"q_grid"];
+          MPSGraphTensor* q2_grid_tensor = [mpsgraph HermiteanToRealFFTWithTensor:q2_spectrum
+                                                                             axes:@[@0, @1]
+                                                                       descriptor:inverse_desc
+                                                                             name:@"q2_grid"];
+          MPSGraphTensor* xq2_grid_tensor = [mpsgraph HermiteanToRealFFTWithTensor:xq2_spectrum
+                                                                              axes:@[@0, @1]
+                                                                        descriptor:inverse_desc
+                                                                              name:@"xq2_grid"];
+          MPSGraphTensor* yq2_grid_tensor = [mpsgraph HermiteanToRealFFTWithTensor:yq2_spectrum
+                                                                              axes:@[@0, @1]
+                                                                        descriptor:inverse_desc
+                                                                              name:@"yq2_grid"];
+
+          MPSGraphTensorData* mass_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:mass_real_buffer
+                                                                                   shape:real_shape
+                                                                                dataType:MPSDataTypeFloat32] autorelease];
+          MPSGraphTensorData* mass_x_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:mass_x_real_buffer
+                                                                                     shape:real_shape
+                                                                                  dataType:MPSDataTypeFloat32] autorelease];
+          MPSGraphTensorData* mass_y_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:mass_y_real_buffer
+                                                                                     shape:real_shape
+                                                                                  dataType:MPSDataTypeFloat32] autorelease];
+          MPSGraphTensorData* kernel_q_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:kernel_q_real_buffer
+                                                                                       shape:real_shape
+                                                                                    dataType:MPSDataTypeFloat32] autorelease];
+          MPSGraphTensorData* kernel_q2_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:kernel_q2_real_buffer
+                                                                                        shape:real_shape
+                                                                                     dataType:MPSDataTypeFloat32] autorelease];
+          MPSGraphTensorData* q_grid_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:q_grid_real_buffer
+                                                                                     shape:real_shape
+                                                                                  dataType:MPSDataTypeFloat32] autorelease];
+          MPSGraphTensorData* q2_grid_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:q2_grid_real_buffer
+                                                                                      shape:real_shape
+                                                                                   dataType:MPSDataTypeFloat32] autorelease];
+          MPSGraphTensorData* xq2_grid_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:xq2_grid_real_buffer
+                                                                                       shape:real_shape
+                                                                                    dataType:MPSDataTypeFloat32] autorelease];
+          MPSGraphTensorData* yq2_grid_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:yq2_grid_real_buffer
+                                                                                       shape:real_shape
+                                                                                    dataType:MPSDataTypeFloat32] autorelease];
+          mpsgraph_feeds = [@{
+            mass_tensor: mass_data,
+            mass_x_tensor: mass_x_data,
+            mass_y_tensor: mass_y_data,
+            kernel_q_tensor: kernel_q_data,
+            kernel_q2_tensor: kernel_q2_data
+          } retain];
+          mpsgraph_results = [@{
+            q_grid_tensor: q_grid_data,
+            q2_grid_tensor: q2_grid_data,
+            xq2_grid_tensor: xq2_grid_data,
+            yq2_grid_tensor: yq2_grid_data
+          } retain];
+        }
+      }
+
       for (int iter = 0; iter < total_iter; ++iter) {
         const bool in_early = iter < early_exaggeration_iter;
         const double phase_exaggeration = in_early ? early_exaggeration : exaggeration;
@@ -4666,6 +4911,163 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
           max_step,
           1.0f
         };
+
+        if (use_mpsgraph_convolution) {
+          id<MTLCommandBuffer> load_command = [state.queue commandBuffer];
+          {
+            id<MTLComputeCommandEncoder> encoder = [load_command computeCommandEncoder];
+            [encoder setComputePipelineState:state.opentsne_fft_layout_stats_blocks_pipeline];
+            [encoder setBuffer:current_buffer offset:0 atIndex:0];
+            [encoder setBuffer:layout_stats_buffer offset:0 atIndex:1];
+            [encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
+            [encoder setBytes:&stats_block_size length:sizeof(std::uint32_t) atIndex:3];
+            [encoder dispatchThreads:stats_blocks
+               threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+            [encoder endEncoding];
+          }
+          {
+            id<MTLComputeCommandEncoder> encoder = [load_command computeCommandEncoder];
+            [encoder setComputePipelineState:state.opentsne_fft_finalize_layout_stats_pipeline];
+            [encoder setBuffer:layout_stats_buffer offset:0 atIndex:0];
+            [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:1];
+            [encoder setBuffer:center_buffer offset:0 atIndex:2];
+            [encoder setBytes:&stats_block_count length:sizeof(std::uint32_t) atIndex:3];
+            [encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:4];
+            [encoder setBytes:&grid_n length:sizeof(std::uint32_t) atIndex:5];
+            [encoder setBytes:&fft_n length:sizeof(std::uint32_t) atIndex:6];
+            [encoder dispatchThreads:MTLSizeMake(1, 1, 1)
+               threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+            [encoder endEncoding];
+          }
+          {
+            id<MTLComputeCommandEncoder> encoder = [load_command computeCommandEncoder];
+            [encoder setComputePipelineState:state.opentsne_fft_clear_pipeline];
+            [encoder setBuffer:mass_buffer offset:0 atIndex:0];
+            [encoder setBuffer:mass_x_buffer offset:0 atIndex:1];
+            [encoder setBuffer:mass_y_buffer offset:0 atIndex:2];
+            [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:3];
+            [encoder dispatchThreads:grid_cells
+               threadsPerThreadgroup:MTLSizeMake(threads_clear, 1, 1)];
+            [encoder endEncoding];
+          }
+          {
+            id<MTLComputeCommandEncoder> encoder = [load_command computeCommandEncoder];
+            [encoder setComputePipelineState:state.opentsne_fft_scatter_pipeline];
+            [encoder setBuffer:current_buffer offset:0 atIndex:0];
+            [encoder setBuffer:mass_buffer offset:0 atIndex:1];
+            [encoder setBuffer:mass_x_buffer offset:0 atIndex:2];
+            [encoder setBuffer:mass_y_buffer offset:0 atIndex:3];
+            [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:4];
+            [encoder dispatchThreads:point_grid
+               threadsPerThreadgroup:MTLSizeMake(threads_scatter, 1, 1)];
+            [encoder endEncoding];
+          }
+          {
+            id<MTLComputeCommandEncoder> encoder = [load_command computeCommandEncoder];
+            [encoder setComputePipelineState:state.opentsne_mpsgraph_load_real_pipeline];
+            [encoder setBuffer:mass_buffer offset:0 atIndex:0];
+            [encoder setBuffer:mass_x_buffer offset:0 atIndex:1];
+            [encoder setBuffer:mass_y_buffer offset:0 atIndex:2];
+            [encoder setBuffer:mass_real_buffer offset:0 atIndex:3];
+            [encoder setBuffer:mass_x_real_buffer offset:0 atIndex:4];
+            [encoder setBuffer:mass_y_real_buffer offset:0 atIndex:5];
+            [encoder setBuffer:kernel_q_real_buffer offset:0 atIndex:6];
+            [encoder setBuffer:kernel_q2_real_buffer offset:0 atIndex:7];
+            [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:8];
+            [encoder dispatchThreads:fft_grid
+               threadsPerThreadgroup:metal_threadgroup_2d(state.opentsne_mpsgraph_load_real_pipeline)];
+            [encoder endEncoding];
+          }
+          [load_command commit];
+          [load_command waitUntilCompleted];
+          if (load_command.status == MTLCommandBufferStatusError) {
+            Rcpp::stop("Metal openTSNE MPSGraph preparation failed: %s",
+                       ns_error_message(load_command.error).c_str());
+          }
+          if (@available(macOS 14.0, *)) {
+            [mpsgraph runWithMTLCommandQueue:state.queue
+                                       feeds:mpsgraph_feeds
+                            targetOperations:nil
+                           resultsDictionary:mpsgraph_results];
+          }
+
+          id<MTLCommandBuffer> update_command = [state.queue commandBuffer];
+          {
+            id<MTLComputeCommandEncoder> encoder = [update_command computeCommandEncoder];
+            [encoder setComputePipelineState:state.opentsne_fft_pack_real4_pipeline];
+            [encoder setBuffer:q_grid_real_buffer offset:0 atIndex:0];
+            [encoder setBuffer:q2_grid_real_buffer offset:0 atIndex:1];
+            [encoder setBuffer:xq2_grid_real_buffer offset:0 atIndex:2];
+            [encoder setBuffer:yq2_grid_real_buffer offset:0 atIndex:3];
+            [encoder setBuffer:q_grid_buffer offset:0 atIndex:4];
+            [encoder setBuffer:q2_grid_buffer offset:0 atIndex:5];
+            [encoder setBuffer:xq2_grid_buffer offset:0 atIndex:6];
+            [encoder setBuffer:yq2_grid_buffer offset:0 atIndex:7];
+            [encoder setBytes:&fft_total length:sizeof(std::uint32_t) atIndex:8];
+            [encoder dispatchThreads:MTLSizeMake(static_cast<NSUInteger>(fft_total), 1, 1)
+               threadsPerThreadgroup:MTLSizeMake(bounded_threads(state.opentsne_fft_pack_real4_pipeline), 1, 1)];
+            [encoder endEncoding];
+          }
+          {
+            id<MTLComputeCommandEncoder> encoder = [update_command computeCommandEncoder];
+            [encoder setComputePipelineState:state.opentsne_fft_sum_q_blocks_pipeline];
+            [encoder setBuffer:current_buffer offset:0 atIndex:0];
+            [encoder setBuffer:q_grid_buffer offset:0 atIndex:1];
+            [encoder setBuffer:row_sums_buffer offset:0 atIndex:2];
+            [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:3];
+            [encoder setBytes:&sum_block_size length:sizeof(std::uint32_t) atIndex:4];
+            [encoder dispatchThreads:sum_blocks
+               threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+            [encoder endEncoding];
+          }
+          {
+            id<MTLComputeCommandEncoder> encoder = [update_command computeCommandEncoder];
+            [encoder setComputePipelineState:state.opentsne_fft_finalize_sum_q_pipeline];
+            [encoder setBuffer:row_sums_buffer offset:0 atIndex:0];
+            [encoder setBuffer:inv_sum_q_buffer offset:0 atIndex:1];
+            [encoder setBytes:&sum_block_count length:sizeof(std::uint32_t) atIndex:2];
+            [encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:3];
+            [encoder dispatchThreads:MTLSizeMake(1, 1, 1)
+               threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+            [encoder endEncoding];
+          }
+          {
+            id<MTLComputeCommandEncoder> encoder = [update_command computeCommandEncoder];
+            [encoder setComputePipelineState:state.opentsne_fft_epoch_pipeline];
+            [encoder setBuffer:row_ptr_buffer offset:0 atIndex:0];
+            [encoder setBuffer:col_buffer offset:0 atIndex:1];
+            [encoder setBuffer:val_buffer offset:0 atIndex:2];
+            [encoder setBuffer:current_buffer offset:0 atIndex:3];
+            [encoder setBuffer:gains_buffer offset:0 atIndex:4];
+            [encoder setBuffer:updates_buffer offset:0 atIndex:5];
+            [encoder setBuffer:q2_grid_buffer offset:0 atIndex:6];
+            [encoder setBuffer:xq2_grid_buffer offset:0 atIndex:7];
+            [encoder setBuffer:yq2_grid_buffer offset:0 atIndex:8];
+            [encoder setBytes:&params length:sizeof(OpenTsneMetalParams) atIndex:9];
+            [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:10];
+            [encoder setBuffer:inv_sum_q_buffer offset:0 atIndex:11];
+            [encoder dispatchThreads:point_grid
+               threadsPerThreadgroup:MTLSizeMake(threads_epoch, 1, 1)];
+            [encoder endEncoding];
+          }
+          {
+            id<MTLComputeCommandEncoder> center_encoder = [update_command computeCommandEncoder];
+            [center_encoder setComputePipelineState:state.opentsne_center_pipeline];
+            [center_encoder setBuffer:current_buffer offset:0 atIndex:0];
+            [center_encoder setBuffer:center_buffer offset:0 atIndex:1];
+            [center_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
+            [center_encoder dispatchThreads:point_grid
+              threadsPerThreadgroup:MTLSizeMake(threads_center, 1, 1)];
+            [center_encoder endEncoding];
+          }
+          [update_command commit];
+          [update_command waitUntilCompleted];
+          if (update_command.status == MTLCommandBufferStatusError) {
+            Rcpp::stop("Metal openTSNE MPSGraph update failed: %s",
+                       ns_error_message(update_command.error).c_str());
+          }
+          continue;
+        }
 
         if (stage_timer.enabled()) {
           auto encode_layout_stats = [&](id<MTLCommandBuffer> command_buffer) {
@@ -5022,12 +5424,24 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
       [q2_grid_buffer release];
       [xq2_grid_buffer release];
       [yq2_grid_buffer release];
+      if (mass_real_buffer != nil) [mass_real_buffer release];
+      if (mass_x_real_buffer != nil) [mass_x_real_buffer release];
+      if (mass_y_real_buffer != nil) [mass_y_real_buffer release];
+      if (kernel_q_real_buffer != nil) [kernel_q_real_buffer release];
+      if (kernel_q2_real_buffer != nil) [kernel_q2_real_buffer release];
+      if (q_grid_real_buffer != nil) [q_grid_real_buffer release];
+      if (q2_grid_real_buffer != nil) [q2_grid_real_buffer release];
+      if (xq2_grid_real_buffer != nil) [xq2_grid_real_buffer release];
+      if (yq2_grid_real_buffer != nil) [yq2_grid_real_buffer release];
       [fft_scratch_buffer release];
       [fft_twiddle_buffer release];
       [layout_stats_buffer release];
       [fft_grid_params_buffer release];
       [center_buffer release];
       [inv_sum_q_buffer release];
+      if (mpsgraph_feeds != nil) [mpsgraph_feeds release];
+      if (mpsgraph_results != nil) [mpsgraph_results release];
+      if (mpsgraph != nil) [mpsgraph release];
       if (repulsive_norm_buffer != nil) [repulsive_norm_buffer release];
       if (attractive_norm_buffer != nil) [attractive_norm_buffer release];
       if (gradient_norm_buffer != nil) [gradient_norm_buffer release];
@@ -5050,7 +5464,8 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
         Rcpp::Named("itercosts") = NumericVector(0),
         Rcpp::Named("metal_trace") = metal_trace,
         Rcpp::Named("optimizer") = "opentsne_fitsne_fft_grid_native_metal",
-        Rcpp::Named("repulsion") = "fft_grid_metal",
+        Rcpp::Named("repulsion") = use_mpsgraph_convolution ?
+          "fft_grid_mpsgraph_metal" : "fft_grid_metal",
         Rcpp::Named("probabilities") = "symmetric_sparse_knn_cpu_prepared_for_metal",
         Rcpp::Named("repulsion_block_size") = static_cast<int>(grid_n),
         Rcpp::Named("n_threads") = NA_INTEGER,
@@ -6173,6 +6588,8 @@ List metal_fft512_stockham_diagnostic_impl(int seed,
   std::vector<float> stockham(input);
   std::vector<float> scratch(floats, 0.0f);
   std::vector<float> twiddles = make_fft_twiddles(fft_size, log_fft);
+  double generic_time_sec = NA_REAL;
+  double stockham_time_sec = NA_REAL;
 
   @autoreleasepool {
     MetalEmbeddingState& state = metal_embedding_state();
@@ -6197,6 +6614,7 @@ List metal_fft512_stockham_diagnostic_impl(int seed,
       Rcpp::stop("Failed to allocate Metal FFT diagnostic buffers.");
     }
 
+    auto generic_start = std::chrono::steady_clock::now();
     id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
     encode_fft_2d_metal_generic(
       state,
@@ -6208,14 +6626,25 @@ List metal_fft512_stockham_diagnostic_impl(int seed,
       log_fft,
       inverse
     );
+    wait_for_command(command_buffer, "FFT512 generic diagnostic");
+    auto generic_end = std::chrono::steady_clock::now();
+
+    auto stockham_start = std::chrono::steady_clock::now();
+    id<MTLCommandBuffer> stockham_command_buffer = [state.queue commandBuffer];
     encode_fft_512_stockham_metal(
       state,
-      command_buffer,
+      stockham_command_buffer,
       stockham_buffer,
       stockham_scratch_buffer,
       inverse
     );
-    wait_for_command(command_buffer, "FFT512 diagnostic");
+    wait_for_command(stockham_command_buffer, "FFT512 Stockham diagnostic");
+    auto stockham_end = std::chrono::steady_clock::now();
+
+    generic_time_sec =
+      std::chrono::duration<double>(generic_end - generic_start).count();
+    stockham_time_sec =
+      std::chrono::duration<double>(stockham_end - stockham_start).count();
 
     std::memcpy(generic.data(), [generic_buffer contents], bytes);
     std::memcpy(stockham.data(), [stockham_buffer contents], bytes);
@@ -6271,8 +6700,330 @@ List metal_fft512_stockham_diagnostic_impl(int seed,
     Rcpp::Named("max_error_index") = max_index,
     Rcpp::Named("sample") = sample,
     Rcpp::Named("reference") = "generic_metal_cooley_tukey",
-    Rcpp::Named("candidate") = "diagnostic_stockham512"
+    Rcpp::Named("candidate") = "diagnostic_stockham512",
+    Rcpp::Named("generic_time_sec") = generic_time_sec,
+    Rcpp::Named("stockham_time_sec") = stockham_time_sec
   );
+}
+
+List metal_mpsgraph_fft_diagnostic_impl(int fft_size,
+                                        int seed,
+                                        int n_repeats) {
+  if (@available(macOS 14.0, *)) {
+    if (fft_size < 16 || fft_size > 2048) {
+      Rcpp::stop("MPSGraph FFT diagnostic requires fft_size between 16 and 2048.");
+    }
+    if ((fft_size & (fft_size - 1)) != 0) {
+      Rcpp::stop("MPSGraph FFT diagnostic requires a power-of-two fft_size.");
+    }
+    n_repeats = std::max(1, std::min(n_repeats, 20));
+    const std::uint32_t n = static_cast<std::uint32_t>(fft_size);
+    const std::size_t total = static_cast<std::size_t>(n) * n;
+    const std::size_t bytes = total * sizeof(float);
+
+    std::vector<float> input(total);
+    std::vector<float> output(total, 0.0f);
+    std::mt19937 rng(static_cast<std::uint32_t>(seed == NA_INTEGER ? 5489 : seed));
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    for (float& value : input) value = dist(rng);
+
+    NumericVector run_times(n_repeats);
+    @autoreleasepool {
+      MetalEmbeddingState& state = metal_embedding_state();
+      MPSGraph* graph = [[[MPSGraph alloc] init] autorelease];
+      MPSShape* real_shape = @[ @(fft_size), @(fft_size) ];
+      MPSGraphTensor* input_tensor = [graph placeholderWithShape:real_shape
+                                                        dataType:MPSDataTypeFloat32
+                                                            name:@"input"];
+      MPSGraphFFTDescriptor* forward_desc = [MPSGraphFFTDescriptor descriptor];
+      forward_desc.inverse = NO;
+      forward_desc.scalingMode = MPSGraphFFTScalingModeNone;
+      MPSGraphTensor* spectrum = [graph realToHermiteanFFTWithTensor:input_tensor
+                                                                axes:@[@0, @1]
+                                                          descriptor:forward_desc
+                                                                name:@"rfft2"];
+      MPSGraphFFTDescriptor* inverse_desc = [MPSGraphFFTDescriptor descriptor];
+      inverse_desc.inverse = YES;
+      inverse_desc.scalingMode = MPSGraphFFTScalingModeSize;
+      MPSGraphTensor* recovered = [graph HermiteanToRealFFTWithTensor:spectrum
+                                                                 axes:@[@0, @1]
+                                                           descriptor:inverse_desc
+                                                                 name:@"irfft2"];
+
+      id<MTLBuffer> input_buffer = [state.device newBufferWithBytes:input.data()
+                                                             length:bytes
+                                                            options:MTLResourceStorageModeShared];
+      if (input_buffer == nil) Rcpp::stop("Failed to allocate MPSGraph FFT input buffer.");
+      MPSGraphTensorData* input_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:input_buffer
+                                                                                shape:real_shape
+                                                                             dataType:MPSDataTypeFloat32] autorelease];
+      MPSGraphTensorDataDictionary* feeds = @{ input_tensor: input_data };
+      for (int r = 0; r < n_repeats; ++r) {
+        auto start = std::chrono::steady_clock::now();
+        MPSGraphTensorDataDictionary* result =
+          [graph runWithMTLCommandQueue:state.queue
+                                  feeds:feeds
+                          targetTensors:@[ recovered ]
+                       targetOperations:nil];
+        auto end = std::chrono::steady_clock::now();
+        run_times[r] = std::chrono::duration<double>(end - start).count();
+        if (r == n_repeats - 1) {
+          MPSGraphTensorData* recovered_data = [result objectForKey:recovered];
+          if (recovered_data == nil) {
+            [input_buffer release];
+            Rcpp::stop("MPSGraph FFT diagnostic did not return recovered tensor.");
+          }
+          MPSNDArray* array = [recovered_data mpsndarray];
+          if (array == nil) {
+            [input_buffer release];
+            Rcpp::stop("MPSGraph FFT diagnostic did not expose an MPSNDArray.");
+          }
+          [array readBytes:output.data() strideBytes:nil];
+        }
+      }
+      [input_buffer release];
+    }
+
+    double max_abs = 0.0;
+    double sum_sq = 0.0;
+    double ref_sq = 0.0;
+    int max_index = 0;
+    for (std::size_t i = 0; i < total; ++i) {
+      const double err = static_cast<double>(output[i]) - static_cast<double>(input[i]);
+      const double abs_err = std::abs(err);
+      sum_sq += err * err;
+      ref_sq += static_cast<double>(input[i]) * static_cast<double>(input[i]);
+      if (abs_err > max_abs) {
+        max_abs = abs_err;
+        max_index = static_cast<int>(i);
+      }
+    }
+    const double rms_abs = std::sqrt(sum_sq / static_cast<double>(total));
+    const double rms_rel = std::sqrt(sum_sq / std::max(ref_sq, std::numeric_limits<double>::min()));
+    return List::create(
+      Rcpp::Named("available") = true,
+      Rcpp::Named("fft_size") = fft_size,
+      Rcpp::Named("seed") = seed,
+      Rcpp::Named("n_repeats") = n_repeats,
+      Rcpp::Named("run_times_sec") = run_times,
+      Rcpp::Named("median_time_sec") = Rcpp::median(run_times),
+      Rcpp::Named("first_time_sec") = run_times[0],
+      Rcpp::Named("max_abs_error") = max_abs,
+      Rcpp::Named("rms_abs_error") = rms_abs,
+      Rcpp::Named("rms_relative_error") = rms_rel,
+      Rcpp::Named("max_error_index") = max_index,
+      Rcpp::Named("method") = "MPSGraph realToHermiteanFFT + HermiteanToRealFFT roundtrip"
+    );
+  } else {
+    return List::create(
+      Rcpp::Named("available") = false,
+      Rcpp::Named("status") = "not_supported",
+      Rcpp::Named("error_message") = "MPSGraph FFT requires macOS 14.0 or newer."
+    );
+  }
+}
+
+List metal_mpsgraph_convolution_diagnostic_impl(int fft_size,
+                                                int seed,
+                                                int n_repeats) {
+  if (@available(macOS 14.0, *)) {
+    if (fft_size < 16 || fft_size > 2048) {
+      Rcpp::stop("MPSGraph convolution diagnostic requires fft_size between 16 and 2048.");
+    }
+    if ((fft_size & (fft_size - 1)) != 0) {
+      Rcpp::stop("MPSGraph convolution diagnostic requires a power-of-two fft_size.");
+    }
+    n_repeats = std::max(1, std::min(n_repeats, 20));
+    const std::uint32_t n = static_cast<std::uint32_t>(fft_size);
+    const std::uint32_t log_fft = log2_power_of_two(n);
+    const std::uint32_t total_u = n * n;
+    const std::size_t total = static_cast<std::size_t>(total_u);
+    const std::size_t real_bytes = total * sizeof(float);
+    const std::size_t complex_floats = total * 2u;
+    const std::size_t complex_bytes = complex_floats * sizeof(float);
+
+    std::vector<float> mass(total);
+    std::vector<float> kernel(total);
+    std::vector<float> current_complex(complex_floats, 0.0f);
+    std::vector<float> kernel_complex(complex_floats, 0.0f);
+    std::vector<float> current_out_complex(complex_floats, 0.0f);
+    std::vector<float> mpsgraph_out(total, 0.0f);
+    std::mt19937 rng(static_cast<std::uint32_t>(seed == NA_INTEGER ? 5489 : seed));
+    std::uniform_real_distribution<float> mass_dist(0.0f, 1.0f);
+    std::normal_distribution<float> kernel_dist(0.0f, 0.25f);
+    for (std::size_t i = 0; i < total; ++i) {
+      mass[i] = mass_dist(rng);
+      kernel[i] = kernel_dist(rng);
+      current_complex[i * 2u] = mass[i];
+      kernel_complex[i * 2u] = kernel[i];
+    }
+
+    double current_time_sec = NA_REAL;
+    NumericVector mpsgraph_times(n_repeats);
+    @autoreleasepool {
+      MetalEmbeddingState& state = metal_embedding_state();
+      std::vector<float> twiddles = make_fft_twiddles(n, log_fft);
+      std::vector<float> scratch(complex_floats, 0.0f);
+      id<MTLBuffer> mass_buffer = [state.device newBufferWithBytes:current_complex.data()
+                                                            length:complex_bytes
+                                                           options:MTLResourceStorageModeShared];
+      id<MTLBuffer> kernel_buffer = [state.device newBufferWithBytes:kernel_complex.data()
+                                                              length:complex_bytes
+                                                             options:MTLResourceStorageModeShared];
+      id<MTLBuffer> out_buffer = [state.device newBufferWithBytes:current_out_complex.data()
+                                                           length:complex_bytes
+                                                          options:MTLResourceStorageModeShared];
+      id<MTLBuffer> scratch_buffer = [state.device newBufferWithBytes:scratch.data()
+                                                               length:complex_bytes
+                                                              options:MTLResourceStorageModeShared];
+      id<MTLBuffer> twiddle_buffer = [state.device newBufferWithBytes:twiddles.data()
+                                                              length:twiddles.size() * sizeof(float)
+                                                             options:MTLResourceStorageModeShared];
+      if (mass_buffer == nil || kernel_buffer == nil || out_buffer == nil ||
+          scratch_buffer == nil || twiddle_buffer == nil) {
+        Rcpp::stop("Failed to allocate Metal convolution diagnostic buffers.");
+      }
+
+      auto current_start = std::chrono::steady_clock::now();
+      id<MTLCommandBuffer> current_command = [state.queue commandBuffer];
+      encode_fft_2d_metal(state, current_command, mass_buffer, scratch_buffer, twiddle_buffer, n, log_fft, false);
+      encode_fft_2d_metal(state, current_command, kernel_buffer, scratch_buffer, twiddle_buffer, n, log_fft, false);
+      {
+        id<MTLComputeCommandEncoder> encoder = [current_command computeCommandEncoder];
+        [encoder setComputePipelineState:state.opentsne_fft_multiply_pipeline];
+        [encoder setBuffer:mass_buffer offset:0 atIndex:0];
+        [encoder setBuffer:kernel_buffer offset:0 atIndex:1];
+        [encoder setBuffer:out_buffer offset:0 atIndex:2];
+        [encoder setBytes:&total_u length:sizeof(std::uint32_t) atIndex:3];
+        [encoder dispatchThreads:MTLSizeMake(static_cast<NSUInteger>(total_u), 1, 1)
+           threadsPerThreadgroup:MTLSizeMake(bounded_threads(state.opentsne_fft_multiply_pipeline), 1, 1)];
+        [encoder endEncoding];
+      }
+      encode_fft_2d_metal(state, current_command, out_buffer, scratch_buffer, twiddle_buffer, n, log_fft, true);
+      wait_for_command(current_command, "Metal FFT convolution diagnostic");
+      auto current_end = std::chrono::steady_clock::now();
+      current_time_sec = std::chrono::duration<double>(current_end - current_start).count();
+      std::memcpy(current_out_complex.data(), [out_buffer contents], complex_bytes);
+
+      MPSGraph* graph = [[[MPSGraph alloc] init] autorelease];
+      MPSShape* real_shape = @[ @(fft_size), @(fft_size) ];
+      MPSGraphTensor* mass_tensor = [graph placeholderWithShape:real_shape
+                                                       dataType:MPSDataTypeFloat32
+                                                           name:@"mass"];
+      MPSGraphTensor* kernel_tensor = [graph placeholderWithShape:real_shape
+                                                         dataType:MPSDataTypeFloat32
+                                                             name:@"kernel"];
+      MPSGraphFFTDescriptor* forward_desc = [MPSGraphFFTDescriptor descriptor];
+      forward_desc.inverse = NO;
+      forward_desc.scalingMode = MPSGraphFFTScalingModeNone;
+      MPSGraphTensor* mass_spectrum = [graph realToHermiteanFFTWithTensor:mass_tensor
+                                                                     axes:@[@0, @1]
+                                                               descriptor:forward_desc
+                                                                     name:@"mass_rfft2"];
+      MPSGraphTensor* kernel_spectrum = [graph realToHermiteanFFTWithTensor:kernel_tensor
+                                                                       axes:@[@0, @1]
+                                                                 descriptor:forward_desc
+                                                                       name:@"kernel_rfft2"];
+      MPSGraphTensor* product = [graph multiplicationWithPrimaryTensor:mass_spectrum
+                                                       secondaryTensor:kernel_spectrum
+                                                                  name:@"spectral_product"];
+      MPSGraphFFTDescriptor* inverse_desc = [MPSGraphFFTDescriptor descriptor];
+      inverse_desc.inverse = YES;
+      inverse_desc.scalingMode = MPSGraphFFTScalingModeSize;
+      MPSGraphTensor* convolved = [graph HermiteanToRealFFTWithTensor:product
+                                                                 axes:@[@0, @1]
+                                                           descriptor:inverse_desc
+                                                                 name:@"irfft2_convolution"];
+
+      id<MTLBuffer> mass_real_buffer = [state.device newBufferWithBytes:mass.data()
+                                                                 length:real_bytes
+                                                                options:MTLResourceStorageModeShared];
+      id<MTLBuffer> kernel_real_buffer = [state.device newBufferWithBytes:kernel.data()
+                                                                   length:real_bytes
+                                                                  options:MTLResourceStorageModeShared];
+      if (mass_real_buffer == nil || kernel_real_buffer == nil) {
+        Rcpp::stop("Failed to allocate MPSGraph convolution diagnostic input buffers.");
+      }
+      MPSGraphTensorData* mass_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:mass_real_buffer
+                                                                               shape:real_shape
+                                                                            dataType:MPSDataTypeFloat32] autorelease];
+      MPSGraphTensorData* kernel_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:kernel_real_buffer
+                                                                                 shape:real_shape
+                                                                              dataType:MPSDataTypeFloat32] autorelease];
+      MPSGraphTensorDataDictionary* feeds = @{ mass_tensor: mass_data, kernel_tensor: kernel_data };
+      for (int r = 0; r < n_repeats; ++r) {
+        auto start = std::chrono::steady_clock::now();
+        MPSGraphTensorDataDictionary* result =
+          [graph runWithMTLCommandQueue:state.queue
+                                  feeds:feeds
+                          targetTensors:@[ convolved ]
+                       targetOperations:nil];
+        auto end = std::chrono::steady_clock::now();
+        mpsgraph_times[r] = std::chrono::duration<double>(end - start).count();
+        if (r == n_repeats - 1) {
+          MPSGraphTensorData* convolved_data = [result objectForKey:convolved];
+          if (convolved_data == nil) {
+            Rcpp::stop("MPSGraph convolution diagnostic did not return output tensor.");
+          }
+          MPSNDArray* array = [convolved_data mpsndarray];
+          if (array == nil) {
+            Rcpp::stop("MPSGraph convolution diagnostic did not expose an MPSNDArray.");
+          }
+          [array readBytes:mpsgraph_out.data() strideBytes:nil];
+        }
+      }
+
+      [mass_buffer release];
+      [kernel_buffer release];
+      [out_buffer release];
+      [scratch_buffer release];
+      [twiddle_buffer release];
+      [mass_real_buffer release];
+      [kernel_real_buffer release];
+    }
+
+    double max_abs = 0.0;
+    double sum_sq = 0.0;
+    double ref_sq = 0.0;
+    int max_index = 0;
+    for (std::size_t i = 0; i < total; ++i) {
+      const double current_value = current_out_complex[i * 2u];
+      const double mps_value = mpsgraph_out[i];
+      const double err = mps_value - current_value;
+      const double abs_err = std::abs(err);
+      sum_sq += err * err;
+      ref_sq += current_value * current_value;
+      if (abs_err > max_abs) {
+        max_abs = abs_err;
+        max_index = static_cast<int>(i);
+      }
+    }
+    const double rms_abs = std::sqrt(sum_sq / static_cast<double>(total));
+    const double rms_rel = std::sqrt(sum_sq / std::max(ref_sq, std::numeric_limits<double>::min()));
+
+    return List::create(
+      Rcpp::Named("available") = true,
+      Rcpp::Named("fft_size") = fft_size,
+      Rcpp::Named("seed") = seed,
+      Rcpp::Named("n_repeats") = n_repeats,
+      Rcpp::Named("current_metal_time_sec") = current_time_sec,
+      Rcpp::Named("mpsgraph_run_times_sec") = mpsgraph_times,
+      Rcpp::Named("mpsgraph_median_time_sec") = Rcpp::median(mpsgraph_times),
+      Rcpp::Named("mpsgraph_first_time_sec") = mpsgraph_times[0],
+      Rcpp::Named("max_abs_error") = max_abs,
+      Rcpp::Named("rms_abs_error") = rms_abs,
+      Rcpp::Named("rms_relative_error") = rms_rel,
+      Rcpp::Named("max_error_index") = max_index,
+      Rcpp::Named("reference") = "current_metal_complex_fft_convolution",
+      Rcpp::Named("candidate") = "mpsgraph_real_fft_convolution"
+    );
+  } else {
+    return List::create(
+      Rcpp::Named("available") = false,
+      Rcpp::Named("status") = "not_supported",
+      Rcpp::Named("error_message") = "MPSGraph FFT requires macOS 14.0 or newer."
+    );
+  }
 }
 
 NumericMatrix knn_umap_refine_rows_metal_impl(IntegerMatrix indices,

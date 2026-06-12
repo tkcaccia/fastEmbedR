@@ -171,3 +171,15 @@ List metal_fft512_stockham_diagnostic_impl(int,
                                            int) {
   Rcpp::stop("Metal FFT diagnostics are only available on macOS with Metal support.");
 }
+
+List metal_mpsgraph_fft_diagnostic_impl(int,
+                                        int,
+                                        int) {
+  Rcpp::stop("MPSGraph FFT diagnostics are only available on macOS with Metal support.");
+}
+
+List metal_mpsgraph_convolution_diagnostic_impl(int,
+                                                int,
+                                                int) {
+  Rcpp::stop("MPSGraph convolution diagnostics are only available on macOS with Metal support.");
+}

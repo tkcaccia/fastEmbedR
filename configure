@@ -39,7 +39,7 @@ libs="-pthread"
 if [ "$os_name" = "Darwin" ]; then
   metal_objects="nn_metal_bridge.o nn_metal_impl.o embedding_metal_bridge.o embedding_metal_impl.o"
   cppflags="-DHAVE_METAL=1"
-  libs="-pthread -framework Foundation -framework Metal"
+  libs="-pthread -framework Foundation -framework Metal -framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph"
 fi
 
 use_faiss=${FASTEMBEDR_USE_FAISS:-auto}

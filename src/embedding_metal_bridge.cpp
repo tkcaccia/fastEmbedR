@@ -121,6 +121,12 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
 List metal_fft512_stockham_diagnostic_impl(int seed,
                                            bool inverse,
                                            int n_checks);
+List metal_mpsgraph_fft_diagnostic_impl(int fft_size,
+                                        int seed,
+                                        int n_repeats);
+List metal_mpsgraph_convolution_diagnostic_impl(int fft_size,
+                                                int seed,
+                                                int n_repeats);
 
 // [[Rcpp::export]]
 bool embedding_metal_available_cpp() {
@@ -393,4 +399,18 @@ List metal_fft512_stockham_diagnostic_cpp(int seed = 1,
                                           bool inverse = false,
                                           int n_checks = 8) {
   return metal_fft512_stockham_diagnostic_impl(seed, inverse, n_checks);
+}
+
+// [[Rcpp::export]]
+List metal_mpsgraph_fft_diagnostic_cpp(int fft_size = 512,
+                                       int seed = 1,
+                                       int n_repeats = 5) {
+  return metal_mpsgraph_fft_diagnostic_impl(fft_size, seed, n_repeats);
+}
+
+// [[Rcpp::export]]
+List metal_mpsgraph_convolution_diagnostic_cpp(int fft_size = 512,
+                                               int seed = 1,
+                                               int n_repeats = 5) {
+  return metal_mpsgraph_convolution_diagnostic_impl(fft_size, seed, n_repeats);
 }

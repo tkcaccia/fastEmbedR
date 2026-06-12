@@ -332,6 +332,24 @@ make_opentsne_pca_init <- function(x, n_components, seed, backend = "cpu") {
   init
 }
 
+make_opentsne_pca_init_from_data <- function(init_data,
+                                             n,
+                                             n_components,
+                                             seed,
+                                             backend = "cpu") {
+  x <- as.matrix(init_data)
+  storage.mode(x) <- "double"
+  if (nrow(x) != n) {
+    stop("`init_data` must have one row per KNN row.", call. = FALSE)
+  }
+  make_opentsne_pca_init(
+    x,
+    n_components = n_components,
+    seed = seed,
+    backend = backend
+  )
+}
+
 normalize_opentsne_knn_input <- function(indices, distances = NULL, n_neighbors = NULL) {
   knn <- coerce_knn_input(indices, distances)
   n <- nrow(knn$indices)
@@ -486,7 +504,12 @@ fast_knn_opentsne_materialized <- function(indices,
       negative_gradient_method
     )
   } else {
-    list(Y_init = Y_init, method = "user", spectral_n_iter = NA_integer_)
+    list(
+      Y_init = Y_init,
+      method = attr(Y_init, "fastEmbedR_init_method") %||% "user",
+      backend = attr(Y_init, "fastEmbedR_init_backend") %||% NA_character_,
+      spectral_n_iter = attr(Y_init, "fastEmbedR_init_spectral_n_iter") %||% NA_integer_
+    )
   }
   if (is.null(Y_init)) {
     Y_init <- init_info$Y_init
@@ -748,13 +771,19 @@ fast_knn_opentsne_core <- function(indices,
 #' @param n_neighbors Optional number of non-self neighbor columns to use from
 #'   the supplied KNN graph. This lets you compute a wide KNN once and reuse
 #'   its first columns for comparable tests.
+#' @param init Initialization strategy. `"pca"` is the default when
+#'   `init_data` is supplied; KNN-only calls without `init_data` use the
+#'   existing KNN-native default.
+#' @param init_data Optional original high-dimensional data matrix used only to
+#'   compute PCA initialization for KNN-input runs. It is not used for neighbor
+#'   search or optimization.
 #' @inheritParams opentsne
 #' @return A numeric embedding matrix with settings stored in
 #'   `attr(layout, "fastEmbedR_config")`.
 #' @examples
 #' x <- scale(as.matrix(iris[, 1:4]))
 #' knn <- nn(x, k = 31)
-#' layout <- opentsne_knn(knn, perplexity = 10,
+#' layout <- opentsne_knn(knn, init_data = x, perplexity = 10,
 #'   early_exaggeration_iter = 100, n_iter = 250)
 #' if (all(is.finite(layout))) {
 #'   plot(layout, pch = 21, bg = iris$Species)
@@ -765,6 +794,8 @@ opentsne_knn <- function(indices,
                          n_neighbors = NULL,
                          perplexity = NULL,
                          n_components = 2L,
+                         init = c("pca", "random"),
+                         init_data = NULL,
                          Y_init = NULL,
                          seed = 4L,
                          verbose = FALSE,
@@ -783,7 +814,22 @@ opentsne_knn <- function(indices,
                           auto_config = TRUE,
                           ...) {
   backend <- match.arg(backend)
+  init <- match.arg(init)
   knn <- normalize_opentsne_knn_input(indices, distances, n_neighbors)
+  if (is.null(Y_init) && identical(init, "pca") && !is.null(init_data)) {
+    init_backend <- if (backend %in% c("metal", "cuda")) backend else "cpu"
+    Y_init <- make_opentsne_pca_init_from_data(
+      init_data,
+      n = knn$n,
+      n_components = n_components,
+      seed = seed,
+      backend = init_backend
+    )
+  } else if (is.null(Y_init) && identical(init, "random")) {
+    Y_init <- make_opentsne_random_init(knn$n, n_components, seed)
+    attr(Y_init, "fastEmbedR_init_method") <- "random_normal"
+    attr(Y_init, "fastEmbedR_init_backend") <- "cpu"
+  }
   fast_knn_opentsne_materialized(
     knn$indices,
     knn$distances,
@@ -830,7 +876,10 @@ opentsne_knn <- function(indices,
 #' @param init Initialization for matrix input. `"pca"` is the default because
 #'   it improves visual stability on large MNIST-like data without changing the
 #'   t-SNE objective. `"random"` uses openTSNE-style tiny random initialization.
-#'   KNN-only input cannot compute PCA unless `Y_init` is supplied.
+#'   KNN-only input computes PCA when `init_data` is supplied, otherwise it uses
+#'   the existing KNN-native default.
+#' @param init_data Optional original high-dimensional data matrix used only to
+#'   compute PCA initialization when `data` is a precomputed KNN object.
 #' @param Y_init Optional explicit initial layout. If supplied, it overrides
 #'   `init`.
 #' @param standardize Center and scale columns before KNN.
@@ -881,6 +930,7 @@ opentsne <- function(data,
                      perplexity = NULL,
                      n_components = 2L,
                      init = c("pca", "random"),
+                     init_data = NULL,
                      Y_init = NULL,
                      standardize = TRUE,
                      pca_dims = NULL,
@@ -936,6 +986,20 @@ opentsne <- function(data,
     n <- knn_result$n
     if (!is.null(labels) && length(labels) != n) {
       stop("`labels` must have one entry per KNN row.", call. = FALSE)
+    }
+    if (is.null(Y_init) && identical(init, "pca") && !is.null(init_data)) {
+      init_backend <- if (optimizer_backend %in% c("metal", "cuda")) optimizer_backend else "cpu"
+      Y_init <- make_opentsne_pca_init_from_data(
+        init_data,
+        n = n,
+        n_components = n_components,
+        seed = seed,
+        backend = init_backend
+      )
+    } else if (is.null(Y_init) && identical(init, "random")) {
+      Y_init <- make_opentsne_random_init(n, n_components, seed)
+      attr(Y_init, "fastEmbedR_init_method") <- "random_normal"
+      attr(Y_init, "fastEmbedR_init_backend") <- "cpu"
     }
 
     embedding_time <- system.time({

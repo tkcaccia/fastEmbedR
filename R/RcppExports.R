@@ -121,6 +121,14 @@ metal_fft512_stockham_diagnostic_cpp <- function(seed = 1L, inverse = FALSE, n_c
     .Call(`_fastEmbedR_metal_fft512_stockham_diagnostic_cpp`, seed, inverse, n_checks)
 }
 
+metal_mpsgraph_fft_diagnostic_cpp <- function(fft_size = 512L, seed = 1L, n_repeats = 5L) {
+    .Call(`_fastEmbedR_metal_mpsgraph_fft_diagnostic_cpp`, fft_size, seed, n_repeats)
+}
+
+metal_mpsgraph_convolution_diagnostic_cpp <- function(fft_size = 512L, seed = 1L, n_repeats = 5L) {
+    .Call(`_fastEmbedR_metal_mpsgraph_convolution_diagnostic_cpp`, fft_size, seed, n_repeats)
+}
+
 standardize_cpu_cpp <- function(data) {
     .Call(`_fastEmbedR_standardize_cpu_cpp`, data)
 }

@@ -10,6 +10,8 @@ opentsne_knn(
   n_neighbors = NULL,
   perplexity = NULL,
   n_components = 2L,
+  init = c("pca", "random"),
+  init_data = NULL,
   Y_init = NULL,
   seed = 4L,
   verbose = FALSE,
@@ -45,8 +47,16 @@ its first columns for comparable tests.}
 
 \item{n_components}{Output dimensionality, from 1 to 3.}
 
-\item{Y_init}{Optional explicit initial layout. For KNN-only input, pass a
-PCA initialization computed from the original data matrix if desired.}
+\item{init}{Initialization strategy. `"pca"` is the default when
+`init_data` is supplied; KNN-only calls without `init_data` use the
+existing KNN-native default.}
+
+\item{init_data}{Optional original high-dimensional data matrix used only to
+compute PCA initialization for KNN-input runs. It is not used for neighbor
+search or optimization.}
+
+\item{Y_init}{Optional explicit initial layout. If supplied, it overrides
+`init`.}
 
 \item{seed}{Random seed.}
 
@@ -110,7 +120,7 @@ PCA is done inside this function.
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))
 knn <- nn(x, k = 31)
-layout <- opentsne_knn(knn, perplexity = 10,
+layout <- opentsne_knn(knn, init_data = x, perplexity = 10,
   early_exaggeration_iter = 100, n_iter = 250)
 if (all(is.finite(layout))) {
   plot(layout, pch = 21, bg = iris$Species)
