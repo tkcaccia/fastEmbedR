@@ -49,3 +49,18 @@ Recommended next gallery datasets:
 - Covertype;
 - SingleCell/MetRef on the CUDA workstation;
 - CIFAR-style image features.
+
+The multi-dataset runner is documented in
+[extended-benchmark-suite.md](extended-benchmark-suite.md).
+
+## Shuttle 58k: Extended Local Benchmark
+
+The extended runner now includes a Shuttle benchmark with CPU, Metal,
+MPSGraph diagnostic, `Rtsne_neighbors`, and `uwot::umap(fast_sgd = TRUE)`.
+
+![Shuttle 58k extended embedding gallery](assets/extended-shuttle58k-embedding-gallery.png)
+
+![Shuttle 58k extended timing](assets/extended-shuttle58k-timing-stacked.png)
+
+See [extended-benchmark-suite.md](extended-benchmark-suite.md) for the table
+and interpretation.

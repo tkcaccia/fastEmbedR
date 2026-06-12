@@ -6,6 +6,7 @@ Topic pages:
 - [Usage and API](usage-api.md)
 - [Backend capabilities](backend-capabilities.md)
 - [Benchmark gallery](benchmark-gallery.md)
+- [Extended benchmark suite](extended-benchmark-suite.md)
 - [Benchmarks](benchmarks.md)
 - [Implementation and library inventory](implementation-inventory.md)
 - [Function implementation details and literature](function-implementation-details.md)
