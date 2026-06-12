@@ -70,3 +70,36 @@ but shifted the plot and quality slightly:
 The conclusion for now is to keep package-native Metal FFT-grid as the default
 and keep MPSGraph diagnostic-only.
 
+## GitHub Figure: openTSNE PCA Init, CPU vs Metal vs CUDA
+
+The figure below shows `fastEmbedR::opentsne_knn()` on MNIST 70k raw flattened
+images using KNN input and PCA initialization. CPU and Metal were rerun locally
+from cached backend-specific KNN. CUDA uses the saved chiamaka CUDA run with
+RAPIDS cuVS NN-descent KNN and native CUDA FFT-grid openTSNE.
+
+![MNIST 70k openTSNE PCA embeddings](assets/mnist70k-opentsne-pca-embeddings-cpu-metal-cuda.png)
+
+The stacked bar plot separates nearest-neighbour time from embedding time, as
+requested. PCA initialization time is not included in the stacked bars; the
+bars report only NN search plus openTSNE embedding.
+
+![MNIST 70k openTSNE PCA timing](assets/mnist70k-opentsne-pca-timing-stacked.png)
+
+Timing table:
+
+| backend | machine | NN sec | embedding sec | total sec | trust | label KNN acc |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| CPU | Stefanos-MacBook-Pro.local | 61.642 | 3.896 | 65.538 | 0.324 | 0.958 |
+| Metal | Stefanos-MacBook-Pro.local | 40.904 | 3.250 | 44.154 | 0.312 | 0.966 |
+| CUDA | icgeb-bioinformatics-unit | 2.046 | 0.410 | 2.456 | 0.327 | 0.972 |
+
+The source CSV for the figure is
+[assets/mnist70k-opentsne-pca-timing.csv](assets/mnist70k-opentsne-pca-timing.csv).
+The figure was generated with:
+
+```sh
+Rscript tools/make_mnist70k_pca_github_figures.R \
+  --local-dir=results/mnist70k_pca_opentsne_github_local_20260612_214031 \
+  --cuda-dir=results/chiamaka_mnist70k_cpu_cuda_20260612_150230/results \
+  --out-dir=docs/assets
+```

@@ -1,0 +1,4 @@
+"method","backend","machine","nn_sec","embedding_sec","total_sec","trust","label_knn_accuracy"
+"openTSNE PCA init","cpu","Stefanos-MacBook-Pro.local",61.642,3.896,65.538,0.323977777777779,0.9582
+"openTSNE PCA init","metal","Stefanos-MacBook-Pro.local",40.904,3.25,44.154,0.31248888888889,0.9658
+"openTSNE PCA init","cuda","icgeb-bioinformatics-unit",2.04600000000005,0.409999999999968,2.45600000000002,0.326911111111112,0.9718
