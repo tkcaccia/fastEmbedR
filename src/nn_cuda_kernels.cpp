@@ -652,23 +652,26 @@ extern "C" int fastembedr_cuda_knn(const double* data,
   float* d_points = nullptr;
   int* d_indices = nullptr;
   float* d_distances = nullptr;
+  const bool self_query = data == points && n_data == n_points;
   const std::size_t data_size = static_cast<std::size_t>(n_data) * n_features;
   const std::size_t data_bytes = data_size * sizeof(float);
-  const int max_batch = choose_query_batch_size(n_points, n_features, k, data_bytes);
+  const int max_batch = self_query ?
+    n_points :
+    choose_query_batch_size(n_points, n_features, k, data_bytes);
   if (max_batch < 1) {
     set_error("CUDA KNN allocation preflight: insufficient free device memory for reference data and one query batch");
     return 1;
   }
   const std::size_t batch_points_size = static_cast<std::size_t>(max_batch) * n_features;
   const std::size_t batch_out_size = static_cast<std::size_t>(max_batch) * k;
-  const std::size_t points_bytes = batch_points_size * sizeof(float);
+  const std::size_t points_bytes = self_query ? 0u : batch_points_size * sizeof(float);
   const std::size_t out_i_bytes = batch_out_size * sizeof(int);
   const std::size_t out_d_bytes = batch_out_size * sizeof(float);
   const std::size_t required_bytes = data_bytes + points_bytes + out_i_bytes + out_d_bytes;
 
   auto cleanup = [&]() {
     if (d_data != nullptr) cudaFree(d_data);
-    if (d_points != nullptr) cudaFree(d_points);
+    if (d_points != nullptr && d_points != d_data) cudaFree(d_points);
     if (d_indices != nullptr) cudaFree(d_indices);
     if (d_distances != nullptr) cudaFree(d_distances);
   };
@@ -681,9 +684,13 @@ extern "C" int fastembedr_cuda_knn(const double* data,
     cleanup();
     return 1;
   }
-  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_points), points_bytes), "cudaMalloc(points)")) {
-    cleanup();
-    return 1;
+  if (self_query) {
+    d_points = d_data;
+  } else {
+    if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_points), points_bytes), "cudaMalloc(points)")) {
+      cleanup();
+      return 1;
+    }
   }
   if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_indices), out_i_bytes), "cudaMalloc(indices)")) {
     cleanup();
@@ -704,17 +711,19 @@ extern "C" int fastembedr_cuda_knn(const double* data,
 
   for (int start = 0; start < n_points; start += max_batch) {
     const int batch_n = std::min(max_batch, n_points - start);
-    if (copy_query_batch_to_float_device(
-      points,
-      d_points,
-      n_points,
-      n_features,
-      start,
-      batch_n,
-      query_buffer
-    )) {
-      cleanup();
-      return 1;
+    if (!self_query) {
+      if (copy_query_batch_to_float_device(
+        points,
+        d_points,
+        n_points,
+        n_features,
+        start,
+        batch_n,
+        query_buffer
+      )) {
+        cleanup();
+        return 1;
+      }
     }
 
     const KnnParams params{n_data, batch_n, n_features, k, square ? 1 : 0};
@@ -741,10 +750,6 @@ extern "C" int fastembedr_cuda_knn(const double* data,
         cleanup();
         return 1;
       }
-    }
-    if (check_cuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize")) {
-      cleanup();
-      return 1;
     }
     if (copy_batch_results_to_host(
       d_indices,

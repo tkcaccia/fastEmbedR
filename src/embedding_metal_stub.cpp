@@ -28,6 +28,17 @@ NumericMatrix project_embedding_knn_metal_impl(NumericMatrix,
   Rcpp::stop("Metal projection backend is only available on macOS with Metal support.");
 }
 
+List project_embedding_affine_metal_impl(NumericMatrix,
+                                         NumericMatrix,
+                                         NumericMatrix,
+                                         IntegerMatrix,
+                                         NumericMatrix,
+                                         int,
+                                         double,
+                                         double) {
+  Rcpp::stop("Metal affine projection backend is only available on macOS with Metal support.");
+}
+
 NumericMatrix interpolate_landmark_layout_metal_impl(NumericMatrix,
                                                      IntegerVector,
                                                      IntegerMatrix,
@@ -77,6 +88,32 @@ NumericMatrix knn_embed_metal_impl(IntegerMatrix,
                                    double,
                                    int) {
   Rcpp::stop("Metal embedding backend is only available on macOS with Metal support.");
+}
+
+NumericMatrix knn_embed_metal_csr_impl(IntegerVector,
+                                       IntegerVector,
+                                       NumericVector,
+                                       NumericMatrix,
+                                       int,
+                                       int,
+                                       double,
+                                       double,
+                                       double,
+                                       int) {
+  Rcpp::stop("Metal CSR embedding backend is only available on macOS with Metal support.");
+}
+
+NumericMatrix knn_umap_refine_rows_metal_impl(IntegerMatrix,
+                                              NumericMatrix,
+                                              IntegerVector,
+                                              NumericMatrix,
+                                              int,
+                                              double,
+                                              int,
+                                              double,
+                                              double,
+                                              int) {
+  Rcpp::stop("Metal UMAP landmark refinement backend is only available on macOS with Metal support.");
 }
 
 NumericMatrix rsvd_multiply_metal_impl(NumericMatrix,

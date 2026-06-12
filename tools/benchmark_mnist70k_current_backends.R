@@ -335,6 +335,10 @@ plot_layouts <- function(layouts, labels, path, seed, max_points = 20000L, point
   invisible(TRUE)
 }
 
+user_lib <- Sys.getenv("R_LIBS_USER", "")
+if (nzchar(user_lib)) {
+  .libPaths(unique(c(user_lib, .libPaths())))
+}
 suppressPackageStartupMessages(library(fastEmbedR))
 
 cache <- arg_value(
@@ -460,7 +464,7 @@ for (backend in backends) {
     )
   }
 
-  if (isTRUE(run_umap) && backend %in% c("cpu", "metal")) {
+  if (isTRUE(run_umap) && backend %in% c("cpu", "metal", "cuda")) {
     message("fastEmbedR UMAP ", backend)
     umap_run <- safe_status(timed(with_default_metal_umap(
       fastEmbedR::umap_knn(
@@ -510,7 +514,7 @@ for (backend in backends) {
     }
   }
 
-  if (isTRUE(run_landmark) && isTRUE(run_umap) && backend %in% c("cpu", "metal")) {
+  if (isTRUE(run_landmark) && isTRUE(run_umap) && backend %in% c("cpu", "metal", "cuda")) {
     message("fastEmbedR UMAP landmark50 ", backend)
     umap_landmark_run <- safe_status(timed(with_default_metal_umap(
       fastEmbedR::landmark_umap(
@@ -685,7 +689,7 @@ for (backend in backends) {
       negative_gradient_method = negative,
       transform_k = k,
       transform_perplexity = min(15, perplexity),
-      transform_iter = 0L,
+      transform_iter = 50L,
       silhouette_sample = NULL,
       preserve_sample = NULL,
       keep_knn = FALSE,
@@ -876,26 +880,34 @@ table_out$method_label <- ifelse(
   table_out$method,
   paste(table_out$method, table_out$variant)
 )
+proj_transform_sec <- rep(NA_real_, nrow(table_out))
+if (nrow(table_out) > 0L) {
+  proj_transform_sec <- rowSums(
+    cbind(table_out$projection_sec, table_out$transform_sec),
+    na.rm = TRUE
+  )
+  proj_transform_sec[is.na(table_out$projection_sec) & is.na(table_out$transform_sec)] <- NA_real_
+}
 contract <- data.frame(
   machine = table_out$machine,
   method = table_out$method_label,
   backend = table_out$backend_requested,
   `NN sec` = table_out$nn_sec,
   `embed sec` = table_out$embedding_sec,
-  `proj+transform sec` = rowSums(
-    cbind(table_out$projection_sec, table_out$transform_sec),
-    na.rm = TRUE
-  ),
+  `proj+transform sec` = proj_transform_sec,
   trust = table_out$trustworthiness,
   status = table_out$status,
   error_message = table_out$error_message,
   check.names = FALSE,
   stringsAsFactors = FALSE
 )
-contract$`proj+transform sec`[is.na(table_out$projection_sec) & is.na(table_out$transform_sec)] <- NA_real_
 contract_csv <- file.path(out_dir, "mnist70k_contract_table.csv")
 write.csv(contract, contract_csv, row.names = FALSE)
 message("Contract table CSV: ", normalizePath(contract_csv, winslash = "/", mustWork = FALSE))
-print(contract[, c("machine", "method", "backend", "NN sec", "embed sec",
-                   "proj+transform sec", "trust", "status")],
-      row.names = FALSE)
+if (nrow(contract) > 0L) {
+  print(contract[, c("machine", "method", "backend", "NN sec", "embed sec",
+                     "proj+transform sec", "trust", "status")],
+        row.names = FALSE)
+} else {
+  message("No successful or failed method rows were recorded.")
+}

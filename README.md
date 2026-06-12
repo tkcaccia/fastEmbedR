@@ -46,6 +46,32 @@ FASTEMBEDR_USE_FAISS=1 FAISS_HOME=/path/to/faiss R CMD INSTALL .
 FASTEMBEDR_USE_CUDA=1 FASTEMBEDR_USE_CUVS=1 CUVS_HOME=/path/to/cuvs R CMD INSTALL .
 ```
 
+### Optional RAPIDS cuVS KNN
+
+`fastEmbedR` includes native C++ bindings for RAPIDS cuVS KNN, including
+brute-force search, CAGRA, and NN-descent. The RAPIDS libraries themselves are
+not vendored into the R package because the CUDA binary stack is large and must
+match the host NVIDIA driver/CUDA runtime. On a CUDA Linux machine, install the
+external cuVS SDK with:
+
+```sh
+tools/install_cuvs_linux.sh
+. ~/.fastEmbedR/cuvs_env.sh
+R CMD INSTALL .
+```
+
+After installation:
+
+```r
+library(fastEmbedR)
+cuvs_available()
+backend_info()
+knn <- nn(x, k = 50, backend = "cuda_cuvs_nndescent")
+```
+
+If cuVS is unavailable, explicit cuVS requests fail clearly. They are never
+reported as CUDA/cuVS after running on CPU.
+
 ## Backend Rule
 
 All public compute functions that can use parallel CPU work now expose

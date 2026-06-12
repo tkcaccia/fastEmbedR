@@ -606,6 +606,7 @@ fast_knn_umap_gpu_hybrid_mode <- function() {
     return(if (isTRUE(value)) "on" else "off")
   }
   value <- tolower(as.character(value[[1L]]))
+  if (length(value) != 1L || is.na(value)) return("auto")
   if (value %in% c("1", "true", "yes", "on", "quality", "hybrid")) return("on")
   if (value %in% c("0", "false", "no", "off", "speed", "pure")) return("off")
   "auto"
@@ -621,6 +622,7 @@ fast_knn_umap_gpu_hybrid_auto_selected <- function(cfg) {
     return(TRUE)
   }
   cv <- suppressWarnings(as.numeric(cfg$knn_distance_cv))
+  if (length(cv) != 1L || is.na(cv) || !is.finite(cv)) return(FALSE)
   is.finite(cv) && cv >= fast_knn_umap_gpu_hybrid_cv_threshold()
 }
 
