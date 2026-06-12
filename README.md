@@ -60,6 +60,20 @@ tools/install_cuvs_linux.sh
 R CMD INSTALL .
 ```
 
+For the chiamaka CUDA workstation (`chiamaka@137.158.224.178`), use the same
+script with an explicit RAPIDS CUDA version because the machine has a new
+NVIDIA driver but an older system `nvcc`:
+
+```sh
+FASTEMBEDR_CUVS_CUDA_VERSION=12.9 tools/install_cuvs_linux.sh
+. ~/.fastEmbedR/cuvs_env.sh
+R CMD INSTALL .
+```
+
+The activation file sets `CUVS_HOME`, `CUDA_HOME`, `NVCC`,
+`FASTEMBEDR_USE_CUDA=1`, and `FASTEMBEDR_USE_CUVS=1`, so fastEmbedR builds
+against the micromamba cuVS/CUDA environment instead of `/usr/bin/nvcc`.
+
 After installation:
 
 ```r
@@ -120,6 +134,21 @@ Native Metal FFT openTSNE is implemented in Objective-C++/Metal when the Metal
 backend is compiled. Native CUDA FFT openTSNE is still refused until the CUDA
 port exists; unsupported GPU requests fail clearly instead of falling back to
 CPU.
+
+## Automatic Parameters
+
+`opentsne()` and `opentsne_knn()` use `auto_config = TRUE` by default. Missing
+t-SNE settings are resolved in native C++ using the opt-SNE strategy: `"auto"`
+learning rate becomes `n / early_exaggeration`, early exaggeration can stop at
+the local maximum of KLD relative change, and the normal phase can stop when the
+KLD improvement drops below the opt-SNE threshold. The KLD monitor is enabled
+only where it is computationally honest: CPU/small exact runs. Large FFT and
+GPU runs keep opt-SNE's learning-rate/default-limit policy but do not perform a
+hidden CPU O(n^2) KLD poll or report it as GPU work.
+
+`umap()` and `umap_knn()` also choose internal defaults from the supplied KNN
+distance profile in C++. This keeps the public API small while letting Shuttle-
+like broad-shell data and high-variability data get less brittle defaults.
 
 ## Basic Use
 

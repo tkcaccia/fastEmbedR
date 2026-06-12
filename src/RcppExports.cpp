@@ -902,6 +902,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// umap_auto_parameters_cpp
+Rcpp::List umap_auto_parameters_cpp(NumericMatrix distances, int n_neighbors, std::string backend);
+RcppExport SEXP _fastEmbedR_umap_auto_parameters_cpp(SEXP distancesSEXP, SEXP n_neighborsSEXP, SEXP backendSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_neighbors(n_neighborsSEXP);
+    Rcpp::traits::input_parameter< std::string >::type backend(backendSEXP);
+    rcpp_result_gen = Rcpp::wrap(umap_auto_parameters_cpp(distances, n_neighbors, backend));
+    return rcpp_result_gen;
+END_RCPP
+}
 // nn_cpp
 List nn_cpp(NumericMatrix data, NumericMatrix points, int k, std::string method, bool square, bool sorted, double p, bool parallel, int cores, bool exclude_self);
 RcppExport SEXP _fastEmbedR_nn_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP squareSEXP, SEXP sortedSEXP, SEXP pSEXP, SEXP parallelSEXP, SEXP coresSEXP, SEXP exclude_selfSEXP) {
@@ -1320,9 +1333,25 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// tsne_auto_parameters_cpp
+List tsne_auto_parameters_cpp(const int n, const int k, const double perplexity, const bool perplexity_missing, const std::string backend, const std::string negative_gradient_method);
+RcppExport SEXP _fastEmbedR_tsne_auto_parameters_cpp(SEXP nSEXP, SEXP kSEXP, SEXP perplexitySEXP, SEXP perplexity_missingSEXP, SEXP backendSEXP, SEXP negative_gradient_methodSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< const int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< const double >::type perplexity(perplexitySEXP);
+    Rcpp::traits::input_parameter< const bool >::type perplexity_missing(perplexity_missingSEXP);
+    Rcpp::traits::input_parameter< const std::string >::type backend(backendSEXP);
+    Rcpp::traits::input_parameter< const std::string >::type negative_gradient_method(negative_gradient_methodSEXP);
+    rcpp_result_gen = Rcpp::wrap(tsne_auto_parameters_cpp(n, k, perplexity, perplexity_missing, backend, negative_gradient_method));
+    return rcpp_result_gen;
+END_RCPP
+}
 // knn_tsne_opentsne_cpp
-List knn_tsne_opentsne_cpp(IntegerMatrix indices, NumericMatrix distances, NumericMatrix y_init, bool init, int n_components, double perplexity, double theta, int early_exaggeration_iter, int n_iter, double early_exaggeration, double exaggeration, double learning_rate, bool learning_rate_auto, double initial_momentum, double final_momentum, double min_gain, double max_step_norm, std::string negative_gradient_method, int n_threads, int seed, bool verbose, bool record_costs);
-RcppExport SEXP _fastEmbedR_knn_tsne_opentsne_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP initSEXP, SEXP n_componentsSEXP, SEXP perplexitySEXP, SEXP thetaSEXP, SEXP early_exaggeration_iterSEXP, SEXP n_iterSEXP, SEXP early_exaggerationSEXP, SEXP exaggerationSEXP, SEXP learning_rateSEXP, SEXP learning_rate_autoSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP min_gainSEXP, SEXP max_step_normSEXP, SEXP negative_gradient_methodSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP verboseSEXP, SEXP record_costsSEXP) {
+List knn_tsne_opentsne_cpp(IntegerMatrix indices, NumericMatrix distances, NumericMatrix y_init, bool init, int n_components, double perplexity, double theta, int early_exaggeration_iter, int n_iter, double early_exaggeration, double exaggeration, double learning_rate, bool learning_rate_auto, double initial_momentum, double final_momentum, double min_gain, double max_step_norm, std::string negative_gradient_method, int n_threads, int seed, bool verbose, bool record_costs, bool auto_config, double auto_iter_end);
+RcppExport SEXP _fastEmbedR_knn_tsne_opentsne_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP initSEXP, SEXP n_componentsSEXP, SEXP perplexitySEXP, SEXP thetaSEXP, SEXP early_exaggeration_iterSEXP, SEXP n_iterSEXP, SEXP early_exaggerationSEXP, SEXP exaggerationSEXP, SEXP learning_rateSEXP, SEXP learning_rate_autoSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP min_gainSEXP, SEXP max_step_normSEXP, SEXP negative_gradient_methodSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP verboseSEXP, SEXP record_costsSEXP, SEXP auto_configSEXP, SEXP auto_iter_endSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1348,7 +1377,9 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
     Rcpp::traits::input_parameter< bool >::type record_costs(record_costsSEXP);
-    rcpp_result_gen = Rcpp::wrap(knn_tsne_opentsne_cpp(indices, distances, y_init, init, n_components, perplexity, theta, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, n_threads, seed, verbose, record_costs));
+    Rcpp::traits::input_parameter< bool >::type auto_config(auto_configSEXP);
+    Rcpp::traits::input_parameter< double >::type auto_iter_end(auto_iter_endSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_tsne_opentsne_cpp(indices, distances, y_init, init, n_components, perplexity, theta, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, n_threads, seed, verbose, record_costs, auto_config, auto_iter_end));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1439,6 +1470,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_knn_umap_refine_masked_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_masked_cpp, 12},
     {"_fastEmbedR_knn_umap_refine_rows_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_rows_cpp, 12},
     {"_fastEmbedR_fast_knn_umap_csr_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_csr_cpp, 14},
+    {"_fastEmbedR_umap_auto_parameters_cpp", (DL_FUNC) &_fastEmbedR_umap_auto_parameters_cpp, 3},
     {"_fastEmbedR_nn_cpp", (DL_FUNC) &_fastEmbedR_nn_cpp, 10},
     {"_fastEmbedR_nndescent_candidate_matrix_cpp", (DL_FUNC) &_fastEmbedR_nndescent_candidate_matrix_cpp, 3},
     {"_fastEmbedR_nndescent_candidate_matrix_mlx_cpp", (DL_FUNC) &_fastEmbedR_nndescent_candidate_matrix_mlx_cpp, 6},
@@ -1468,7 +1500,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_landmark_candidate_knn_metal_cpp", (DL_FUNC) &_fastEmbedR_landmark_candidate_knn_metal_cpp, 5},
     {"_fastEmbedR_grid_knn_metal_cpp", (DL_FUNC) &_fastEmbedR_grid_knn_metal_cpp, 5},
     {"_fastEmbedR_row_candidate_knn_metal_cpp", (DL_FUNC) &_fastEmbedR_row_candidate_knn_metal_cpp, 3},
-    {"_fastEmbedR_knn_tsne_opentsne_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cpp, 22},
+    {"_fastEmbedR_tsne_auto_parameters_cpp", (DL_FUNC) &_fastEmbedR_tsne_auto_parameters_cpp, 6},
+    {"_fastEmbedR_knn_tsne_opentsne_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cpp, 24},
     {"_fastEmbedR_transform_tsne_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_cpp, 21},
     {NULL, NULL, 0}
 };

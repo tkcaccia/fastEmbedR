@@ -52,12 +52,45 @@ fast_knn_umap_core <- function(indices,
   indices <- knn$indices
   distances <- knn$distances
 
-  cfg <- fast_knn_umap_config(
-    n = nrow(indices),
-    k = knn$n_neighbors,
-    backend = backend
-  )
-  if (!is.null(n_threads)) {
+	  cfg <- fast_knn_umap_config(
+	    n = nrow(indices),
+	    k = knn$n_neighbors,
+	    backend = backend
+	  )
+	  auto_policy <- tryCatch(
+	    {
+	      policy_distances <- if (knn$col_start != 0L || knn$n_neighbors != ncol(distances)) {
+	        materialize_knn_range(indices, distances, knn$col_start, knn$n_neighbors)$distances
+	      } else {
+	        distances
+	      }
+	      umap_auto_parameters_cpp(
+	        policy_distances,
+	        as.integer(knn$n_neighbors),
+	        as.character(cfg$backend)
+	      )
+	    },
+	    error = function(e) {
+	      list(error = conditionMessage(e))
+	    }
+	  )
+	  if (is.null(auto_policy$error)) {
+	    cfg$n_epochs <- as.integer(auto_policy$n_epochs)
+	    cfg$min_dist <- as.numeric(auto_policy$min_dist)
+	    cfg$negative_sample_rate <- as.integer(auto_policy$negative_sample_rate)
+	    cfg$learning_rate <- as.numeric(auto_policy$learning_rate)
+	    cfg$spectral_n_iter <- as.integer(auto_policy$spectral_n_iter)
+	    cfg$init_scale <- as.numeric(auto_policy$init_scale)
+	    cfg$auto_parameter_backend <- "cpp_knn_distance_profile"
+	    cfg$auto_parameter_rule <- as.character(auto_policy$rule)
+	    cfg$knn_distance_cv <- as.numeric(auto_policy$knn_distance_cv)
+	    cfg$knn_distance_ratio_30_15 <- as.numeric(auto_policy$knn_distance_ratio_30_15)
+	    cfg$knn_distance_ratio_50_15 <- as.numeric(auto_policy$knn_distance_ratio_50_15)
+	  } else {
+	    cfg$auto_parameter_backend <- "r_size_rule_fallback"
+	    cfg$auto_parameter_error <- auto_policy$error
+	  }
+	  if (!is.null(n_threads)) {
     n_threads <- as.integer(n_threads)
     if (length(n_threads) != 1L || is.na(n_threads) || !is.finite(n_threads) || n_threads < 1L) {
       stop("`n_threads` must be NULL or a positive integer.", call. = FALSE)

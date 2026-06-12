@@ -24,7 +24,7 @@ automatically.}
 \item{distances}{Numeric KNN distance matrix matching `indices`. Leave as
 `NULL` when `indices` is an `nn()` result.}
 
-\item{method}{Embedding method: `"umap"` or `"opentsne"`. UMAP is the default.}
+\item{method}{Embedding method: `"opentsne"` or `"umap"`.}
 
 \item{n_components}{Output dimensionality.}
 
@@ -38,9 +38,9 @@ GPU backend and errors if CUDA or Metal is unavailable.}
 \item{n_threads}{Number of CPU worker threads used by the CPU optimizer.
 Native GPU optimizers ignore this argument.}
 
-\item{...}{Additional openTSNE-specific parameters when
-`method = "opentsne"`, such as `perplexity`, iteration controls, `Y_init`,
-learning-rate controls, and exaggeration controls.}
+\item{...}{Additional openTSNE-specific parameters such as `perplexity`,
+iteration controls, `Y_init`, learning-rate controls, exaggeration
+controls.}
 }
 \value{
 A numeric embedding matrix with resolved settings stored in

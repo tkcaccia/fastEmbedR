@@ -2,6 +2,10 @@ is_whole_number <- function(x, tol = .Machine$double.eps^0.5) {
   abs(x - round(x)) < tol
 }
 
+`%||%` <- function(x, y) {
+  if (is.null(x)) y else x
+}
+
 auto_tsne_perplexity <- function(n, k) {
   n <- as.integer(n)
   k <- as.integer(k)
@@ -17,6 +21,68 @@ auto_tsne_k <- function(n, perplexity = NULL) {
   }
   k <- as.integer(floor(3 * as.numeric(perplexity)))
   max(1L, min(n - 1L, k))
+}
+
+resolve_opentsne_auto_parameters <- function(n,
+                                             k,
+                                             perplexity,
+                                             early_exaggeration_iter,
+                                             n_iter,
+                                             learning_rate,
+                                             optimizer_backend,
+                                             negative_gradient_method,
+                                             auto_config) {
+  perplexity_missing <- is.null(perplexity)
+  early_iter_missing <- is.null(early_exaggeration_iter) ||
+    (length(early_exaggeration_iter) == 1L && is.na(early_exaggeration_iter))
+  n_iter_missing <- is.null(n_iter) ||
+    (length(n_iter) == 1L && is.na(n_iter))
+  auto <- if (isTRUE(auto_config)) {
+    tsne_auto_parameters_cpp(
+      as.integer(n),
+      as.integer(k),
+      if (perplexity_missing) NA_real_ else as.numeric(perplexity),
+      isTRUE(perplexity_missing),
+      as.character(optimizer_backend),
+      as.character(negative_gradient_method)
+    )
+  } else {
+    list(
+      perplexity = if (perplexity_missing) auto_tsne_perplexity(n, k) else as.numeric(perplexity),
+      early_exaggeration_iter = 250L,
+      n_iter = 500L,
+      learning_rate = NA_real_,
+      auto_kld_stop = FALSE,
+      auto_iter_end = 5000,
+      rule = "manual"
+    )
+  }
+  if (perplexity_missing) {
+    perplexity <- auto$perplexity
+  }
+  if (early_iter_missing) {
+    early_exaggeration_iter <- auto$early_exaggeration_iter
+  }
+  if (n_iter_missing) {
+    n_iter <- auto$n_iter
+  }
+  opt_sne_learning_rate <- isTRUE(auto_config) &&
+    is.character(learning_rate) &&
+    length(learning_rate) == 1L &&
+    identical(tolower(learning_rate), "auto")
+  list(
+    perplexity = as.numeric(perplexity),
+    early_exaggeration_iter = as.integer(early_exaggeration_iter),
+    n_iter = as.integer(n_iter),
+    opt_sne_learning_rate = opt_sne_learning_rate,
+    learning_rate_value = as.numeric(auto$learning_rate %||% NA_real_),
+    auto_config = isTRUE(auto_config),
+    auto_kld_stop = isTRUE(auto$auto_kld_stop) && early_iter_missing && n_iter_missing,
+    auto_iter_end = as.numeric(auto$auto_iter_end %||% 5000),
+    auto_rule = as.character(auto$rule %||% "manual"),
+    auto_perplexity = as.numeric(auto$perplexity %||% perplexity),
+    auto_n_neighbors = as.integer(auto$n_neighbors %||% k)
+  )
 }
 
 default_tsne_threads <- function() {
@@ -278,8 +344,8 @@ fast_knn_opentsne_materialized <- function(indices,
                                            n_components = 2L,
                                            perplexity = NULL,
                                            theta = 0.5,
-                                           early_exaggeration_iter = 250L,
-                                           n_iter = 500L,
+                                           early_exaggeration_iter = NULL,
+                                           n_iter = NULL,
                                            learning_rate = "auto",
                                            early_exaggeration = "auto",
                                            exaggeration = NULL,
@@ -294,6 +360,7 @@ fast_knn_opentsne_materialized <- function(indices,
                                            seed = 42L,
                                            verbose = FALSE,
                                            backend = c("auto", "cpu", "gpu", "metal", "cuda"),
+                                           auto_config = TRUE,
                                            input_had_self = FALSE,
                                            input_backend = NA_character_) {
   backend <- match.arg(backend)
@@ -336,12 +403,24 @@ fast_knn_opentsne_materialized <- function(indices,
   }
   n <- nrow(indices)
   k <- ncol(indices)
-  if (is.null(perplexity)) {
-    perplexity <- auto_tsne_perplexity(n, k)
-  }
   if (is.null(n_threads)) {
     n_threads <- default_tsne_threads()
   }
+  negative_gradient_method <- normalize_tsne_negative_gradient_method(negative_gradient_method)
+  auto_params <- resolve_opentsne_auto_parameters(
+    n = n,
+    k = k,
+    perplexity = perplexity,
+    early_exaggeration_iter = early_exaggeration_iter,
+    n_iter = n_iter,
+    learning_rate = learning_rate,
+    optimizer_backend = optimizer_backend,
+    negative_gradient_method = negative_gradient_method,
+    auto_config = auto_config
+  )
+  perplexity <- auto_params$perplexity
+  early_exaggeration_iter <- auto_params$early_exaggeration_iter
+  n_iter <- auto_params$n_iter
   early_exaggeration_iter <- as.integer(early_exaggeration_iter)
   n_iter <- as.integer(n_iter)
   if (length(early_exaggeration_iter) != 1L || is.na(early_exaggeration_iter) || early_exaggeration_iter < 0L) {
@@ -353,7 +432,6 @@ fast_knn_opentsne_materialized <- function(indices,
   if (early_exaggeration_iter + n_iter < 1L) {
     stop("At least one optimization iteration is required.", call. = FALSE)
   }
-  negative_gradient_method <- normalize_tsne_negative_gradient_method(negative_gradient_method)
   if (identical(optimizer_backend, "metal")) {
     if (identical(negative_gradient_method, "auto")) {
       negative_gradient_method <- "fft"
@@ -409,6 +487,11 @@ fast_knn_opentsne_materialized <- function(indices,
   )
   lr <- normalize_opentsne_learning_rate(learning_rate)
   ex <- normalize_opentsne_exaggeration(early_exaggeration, exaggeration)
+  if (isTRUE(auto_params$opt_sne_learning_rate) &&
+      is.finite(auto_params$learning_rate_value) &&
+      auto_params$learning_rate_value > 0) {
+    lr <- list(auto = FALSE, value = auto_params$learning_rate_value)
+  }
   min_gain <- as.numeric(min_gain)
   if (length(min_gain) != 1L || is.na(min_gain) || !is.finite(min_gain) || min_gain <= 0) {
     stop("`min_gain` must be a positive number.", call. = FALSE)
@@ -500,7 +583,9 @@ fast_knn_opentsne_materialized <- function(indices,
       as.integer(n_threads),
       as.integer(seed),
       args$verbose,
-      record_costs
+      record_costs,
+      isTRUE(auto_params$auto_kld_stop),
+      auto_params$auto_iter_end
     )
   }
   layout <- set_embedding_colnames(out$Y, "openTSNE")
@@ -519,8 +604,17 @@ fast_knn_opentsne_materialized <- function(indices,
     theta = args$theta,
     early_exaggeration_iter = early_exaggeration_iter,
     n_iter = n_iter,
+    early_exaggeration_iter_actual = out$early_exaggeration_iter_actual %||% early_exaggeration_iter,
+    n_iter_actual = out$n_iter_actual %||% n_iter,
     max_iter = early_exaggeration_iter + n_iter,
-    learning_rate = if (isTRUE(lr$auto)) "auto" else lr$value,
+    max_iter_actual = out$max_iter_actual %||% (early_exaggeration_iter + n_iter),
+    learning_rate = if (isTRUE(auto_params$opt_sne_learning_rate)) {
+      "auto_opt_sne_n_over_early_exaggeration"
+    } else if (isTRUE(lr$auto)) {
+      "auto"
+    } else {
+      lr$value
+    },
     learning_rate_early = out$learning_rate_early,
     learning_rate_normal = out$learning_rate_normal,
     early_exaggeration = ex$early,
@@ -532,6 +626,13 @@ fast_knn_opentsne_materialized <- function(indices,
     initialization = init_info$method,
     initialization_spectral_n_iter = init_info$spectral_n_iter,
     negative_gradient_method = negative_gradient_method,
+    auto_config = isTRUE(auto_params$auto_config),
+    auto_config_rule = auto_params$auto_rule,
+    auto_kld_stop = isTRUE(out$auto_kld_stop %||% FALSE),
+    auto_stop_reason = out$auto_stop_reason %||% "not_reported",
+    auto_iter_end = out$auto_iter_end %||% auto_params$auto_iter_end,
+    auto_perplexity = auto_params$auto_perplexity,
+    auto_n_neighbors = auto_params$auto_n_neighbors,
     record_costs = record_costs,
     optimizer = out$optimizer,
     repulsion = out$repulsion,
@@ -556,6 +657,7 @@ fast_knn_opentsne_materialized <- function(indices,
   attr(layout, "fastEmbedR_config") <- cfg
   attr(layout, "costs") <- out$costs
   attr(layout, "itercosts") <- out$itercosts
+  attr(layout, "itercost_iterations") <- out$itercost_iterations
   if (!is.null(metal_stage_timing) && NROW(metal_stage_timing) > 0L) {
     attr(layout, "metal_stage_timing") <- metal_stage_timing
   }
@@ -567,8 +669,8 @@ fast_knn_opentsne_core <- function(indices,
                                    n_components = 2L,
                                    perplexity = NULL,
                                    theta = 0.5,
-                                   early_exaggeration_iter = 250L,
-                                   n_iter = 500L,
+                                   early_exaggeration_iter = NULL,
+                                   n_iter = NULL,
                                    learning_rate = "auto",
                                    early_exaggeration = "auto",
                                    exaggeration = NULL,
@@ -582,7 +684,8 @@ fast_knn_opentsne_core <- function(indices,
                                    n_threads = NULL,
                                    seed = 42L,
                                    verbose = FALSE,
-                                   backend = c("auto", "cpu", "gpu", "metal", "cuda")) {
+                                   backend = c("auto", "cpu", "gpu", "metal", "cuda"),
+                                   auto_config = TRUE) {
   backend <- match.arg(backend)
   knn <- normalize_opentsne_knn_input(indices, distances)
   fast_knn_opentsne_materialized(
@@ -607,6 +710,7 @@ fast_knn_opentsne_core <- function(indices,
     seed = seed,
     verbose = verbose,
     backend = backend,
+    auto_config = auto_config,
     input_had_self = knn$has_self,
     input_backend = knn$input_backend
   )
@@ -646,18 +750,19 @@ opentsne_knn <- function(indices,
                          seed = 4L,
                          verbose = FALSE,
                          backend = c("auto", "cpu", "gpu", "metal", "cuda"),
-                         n_threads = NULL,
-                         learning_rate = "auto",
-                         early_exaggeration_iter = 250L,
-                         early_exaggeration = "auto",
-                         n_iter = 500L,
-                         exaggeration = NULL,
+                          n_threads = NULL,
+                          learning_rate = "auto",
+                          early_exaggeration_iter = NULL,
+                          early_exaggeration = "auto",
+                          n_iter = NULL,
+                          exaggeration = NULL,
                          initial_momentum = 0.8,
                          final_momentum = 0.8,
-                         max_step_norm = "auto",
-                         negative_gradient_method = "auto",
-                         record_costs = FALSE,
-                         ...) {
+                          max_step_norm = "auto",
+                          negative_gradient_method = "auto",
+                          record_costs = FALSE,
+                          auto_config = TRUE,
+                          ...) {
   backend <- match.arg(backend)
   knn <- normalize_opentsne_knn_input(indices, distances, n_neighbors)
   fast_knn_opentsne_materialized(
@@ -677,9 +782,10 @@ opentsne_knn <- function(indices,
     initial_momentum = initial_momentum,
     final_momentum = final_momentum,
     max_step_norm = max_step_norm,
-    negative_gradient_method = negative_gradient_method,
-    record_costs = record_costs,
-    input_had_self = knn$has_self,
+     negative_gradient_method = negative_gradient_method,
+     record_costs = record_costs,
+     auto_config = auto_config,
+     input_had_self = knn$has_self,
     input_backend = knn$input_backend,
     ...
   )
@@ -735,6 +841,11 @@ opentsne_knn <- function(indices,
 #'   are used only when the corresponding compiled symbols are available;
 #'   otherwise GPU requests fail clearly rather than falling back to CPU.
 #' @param record_costs If `TRUE`, compute diagnostic KL/cost traces.
+#' @param auto_config If `TRUE`, choose missing t-SNE settings with a native
+#'   C++ opt-SNE-inspired policy. The policy uses `n / early_exaggeration` for
+#'   `"auto"` learning rate, chooses missing iteration limits, and enables
+#'   KLD-based early stopping only on CPU/small exact runs where the monitor is
+#'   not prohibitively expensive. Explicit user-supplied values are respected.
 #' @param ... Additional low-level parameters passed to [opentsne_knn()].
 #' @return A `fastEmbedR_embedding` object.
 #' @export
@@ -757,18 +868,19 @@ opentsne <- function(data,
                      preserve_k = NULL,
                      keep_knn = FALSE,
                      verbose = FALSE,
-                     n_threads = NULL,
-                     learning_rate = "auto",
-                     early_exaggeration_iter = 250L,
-                     early_exaggeration = "auto",
-                     n_iter = 500L,
+                      n_threads = NULL,
+                      learning_rate = "auto",
+                      early_exaggeration_iter = NULL,
+                      early_exaggeration = "auto",
+                      n_iter = NULL,
                      exaggeration = NULL,
                      initial_momentum = 0.8,
                      final_momentum = 0.8,
                      max_step_norm = "auto",
-                     negative_gradient_method = "auto",
-                     record_costs = FALSE,
-                     ...) {
+                      negative_gradient_method = "auto",
+                      record_costs = FALSE,
+                      auto_config = TRUE,
+                      ...) {
   backend <- match.arg(backend)
   optimizer_backend <- if (identical(backend, "gpu")) {
     resolve_backend_request("gpu", need_embedding = TRUE)
@@ -815,9 +927,10 @@ opentsne <- function(data,
         initial_momentum = initial_momentum,
         final_momentum = final_momentum,
         max_step_norm = max_step_norm,
-        negative_gradient_method = negative_gradient_method,
-        record_costs = record_costs,
-        input_had_self = knn_result$has_self,
+         negative_gradient_method = negative_gradient_method,
+         record_costs = record_costs,
+         auto_config = auto_config,
+         input_had_self = knn_result$has_self,
         input_backend = knn_result$input_backend,
         ...
       )
@@ -952,9 +1065,10 @@ opentsne <- function(data,
       initial_momentum = initial_momentum,
       final_momentum = final_momentum,
       max_step_norm = max_step_norm,
-      negative_gradient_method = negative_gradient_method,
-      record_costs = record_costs,
-      input_had_self = knn_result$has_self,
+            negative_gradient_method = negative_gradient_method,
+            record_costs = record_costs,
+            auto_config = auto_config,
+            input_had_self = knn_result$has_self,
       input_backend = knn_result$nn_backend,
       ...
     )

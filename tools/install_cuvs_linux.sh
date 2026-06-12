@@ -70,13 +70,13 @@ if ! "$prefix/bin/micromamba" env list | awk '{print $1}' | grep -qx "$env_name"
   "$prefix/bin/micromamba" create -y -n "$env_name" \
     --channel-priority "$channel_priority" \
     -c "$rapids_channel" -c "$conda_channel" -c "$nvidia_channel" \
-    "libcuvs" "cuda-version=$cuda_version"
+    "libcuvs" "cuda-nvcc" "cuda-cudart-dev" "cuda-version=$cuda_version"
 else
   echo "Updating micromamba environment $env_name with libcuvs cuda-version=$cuda_version"
   "$prefix/bin/micromamba" install -y -n "$env_name" \
     --channel-priority "$channel_priority" \
     -c "$rapids_channel" -c "$conda_channel" -c "$nvidia_channel" \
-    "libcuvs" "cuda-version=$cuda_version"
+    "libcuvs" "cuda-nvcc" "cuda-cudart-dev" "cuda-version=$cuda_version"
 fi
 
 env_prefix=$("$prefix/bin/micromamba" env list | awk -v name="$env_name" '$1 == name {print $NF}')
@@ -88,11 +88,13 @@ fi
 cat > "$env_file" <<EOF
 # Source this before building fastEmbedR with RAPIDS cuVS.
 export CUVS_HOME="$env_prefix"
+export CUDA_HOME="$env_prefix"
+export NVCC="$env_prefix/bin/nvcc"
 export FASTEMBEDR_USE_CUDA=1
 export FASTEMBEDR_USE_CUVS=1
-export PATH="\${CUDA_HOME:-/usr/local/cuda}/bin:$env_prefix/bin:\$PATH"
-export LD_LIBRARY_PATH="$env_prefix/lib:$env_prefix/lib64:\${CUDA_HOME:-/usr/local/cuda}/lib64:\${LD_LIBRARY_PATH:-}"
-export R_LD_LIBRARY_PATH="$env_prefix/lib:$env_prefix/lib64:\${CUDA_HOME:-/usr/local/cuda}/lib64:\${R_LD_LIBRARY_PATH:-}"
+export PATH="$env_prefix/bin:\${PATH}"
+export LD_LIBRARY_PATH="$env_prefix/lib:$env_prefix/lib64:\${LD_LIBRARY_PATH:-}"
+export R_LD_LIBRARY_PATH="$env_prefix/lib:$env_prefix/lib64:\${R_LD_LIBRARY_PATH:-}"
 export LD_PRELOAD="$env_prefix/lib/libstdc++.so.6\${LD_PRELOAD:+:\$LD_PRELOAD}"
 EOF
 

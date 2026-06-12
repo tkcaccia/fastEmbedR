@@ -17,6 +17,7 @@
 #include <vector>
 
 using Rcpp::IntegerMatrix;
+using Rcpp::IntegerVector;
 using Rcpp::List;
 using Rcpp::NumericMatrix;
 using Rcpp::NumericVector;
@@ -1274,6 +1275,56 @@ double evaluate_kl(const SparseProbabilities& p,
 
 } // namespace
 
+// [[Rcpp::export]]
+List tsne_auto_parameters_cpp(const int n,
+                              const int k,
+                              const double perplexity,
+                              const bool perplexity_missing,
+                              const std::string backend,
+                              const std::string negative_gradient_method) {
+  if (n < 2) Rcpp::stop("`n` must be at least 2.");
+  if (k < 1) Rcpp::stop("`k` must be positive.");
+
+  const int max_perplexity_n = std::max(1, (n - 1) / 3);
+  const int max_perplexity_k = std::max(1, k / 3);
+  double resolved_perplexity = perplexity_missing || !std::isfinite(perplexity) || perplexity <= 0.0 ?
+    static_cast<double>(std::min(30, std::min(max_perplexity_n, max_perplexity_k))) :
+    perplexity;
+  resolved_perplexity = std::max(
+    1.0,
+    std::min(resolved_perplexity, static_cast<double>(std::min(max_perplexity_n, max_perplexity_k)))
+  );
+
+  const double early_exaggeration = 12.0;
+  const int needed_k = std::max(1, std::min(n - 1, static_cast<int>(std::ceil(3.0 * resolved_perplexity))));
+  const int early_max = n >= 10000 ? 750 : 500;
+  const int normal_max = n >= 10000 ? 750 : 500;
+
+  const bool cpu_backend = backend == "cpu" || backend == "auto";
+  const bool exact_or_small = negative_gradient_method == "exact" || n <= 5000;
+  const bool kld_auto_stop = cpu_backend && exact_or_small;
+
+  return List::create(
+    Rcpp::Named("perplexity") = resolved_perplexity,
+    Rcpp::Named("n_neighbors") = needed_k,
+    Rcpp::Named("early_exaggeration") = early_exaggeration,
+    Rcpp::Named("exaggeration") = 1.0,
+    Rcpp::Named("learning_rate") = static_cast<double>(n) / early_exaggeration,
+    Rcpp::Named("early_exaggeration_iter") = kld_auto_stop ? early_max : 250,
+    Rcpp::Named("n_iter") = kld_auto_stop ? normal_max : 500,
+    Rcpp::Named("auto_kld_stop") = kld_auto_stop,
+    Rcpp::Named("auto_iter_end") = 5000.0,
+    Rcpp::Named("auto_iter_buffer_ee") = 15L,
+    Rcpp::Named("auto_iter_buffer_run") = 15L,
+    Rcpp::Named("auto_iter_pollrate_ee") = 3L,
+    Rcpp::Named("auto_iter_pollrate_run") = 5L,
+    Rcpp::Named("auto_iter_ee_switch_buffer") = 2L,
+    Rcpp::Named("rule") = kld_auto_stop ?
+      "opt_sne_kld_sensor" :
+      "opt_sne_learning_rate_fixed_iterations_no_expensive_kld_polling"
+  );
+}
+
 // Native openTSNE-style optimizer from precomputed KNN probabilities. This
 // follows openTSNE's two-phase optimization contract while keeping the
 // implementation in fastEmbedR C++ and using the same sparse KNN affinity
@@ -1300,7 +1351,9 @@ List knn_tsne_opentsne_cpp(IntegerMatrix indices,
                            int n_threads,
                            int seed,
                            bool verbose,
-                           bool record_costs) {
+                           bool record_costs,
+                           bool auto_config,
+                           double auto_iter_end) {
   if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
     Rcpp::stop("KNN `indices` and `distances` must have the same dimensions.");
   }
@@ -1362,19 +1415,32 @@ List knn_tsne_opentsne_cpp(IntegerMatrix indices,
   std::vector<double> grad(y.size(), 0.0);
   std::vector<double> update(y.size(), 0.0);
   std::vector<double> gains(y.size(), 1.0);
-  const int total_iter = early_exaggeration_iter + n_iter;
+  const int requested_total_iter = early_exaggeration_iter + n_iter;
+  const bool auto_kld_stop = auto_config && n <= 5000;
   const bool should_record_costs = record_costs || verbose;
   NumericVector iter_costs(should_record_costs ?
-    static_cast<int>(std::ceil(static_cast<double>(total_iter) / 50.0)) :
+    static_cast<int>(std::ceil(static_cast<double>(requested_total_iter) / 50.0)) :
     0);
+  IntegerVector itercost_iterations(should_record_costs ? iter_costs.size() : 0);
   int cost_index = 0;
+  double auto_prev_error = std::numeric_limits<double>::infinity();
+  double auto_prev_rc = std::numeric_limits<double>::infinity();
+  bool auto_prev_valid = false;
+  int auto_ee_switch_buffer = 2;
+  std::string auto_stop_reason = auto_kld_stop ?
+    "max_iterations_without_kld_plateau" :
+    "disabled";
+  if (!std::isfinite(auto_iter_end) || auto_iter_end <= 0.0) auto_iter_end = 5000.0;
 
   auto run_phase = [&](const int phase_iter,
                        const double phase_exaggeration,
                        const double phase_momentum,
                        const char* phase_name,
-                       int& completed_iter) {
-    if (phase_iter <= 0) return;
+                       int& completed_iter) -> int {
+    if (phase_iter <= 0) return 0;
+    const bool early_phase = std::string(phase_name) == "early_exaggeration";
+    const int auto_pollrate = early_phase ? 3 : 5;
+    const int auto_buffer = early_phase ? 15 : 15;
     const double phase_lr = learning_rate_auto ?
       static_cast<double>(n) / std::max(phase_exaggeration, DBL_MIN) :
       learning_rate;
@@ -1385,6 +1451,7 @@ List knn_tsne_opentsne_cpp(IntegerMatrix indices,
                   << ", learning_rate=" << phase_lr
                   << ", momentum=" << phase_momentum << "\n";
     }
+    int phase_completed = 0;
     for (int iter = 0; iter < phase_iter; ++iter) {
       if (((completed_iter + iter) & 7) == 0) Rcpp::checkUserInterrupt();
       compute_gradient(
@@ -1415,21 +1482,70 @@ List knn_tsne_opentsne_cpp(IntegerMatrix indices,
       zero_mean(y, n, n_components);
 
       const int global_iter = completed_iter + iter + 1;
-      if (should_record_costs && ((global_iter % 50 == 0) || global_iter == total_iter)) {
+      const bool need_auto_error = auto_kld_stop && ((iter + 1) % auto_pollrate == 0);
+      const bool need_record_error = should_record_costs &&
+        ((global_iter % 50 == 0) || global_iter == requested_total_iter);
+      if (need_auto_error || need_record_error) {
         const double kl = evaluate_kl(p, y, n, n_components, threads);
-        if (cost_index < iter_costs.size()) iter_costs[cost_index++] = kl;
+        if (need_record_error && cost_index < iter_costs.size()) {
+          iter_costs[cost_index] = kl;
+          itercost_iterations[cost_index] = global_iter;
+          ++cost_index;
+        }
         if (verbose) {
           Rcpp::Rcout << "Iteration " << global_iter
                       << ": error is " << kl << "\n";
         }
+        if (need_auto_error) {
+          const double error_diff = auto_prev_error - kl;
+          const double error_rc = std::isfinite(auto_prev_error) && auto_prev_error > 0.0 ?
+            100.0 * error_diff / auto_prev_error :
+            std::numeric_limits<double>::infinity();
+          if (auto_prev_valid) {
+            if (early_phase) {
+              if (error_rc < auto_prev_rc && iter + 1 > auto_buffer) {
+                if (auto_ee_switch_buffer < 1) {
+                  auto_stop_reason = "early_exaggeration_stopped_at_local_max_kld_relative_change";
+                  ++phase_completed;
+                  completed_iter += phase_completed;
+                  return phase_completed;
+                }
+                --auto_ee_switch_buffer;
+              }
+            } else if (iter + 1 > auto_buffer &&
+                       std::fabs(error_diff) / static_cast<double>(auto_pollrate) < kl / auto_iter_end) {
+              auto_stop_reason = "normal_phase_stopped_at_kld_improvement_threshold";
+              ++phase_completed;
+              completed_iter += phase_completed;
+              return phase_completed;
+            }
+          }
+          auto_prev_error = kl;
+          auto_prev_rc = error_rc;
+          auto_prev_valid = true;
+        }
       }
+      ++phase_completed;
     }
     completed_iter += phase_iter;
+    return phase_completed;
   };
 
   int completed_iter = 0;
-  run_phase(early_exaggeration_iter, early_exaggeration, initial_momentum, "early_exaggeration", completed_iter);
-  run_phase(n_iter, exaggeration, final_momentum, "normal", completed_iter);
+  const int actual_early_iter = run_phase(
+    early_exaggeration_iter,
+    early_exaggeration,
+    initial_momentum,
+    "early_exaggeration",
+    completed_iter
+  );
+  const int actual_normal_iter = run_phase(
+    n_iter,
+    exaggeration,
+    final_momentum,
+    "normal",
+    completed_iter
+  );
 
   NumericVector row_costs;
   if (should_record_costs) {
@@ -1450,16 +1566,28 @@ List knn_tsne_opentsne_cpp(IntegerMatrix indices,
   return List::create(
     Rcpp::Named("Y") = layout,
     Rcpp::Named("costs") = row_costs,
-    Rcpp::Named("itercosts") = iter_costs,
-    Rcpp::Named("optimizer") = optimizer_name,
+	    Rcpp::Named("itercosts") = iter_costs,
+	    Rcpp::Named("itercost_iterations") = itercost_iterations,
+	    Rcpp::Named("optimizer") = optimizer_name,
     Rcpp::Named("repulsion") = repulsion_mode,
     Rcpp::Named("repulsion_block_size") = repulsion_block_size,
     Rcpp::Named("theta_requested") = theta,
     Rcpp::Named("n_threads") = threads,
-    Rcpp::Named("learning_rate") = learning_rate_auto ? NA_REAL : learning_rate,
-    Rcpp::Named("learning_rate_early") = static_cast<double>(n) / std::max(early_exaggeration, DBL_MIN),
-    Rcpp::Named("learning_rate_normal") = static_cast<double>(n) / std::max(exaggeration, DBL_MIN)
-  );
+	    Rcpp::Named("learning_rate") = learning_rate_auto ? NA_REAL : learning_rate,
+	    Rcpp::Named("learning_rate_early") = learning_rate_auto ?
+        static_cast<double>(n) / std::max(early_exaggeration, DBL_MIN) :
+        learning_rate,
+	    Rcpp::Named("learning_rate_normal") = learning_rate_auto ?
+        static_cast<double>(n) / std::max(exaggeration, DBL_MIN) :
+        learning_rate,
+	    Rcpp::Named("auto_config") = auto_config,
+	    Rcpp::Named("auto_kld_stop") = auto_kld_stop,
+	    Rcpp::Named("auto_stop_reason") = auto_stop_reason,
+	    Rcpp::Named("early_exaggeration_iter_actual") = actual_early_iter,
+	    Rcpp::Named("n_iter_actual") = actual_normal_iter,
+	    Rcpp::Named("max_iter_actual") = completed_iter,
+	    Rcpp::Named("auto_iter_end") = auto_iter_end
+	  );
 }
 
 // [[Rcpp::export]]

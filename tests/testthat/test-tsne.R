@@ -23,9 +23,35 @@ test_that("embed_knn runs native openTSNE from supplied neighbours", {
   expect_equal(cfg$repulsion, "fft_grid")
   expect_equal(cfg$early_exaggeration_iter, 3L)
   expect_equal(cfg$n_iter, 4L)
-  expect_equal(cfg$learning_rate, "auto")
+  expect_equal(cfg$learning_rate, "auto_opt_sne_n_over_early_exaggeration")
   expect_equal(cfg$learning_rate_early, nrow(x) / cfg$early_exaggeration)
-  expect_equal(cfg$learning_rate_normal, nrow(x) / cfg$exaggeration)
+  expect_equal(cfg$learning_rate_normal, nrow(x) / cfg$early_exaggeration)
+})
+
+test_that("openTSNE auto configuration exposes opt-SNE policy metadata", {
+  policy <- fastEmbedR:::tsne_auto_parameters_cpp(
+    150L,
+    30L,
+    NA_real_,
+    TRUE,
+    "cpu",
+    "exact"
+  )
+  expect_equal(policy$perplexity, 10)
+  expect_equal(policy$learning_rate, 150 / policy$early_exaggeration)
+  expect_true(policy$auto_kld_stop)
+  expect_equal(policy$auto_iter_end, 5000)
+
+  large_fft <- fastEmbedR:::tsne_auto_parameters_cpp(
+    70000L,
+    90L,
+    NA_real_,
+    TRUE,
+    "cpu",
+    "fft"
+  )
+  expect_equal(large_fft$perplexity, 30)
+  expect_false(large_fft$auto_kld_stop)
 })
 
 test_that("removed embedding methods fail at the public KNN dispatcher", {

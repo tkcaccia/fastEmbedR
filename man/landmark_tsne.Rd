@@ -64,14 +64,15 @@ is not silently replaced by CPU.}
 
 \item{transform_perplexity}{Perplexity used by `transform_tsne()`.}
 
-\item{transform_iter}{Number of normal transform iterations.}
+\item{transform_iter}{Number of normal transform iterations. Use `0` for
+projection-only landmarking with no transform refinement.}
 
 \item{transform_early_exaggeration_iter}{Number of transform early
 exaggeration iterations.}
 
 \item{transform_n_negatives}{Number of sampled reference negatives used by
-`transform_tsne()` on large landmark sets. GPU sampled transform repulsion is
-native and experimental for large reference sets.}
+`transform_tsne()` on large landmark sets. GPU sampled transform repulsion
+is native and experimental for large reference sets.}
 
 \item{initialization}{Initial placement for transformed observations.}
 

@@ -7,6 +7,7 @@
 #include <mutex>
 #include <numeric>
 #include <random>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -3786,5 +3787,107 @@ NumericMatrix fast_knn_umap_csr_cpp(IntegerVector offsets,
     n, n_components, offsets, neighbors, weights, index_offset, n_epochs, min_dist,
     negative_sample_rate, learning_rate, repulsion_strength, spectral_n_iter,
     n_threads, init_scale, seed, verbose
+  );
+}
+
+// [[Rcpp::export]]
+Rcpp::List umap_auto_parameters_cpp(NumericMatrix distances,
+                                    int n_neighbors,
+                                    std::string backend) {
+  const int n = distances.nrow();
+  const int k = std::max(1, std::min(n_neighbors, distances.ncol()));
+  if (n < 2 || k < 1) Rcpp::stop("KNN distances must have at least two rows and one neighbor column.");
+
+  double sum = 0.0;
+  double sum_sq = 0.0;
+  int count = 0;
+  std::vector<double> d15;
+  std::vector<double> d30;
+  std::vector<double> d50;
+  d15.reserve(static_cast<std::size_t>(n));
+  d30.reserve(static_cast<std::size_t>(n));
+  d50.reserve(static_cast<std::size_t>(n));
+
+  const int col15 = std::min(k, 15) - 1;
+  const int col30 = std::min(k, 30) - 1;
+  const int col50 = std::min(k, 50) - 1;
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < k; ++j) {
+      const double d = distances(i, j);
+      if (std::isfinite(d)) {
+        sum += d;
+        sum_sq += d * d;
+        ++count;
+      }
+    }
+    const double v15 = distances(i, col15);
+    const double v30 = distances(i, col30);
+    const double v50 = distances(i, col50);
+    if (std::isfinite(v15)) d15.push_back(v15);
+    if (std::isfinite(v30)) d30.push_back(v30);
+    if (std::isfinite(v50)) d50.push_back(v50);
+  }
+
+  auto median_or_na = [](std::vector<double>& values) -> double {
+    if (values.empty()) return NA_REAL;
+    const std::size_t mid = values.size() / 2u;
+    std::nth_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(mid), values.end());
+    double med = values[mid];
+    if ((values.size() & 1u) == 0u) {
+      const auto lower = std::max_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(mid));
+      med = 0.5 * (med + *lower);
+    }
+    return med;
+  };
+
+  const double mean = count > 0 ? sum / static_cast<double>(count) : NA_REAL;
+  double cv = NA_REAL;
+  if (count > 1 && std::isfinite(mean) && mean > 0.0) {
+    const double var = std::max(0.0, (sum_sq / static_cast<double>(count)) - mean * mean);
+    cv = std::sqrt(var) / mean;
+  }
+  const double med15 = median_or_na(d15);
+  const double med30 = median_or_na(d30);
+  const double med50 = median_or_na(d50);
+  const double denom = std::isfinite(med15) && med15 > 0.0 ?
+    med15 :
+    std::numeric_limits<double>::epsilon();
+  const double ratio30 = std::isfinite(med30) ? med30 / denom : NA_REAL;
+  const double ratio50 = std::isfinite(med50) ? med50 / denom : NA_REAL;
+
+  const bool very_large = n >= 10000;
+  int n_epochs = very_large ? 200 : 500;
+  double min_dist = 0.01;
+  int negative_sample_rate = 5;
+  int spectral_n_iter = very_large ? (k <= 15 ? 30 : 20) : (n >= 500 ? 60 : 50);
+  double init_scale = NA_REAL;
+  double learning_rate = 1.0;
+  std::string rule = very_large ? "uwot_fast_sgd_compatible_cpp_profile" : "uwot_default_cpp_profile";
+
+  if (very_large && std::isfinite(ratio50) && std::isfinite(cv) && ratio50 >= 1.25 && cv >= 1.0) {
+    min_dist = 0.1;
+    init_scale = 5.0;
+    learning_rate = 1.25;
+    rule = "wide_shell_balanced_quality_speed_cpp_profile";
+  } else if (very_large && std::isfinite(cv) && cv >= 0.60) {
+    n_epochs = std::max(n_epochs, 300);
+    rule = "high_variability_more_epochs_cpp_profile";
+  }
+
+  int thread_cap = very_large || (k >= 15 && n >= 500) ? 4 : (k >= 15 && n >= 200 ? 3 : 1);
+  if (backend == "metal" || backend == "cuda" || backend == "gpu") thread_cap = 4;
+
+  return Rcpp::List::create(
+    Rcpp::Named("n_epochs") = n_epochs,
+    Rcpp::Named("min_dist") = min_dist,
+    Rcpp::Named("negative_sample_rate") = negative_sample_rate,
+    Rcpp::Named("learning_rate") = learning_rate,
+    Rcpp::Named("spectral_n_iter") = spectral_n_iter,
+    Rcpp::Named("init_scale") = init_scale,
+    Rcpp::Named("n_threads_cap") = thread_cap,
+    Rcpp::Named("knn_distance_cv") = cv,
+    Rcpp::Named("knn_distance_ratio_30_15") = ratio30,
+    Rcpp::Named("knn_distance_ratio_50_15") = ratio50,
+    Rcpp::Named("rule") = rule
   );
 }

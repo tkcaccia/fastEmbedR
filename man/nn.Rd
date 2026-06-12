@@ -46,11 +46,13 @@ NN-descent self-KNN.
 `"cpu_nndescent"`, `"cpu_clustered"`, and `"cpu_vptree"` force the native
 NN-descent, legacy clustered-IVF, and VP-tree strategies for self-KNN searches.
 `"gpu"` requests CUDA when available and otherwise Metal. `"cuda"` and
-`"metal"` request exact GPU backends explicitly. `"gpu_nndescent"`,
-`"cuda_nndescent"`, and `"metal_nndescent"` request seeded native
-NN-descent refinement. `"gpu_approx"`, `"cuda_approx"`, and
-`"metal_approx"` are convenience aliases for the preferred native GPU
-NN-descent path. `"gpu_ivf"`,
+`"metal"` request exact GPU backends explicitly. `"metal_nndescent"`
+requests seeded native Metal NN-descent refinement. `"cuda_nndescent"`
+and `"cuda_approx"` are compatibility aliases for
+`"cuda_cuvs_nndescent"`; CUDA approximate KNN is routed through RAPIDS
+cuVS NN-descent rather than the removed native CUDA NN-descent branch.
+`"gpu_nndescent"`, `"gpu_approx"`, and `"metal_approx"` are convenience
+aliases for the preferred native GPU NN-descent path. `"gpu_ivf"`,
 `"cuda_ivf"`, `"metal_ivf"`, `"gpu_faiss"`, `"cuda_faiss"`, and
 `"metal_faiss"` request native GPU IVF/FAISS-style IVF-flat searches and
 fail clearly if the requested GPU backend is unavailable. `"metal_grid"`

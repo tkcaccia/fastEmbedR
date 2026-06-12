@@ -53,11 +53,15 @@ layout2 <- embed_knn(
   knn,
   method = "opentsne",
   perplexity = 10,
-  early_exaggeration_iter = 100,
-  n_iter = 250,
   seed = 4
 )
 ```
+
+When iteration counts and learning rate are omitted, openTSNE uses
+`auto_config = TRUE`. The native C++ policy follows opt-SNE's practical rules:
+learning rate is `n / early_exaggeration`, CPU/small exact runs can end early by
+monitoring KLD, and large FFT/GPU runs do not hide an expensive CPU KLD monitor
+inside a GPU-labelled benchmark.
 
 ## One-Call Workflow
 

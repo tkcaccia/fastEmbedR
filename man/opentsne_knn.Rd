@@ -15,15 +15,16 @@ opentsne_knn(
   backend = c("auto", "cpu", "gpu", "metal", "cuda"),
   n_threads = NULL,
   learning_rate = "auto",
-  early_exaggeration_iter = 250L,
+  early_exaggeration_iter = NULL,
   early_exaggeration = "auto",
-  n_iter = 500L,
+  n_iter = NULL,
   exaggeration = NULL,
   initial_momentum = 0.8,
   final_momentum = 0.8,
   max_step_norm = "auto",
   negative_gradient_method = "auto",
   record_costs = FALSE,
+  auto_config = TRUE,
   ...
 )
 }
@@ -48,9 +49,9 @@ its first columns for comparable tests.}
 \item{verbose}{Print optimizer progress.}
 
 \item{backend}{KNN/preprocessing backend and, when the matching native
-openTSNE symbols are compiled, a real GPU optimizer backend. Unsupported GPU
-requests fail clearly and are not relabelled CPU runs. `backend = "auto"`
-keeps the CPU optimizer.}
+openTSNE symbols are compiled, a real GPU optimizer backend. Unsupported
+GPU requests fail clearly and are not relabelled CPU runs. `backend =
+"auto"` keeps the CPU optimizer.}
 
 \item{n_threads}{Number of CPU worker threads used by CPU KNN and CPU
 openTSNE optimization. Native GPU optimizers ignore this argument.}
@@ -72,16 +73,23 @@ exaggeration.}
 
 \item{final_momentum}{Momentum during normal optimization.}
 
-\item{max_step_norm}{Maximum per-point update norm. Use `NULL` or `NA` to
-disable clipping.}
+\item{max_step_norm}{Maximum per-point update norm. `"auto"` uses the
+standard CPU limit and a tighter native Metal FFT-grid limit to avoid
+float32 outlier steps. Use `NULL` or `NA` to disable clipping.}
 
-\item{negative_gradient_method}{`"auto"`, `"exact"`,
-or `"fft"`. On CPU, `"auto"` resolves to the native grid-FFT
-FIt-SNE-style negative-gradient approximation. Native GPU FFT/exact paths are
-used only when the corresponding compiled symbols are available; otherwise GPU
-requests fail clearly rather than falling back to CPU.}
+\item{negative_gradient_method}{`"auto"`, `"exact"`, or
+`"fft"`. On CPU, `"auto"` resolves to the native grid-FFT
+FIt-SNE-style negative-gradient approximation. Native GPU FFT/exact paths
+are used only when the corresponding compiled symbols are available;
+otherwise GPU requests fail clearly rather than falling back to CPU.}
 
 \item{record_costs}{If `TRUE`, compute diagnostic KL/cost traces.}
+
+\item{auto_config}{If `TRUE`, choose missing t-SNE settings with a native
+C++ opt-SNE-inspired policy. The policy uses `n / early_exaggeration` for
+`"auto"` learning rate, chooses missing iteration limits, and enables
+KLD-based early stopping only on CPU/small exact runs where the monitor is
+not prohibitively expensive. Explicit user-supplied values are respected.}
 
 \item{...}{Additional low-level parameters passed to [opentsne_knn()].}
 }

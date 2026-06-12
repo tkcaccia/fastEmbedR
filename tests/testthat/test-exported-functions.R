@@ -69,6 +69,10 @@ test_that("core exported functions have tiny openTSNE smoke tests", {
   layout_umap_knn <- umap_knn(knn)
   expect_embedding(layout_umap_knn, n)
   expect_equal(attr(layout_umap_knn, "fastEmbedR_config")$method, "umap")
+  expect_equal(
+    attr(layout_umap_knn, "fastEmbedR_config")$auto_parameter_backend,
+    "cpp_knn_distance_profile"
+  )
 
   layout_knn <- opentsne_knn(knn, perplexity = 1, early_exaggeration_iter = 2L, n_iter = 3L)
   expect_embedding(layout_knn, n)

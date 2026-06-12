@@ -4,16 +4,17 @@
 \name{fastEmbedR-package}
 \alias{fastEmbedR}
 \alias{fastEmbedR-package}
-\title{fastEmbedR: fast KNN and native openTSNE from KNN}
+\title{fastEmbedR: fast KNN, UMAP, and native openTSNE from KNN}
 \description{
 fastEmbedR focuses on fast nearest-neighbour search and native
-openTSNE-style embeddings from precomputed KNN matrices. The recommended
-workflow is to compute KNN once with [nn()], embed with [opentsne_knn()] or
-[opentsne()], and score the result with [evaluate_embedding()].
+UMAP/openTSNE-style embeddings from precomputed KNN matrices. The
+recommended workflow is to compute KNN once with [nn()], embed with
+[umap_knn()], [opentsne_knn()], [umap()], or [opentsne()], and score the
+result with [evaluate_embedding()].
 }
 \details{
-The package intentionally does not export the earlier experimental UMAP,
-legacy t-SNE, or InfoTSNE reducers.
+The package intentionally does not export the earlier legacy t-SNE,
+InfoTSNE, PaCMAP, TriMap, or LocalMAP reducers.
 }
 \seealso{
 Useful links:

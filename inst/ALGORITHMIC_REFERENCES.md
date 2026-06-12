@@ -83,6 +83,37 @@ License decision:
   native optimizer in `src/tsne_neighbors.cpp` is a fresh implementation of
   the t-SNE-from-KNN math with Rtsne-compatible defaults.
 
+## opt-SNE / Multicore-opt-SNE
+
+- Paper: Belkina AC, Ciccolella CO, Anno R, Spidlen J, Halpert R, and
+  Snyder-Cappione JE. "Automated optimized parameters for T-distributed
+  stochastic neighbor embedding improve visualization and analysis of large
+  datasets." Nature Communications 10, 5415, 2019.
+- Repository: <https://github.com/omiq-ai/Multicore-opt-SNE>
+- License: BSD-3-Clause
+- Current use in `fastEmbedR`: algorithmic behaviour reference for automatic
+  openTSNE parameter selection. No Multicore-opt-SNE source files are vendored,
+  linked, called, or copied into the package.
+
+Ideas implemented:
+
+- `learning_rate = "auto"` resolves to the opt-SNE learning-rate rule
+  `n / early_exaggeration`.
+- Missing early-exaggeration and normal-phase iteration limits are selected by
+  a native C++ helper.
+- On CPU/small exact runs, `src/tsne_neighbors.cpp` monitors KLD and can stop
+  early exaggeration after the local maximum of relative KLD change, then stop
+  the normal phase when KLD improvement drops below `KLD / 5000`.
+- On large FFT and GPU-labelled runs, KLD auto-stopping is disabled unless a
+  real native monitor is implemented. This avoids hiding an O(n^2) CPU KLD
+  poll inside a GPU or FFT benchmark.
+
+Implemented locations:
+
+- `src/tsne_neighbors.cpp::tsne_auto_parameters_cpp`
+- `src/tsne_neighbors.cpp::knn_tsne_opentsne_cpp`
+- `R/fast_knn_tsne.R::resolve_opentsne_auto_parameters`
+
 ## openTSNE
 
 - Repository: <https://github.com/pavlin-policar/openTSNE>
