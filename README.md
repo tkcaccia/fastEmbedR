@@ -34,6 +34,7 @@ openTSNE-style t-SNE, KNN, GPU backends, and landmarking.
 | Basic use, KNN-first workflow, landmark workflow, public API | [docs/usage-api.md](docs/usage-api.md) |
 | Current MNIST benchmark command and result snapshot | [docs/benchmarks.md](docs/benchmarks.md) |
 | Implementation and library inventory for openTSNE, UMAP, and KNN | [docs/implementation-inventory.md](docs/implementation-inventory.md) |
+| Function-by-function implementation details and literature | [docs/function-implementation-details.md](docs/function-implementation-details.md) |
 | Metal FFT development notes | [docs/metal-fft-roadmap.md](docs/metal-fft-roadmap.md) |
 | FFT library evaluation | [docs/fft-library-evaluation.md](docs/fft-library-evaluation.md) |
 | Full benchmark summary | [BENCHMARK_SUMMARY.md](BENCHMARK_SUMMARY.md) |

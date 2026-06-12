@@ -6,6 +6,8 @@ openTSNE paths.
 
 Detailed provenance is also recorded in [../inst/NOTICE](../inst/NOTICE) and
 [../inst/ALGORITHMIC_REFERENCES.md](../inst/ALGORITHMIC_REFERENCES.md).
+For function-by-function implementation notes and literature, see
+[function-implementation-details.md](function-implementation-details.md).
 
 ## openTSNE-style t-SNE
 
@@ -61,4 +63,3 @@ called by the package at runtime:
 - Rtsne Barnes-Hut internals
 - older package experiments for classic `tsne()`, InfoTSNE, PaCMAP, TriMap,
   and LocalMAP
-

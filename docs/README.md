@@ -6,6 +6,7 @@ Topic pages:
 - [Usage and API](usage-api.md)
 - [Benchmarks](benchmarks.md)
 - [Implementation and library inventory](implementation-inventory.md)
+- [Function implementation details and literature](function-implementation-details.md)
 - [Metal FFT roadmap](metal-fft-roadmap.md)
 - [FFT library evaluation](fft-library-evaluation.md)
 
@@ -15,4 +16,3 @@ Repository-level references:
 - [License implications](../LICENSE-IMPLICATIONS.md)
 - [Detailed provenance notice](../inst/NOTICE)
 - [Algorithmic references](../inst/ALGORITHMIC_REFERENCES.md)
-
