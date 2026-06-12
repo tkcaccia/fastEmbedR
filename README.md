@@ -107,7 +107,7 @@ not run on CPU and label the result as GPU.
 | Basic use, KNN-first workflow, landmark workflow, public API | [docs/usage-api.md](docs/usage-api.md) |
 | Backend capability matrix | [docs/backend-capabilities.md](docs/backend-capabilities.md) |
 | Benchmark gallery with plots | [docs/benchmark-gallery.md](docs/benchmark-gallery.md) |
-| Extended benchmark suite for MNIST, Fashion-MNIST, Shuttle, Covertype, CIFAR, and optional local data | [docs/extended-benchmark-suite.md](docs/extended-benchmark-suite.md) |
+| Extended benchmark suite for MNIST, Fashion-MNIST, Shuttle, Covertype, CIFAR, opt-SNE cytometry datasets, and optional local data | [docs/extended-benchmark-suite.md](docs/extended-benchmark-suite.md) |
 | Current MNIST benchmark commands and result snapshots | [docs/benchmarks.md](docs/benchmarks.md) |
 | Implementation and library inventory for openTSNE, UMAP, and KNN | [docs/implementation-inventory.md](docs/implementation-inventory.md) |
 | Function-by-function implementation details and literature | [docs/function-implementation-details.md](docs/function-implementation-details.md) |

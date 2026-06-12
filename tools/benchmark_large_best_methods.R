@@ -176,6 +176,68 @@ load_fashion_mnist <- function(cache_dir) {
   dataset_record("fashion_mnist_70000", x, labels, "Zalando Fashion-MNIST IDX files")
 }
 
+load_optsne_figshare <- function(cache_dir,
+                                 dataset = c("flow18", "mass41")) {
+  dataset <- match.arg(dataset)
+  files <- list(
+    flow18 = list(
+      name = "optsne_flow18",
+      data_id = "17865890",
+      data_file = "flow18_for_optsne.csv",
+      class_id = "22522529",
+      class_file = "class_description_flow.csv",
+      source = "Belkina et al. opt-SNE Figshare Flow18parameter CSV, doi:10.6084/m9.figshare.9927986.v2"
+    ),
+    mass41 = list(
+      name = "optsne_mass41",
+      data_id = "17865896",
+      data_file = "mass41_for_optsne.csv",
+      class_id = "22522526",
+      class_file = "class_description_mass.csv",
+      source = "Belkina et al. opt-SNE Figshare Mass41parameter CSV, doi:10.6084/m9.figshare.9927986.v2"
+    )
+  )
+  meta <- files[[dataset]]
+  root <- file.path(cache_dir, "optsne_figshare", dataset)
+  data_path <- download_file(
+    paste0("https://ndownloader.figshare.com/files/", meta$data_id),
+    file.path(root, meta$data_file)
+  )
+  class_path <- download_file(
+    paste0("https://ndownloader.figshare.com/files/", meta$class_id),
+    file.path(root, meta$class_file)
+  )
+  if (is.na(data_path)) return(NULL)
+  tryCatch({
+    x <- utils::read.csv(data_path, check.names = FALSE)
+    numeric_cols <- vapply(x, is.numeric, logical(1L))
+    if (!any(numeric_cols)) {
+      stop("No numeric marker columns were found in ", data_path, call. = FALSE)
+    }
+    labels <- NULL
+    label_col <- intersect(
+      c("class", "Class", "class_id", "ClassID", "cell_type", "cell_subset"),
+      names(x)
+    )
+    if (length(label_col) > 0L) {
+      labels <- x[[label_col[[1L]]]]
+      numeric_cols[label_col[[1L]]] <- FALSE
+    }
+    out <- dataset_record(meta$name, x[, numeric_cols, drop = FALSE], labels, meta$source)
+    out$class_description_path <- if (!is.na(class_path)) class_path else NA_character_
+    if (is.null(labels)) {
+      out$label_note <- paste(
+        "The public opt-SNE CSV contains marker columns only.",
+        "Gated class descriptions are downloaded for provenance, but per-event labels require the annotated FCS file."
+      )
+    }
+    out
+  }, error = function(e) {
+    warning("Skipping opt-SNE ", dataset, ": ", conditionMessage(e), call. = FALSE)
+    NULL
+  })
+}
+
 load_cifar_python_features <- function(cache_dir,
                                        dataset = c("cifar10", "cifar100")) {
   dataset <- match.arg(dataset)
@@ -402,6 +464,10 @@ load_named_dataset <- function(name, cache_dir, min_n, max_n, seed) {
     out <- load_mnist_idx(cache_dir)
   } else if (key %in% c("fashion_mnist", "fashion-mnist", "fashion_mnist_70000")) {
     out <- load_fashion_mnist(cache_dir)
+  } else if (key %in% c("optsne_flow18", "opt_sne_flow18", "flow18", "flow18parameter")) {
+    out <- load_optsne_figshare(cache_dir, "flow18")
+  } else if (key %in% c("optsne_mass41", "opt_sne_mass41", "mass41", "mass41parameter")) {
+    out <- load_optsne_figshare(cache_dir, "mass41")
   } else if (key %in% c("cifar", "cifar10", "cifar10_features", "cifar10_rgb8x8")) {
     out <- load_cifar_python_features(cache_dir, "cifar10")
   } else if (key %in% c("cifar100", "cifar100_features", "cifar100_rgb8x8")) {

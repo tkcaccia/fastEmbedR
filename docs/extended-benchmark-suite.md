@@ -41,8 +41,24 @@ Kaggle credentials or manual login.
 | `shuttle` | tabular classes | UCI Statlog Shuttle or OpenML fallback | large low-dimensional imbalanced tabular data |
 | `covertype` | tabular classes | UCI Covertype or sklearn fallback | large heterogeneous tabular benchmark |
 | `cifar10` | image features | Toronto CIFAR-10 Python files, converted to RGB 8x8 block means | image benchmark with more complex class structure |
+| `optsne_flow18` | flow cytometry | Belkina et al. opt-SNE Figshare Flow18parameter CSV | direct dataset used in the opt-SNE Nature Communications paper |
+| `optsne_mass41` | mass cytometry | Belkina et al. opt-SNE Figshare Mass41parameter CSV | direct dataset used in the opt-SNE Nature Communications paper |
 | `fastpls_singlecell` | local biological data | local fastPLS/GPUPLS folders if present | single-cell-style benchmark, skipped if absent |
 | `fastpls_metref` | local metabolomics data | local fastPLS/GPUPLS folders if present | metabolomics benchmark, skipped if absent |
+
+The opt-SNE Figshare CSV files contain the marker matrix used by Multicore
+opt-SNE. The per-event expert-gated class labels are present in the annotated
+FCS files, not in the public CSV matrix. The benchmark loader downloads the
+class-description CSV for provenance but treats the matrix as unlabeled unless
+a labelled version is added later.
+
+Datasets described in the opt-SNE paper but not included as automatic defaults:
+
+| Dataset | Paper/source note | Current benchmark status |
+| --- | --- | --- |
+| Flow20M / van Unen mass cytometry | FlowRepository-linked dataset used by opt-SNE | not enabled by default because direct no-login file retrieval is less stable than Figshare |
+| 10x Genomics 1.3M mouse brain cells | public 10x Genomics dataset | feasible as a separate very-large benchmark after adding sparse Matrix Market preprocessing |
+| Full annotated FCS Flow18/Mass41 | Figshare FCS files | feasible if we add optional FCS parsing in tools; not required for unlabeled speed/trust benchmarks |
 
 ## Methods
 
@@ -163,4 +179,18 @@ Rscript tools/benchmark_extended_dr_datasets.R \
   --normal-iter=30 \
   --umap-epochs=50 \
   --out-dir=results/extended_dr_smoke
+```
+
+To test the opt-SNE paper datasets directly:
+
+```sh
+Rscript tools/benchmark_extended_dr_datasets.R \
+  --datasets=optsne_flow18,optsne_mass41 \
+  --methods=opentsne_cpu,opentsne_metal,opentsne_metal_mpsgraph,umap_cpu,umap_metal,rtsne_neighbors,uwot_fast_sgd \
+  --max-n=70000 \
+  --metric-n=3000 \
+  --plot-n=15000 \
+  --pca-dims=50 \
+  --k=50 \
+  --threads=4
 ```

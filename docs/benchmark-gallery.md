@@ -47,6 +47,7 @@ Recommended next gallery datasets:
 - Fashion-MNIST 70k;
 - Shuttle;
 - Covertype;
+- opt-SNE paper Flow18 and Mass41 cytometry datasets;
 - SingleCell/MetRef on the CUDA workstation;
 - CIFAR-style image features.
 
