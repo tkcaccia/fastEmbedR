@@ -369,6 +369,10 @@ run_landmark <- arg_flag("run-landmark", TRUE)
 landmark_fraction <- arg_num("landmark-fraction", 0.5)
 report_knn_only <- arg_flag("report-knn-only", FALSE)
 report_unsupported <- arg_flag("report-unsupported", TRUE)
+knn_cache_dir <- arg_value("knn-cache-dir", file.path("results", "knn_cache"))
+use_knn_cache <- arg_flag("use-knn-cache", TRUE)
+require_knn_cache <- arg_flag("require-knn-cache", FALSE)
+force_knn_recompute <- arg_flag("force-knn-recompute", FALSE)
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 feature_source <- tolower(feature_source)
@@ -397,6 +401,17 @@ message("MNIST current backend benchmark")
 message("  feature_source=", feature_source, " dataset=", dataset)
 message("  n=", nrow(x), " p=", ncol(x), " k=", k, " perplexity=", perplexity)
 message("  backends=", paste(backends, collapse = ","), " out_dir=", out_dir)
+
+opentsne_init_time <- system.time({
+  opentsne_y_init <- fastEmbedR:::make_opentsne_pca_init(
+    x,
+    n_components = 2L,
+    seed = seed,
+    backend = "cpu"
+  )
+})
+opentsne_init_sec <- unname(opentsne_init_time[["elapsed"]])
+message("  openTSNE init=pca_rsvd2 sec=", sprintf("%.3f", opentsne_init_sec))
 
 knn_backend_for <- function(backend) {
   switch(
@@ -431,27 +446,81 @@ rows_out <- list()
 layouts <- list()
 knn_cache <- list()
 
+knn_cache_path <- function(dataset, backend, knn_backend, n, p, k, seed, cache_dir) {
+  safe <- function(x) gsub("[^A-Za-z0-9_.-]+", "_", as.character(x))
+  file.path(
+    cache_dir,
+    sprintf(
+      "nn_%s_backend-%s_knn-%s_n%d_p%d_k%d_seed%d.rds",
+      safe(dataset), safe(backend), safe(knn_backend), as.integer(n),
+      as.integer(p), as.integer(k), as.integer(seed)
+    )
+  )
+}
+
 for (backend in backends) {
   knn_backend <- knn_backend_for(backend)
-  message("KNN ", backend, " via ", knn_backend)
-  knn_run <- safe_status(timed(fastEmbedR::nn(
-    x,
-    k = k + 1L,
-    backend = knn_backend,
-    n_threads = n_threads
-  )))
-  if (!identical(knn_run$status, "success")) {
-    if (isTRUE(report_knn_only)) {
+  cache_path <- knn_cache_path(dataset, backend, knn_backend, nrow(x), ncol(x), k + 1L, seed, knn_cache_dir)
+  cache_hit <- FALSE
+  if (isTRUE(use_knn_cache) && !isTRUE(force_knn_recompute) && file.exists(cache_path)) {
+    message("KNN ", backend, " via ", knn_backend, " loaded from cache: ", cache_path)
+    cached <- readRDS(cache_path)
+    knn <- cached$knn
+    knn_sec <- cached$nn_sec %||% NA_real_
+    cache_hit <- TRUE
+  } else {
+    if (isTRUE(require_knn_cache)) {
+      message("KNN cache required but missing: ", cache_path)
       rows_out[[length(rows_out) + 1L]] <- make_row(
-        dataset, "knn", "knn_only", backend, backend, "failed", knn_run$error,
+        dataset, "knn", "knn_only", backend, backend, "failed",
+        paste0("KNN cache required but missing: ", cache_path),
         nrow(x), ncol(x), seed, nn_backend = knn_backend,
-        parameters = list(k = k, backend = backend, knn_backend = knn_backend)
+        parameters = list(k = k, backend = backend, knn_backend = knn_backend,
+                          knn_cache_path = cache_path, knn_cache_required = TRUE)
       )
+      next
     }
-    next
+    message("KNN ", backend, " via ", knn_backend)
+    knn_run <- safe_status(timed(fastEmbedR::nn(
+      x,
+      k = k + 1L,
+      backend = knn_backend,
+      n_threads = n_threads
+    )))
+    if (!identical(knn_run$status, "success")) {
+      if (isTRUE(report_knn_only)) {
+        rows_out[[length(rows_out) + 1L]] <- make_row(
+          dataset, "knn", "knn_only", backend, backend, "failed", knn_run$error,
+          nrow(x), ncol(x), seed, nn_backend = knn_backend,
+          parameters = list(k = k, backend = backend, knn_backend = knn_backend,
+                            knn_cache_path = cache_path)
+        )
+      }
+      next
+    }
+    knn <- knn_run$value$value
+    knn_sec <- knn_run$value$sec
+    if (isTRUE(use_knn_cache)) {
+      dir.create(dirname(cache_path), recursive = TRUE, showWarnings = FALSE)
+      saveRDS(
+        list(
+          knn = knn,
+          nn_sec = knn_sec,
+          backend = backend,
+          knn_backend = knn_backend,
+          dataset = dataset,
+          n = nrow(x),
+          p = ncol(x),
+          k_requested = k + 1L,
+          seed = seed,
+          created = as.character(Sys.time())
+        ),
+        cache_path,
+        version = 2
+      )
+      message("Saved KNN cache: ", cache_path)
+    }
   }
-  knn <- knn_run$value$value
-  knn_sec <- knn_run$value$sec
   knn_cache[[backend]] <- knn
   if (isTRUE(report_knn_only)) {
     rows_out[[length(rows_out) + 1L]] <- make_row(
@@ -460,7 +529,8 @@ for (backend in backends) {
       nn_backend = attr(knn, "backend") %||% knn_backend,
       nn_sec = knn_sec,
       total_sec = knn_sec,
-      parameters = list(k = k, backend = backend, knn_backend = knn_backend)
+      parameters = list(k = k, backend = backend, knn_backend = knn_backend,
+                        knn_cache_path = cache_path, knn_cache_hit = cache_hit)
     )
   }
 
@@ -571,6 +641,7 @@ for (backend in backends) {
       knn,
       n_neighbors = k,
       perplexity = perplexity,
+      Y_init = opentsne_y_init,
       early_exaggeration_iter = early_iter,
       n_iter = normal_iter,
       learning_rate = "auto",
@@ -597,7 +668,11 @@ for (backend in backends) {
         negative_gradient_method = cfg$negative_gradient_method %||% negative,
         parameters = list(k = k, perplexity = perplexity, early_iter = early_iter,
                           normal_iter = normal_iter, backend = backend,
-                          knn_backend = knn_backend),
+                          init = "pca_rsvd2_scaled_1e-4",
+                          init_sec = opentsne_init_sec,
+                          knn_backend = knn_backend,
+                          knn_cache_path = cache_path,
+                          knn_cache_hit = cache_hit),
         metrics = metrics
       )
     } else {
@@ -606,7 +681,9 @@ for (backend in backends) {
         nrow(x), ncol(x), seed, nn_backend = attr(knn, "backend") %||% knn_backend,
         nn_sec = knn_sec, negative_gradient_method = negative,
         parameters = list(k = k, perplexity = perplexity, backend = backend,
-                          knn_backend = knn_backend)
+                          knn_backend = knn_backend,
+                          knn_cache_path = cache_path,
+                          knn_cache_hit = cache_hit)
       )
     }
   }

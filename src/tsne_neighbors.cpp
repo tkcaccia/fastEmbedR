@@ -35,6 +35,15 @@ struct PackedEdge {
   double value;
 };
 
+struct TsneTraceMetrics {
+  double sum_q = NA_REAL;
+  double repulsive_norm = NA_REAL;
+  double attractive_norm = NA_REAL;
+  double gradient_norm = NA_REAL;
+  double update_norm = NA_REAL;
+  double embedding_norm = NA_REAL;
+};
+
 std::uint64_t pair_key(int a, int b) {
   return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(a)) << 32u) |
     static_cast<std::uint32_t>(b);
@@ -891,6 +900,140 @@ void compute_gradient_fft_grid(const SparseProbabilities& p,
   add_sparse_attractive_gradient(p, y, n, dims, exaggeration, n_threads, grad);
 }
 
+TsneTraceMetrics compute_gradient_fft_grid_trace(const SparseProbabilities& p,
+                                                 const std::vector<double>& y,
+                                                 const int n,
+                                                 const int dims,
+                                                 const double exaggeration,
+                                                 const int n_threads,
+                                                 std::vector<double>& grad,
+                                                 std::vector<double>& attractive) {
+  if (dims != 2) {
+    Rcpp::stop("CPU openTSNE parity trace currently supports two dimensions.");
+  }
+
+  std::fill(grad.begin(), grad.end(), 0.0);
+  std::fill(attractive.begin(), attractive.end(), 0.0);
+  const int grid_size = tsne_fft_grid_size(n);
+  double min_x = y[0], max_x = y[0], min_y = y[1], max_y = y[1];
+  for (int i = 1; i < n; ++i) {
+    const std::size_t base = static_cast<std::size_t>(i) * 2u;
+    min_x = std::min(min_x, y[base]);
+    max_x = std::max(max_x, y[base]);
+    min_y = std::min(min_y, y[base + 1u]);
+    max_y = std::max(max_y, y[base + 1u]);
+  }
+  const double cx = 0.5 * (min_x + max_x);
+  const double cy = 0.5 * (min_y + max_y);
+  double span = std::max(max_x - min_x, max_y - min_y);
+  if (!std::isfinite(span) || span <= 0.0) span = 1.0;
+  const double half = 0.55 * span + 1.0e-3;
+  const double lower_x = cx - half;
+  const double lower_y = cy - half;
+  const double spacing = (2.0 * half) / static_cast<double>(grid_size - 1);
+  const double inv_spacing = 1.0 / spacing;
+
+  std::vector<double> mass(static_cast<std::size_t>(grid_size) * grid_size, 0.0);
+  std::vector<double> mass_x(static_cast<std::size_t>(grid_size) * grid_size, 0.0);
+  std::vector<double> mass_y(static_cast<std::size_t>(grid_size) * grid_size, 0.0);
+  std::vector<double> gx(static_cast<std::size_t>(n), 0.0);
+  std::vector<double> gy(static_cast<std::size_t>(n), 0.0);
+  for (int i = 0; i < n; ++i) {
+    const std::size_t base = static_cast<std::size_t>(i) * 2u;
+    const double x_coord = y[base];
+    const double y_coord = y[base + 1u];
+    const double raw_x = (x_coord - lower_x) * inv_spacing;
+    const double raw_y = (y_coord - lower_y) * inv_spacing;
+    const double clamped_x = std::max(0.0, std::min(static_cast<double>(grid_size - 1), raw_x));
+    const double clamped_y = std::max(0.0, std::min(static_cast<double>(grid_size - 1), raw_y));
+    const int x0 = std::max(0, std::min(grid_size - 2, static_cast<int>(std::floor(clamped_x))));
+    const int y0 = std::max(0, std::min(grid_size - 2, static_cast<int>(std::floor(clamped_y))));
+    const int x1 = x0 + 1;
+    const int y1 = y0 + 1;
+    const double tx = clamped_x - static_cast<double>(x0);
+    const double ty = clamped_y - static_cast<double>(y0);
+    gx[static_cast<std::size_t>(i)] = clamped_x;
+    gy[static_cast<std::size_t>(i)] = clamped_y;
+    const double w00 = (1.0 - tx) * (1.0 - ty);
+    const double w10 = tx * (1.0 - ty);
+    const double w01 = (1.0 - tx) * ty;
+    const double w11 = tx * ty;
+    const std::size_t p00 = static_cast<std::size_t>(y0) * grid_size + x0;
+    const std::size_t p10 = static_cast<std::size_t>(y0) * grid_size + x1;
+    const std::size_t p01 = static_cast<std::size_t>(y1) * grid_size + x0;
+    const std::size_t p11 = static_cast<std::size_t>(y1) * grid_size + x1;
+    mass[p00] += w00;
+    mass[p10] += w10;
+    mass[p01] += w01;
+    mass[p11] += w11;
+    mass_x[p00] += w00 * x_coord;
+    mass_x[p10] += w10 * x_coord;
+    mass_x[p01] += w01 * x_coord;
+    mass_x[p11] += w11 * x_coord;
+    mass_y[p00] += w00 * y_coord;
+    mass_y[p10] += w10 * y_coord;
+    mass_y[p01] += w01 * y_coord;
+    mass_y[p11] += w11 * y_coord;
+  }
+
+  std::vector<double> q_grid;
+  std::vector<double> q2_grid;
+  std::vector<double> xq2_grid;
+  std::vector<double> yq2_grid;
+  compute_fft_grid_convolution(
+    mass, mass_x, mass_y, grid_size, spacing, n_threads,
+    q_grid, q2_grid, xq2_grid, yq2_grid
+  );
+
+  std::vector<double> partial_sum_q(static_cast<std::size_t>(n_threads), 0.0);
+  parallel_for(n, n_threads, [&](const int begin, const int end, const int thread_id) {
+    double local_sum_q = 0.0;
+    for (int i = begin; i < end; ++i) {
+      local_sum_q += bilinear_grid_value(
+        q_grid, grid_size, gx[static_cast<std::size_t>(i)], gy[static_cast<std::size_t>(i)]
+      );
+    }
+    partial_sum_q[static_cast<std::size_t>(thread_id)] = local_sum_q;
+  });
+  const double sum_q = std::max(
+    std::accumulate(partial_sum_q.begin(), partial_sum_q.end(), 0.0) -
+      static_cast<double>(n),
+    DBL_MIN
+  );
+  const double inv_sum_q = 1.0 / sum_q;
+
+  parallel_for(n, n_threads, [&](const int begin, const int end, const int) {
+    for (int i = begin; i < end; ++i) {
+      const std::size_t base = static_cast<std::size_t>(i) * 2u;
+      const double px = gx[static_cast<std::size_t>(i)];
+      const double py = gy[static_cast<std::size_t>(i)];
+      const double q2_value = bilinear_grid_value(q2_grid, grid_size, px, py);
+      const double xq2_value = bilinear_grid_value(xq2_grid, grid_size, px, py);
+      const double yq2_value = bilinear_grid_value(yq2_grid, grid_size, px, py);
+      grad[base] = -(y[base] * q2_value - xq2_value) * inv_sum_q;
+      grad[base + 1u] = -(y[base + 1u] * q2_value - yq2_value) * inv_sum_q;
+    }
+  });
+
+  add_sparse_attractive_gradient(p, y, n, dims, exaggeration, n_threads, attractive);
+  TsneTraceMetrics metrics;
+  metrics.sum_q = sum_q;
+  double rep2 = 0.0, att2 = 0.0, grad2 = 0.0;
+  for (std::size_t i = 0; i < grad.size(); ++i) {
+    const double rep = grad[i];
+    const double att = attractive[i];
+    const double total = rep + att;
+    rep2 += rep * rep;
+    att2 += att * att;
+    grad2 += total * total;
+    grad[i] = total;
+  }
+  metrics.repulsive_norm = std::sqrt(rep2);
+  metrics.attractive_norm = std::sqrt(att2);
+  metrics.gradient_norm = std::sqrt(grad2);
+  return metrics;
+}
+
 void compute_gradient(const SparseProbabilities& p,
                       const std::vector<double>& y,
                       const int n,
@@ -1588,6 +1731,93 @@ List knn_tsne_opentsne_cpp(IntegerMatrix indices,
 	    Rcpp::Named("max_iter_actual") = completed_iter,
 	    Rcpp::Named("auto_iter_end") = auto_iter_end
 	  );
+}
+
+// [[Rcpp::export]]
+List opentsne_cpu_trace_cpp(IntegerMatrix indices,
+                            NumericMatrix distances,
+                            NumericMatrix y_init,
+                            double perplexity,
+                            int n_iter,
+                            double early_exaggeration,
+                            double learning_rate,
+                            bool learning_rate_auto,
+                            double momentum,
+                            double min_gain,
+                            double max_step_norm,
+                            int n_threads) {
+  if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
+    Rcpp::stop("KNN `indices` and `distances` must have the same dimensions.");
+  }
+  const int n = indices.nrow();
+  if (y_init.nrow() != n || y_init.ncol() != 2) {
+    Rcpp::stop("`y_init` must have one row per point and two columns.");
+  }
+  if (n_iter < 1) Rcpp::stop("`n_iter` must be positive.");
+  const int threads = resolve_threads(n_threads, n);
+  SparseProbabilities p = build_tsne_probabilities(indices, distances, perplexity, threads);
+  std::vector<double> y(static_cast<std::size_t>(n) * 2u, 0.0);
+  for (int i = 0; i < n; ++i) {
+    y[static_cast<std::size_t>(i) * 2u] = y_init(i, 0);
+    y[static_cast<std::size_t>(i) * 2u + 1u] = y_init(i, 1);
+  }
+  zero_mean(y, n, 2);
+
+  std::vector<double> grad(y.size(), 0.0);
+  std::vector<double> attractive(y.size(), 0.0);
+  std::vector<double> update(y.size(), 0.0);
+  std::vector<double> gains(y.size(), 1.0);
+  NumericVector iter(n_iter), sum_q(n_iter), repulsive_norm(n_iter),
+    attractive_norm(n_iter), gradient_norm(n_iter), update_norm(n_iter),
+    embedding_norm(n_iter);
+  const double lr = learning_rate_auto ?
+    static_cast<double>(n) / std::max(early_exaggeration, DBL_MIN) :
+    learning_rate;
+
+  for (int it = 0; it < n_iter; ++it) {
+    TsneTraceMetrics metrics = compute_gradient_fft_grid_trace(
+      p, y, n, 2, early_exaggeration, threads, grad, attractive
+    );
+    apply_open_tsne_update(
+      y, update, gains, grad, n, 2, lr, momentum, min_gain, max_step_norm, threads
+    );
+    zero_mean(y, n, 2);
+    double update2 = 0.0;
+    double layout2 = 0.0;
+    for (std::size_t i = 0; i < y.size(); ++i) {
+      update2 += update[i] * update[i];
+      layout2 += y[i] * y[i];
+    }
+    iter[it] = it + 1;
+    sum_q[it] = metrics.sum_q;
+    repulsive_norm[it] = metrics.repulsive_norm;
+    attractive_norm[it] = metrics.attractive_norm;
+    gradient_norm[it] = metrics.gradient_norm;
+    update_norm[it] = std::sqrt(update2);
+    embedding_norm[it] = std::sqrt(layout2);
+  }
+
+  NumericMatrix layout(n, 2);
+  for (int i = 0; i < n; ++i) {
+    layout(i, 0) = y[static_cast<std::size_t>(i) * 2u];
+    layout(i, 1) = y[static_cast<std::size_t>(i) * 2u + 1u];
+  }
+
+  Rcpp::DataFrame trace = Rcpp::DataFrame::create(
+    Rcpp::Named("iter") = iter,
+    Rcpp::Named("sum_q") = sum_q,
+    Rcpp::Named("repulsive_norm") = repulsive_norm,
+    Rcpp::Named("attractive_norm") = attractive_norm,
+    Rcpp::Named("gradient_norm") = gradient_norm,
+    Rcpp::Named("update_norm") = update_norm,
+    Rcpp::Named("embedding_norm") = embedding_norm
+  );
+  return List::create(
+    Rcpp::Named("trace") = trace,
+    Rcpp::Named("Y") = layout,
+    Rcpp::Named("backend") = "cpu",
+    Rcpp::Named("negative_gradient_method") = "fft"
+  );
 }
 
 // [[Rcpp::export]]

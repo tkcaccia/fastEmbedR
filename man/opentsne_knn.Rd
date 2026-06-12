@@ -10,6 +10,7 @@ opentsne_knn(
   n_neighbors = NULL,
   perplexity = NULL,
   n_components = 2L,
+  Y_init = NULL,
   seed = 4L,
   verbose = FALSE,
   backend = c("auto", "cpu", "gpu", "metal", "cuda"),
@@ -43,6 +44,9 @@ its first columns for comparable tests.}
 `min(30, floor((n - 1) / 3), floor(k / 3))`.}
 
 \item{n_components}{Output dimensionality, from 1 to 3.}
+
+\item{Y_init}{Optional explicit initial layout. For KNN-only input, pass a
+PCA initialization computed from the original data matrix if desired.}
 
 \item{seed}{Random seed.}
 

@@ -82,6 +82,23 @@ KNN bandwidths, fuzzy graph weights, epoch schedules, graph-smoothed
 initialization, and UMAP SGD in C++/Metal kernels. It does not call Python/MLX
 or reuse CPU UMAP graph builders for Metal-labelled UMAP runs.
 
+Native Metal FFT design reference
+---------------------------------
+
+The package-native Metal openTSNE FFT-grid path includes a validated 512x512
+Stockham FFT kernel adapted from:
+
+  AppleSiliconFFT
+  Author: Mohamed Amine Bergach
+  Repository: https://github.com/aminems/AppleSiliconFFT
+  License: MIT
+
+The adapted ideas are radix-4 Stockham autosort stages, threadgroup-memory
+staging, and row/column 512-point transform structure. The implementation is
+kept inside fastEmbedR's Objective-C++/Metal source and is used only for
+validated 512x512 openTSNE FFT grids. Other FFT grid sizes use fastEmbedR's
+generic package-native Metal Cooley-Tukey kernels.
+
 openTSNE design reference
 -------------------------
 

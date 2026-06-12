@@ -490,6 +490,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// metal_fft512_stockham_diagnostic_cpp
+List metal_fft512_stockham_diagnostic_cpp(int seed, bool inverse, int n_checks);
+RcppExport SEXP _fastEmbedR_metal_fft512_stockham_diagnostic_cpp(SEXP seedSEXP, SEXP inverseSEXP, SEXP n_checksSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type inverse(inverseSEXP);
+    Rcpp::traits::input_parameter< int >::type n_checks(n_checksSEXP);
+    rcpp_result_gen = Rcpp::wrap(metal_fft512_stockham_diagnostic_cpp(seed, inverse, n_checks));
+    return rcpp_result_gen;
+END_RCPP
+}
 // standardize_cpu_cpp
 List standardize_cpu_cpp(NumericMatrix data);
 RcppExport SEXP _fastEmbedR_standardize_cpu_cpp(SEXP dataSEXP) {
@@ -1382,6 +1395,28 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// opentsne_cpu_trace_cpp
+List opentsne_cpu_trace_cpp(IntegerMatrix indices, NumericMatrix distances, NumericMatrix y_init, double perplexity, int n_iter, double early_exaggeration, double learning_rate, bool learning_rate_auto, double momentum, double min_gain, double max_step_norm, int n_threads);
+RcppExport SEXP _fastEmbedR_opentsne_cpu_trace_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP perplexitySEXP, SEXP n_iterSEXP, SEXP early_exaggerationSEXP, SEXP learning_rateSEXP, SEXP learning_rate_autoSEXP, SEXP momentumSEXP, SEXP min_gainSEXP, SEXP max_step_normSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type y_init(y_initSEXP);
+    Rcpp::traits::input_parameter< double >::type perplexity(perplexitySEXP);
+    Rcpp::traits::input_parameter< int >::type n_iter(n_iterSEXP);
+    Rcpp::traits::input_parameter< double >::type early_exaggeration(early_exaggerationSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< bool >::type learning_rate_auto(learning_rate_autoSEXP);
+    Rcpp::traits::input_parameter< double >::type momentum(momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type min_gain(min_gainSEXP);
+    Rcpp::traits::input_parameter< double >::type max_step_norm(max_step_normSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(opentsne_cpu_trace_cpp(indices, distances, y_init, perplexity, n_iter, early_exaggeration, learning_rate, learning_rate_auto, momentum, min_gain, max_step_norm, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
 // transform_tsne_cpp
 List transform_tsne_cpp(NumericMatrix reference_layout, IntegerMatrix indices, NumericMatrix distances, NumericMatrix y_init, bool init, std::string initialization, double perplexity, int n_iter, int early_exaggeration_iter, double learning_rate, double early_exaggeration, double exaggeration, double initial_momentum, double final_momentum, double max_grad_norm, double max_step_norm, int n_negatives, int exact_repulsion_threshold, int n_threads, int seed, bool verbose);
 RcppExport SEXP _fastEmbedR_transform_tsne_cpp(SEXP reference_layoutSEXP, SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP initSEXP, SEXP initializationSEXP, SEXP perplexitySEXP, SEXP n_iterSEXP, SEXP early_exaggeration_iterSEXP, SEXP learning_rateSEXP, SEXP early_exaggerationSEXP, SEXP exaggerationSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP max_grad_normSEXP, SEXP max_step_normSEXP, SEXP n_negativesSEXP, SEXP exact_repulsion_thresholdSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
@@ -1444,6 +1479,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_rsvd_multiply_metal_cpp", (DL_FUNC) &_fastEmbedR_rsvd_multiply_metal_cpp, 3},
     {"_fastEmbedR_transform_tsne_metal_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_metal_cpp, 19},
     {"_fastEmbedR_knn_tsne_opentsne_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_metal_cpp, 19},
+    {"_fastEmbedR_metal_fft512_stockham_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_metal_fft512_stockham_diagnostic_cpp, 3},
     {"_fastEmbedR_standardize_cpu_cpp", (DL_FUNC) &_fastEmbedR_standardize_cpu_cpp, 1},
     {"_fastEmbedR_strip_self_neighbors_cpp", (DL_FUNC) &_fastEmbedR_strip_self_neighbors_cpp, 2},
     {"_fastEmbedR_validate_projection_knn_cpp", (DL_FUNC) &_fastEmbedR_validate_projection_knn_cpp, 4},
@@ -1501,6 +1537,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_row_candidate_knn_metal_cpp", (DL_FUNC) &_fastEmbedR_row_candidate_knn_metal_cpp, 3},
     {"_fastEmbedR_tsne_auto_parameters_cpp", (DL_FUNC) &_fastEmbedR_tsne_auto_parameters_cpp, 6},
     {"_fastEmbedR_knn_tsne_opentsne_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cpp, 24},
+    {"_fastEmbedR_opentsne_cpu_trace_cpp", (DL_FUNC) &_fastEmbedR_opentsne_cpu_trace_cpp, 12},
     {"_fastEmbedR_transform_tsne_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_cpp, 21},
     {NULL, NULL, 0}
 };

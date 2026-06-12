@@ -156,13 +156,46 @@ Source locations studied:
 - `openTSNE/tsne.py::kl_divergence_bh`
 - `openTSNE/tsne.py::TSNEEmbedding.transform`
 
-Not yet ported:
+Implemented native extensions:
 
-- FFT/FIt-SNE interpolation negative gradients from
-  `openTSNE/_tsne.pyx::estimate_negative_gradient_fft_2d` and the matrix
-  multiplication backends. These are BSD-3 and suitable for a later native
-  C++/Metal/CUDA port, but fastEmbedR currently does not expose them as a
-  working path.
+- FFT/FIt-SNE-style interpolation negative gradients are implemented as
+  package-native CPU, Metal, and CUDA paths. The implementation follows the
+  openTSNE/FIt-SNE split into grid scatter, FFT convolution, grid gather,
+  sparse attractive forces, and momentum/gain updates, but does not call
+  Python/Cython at runtime.
+
+## AppleSiliconFFT
+
+- Repository: <https://github.com/aminems/AppleSiliconFFT>
+- Author: Mohamed Amine Bergach
+- License: MIT
+- Current use in `fastEmbedR`: adapted native Metal 512-point Stockham FFT
+  kernels for the openTSNE/FIt-SNE 512x512 grid path.
+
+Ideas/code behaviour used:
+
+- Radix-4 Stockham autosort stages.
+- Threadgroup-memory staging for one 512-point transform per threadgroup.
+- Separate row and column kernels for 2D FFT grids.
+
+Implemented locations:
+
+- `src/embedding_metal_impl.mm::opentsne_fft_stockham512_core`
+- `src/embedding_metal_impl.mm::opentsne_fft_512_rows_stockham`
+- `src/embedding_metal_impl.mm::opentsne_fft_512_cols_stockham`
+- `src/embedding_metal_impl.mm::metal_fft512_stockham_diagnostic_impl`
+
+Validation:
+
+- The standalone diagnostic compares the Stockham path with fastEmbedR's
+  previous generic Metal Cooley-Tukey FFT path.
+- On the local Mac, the corrected kernel matched the generic reference with
+  relative RMS error around `3.16e-7` for forward and inverse 512x512 FFTs.
+
+License decision:
+
+- AppleSiliconFFT is MIT licensed and compatible with fastEmbedR's GPL
+  distribution. Keep this notice if the Stockham kernels are modified further.
 
 ## t-SNE-CUDA
 

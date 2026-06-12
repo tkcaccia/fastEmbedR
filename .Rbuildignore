@@ -23,6 +23,8 @@
 ^examples/
 ^tools$
 ^tools/
+^docs$
+^docs/
 ^\.DS_Store$
 ^\.pytest_cache$
 ^\.pytest_cache/

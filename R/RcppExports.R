@@ -117,6 +117,10 @@ knn_tsne_opentsne_metal_cpp <- function(indices, distances, y_init, init, n_comp
     .Call(`_fastEmbedR_knn_tsne_opentsne_metal_cpp`, indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs)
 }
 
+metal_fft512_stockham_diagnostic_cpp <- function(seed = 1L, inverse = FALSE, n_checks = 8L) {
+    .Call(`_fastEmbedR_metal_fft512_stockham_diagnostic_cpp`, seed, inverse, n_checks)
+}
+
 standardize_cpu_cpp <- function(data) {
     .Call(`_fastEmbedR_standardize_cpu_cpp`, data)
 }
@@ -343,6 +347,10 @@ tsne_auto_parameters_cpp <- function(n, k, perplexity, perplexity_missing, backe
 
 knn_tsne_opentsne_cpp <- function(indices, distances, y_init, init, n_components, perplexity, theta, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, n_threads, seed, verbose, record_costs, auto_config, auto_iter_end) {
     .Call(`_fastEmbedR_knn_tsne_opentsne_cpp`, indices, distances, y_init, init, n_components, perplexity, theta, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, n_threads, seed, verbose, record_costs, auto_config, auto_iter_end)
+}
+
+opentsne_cpu_trace_cpp <- function(indices, distances, y_init, perplexity, n_iter, early_exaggeration, learning_rate, learning_rate_auto, momentum, min_gain, max_step_norm, n_threads) {
+    .Call(`_fastEmbedR_opentsne_cpu_trace_cpp`, indices, distances, y_init, perplexity, n_iter, early_exaggeration, learning_rate, learning_rate_auto, momentum, min_gain, max_step_norm, n_threads)
 }
 
 transform_tsne_cpp <- function(reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, n_threads, seed, verbose) {

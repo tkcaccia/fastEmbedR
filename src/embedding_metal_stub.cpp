@@ -165,3 +165,9 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix,
                                   bool) {
   Rcpp::stop("Metal openTSNE optimizer is only available on macOS with Metal support.");
 }
+
+List metal_fft512_stockham_diagnostic_impl(int,
+                                           bool,
+                                           int) {
+  Rcpp::stop("Metal FFT diagnostics are only available on macOS with Metal support.");
+}

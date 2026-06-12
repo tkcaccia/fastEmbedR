@@ -307,6 +307,31 @@ make_opentsne_default_init <- function(indices,
   )
 }
 
+make_opentsne_pca_init <- function(x, n_components, seed, backend = "cpu") {
+  x <- as.matrix(x)
+  storage.mode(x) <- "double"
+  n_components <- as.integer(n_components)
+  if (length(n_components) != 1L || is.na(n_components) || n_components < 1L) {
+    stop("`n_components` must be a positive integer.", call. = FALSE)
+  }
+  centered <- sweep(x, 2L, colMeans(x), check.margin = FALSE)
+  pca <- fastpls_rsvd_pca_scores(
+    centered,
+    rank = n_components,
+    seed = seed,
+    backend = backend
+  )
+  init <- as.matrix(pca$scores[, seq_len(n_components), drop = FALSE])
+  init <- sweep(init, 2L, colMeans(init), check.margin = FALSE)
+  scale <- max(apply(init, 2L, stats::sd))
+  if (is.finite(scale) && scale > 0) {
+    init <- init * (1e-4 / scale)
+  }
+  attr(init, "fastEmbedR_init_method") <- paste0("pca_", pca$method)
+  attr(init, "fastEmbedR_init_backend") <- pca$backend
+  init
+}
+
 normalize_opentsne_knn_input <- function(indices, distances = NULL, n_neighbors = NULL) {
   knn <- coerce_knn_input(indices, distances)
   n <- nrow(knn$indices)
@@ -650,6 +675,7 @@ fast_knn_opentsne_materialized <- function(indices,
   attr(layout, "costs") <- out$costs
   attr(layout, "itercosts") <- out$itercosts
   attr(layout, "itercost_iterations") <- out$itercost_iterations
+  attr(layout, "metal_trace") <- out$metal_trace
   if (!is.null(metal_stage_timing) && NROW(metal_stage_timing) > 0L) {
     attr(layout, "metal_stage_timing") <- metal_stage_timing
   }
@@ -739,6 +765,7 @@ opentsne_knn <- function(indices,
                          n_neighbors = NULL,
                          perplexity = NULL,
                          n_components = 2L,
+                         Y_init = NULL,
                          seed = 4L,
                          verbose = FALSE,
                          backend = c("auto", "cpu", "gpu", "metal", "cuda"),
@@ -762,6 +789,7 @@ opentsne_knn <- function(indices,
     knn$distances,
     n_components = n_components,
     perplexity = perplexity,
+    Y_init = Y_init,
     seed = seed,
     verbose = verbose,
     backend = backend,
@@ -799,6 +827,12 @@ opentsne_knn <- function(indices,
 #' @param perplexity t-SNE perplexity. If `NULL`, uses
 #'   `min(30, floor((n - 1) / 3), floor(k / 3))`.
 #' @param n_components Output dimensionality, from 1 to 3.
+#' @param init Initialization for matrix input. `"pca"` is the default because
+#'   it improves visual stability on large MNIST-like data without changing the
+#'   t-SNE objective. `"random"` uses openTSNE-style tiny random initialization.
+#'   KNN-only input cannot compute PCA unless `Y_init` is supplied.
+#' @param Y_init Optional explicit initial layout. If supplied, it overrides
+#'   `init`.
 #' @param standardize Center and scale columns before KNN.
 #' @param pca_dims Optional PCA dimension before KNN.
 #' @param nn Optional precomputed KNN output when `data` is a data matrix.
@@ -846,6 +880,8 @@ opentsne <- function(data,
                      n_neighbors = NULL,
                      perplexity = NULL,
                      n_components = 2L,
+                     init = c("pca", "random"),
+                     Y_init = NULL,
                      standardize = TRUE,
                      pca_dims = NULL,
                      nn = NULL,
@@ -874,6 +910,7 @@ opentsne <- function(data,
                       auto_config = TRUE,
                       ...) {
   backend <- match.arg(backend)
+  init <- match.arg(init)
   optimizer_backend <- if (identical(backend, "gpu")) {
     resolve_backend_request("gpu", need_embedding = TRUE)
   } else if (backend %in% c("metal", "cuda")) {
@@ -907,6 +944,7 @@ opentsne <- function(data,
         knn_result$distances,
         n_components = n_components,
         perplexity = perplexity,
+        Y_init = Y_init,
         seed = seed,
         verbose = verbose,
         backend = optimizer_backend,
@@ -993,7 +1031,11 @@ opentsne <- function(data,
         NULL
       },
       knn_with_self = NULL,
-      preprocess = list(input = "precomputed_knn")
+      preprocess = list(input = "precomputed_knn"),
+      diagnostics = list(
+        metal_trace = attr(layout, "metal_trace"),
+        metal_stage_timing = attr(layout, "metal_stage_timing")
+      )
     )
     class(out) <- "fastEmbedR_embedding"
     return(out)
@@ -1039,12 +1081,35 @@ opentsne <- function(data,
     }
   })
 
+  init_info <- list(method = "user", backend = NA_character_)
+  if (is.null(Y_init) && identical(init, "pca")) {
+    init_backend <- if (optimizer_backend %in% c("metal", "cuda")) optimizer_backend else "cpu"
+    Y_init <- tryCatch(
+      make_opentsne_pca_init(x, n_components, seed, backend = init_backend),
+      error = function(e) {
+        init_info$error <<- conditionMessage(e)
+        NULL
+      }
+    )
+    if (!is.null(Y_init)) {
+      init_info$method <- attr(Y_init, "fastEmbedR_init_method") %||% "pca"
+      init_info$backend <- attr(Y_init, "fastEmbedR_init_backend") %||% init_backend
+    } else {
+      init_info$method <- "random_fallback_after_pca_error"
+      init_info$backend <- "cpu"
+    }
+  } else if (is.null(Y_init)) {
+    init_info$method <- "random"
+    init_info$backend <- "cpu"
+  }
+
   embedding_time <- system.time({
     layout <- fast_knn_opentsne_materialized(
       knn_result$indices,
       knn_result$distances,
       n_components = n_components,
       perplexity = perplexity,
+      Y_init = Y_init,
       seed = seed,
       verbose = verbose,
       backend = optimizer_backend,
@@ -1111,7 +1176,8 @@ opentsne <- function(data,
       keep_knn = keep_knn
     ),
     cfg,
-    prepared$preprocess
+    prepared$preprocess,
+    list(init = init_info$method, init_backend = init_info$backend)
   )
   out <- list(
     layout = layout,
@@ -1126,7 +1192,11 @@ opentsne <- function(data,
       NULL
     },
     knn_with_self = if (isTRUE(keep_knn)) knn_result$knn_with_self else NULL,
-    preprocess = prepared$preprocess
+    preprocess = prepared$preprocess,
+    diagnostics = list(
+      metal_trace = attr(layout, "metal_trace"),
+      metal_stage_timing = attr(layout, "metal_stage_timing")
+    )
   )
   class(out) <- "fastEmbedR_embedding"
   out

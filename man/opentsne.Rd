@@ -10,6 +10,8 @@ opentsne(
   n_neighbors = NULL,
   perplexity = NULL,
   n_components = 2L,
+  init = c("pca", "random"),
+  Y_init = NULL,
   standardize = TRUE,
   pca_dims = NULL,
   nn = NULL,
@@ -50,6 +52,14 @@ object returned by [nn()].}
 `min(30, floor((n - 1) / 3), floor(k / 3))`.}
 
 \item{n_components}{Output dimensionality, from 1 to 3.}
+
+\item{init}{Initialization for matrix input. `"pca"` is the default because
+it improves visual stability on large MNIST-like data without changing the
+t-SNE objective. `"random"` uses openTSNE-style tiny random initialization.
+KNN-only input cannot compute PCA unless `Y_init` is supplied.}
+
+\item{Y_init}{Optional explicit initial layout. If supplied, it overrides
+`init`.}
 
 \item{standardize}{Center and scale columns before KNN.}
 

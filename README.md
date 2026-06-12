@@ -100,6 +100,23 @@ to an MPSGraph FFT backend because the local MNIST benchmark did not show a
 speed advantage over the package-native Metal FFT-grid path. There is no user
 option for choosing this experimental backend.
 
+The main remaining Metal openTSNE speed gap is the FFT itself. CUDA uses
+NVIDIA cuFFT, while the Mac path uses package-native Metal FFT kernels. The
+512x512 openTSNE/FIt-SNE grid path now uses a validated Stockham FFT kernel
+adapted from the MIT-licensed AppleSiliconFFT design; other grid sizes still
+use the generic package-native Metal Cooley-Tukey path. To continue developing
+the cuFFT-like Mac path without changing embedding math, see
+[`docs/metal-fft-roadmap.md`](docs/metal-fft-roadmap.md) and profile the
+current FFT stages with:
+
+```r
+system("Rscript tools/profile_metal_opentsne_fft.R --n=10000 --k=50")
+```
+
+On the local MNIST raw-pixel profile, the FFT stages account for most of the
+Metal GPU time, so new Metal FFT kernels must beat that profiler before they
+are promoted into openTSNE.
+
 ## Native Metal UMAP
 
 On Apple Silicon, `umap_knn(..., backend = "metal")` uses the restored native

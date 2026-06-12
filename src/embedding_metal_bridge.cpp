@@ -118,6 +118,9 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
                                   std::string negative_gradient_method,
                                   int seed,
                                   bool record_costs);
+List metal_fft512_stockham_diagnostic_impl(int seed,
+                                           bool inverse,
+                                           int n_checks);
 
 // [[Rcpp::export]]
 bool embedding_metal_available_cpp() {
@@ -383,4 +386,11 @@ List knn_tsne_opentsne_metal_cpp(IntegerMatrix indices,
     seed,
     record_costs
   );
+}
+
+// [[Rcpp::export]]
+List metal_fft512_stockham_diagnostic_cpp(int seed = 1,
+                                          bool inverse = false,
+                                          int n_checks = 8) {
+  return metal_fft512_stockham_diagnostic_impl(seed, inverse, n_checks);
 }
