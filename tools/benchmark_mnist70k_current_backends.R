@@ -60,6 +60,66 @@ stratified_rows <- function(labels, n, seed) {
   sort(rows)
 }
 
+download_file <- function(url, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  if (file.exists(path) && file.info(path)$size > 0) return(path)
+  utils::download.file(url, path, mode = "wb", quiet = TRUE)
+  path
+}
+
+read_idx_images <- function(path) {
+  con <- gzfile(path, "rb")
+  on.exit(close(con), add = TRUE)
+  header <- readBin(con, "integer", n = 4L, size = 4L, endian = "big")
+  if (length(header) != 4L || header[[1L]] != 2051L) {
+    stop("Invalid IDX image file: ", path, call. = FALSE)
+  }
+  n <- header[[2L]]
+  rows <- header[[3L]]
+  cols <- header[[4L]]
+  values <- readBin(con, "integer", n = n * rows * cols, size = 1L, signed = FALSE)
+  x <- matrix(as.numeric(values) / 255, nrow = n, byrow = TRUE)
+  colnames(x) <- paste0("px", seq_len(ncol(x)))
+  x
+}
+
+read_idx_labels <- function(path) {
+  con <- gzfile(path, "rb")
+  on.exit(close(con), add = TRUE)
+  header <- readBin(con, "integer", n = 2L, size = 4L, endian = "big")
+  if (length(header) != 2L || header[[1L]] != 2049L) {
+    stop("Invalid IDX label file: ", path, call. = FALSE)
+  }
+  factor(readBin(con, "integer", n = header[[2L]], size = 1L, signed = FALSE))
+}
+
+load_raw_mnist <- function(cache_dir, raw_cache) {
+  if (file.exists(raw_cache)) return(readRDS(raw_cache))
+  base <- "https://storage.googleapis.com/cvdf-datasets/mnist"
+  files <- c(
+    train_images = "train-images-idx3-ubyte.gz",
+    train_labels = "train-labels-idx1-ubyte.gz",
+    test_images = "t10k-images-idx3-ubyte.gz",
+    test_labels = "t10k-labels-idx1-ubyte.gz"
+  )
+  paths <- vapply(
+    files,
+    function(file) download_file(file.path(base, file), file.path(cache_dir, "mnist", file)),
+    character(1L)
+  )
+  out <- list(
+    x = rbind(read_idx_images(paths[["train_images"]]), read_idx_images(paths[["test_images"]])),
+    labels = factor(c(
+      as.character(read_idx_labels(paths[["train_labels"]])),
+      as.character(read_idx_labels(paths[["test_labels"]]))
+    )),
+    source = "MNIST IDX public files, raw flattened 28x28 pixels"
+  )
+  dir.create(dirname(raw_cache), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(out, raw_cache, version = 2)
+  out
+}
+
 safe_status <- function(expr) {
   tryCatch(
     list(status = "success", value = force(expr), error = NA_character_),
@@ -74,7 +134,7 @@ as_layout <- function(x) {
   as.matrix(x)
 }
 
-score_layout <- function(x, labels, layout, method, backend, seed, n_threads, metric_n) {
+score_layout <- function(x, labels, layout, method, backend, seed, n_threads, metric_n, dataset_name) {
   rows <- stratified_rows(labels, min(metric_n, nrow(x)), seed + 17L)
   out <- tryCatch(
     fastEmbedR::evaluate_embedding(
@@ -88,7 +148,7 @@ score_layout <- function(x, labels, layout, method, backend, seed, n_threads, me
       method = method,
       backend = "cpu",
       n_threads = n_threads,
-      dataset = "mnist70k_pca50"
+      dataset = dataset_name
     ),
     error = function(e) {
       data.frame(
@@ -231,7 +291,7 @@ robust_plot_limits <- function(values, probs = c(0.002, 0.998)) {
   limits + c(-pad, pad)
 }
 
-plot_layouts <- function(layouts, labels, path, seed, max_points = 20000L, point_cex = 0.28) {
+plot_layouts <- function(layouts, labels, path, seed, max_points = 20000L, point_cex = 0.28, dataset_label = "MNIST 70k") {
   if (length(layouts) == 0L) return(invisible(FALSE))
   layouts <- order_layouts_for_report(layouts)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
@@ -267,9 +327,9 @@ plot_layouts <- function(layouts, labels, path, seed, max_points = 20000L, point
     box(col = "grey70")
   }
   plot_title <- if (length(keep) < length(labels)) {
-    paste0("MNIST 70k PCA50 embeddings (", length(keep), "-point stratified plotting sample)")
+    paste0(dataset_label, " embeddings (", length(keep), "-point stratified plotting sample)")
   } else {
-    paste0("MNIST 70k PCA50 embeddings (all ", length(labels), " points)")
+    paste0(dataset_label, " embeddings (all ", length(labels), " points)")
   }
   mtext(plot_title, outer = TRUE, cex = 1.2)
   invisible(TRUE)
@@ -281,6 +341,9 @@ cache <- arg_value(
   "cache",
   "/Users/stefano/Documents/fastEmbedR-results/current_best_umap_tsne_full/cache/mnist_max_all_pca_50_seed_6.rds"
 )
+feature_source <- arg_value("feature-source", "pca50")
+raw_cache_dir <- arg_value("raw-cache-dir", file.path("results", "dataset_cache"))
+raw_cache <- arg_value("raw-cache", file.path(raw_cache_dir, "mnist_idx_70000_flattened.rds"))
 out_dir <- arg_value("out-dir", file.path("results", "mnist70k_current_backends", Sys.info()[["nodename"]]))
 n <- arg_int("n", 70000L)
 k <- arg_int("k", 50L)
@@ -304,8 +367,19 @@ report_knn_only <- arg_flag("report-knn-only", FALSE)
 report_unsupported <- arg_flag("report-unsupported", TRUE)
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-if (!file.exists(cache)) stop("MNIST PCA cache not found: ", cache, call. = FALSE)
-mnist <- readRDS(cache)
+feature_source <- tolower(feature_source)
+if (feature_source %in% c("raw", "flattened", "pixels", "idx")) {
+  mnist <- load_raw_mnist(raw_cache_dir, raw_cache)
+  dataset <- "mnist70k_raw_flattened"
+  dataset_label <- "MNIST 70k raw flattened 28x28"
+} else if (feature_source %in% c("pca", "pca50")) {
+  if (!file.exists(cache)) stop("MNIST PCA cache not found: ", cache, call. = FALSE)
+  mnist <- readRDS(cache)
+  dataset <- "mnist70k_pca50"
+  dataset_label <- "MNIST 70k PCA50"
+} else {
+  stop("`feature-source` must be `raw` or `pca50`.", call. = FALSE)
+}
 if (!all(c("x", "labels") %in% names(mnist))) {
   stop("MNIST cache must contain `x` and `labels`.", call. = FALSE)
 }
@@ -314,9 +388,9 @@ x <- mnist$x[rows, , drop = FALSE]
 storage.mode(x) <- "double"
 labels <- droplevels(factor(mnist$labels[rows]))
 perplexity <- min(30L, floor(k / 3L), floor((nrow(x) - 1L) / 3L))
-dataset <- "mnist70k_pca50"
 
 message("MNIST current backend benchmark")
+message("  feature_source=", feature_source, " dataset=", dataset)
 message("  n=", nrow(x), " p=", ncol(x), " k=", k, " perplexity=", perplexity)
 message("  backends=", paste(backends, collapse = ","), " out_dir=", out_dir)
 
@@ -401,7 +475,7 @@ for (backend in backends) {
       layout_id <- paste0("MNIST70K_FASTEMBEDR_UMAP_", toupper(backend))
       layouts[[layout_id]] <- layout
       saveRDS(layout, file.path(out_dir, paste0(layout_id, ".rds")))
-      metrics <- score_layout(x, labels, layout, "fastembedr_umap", backend, seed, n_threads, metric_n)
+      metrics <- score_layout(x, labels, layout, "fastembedr_umap", backend, seed, n_threads, metric_n, dataset)
       rows_out[[length(rows_out) + 1L]] <- make_row(
         dataset, "umap", "fastEmbedR", backend, cfg$backend %||% backend,
         "success", NA_character_, nrow(x), ncol(x), seed,
@@ -462,7 +536,7 @@ for (backend in backends) {
       layout_id <- paste0("MNIST70K_FASTEMBEDR_UMAP_LANDMARK50_", toupper(backend))
       layouts[[layout_id]] <- layout
       saveRDS(layout, file.path(out_dir, paste0(layout_id, ".rds")))
-      metrics <- score_layout(x, labels, layout, "fastembedr_umap_landmark50", backend, seed, n_threads, metric_n)
+      metrics <- score_layout(x, labels, layout, "fastembedr_umap_landmark50", backend, seed, n_threads, metric_n, dataset)
       m <- fit$metrics
       rows_out[[length(rows_out) + 1L]] <- make_row(
         dataset, "umap", "landmark50", backend, params$backend %||% backend,
@@ -508,7 +582,7 @@ for (backend in backends) {
       layout_id <- paste0("MNIST70K_OPENTSNE_FULL_", toupper(backend), "_", toupper(resolved_negative))
       layouts[[layout_id]] <- layout
       saveRDS(layout, file.path(out_dir, paste0(layout_id, ".rds")))
-      metrics <- score_layout(x, labels, layout, "opentsne", backend, seed, n_threads, metric_n)
+      metrics <- score_layout(x, labels, layout, "opentsne", backend, seed, n_threads, metric_n, dataset)
       rows_out[[length(rows_out) + 1L]] <- make_row(
         dataset, "opentsne", "full", backend, cfg$backend %||% backend,
         "success", NA_character_, nrow(x), ncol(x), seed,
@@ -559,7 +633,7 @@ for (backend in backends) {
         layout_id <- "MNIST70K_RTSNE_NEIGHBORS_CPU"
         layouts[[layout_id]] <- layout
         saveRDS(layout, file.path(out_dir, paste0(layout_id, ".rds")))
-        metrics <- score_layout(x, labels, layout, "Rtsne_neighbors", "cpu", seed, n_threads, metric_n)
+        metrics <- score_layout(x, labels, layout, "Rtsne_neighbors", "cpu", seed, n_threads, metric_n, dataset)
         rows_out[[length(rows_out) + 1L]] <- make_row(
           dataset, "Rtsne", "Rtsne_neighbors", "cpu", "cpu",
           "success", NA_character_, nrow(x), ncol(x), seed,
@@ -630,7 +704,7 @@ for (backend in backends) {
       layout_id <- paste0("MNIST70K_OPENTSNE_LANDMARK50_", toupper(backend), "_", toupper(resolved_negative))
       layouts[[layout_id]] <- layout
       saveRDS(layout, file.path(out_dir, paste0(layout_id, ".rds")))
-      metrics <- score_layout(x, labels, layout, "opentsne_landmark50", backend, seed, n_threads, metric_n)
+      metrics <- score_layout(x, labels, layout, "opentsne_landmark50", backend, seed, n_threads, metric_n, dataset)
       m <- fit$metrics
       projection_elapsed <- m$landmark_projection_knn_elapsed %||% NA_real_
       if (identical(params$projection_strategy, "gpu_resident_landmark_projection_transform")) {
@@ -696,7 +770,7 @@ if (isTRUE(run_uwot)) {
     layout_id <- "MNIST70K_UWOT_UMAP_FAST_SGD_CPU"
     layouts[[layout_id]] <- layout
     saveRDS(layout, file.path(out_dir, paste0(layout_id, ".rds")))
-    metrics <- score_layout(x, labels, layout, "uwot_umap_fast_sgd", "cpu", seed, n_threads, metric_n)
+    metrics <- score_layout(x, labels, layout, "uwot_umap_fast_sgd", "cpu", seed, n_threads, metric_n, dataset)
     rows_out[[length(rows_out) + 1L]] <- make_row(
       dataset, "uwot::umap", "fast_sgd", "cpu", "cpu", "success", NA_character_,
       nrow(x), ncol(x), seed,
@@ -746,7 +820,7 @@ if (isTRUE(run_rtsne_internal)) {
     layout_id <- "MNIST70K_RTSNE_INTERNAL_NN_CPU"
     layouts[[layout_id]] <- layout
     saveRDS(layout, file.path(out_dir, paste0(layout_id, ".rds")))
-    metrics <- score_layout(x, labels, layout, "Rtsne_internal_nn", "cpu", seed, n_threads, metric_n)
+    metrics <- score_layout(x, labels, layout, "Rtsne_internal_nn", "cpu", seed, n_threads, metric_n, dataset)
     rows_out[[length(rows_out) + 1L]] <- make_row(
       dataset, "Rtsne", "Rtsne_internal_nn", "cpu", "cpu",
       "success", NA_character_, nrow(x), ncol(x), seed,
@@ -779,7 +853,15 @@ write.csv(results, csv, row.names = FALSE)
 write.csv(results, latest, row.names = FALSE)
 
 plot_path <- file.path(out_dir, paste0("MNIST70K_CURRENT_BACKENDS_", Sys.info()[["nodename"]], "_seed", seed, ".png"))
-plot_layouts(layouts, labels, plot_path, seed, max_points = plot_n, point_cex = point_cex)
+plot_layouts(
+  layouts,
+  labels,
+  plot_path,
+  seed,
+  max_points = plot_n,
+  point_cex = point_cex,
+  dataset_label = dataset_label
+)
 
 message("Results CSV: ", normalizePath(csv, winslash = "/", mustWork = FALSE))
 message("Plot PNG: ", normalizePath(plot_path, winslash = "/", mustWork = FALSE))

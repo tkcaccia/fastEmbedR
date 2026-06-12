@@ -549,9 +549,16 @@ fast_knn_opentsne_materialized <- function(indices,
       "openTSNE_native_cpp_two_phase_optimizer_bsd3_informed"
     }
   )
+  metal_stage_timing <- out$metal_stage_timing
+  if (!is.null(metal_stage_timing) && NROW(metal_stage_timing) > 0L) {
+    cfg$metal_stage_timing <- metal_stage_timing
+  }
   attr(layout, "fastEmbedR_config") <- cfg
   attr(layout, "costs") <- out$costs
   attr(layout, "itercosts") <- out$itercosts
+  if (!is.null(metal_stage_timing) && NROW(metal_stage_timing) > 0L) {
+    attr(layout, "metal_stage_timing") <- metal_stage_timing
+  }
   layout
 }
 
@@ -627,7 +634,9 @@ fast_knn_opentsne_core <- function(indices,
 #' knn <- nn(x, k = 31)
 #' layout <- opentsne_knn(knn, perplexity = 10,
 #'   early_exaggeration_iter = 100, n_iter = 250)
-#' plot(layout, pch = 21, bg = iris$Species)
+#' if (all(is.finite(layout))) {
+#'   plot(layout, pch = 21, bg = iris$Species)
+#' }
 #' @export
 opentsne_knn <- function(indices,
                          distances = NULL,

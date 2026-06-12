@@ -3,6 +3,10 @@
 `fastEmbedR` is an opinionated KNN-first package for native UMAP and
 openTSNE-style embeddings in R.
 
+The package is deliberately narrow now: one KNN API, one UMAP API, one
+openTSNE-style API, and explicit CPU/Metal/CUDA backend reporting. Slow or
+visually weak experimental branches have been removed from the public surface.
+
 The public embedding API is intentionally small:
 
 - `nn()` computes nearest neighbours in native code.
@@ -50,6 +54,11 @@ native GPU support also accept `backend = "metal"` on Apple Silicon. The
 convenience `backend = "gpu"` requests a real native GPU path where the
 function has one; unsupported GPU work fails clearly instead of being labelled
 as GPU after running on CPU.
+
+The Metal implementation is kept simple on purpose. The package does not opt in
+to an MPSGraph FFT backend because the local MNIST benchmark did not show a
+speed advantage over the package-native Metal FFT-grid path. There is no user
+option for choosing this experimental backend.
 
 ## Native Metal UMAP
 
@@ -130,6 +139,20 @@ fit <- landmark_tsne(
 plot(fit)
 ```
 
+UMAP has the same landmark pattern:
+
+```r
+fit <- landmark_umap(
+  x,
+  labels = labels,
+  landmarks = 0.5,
+  n_neighbors = 30,
+  backend = "auto",
+  seed = 1
+)
+plot(fit)
+```
+
 For landmark runs, `backend = "metal"` uses a fused native Metal projection
 kernel that computes query-to-landmark KNN, interpolation, and projection
 confidence in one pass before the fixed-reference transform. CPU/auto runs use
@@ -164,6 +187,44 @@ should compare:
 - `Rtsne::Rtsne_neighbors()` as the R reference t-SNE-from-KNN path.
 - `ReductionWrappers::openTSNE()` as the Python openTSNE wrapper when the
   configured `reticulate` Python can import `openTSNE`.
+
+The command below runs the local MNIST 70k benchmark on the raw flattened
+28x28 images, not on PCA features:
+
+```sh
+Rscript tools/benchmark_mnist70k_current_backends.R \
+  --feature-source=raw \
+  --n=70000 \
+  --k=50 \
+  --seed=6 \
+  --threads=4 \
+  --backends=cpu,metal \
+  --run-uwot=true \
+  --run-umap=true \
+  --run-opentsne=true \
+  --run-rtsne=true \
+  --run-landmark=true
+```
+
+Latest local raw-MNIST run, using flattened 784-column images and a 5,000-point
+quality sample:
+
+| method | backend | NN sec | embed sec | proj+transform sec | trust |
+| --- | --- | ---: | ---: | ---: | ---: |
+| openTSNE | CPU | 64.752 | 4.263 | NA | 0.319 |
+| openTSNE | Metal | 40.787 | 6.696 | NA | 0.305 |
+| Rtsne_neighbors | CPU | 64.752 | 34.871 | NA | 0.198 |
+| openTSNE landmark50 | CPU | 192.299 | 2.535 | 143.509 | 0.269 |
+| openTSNE landmark50 | Metal | 50.390 | 3.709 | 49.807 | 0.270 |
+| UMAP | CPU | 64.752 | 6.914 | NA | 0.281 |
+| UMAP | Metal | 40.787 | 2.159 | NA | 0.283 |
+| UMAP landmark50 | CPU | 197.833 | 3.581 | 159.008 | 0.267 |
+| UMAP landmark50 | Metal | 51.452 | 1.236 | 53.215 | 0.262 |
+| uwot::umap fast_sgd | CPU | NA | 67.581 | NA | 0.283 |
+
+For `uwot::umap`, `embed sec` is the total exposed call time because `uwot`
+does not report KNN, graph construction, and SGD timing separately. For
+fastEmbedR rows, KNN and embedding/projection timing are recorded separately.
 
 ## License And Provenance
 

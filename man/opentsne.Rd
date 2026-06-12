@@ -30,7 +30,7 @@ opentsne(
   exaggeration = NULL,
   initial_momentum = 0.8,
   final_momentum = 0.8,
-  max_step_norm = 5,
+  max_step_norm = "auto",
   negative_gradient_method = "auto",
   record_costs = FALSE,
   ...

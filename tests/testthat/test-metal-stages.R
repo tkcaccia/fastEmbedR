@@ -22,6 +22,48 @@ test_that("Metal UMAP exposes only the validated atomic-inplace optimizer", {
   expect_equal(fastEmbedR:::fast_knn_umap_metal_optimizer_mode(), "atomic_inplace")
 })
 
+test_that("Metal openTSNE FFT-grid exposes opt-in per-stage timing", {
+  skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
+
+  old_timing <- Sys.getenv("FASTEMBEDR_METAL_STAGE_TIMING", unset = NA_character_)
+  on.exit({
+    if (is.na(old_timing)) {
+      Sys.unsetenv("FASTEMBEDR_METAL_STAGE_TIMING")
+    } else {
+      Sys.setenv(FASTEMBEDR_METAL_STAGE_TIMING = old_timing)
+    }
+  }, add = TRUE)
+
+  Sys.setenv(FASTEMBEDR_METAL_STAGE_TIMING = "1")
+  set.seed(93)
+  x <- matrix(rnorm(120L * 6L), nrow = 120L, ncol = 6L)
+  knn <- fastEmbedR::nn(x, k = 12L, backend = "metal")
+  layout <- fastEmbedR::opentsne_knn(
+    knn,
+    perplexity = 3,
+    early_exaggeration_iter = 1L,
+    n_iter = 1L,
+    backend = "metal",
+    negative_gradient_method = "fft",
+    seed = 93L
+  )
+  timing <- attr(layout, "metal_stage_timing")
+
+  expect_s3_class(timing, "data.frame")
+  expect_named(
+    timing,
+    c("stage", "command_count", "wall_sec", "gpu_sec", "gpu_timestamps_available")
+  )
+  expect_equal(
+    timing$stage,
+    c("layout_stats", "clear_scatter_load", "fft_forward", "fft_convolution", "sum_q", "epoch_update", "center")
+  )
+  expect_true(all(timing$command_count == 2L))
+  expect_true(all(is.finite(timing$wall_sec)))
+  expect_true(all(timing$wall_sec >= 0))
+  expect_equal(attr(layout, "fastEmbedR_config")$metal_stage_timing, timing)
+})
+
 test_that("Metal UMAP auto policy keeps the visually validated atomic-inplace path", {
   old_hybrid <- getOption("fastEmbedR.gpu_hybrid_refine", NULL)
   on.exit({

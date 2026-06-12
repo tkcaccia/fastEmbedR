@@ -26,3 +26,4 @@
 ^\.DS_Store$
 ^\.pytest_cache$
 ^\.pytest_cache/
+^API_lightning[.]key$

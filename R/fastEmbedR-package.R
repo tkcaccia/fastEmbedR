@@ -11,3 +11,11 @@
 #'
 #' @keywords internal
 "_PACKAGE"
+
+utils::globalVariables(c(
+  "landmark_refinement_epoch_count",
+  "landmark_tsne_transform_resident_cuda_cpp",
+  "landmark_tsne_transform_resident_metal_cpp",
+  "run_native_knn_optimizer",
+  "transform_tsne_cuda_cpp"
+))

@@ -21,7 +21,7 @@ opentsne_knn(
   exaggeration = NULL,
   initial_momentum = 0.8,
   final_momentum = 0.8,
-  max_step_norm = 5,
+  max_step_norm = "auto",
   negative_gradient_method = "auto",
   record_costs = FALSE,
   ...
@@ -100,5 +100,7 @@ x <- scale(as.matrix(iris[, 1:4]))
 knn <- nn(x, k = 31)
 layout <- opentsne_knn(knn, perplexity = 10,
   early_exaggeration_iter = 100, n_iter = 250)
-plot(layout, pch = 21, bg = iris$Species)
+if (all(is.finite(layout))) {
+  plot(layout, pch = 21, bg = iris$Species)
+}
 }

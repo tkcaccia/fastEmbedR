@@ -12,7 +12,7 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 ```
 
 `fastEmbedR` is focused on KNN-first embeddings: UMAP from precomputed nearest
-neighbours, plus a native openTSNE-style CPU optimizer.
+neighbours, plus a native openTSNE-style optimizer.
 
 The legacy `tsne()` and `infotsne()` entry points were removed from the public
 package API. The kept path is:
@@ -26,6 +26,11 @@ CPU-capable public functions expose `n_threads`, for example
 `n_threads = 4` for a fixed four-core run. Native Apple GPU paths use
 `backend = "metal"`; `backend = "gpu"` is a convenience request for a real GPU
 path and is not silently relabelled when unavailable.
+
+The package deliberately keeps the backend surface small. The local MPSGraph
+FFT experiment did not improve the Metal openTSNE benchmark, so it is not
+exposed as an option. The Metal path uses the package-native Objective-C++/Metal
+FFT-grid implementation when compiled.
 
 ## Direct KNN Input
 
@@ -122,7 +127,7 @@ exact multi-threaded projection KNN for small and medium data, and switch
 internally to a projection-specific candidate search only for larger
 projections.
 
-```{r}
+```{r, eval = FALSE}
 landmark_fit <- landmark_tsne(
   x,
   labels = labels,
@@ -140,9 +145,25 @@ landmark_fit <- landmark_tsne(
 plot(landmark_fit)
 ```
 
+UMAP supports the same landmark pattern:
+
+```{r, eval = FALSE}
+landmark_umap_fit <- landmark_umap(
+  x,
+  labels = labels,
+  landmarks = 0.5,
+  n_neighbors = 30,
+  seed = 4,
+  silhouette_sample = NULL,
+  preserve_sample = NULL
+)
+
+plot(landmark_umap_fit)
+```
+
 ## Transform New Points
 
-```{r}
+```{r, eval = FALSE}
 reference <- x[1:100, , drop = FALSE]
 query <- x[101:110, , drop = FALSE]
 
@@ -180,3 +201,29 @@ silently replaced by CPU and reported as GPU.
 ```{r}
 backend_info()
 ```
+
+## Reproducing the MNIST Benchmark
+
+The benchmark helper can use raw flattened MNIST images. This avoids measuring
+a PCA-preprocessed problem when the goal is to test the full image matrix:
+
+```{sh, eval = FALSE}
+Rscript tools/benchmark_mnist70k_current_backends.R \
+  --feature-source=raw \
+  --n=70000 \
+  --k=50 \
+  --seed=6 \
+  --threads=4 \
+  --backends=cpu,metal \
+  --run-uwot=true \
+  --run-umap=true \
+  --run-opentsne=true \
+  --run-rtsne=true \
+  --run-landmark=true
+```
+
+The output table separates nearest-neighbour time, embedding time, and
+landmark projection/transform time where the implementations expose those
+stages. Reference packages that do not expose stage timing are reported with
+their total call time in the closest matching column and a note in the saved
+CSV.

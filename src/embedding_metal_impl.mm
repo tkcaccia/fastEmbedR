@@ -3,6 +3,7 @@
 
 #include <Rcpp.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cctype>
@@ -3034,6 +3035,114 @@ void wait_for_command(id<MTLCommandBuffer> command_buffer,
   }
 }
 
+struct MetalStageTimingEntry {
+  std::string stage;
+  int command_count = 0;
+  double wall_sec = 0.0;
+  double gpu_sec = 0.0;
+  int gpu_timestamp_count = 0;
+};
+
+bool metal_stage_timing_enabled() {
+  const char* raw = std::getenv("FASTEMBEDR_METAL_STAGE_TIMING");
+  if (raw == nullptr || raw[0] == '\0') return false;
+  std::string value(raw);
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value != "0" && value != "false" && value != "no" && value != "off";
+}
+
+class MetalStageTimer {
+ public:
+  explicit MetalStageTimer(const bool enabled) : enabled_(enabled) {}
+
+  bool enabled() const { return enabled_; }
+
+  void record(id<MTLCommandBuffer> command_buffer,
+              const char* stage,
+              const std::chrono::steady_clock::time_point start) {
+    if (!enabled_) return;
+    const auto stop = std::chrono::steady_clock::now();
+    const double wall_sec =
+      std::chrono::duration<double>(stop - start).count();
+    MetalStageTimingEntry& entry = entry_for(stage);
+    entry.command_count += 1;
+    entry.wall_sec += wall_sec;
+
+    bool has_gpu_timestamp = false;
+    double gpu_sec = 0.0;
+    if (command_buffer != nil &&
+        [command_buffer respondsToSelector:@selector(GPUStartTime)] &&
+        [command_buffer respondsToSelector:@selector(GPUEndTime)]) {
+      const double gpu_start = [command_buffer GPUStartTime];
+      const double gpu_end = [command_buffer GPUEndTime];
+      if (std::isfinite(gpu_start) && std::isfinite(gpu_end) && gpu_end > gpu_start) {
+        has_gpu_timestamp = true;
+        gpu_sec = gpu_end - gpu_start;
+      }
+    }
+    if (has_gpu_timestamp) {
+      entry.gpu_sec += gpu_sec;
+      entry.gpu_timestamp_count += 1;
+    }
+  }
+
+  Rcpp::DataFrame to_data_frame() const {
+    const R_xlen_t n = static_cast<R_xlen_t>(entries_.size());
+    Rcpp::CharacterVector stage(n);
+    Rcpp::IntegerVector command_count(n);
+    Rcpp::NumericVector wall_sec(n);
+    Rcpp::NumericVector gpu_sec(n);
+    Rcpp::LogicalVector gpu_timestamps_available(n);
+    for (R_xlen_t i = 0; i < n; ++i) {
+      const MetalStageTimingEntry& entry = entries_[static_cast<std::size_t>(i)];
+      stage[i] = entry.stage;
+      command_count[i] = entry.command_count;
+      wall_sec[i] = entry.wall_sec;
+      if (entry.gpu_timestamp_count > 0) {
+        gpu_sec[i] = entry.gpu_sec;
+        gpu_timestamps_available[i] = true;
+      } else {
+        gpu_sec[i] = NA_REAL;
+        gpu_timestamps_available[i] = false;
+      }
+    }
+    return Rcpp::DataFrame::create(
+      Rcpp::Named("stage") = stage,
+      Rcpp::Named("command_count") = command_count,
+      Rcpp::Named("wall_sec") = wall_sec,
+      Rcpp::Named("gpu_sec") = gpu_sec,
+      Rcpp::Named("gpu_timestamps_available") = gpu_timestamps_available,
+      Rcpp::Named("stringsAsFactors") = false
+    );
+  }
+
+ private:
+  MetalStageTimingEntry& entry_for(const char* stage) {
+    for (MetalStageTimingEntry& entry : entries_) {
+      if (entry.stage == stage) return entry;
+    }
+    entries_.push_back(MetalStageTimingEntry{std::string(stage), 0, 0.0, 0.0, 0});
+    return entries_.back();
+  }
+
+  bool enabled_;
+  std::vector<MetalStageTimingEntry> entries_;
+};
+
+template <typename EncodeFn>
+void run_timed_metal_stage(MetalEmbeddingState& state,
+                           MetalStageTimer& timer,
+                           const char* stage,
+                           EncodeFn encode) {
+  id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+  const auto start = std::chrono::steady_clock::now();
+  encode(command_buffer);
+  wait_for_command(command_buffer, stage);
+  timer.record(command_buffer, stage, start);
+}
+
 void dispatch_rows(id<MTLComputeCommandEncoder> encoder,
                    id<MTLComputePipelineState> pipeline,
                    const int n) {
@@ -4133,6 +4242,7 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
         (static_cast<std::uint32_t>(n) + sum_block_size - 1u) / sum_block_size;
       const MTLSize sum_blocks = MTLSizeMake(static_cast<NSUInteger>(sum_block_count), 1, 1);
       const MTLSize stats_blocks = MTLSizeMake(static_cast<NSUInteger>(stats_block_count), 1, 1);
+      MetalStageTimer stage_timer(metal_stage_timing_enabled());
 
       for (int iter = 0; iter < total_iter; ++iter) {
         const bool in_early = iter < early_exaggeration_iter;
@@ -4150,6 +4260,163 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
           max_step,
           1.0f
         };
+
+        if (stage_timer.enabled()) {
+          auto encode_layout_stats = [&](id<MTLCommandBuffer> command_buffer) {
+            {
+              id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+              [encoder setComputePipelineState:state.opentsne_fft_layout_stats_blocks_pipeline];
+              [encoder setBuffer:current_buffer offset:0 atIndex:0];
+              [encoder setBuffer:layout_stats_buffer offset:0 atIndex:1];
+              [encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
+              [encoder setBytes:&stats_block_size length:sizeof(std::uint32_t) atIndex:3];
+              [encoder dispatchThreads:stats_blocks
+                 threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+              [encoder endEncoding];
+            }
+            {
+              id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+              [encoder setComputePipelineState:state.opentsne_fft_finalize_layout_stats_pipeline];
+              [encoder setBuffer:layout_stats_buffer offset:0 atIndex:0];
+              [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:1];
+              [encoder setBuffer:center_buffer offset:0 atIndex:2];
+              [encoder setBytes:&stats_block_count length:sizeof(std::uint32_t) atIndex:3];
+              [encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:4];
+              [encoder setBytes:&grid_n length:sizeof(std::uint32_t) atIndex:5];
+              [encoder setBytes:&fft_n length:sizeof(std::uint32_t) atIndex:6];
+              [encoder dispatchThreads:MTLSizeMake(1, 1, 1)
+                 threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+              [encoder endEncoding];
+            }
+          };
+
+          auto encode_clear_scatter_load = [&](id<MTLCommandBuffer> command_buffer) {
+            {
+              id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+              [encoder setComputePipelineState:state.opentsne_fft_clear_pipeline];
+              [encoder setBuffer:mass_buffer offset:0 atIndex:0];
+              [encoder setBuffer:mass_x_buffer offset:0 atIndex:1];
+              [encoder setBuffer:mass_y_buffer offset:0 atIndex:2];
+              [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:3];
+              [encoder dispatchThreads:grid_cells
+                 threadsPerThreadgroup:MTLSizeMake(threads_clear, 1, 1)];
+              [encoder endEncoding];
+            }
+            {
+              id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+              [encoder setComputePipelineState:state.opentsne_fft_scatter_pipeline];
+              [encoder setBuffer:current_buffer offset:0 atIndex:0];
+              [encoder setBuffer:mass_buffer offset:0 atIndex:1];
+              [encoder setBuffer:mass_x_buffer offset:0 atIndex:2];
+              [encoder setBuffer:mass_y_buffer offset:0 atIndex:3];
+              [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:4];
+              [encoder dispatchThreads:point_grid
+                 threadsPerThreadgroup:MTLSizeMake(threads_scatter, 1, 1)];
+              [encoder endEncoding];
+            }
+            {
+              id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+              [encoder setComputePipelineState:state.opentsne_fft_load_pipeline];
+              [encoder setBuffer:mass_buffer offset:0 atIndex:0];
+              [encoder setBuffer:mass_x_buffer offset:0 atIndex:1];
+              [encoder setBuffer:mass_y_buffer offset:0 atIndex:2];
+              [encoder setBuffer:mass_fft_buffer offset:0 atIndex:3];
+              [encoder setBuffer:mass_x_fft_buffer offset:0 atIndex:4];
+              [encoder setBuffer:mass_y_fft_buffer offset:0 atIndex:5];
+              [encoder setBuffer:kernel_q_buffer offset:0 atIndex:6];
+              [encoder setBuffer:kernel_q2_buffer offset:0 atIndex:7];
+              [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:8];
+              [encoder dispatchThreads:fft_grid
+                 threadsPerThreadgroup:metal_threadgroup_2d(state.opentsne_fft_load_pipeline)];
+              [encoder endEncoding];
+            }
+          };
+
+          auto encode_fft_forward = [&](id<MTLCommandBuffer> command_buffer) {
+            encode_fft_2d_metal(state, command_buffer, mass_fft_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, false);
+            encode_fft_2d_metal(state, command_buffer, mass_x_fft_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, false);
+            encode_fft_2d_metal(state, command_buffer, mass_y_fft_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, false);
+            encode_fft_2d_metal(state, command_buffer, kernel_q_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, false);
+            encode_fft_2d_metal(state, command_buffer, kernel_q2_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, false);
+          };
+
+          auto encode_fft_convolution = [&](id<MTLCommandBuffer> command_buffer) {
+            encode_fft_convolution_metal(state, command_buffer, mass_fft_buffer, kernel_q_buffer,
+                                         q_grid_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, fft_total);
+            encode_fft_convolution_metal(state, command_buffer, mass_fft_buffer, kernel_q2_buffer,
+                                         q2_grid_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, fft_total);
+            encode_fft_convolution_metal(state, command_buffer, mass_x_fft_buffer, kernel_q2_buffer,
+                                         xq2_grid_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, fft_total);
+            encode_fft_convolution_metal(state, command_buffer, mass_y_fft_buffer, kernel_q2_buffer,
+                                         yq2_grid_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, fft_total);
+          };
+
+          auto encode_sum_q = [&](id<MTLCommandBuffer> command_buffer) {
+            {
+              id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+              [encoder setComputePipelineState:state.opentsne_fft_sum_q_blocks_pipeline];
+              [encoder setBuffer:current_buffer offset:0 atIndex:0];
+              [encoder setBuffer:q_grid_buffer offset:0 atIndex:1];
+              [encoder setBuffer:row_sums_buffer offset:0 atIndex:2];
+              [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:3];
+              [encoder setBytes:&sum_block_size length:sizeof(std::uint32_t) atIndex:4];
+              [encoder dispatchThreads:sum_blocks
+                 threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+              [encoder endEncoding];
+            }
+            {
+              id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+              [encoder setComputePipelineState:state.opentsne_fft_finalize_sum_q_pipeline];
+              [encoder setBuffer:row_sums_buffer offset:0 atIndex:0];
+              [encoder setBuffer:inv_sum_q_buffer offset:0 atIndex:1];
+              [encoder setBytes:&sum_block_count length:sizeof(std::uint32_t) atIndex:2];
+              [encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:3];
+              [encoder dispatchThreads:MTLSizeMake(1, 1, 1)
+                 threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+              [encoder endEncoding];
+            }
+          };
+
+          auto encode_epoch_update = [&](id<MTLCommandBuffer> command_buffer) {
+            id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+            [encoder setComputePipelineState:state.opentsne_fft_epoch_pipeline];
+            [encoder setBuffer:row_ptr_buffer offset:0 atIndex:0];
+            [encoder setBuffer:col_buffer offset:0 atIndex:1];
+            [encoder setBuffer:val_buffer offset:0 atIndex:2];
+            [encoder setBuffer:current_buffer offset:0 atIndex:3];
+            [encoder setBuffer:gains_buffer offset:0 atIndex:4];
+            [encoder setBuffer:updates_buffer offset:0 atIndex:5];
+            [encoder setBuffer:q2_grid_buffer offset:0 atIndex:6];
+            [encoder setBuffer:xq2_grid_buffer offset:0 atIndex:7];
+            [encoder setBuffer:yq2_grid_buffer offset:0 atIndex:8];
+            [encoder setBytes:&params length:sizeof(OpenTsneMetalParams) atIndex:9];
+            [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:10];
+            [encoder setBuffer:inv_sum_q_buffer offset:0 atIndex:11];
+            [encoder dispatchThreads:point_grid
+               threadsPerThreadgroup:MTLSizeMake(threads_epoch, 1, 1)];
+            [encoder endEncoding];
+          };
+
+          auto encode_center = [&](id<MTLCommandBuffer> command_buffer) {
+            id<MTLComputeCommandEncoder> center_encoder = [command_buffer computeCommandEncoder];
+            [center_encoder setComputePipelineState:state.opentsne_center_pipeline];
+            [center_encoder setBuffer:current_buffer offset:0 atIndex:0];
+            [center_encoder setBuffer:center_buffer offset:0 atIndex:1];
+            [center_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
+            [center_encoder dispatchThreads:point_grid
+              threadsPerThreadgroup:MTLSizeMake(threads_center, 1, 1)];
+            [center_encoder endEncoding];
+          };
+
+          run_timed_metal_stage(state, stage_timer, "layout_stats", encode_layout_stats);
+          run_timed_metal_stage(state, stage_timer, "clear_scatter_load", encode_clear_scatter_load);
+          run_timed_metal_stage(state, stage_timer, "fft_forward", encode_fft_forward);
+          run_timed_metal_stage(state, stage_timer, "fft_convolution", encode_fft_convolution);
+          run_timed_metal_stage(state, stage_timer, "sum_q", encode_sum_q);
+          run_timed_metal_stage(state, stage_timer, "epoch_update", encode_epoch_update);
+          run_timed_metal_stage(state, stage_timer, "center", encode_center);
+          continue;
+        }
 
         id<MTLCommandBuffer> fft_command = [state.queue commandBuffer];
         {
@@ -4333,7 +4600,8 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
         Rcpp::Named("n_threads") = NA_INTEGER,
         Rcpp::Named("learning_rate") = learning_rate_auto ? NA_REAL : learning_rate,
         Rcpp::Named("learning_rate_early") = static_cast<double>(n) / std::max(early_exaggeration, std::numeric_limits<double>::min()),
-        Rcpp::Named("learning_rate_normal") = static_cast<double>(n) / std::max(exaggeration, std::numeric_limits<double>::min())
+        Rcpp::Named("learning_rate_normal") = static_cast<double>(n) / std::max(exaggeration, std::numeric_limits<double>::min()),
+        Rcpp::Named("metal_stage_timing") = stage_timer.to_data_frame()
       );
     }
 
