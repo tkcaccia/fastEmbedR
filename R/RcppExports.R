@@ -69,6 +69,10 @@ project_embedding_knn_metal_cpp <- function(reference_layout, projection_indices
     .Call(`_fastEmbedR_project_embedding_knn_metal_cpp`, reference_layout, projection_indices, projection_distances)
 }
 
+project_embedding_affine_metal_cpp <- function(reference_data, query_data, reference_layout, projection_indices, projection_distances, max_neighbors = 12L, ridge = 1e-3, max_extrapolation = 2.5) {
+    .Call(`_fastEmbedR_project_embedding_affine_metal_cpp`, reference_data, query_data, reference_layout, projection_indices, projection_distances, max_neighbors, ridge, max_extrapolation)
+}
+
 interpolate_landmark_layout_metal_cpp <- function(landmark_layout, landmark_indices, projection_indices, projection_distances, n) {
     .Call(`_fastEmbedR_interpolate_landmark_layout_metal_cpp`, landmark_layout, landmark_indices, projection_indices, projection_distances, n)
 }
@@ -95,6 +99,10 @@ knn_embed_metal_cpp <- function(indices, distances, init, objective, n_epochs, n
 
 knn_embed_metal_csr_cpp <- function(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, seed) {
     .Call(`_fastEmbedR_knn_embed_metal_csr_cpp`, offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, seed)
+}
+
+knn_umap_refine_rows_metal_cpp <- function(indices, distances, row_ids, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, seed) {
+    .Call(`_fastEmbedR_knn_umap_refine_rows_metal_cpp`, indices, distances, row_ids, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, seed)
 }
 
 rsvd_multiply_metal_cpp <- function(left, right, transpose_left) {
@@ -163,6 +171,10 @@ project_embedding_knn_cpp <- function(reference_layout, projection_indices, proj
 
 project_embedding_affine_cpp <- function(reference_data, query_data, reference_layout, projection_indices, projection_distances, max_neighbors = 12L, ridge = 1e-3, max_extrapolation = 2.5) {
     .Call(`_fastEmbedR_project_embedding_affine_cpp`, reference_data, query_data, reference_layout, projection_indices, projection_distances, max_neighbors, ridge, max_extrapolation)
+}
+
+project_embedding_affine_parallel_cpp <- function(reference_data, query_data, reference_layout, projection_indices, projection_distances, max_neighbors = 12L, ridge = 1e-3, max_extrapolation = 2.5, n_threads = 1L) {
+    .Call(`_fastEmbedR_project_embedding_affine_parallel_cpp`, reference_data, query_data, reference_layout, projection_indices, projection_distances, max_neighbors, ridge, max_extrapolation, n_threads)
 }
 
 knn_connectivity_range_cpp <- function(indices, col_start, n_cols) {

@@ -269,6 +269,24 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// project_embedding_affine_metal_cpp
+List project_embedding_affine_metal_cpp(NumericMatrix reference_data, NumericMatrix query_data, NumericMatrix reference_layout, IntegerMatrix projection_indices, NumericMatrix projection_distances, int max_neighbors, double ridge, double max_extrapolation);
+RcppExport SEXP _fastEmbedR_project_embedding_affine_metal_cpp(SEXP reference_dataSEXP, SEXP query_dataSEXP, SEXP reference_layoutSEXP, SEXP projection_indicesSEXP, SEXP projection_distancesSEXP, SEXP max_neighborsSEXP, SEXP ridgeSEXP, SEXP max_extrapolationSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type reference_data(reference_dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type query_data(query_dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type reference_layout(reference_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type projection_indices(projection_indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type projection_distances(projection_distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type max_neighbors(max_neighborsSEXP);
+    Rcpp::traits::input_parameter< double >::type ridge(ridgeSEXP);
+    Rcpp::traits::input_parameter< double >::type max_extrapolation(max_extrapolationSEXP);
+    rcpp_result_gen = Rcpp::wrap(project_embedding_affine_metal_cpp(reference_data, query_data, reference_layout, projection_indices, projection_distances, max_neighbors, ridge, max_extrapolation));
+    return rcpp_result_gen;
+END_RCPP
+}
 // interpolate_landmark_layout_metal_cpp
 NumericMatrix interpolate_landmark_layout_metal_cpp(NumericMatrix landmark_layout, IntegerVector landmark_indices, IntegerMatrix projection_indices, NumericMatrix projection_distances, int n);
 RcppExport SEXP _fastEmbedR_interpolate_landmark_layout_metal_cpp(SEXP landmark_layoutSEXP, SEXP landmark_indicesSEXP, SEXP projection_indicesSEXP, SEXP projection_distancesSEXP, SEXP nSEXP) {
@@ -379,6 +397,26 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type max_weight(max_weightSEXP);
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     rcpp_result_gen = Rcpp::wrap(knn_embed_metal_csr_cpp(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, seed));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_umap_refine_rows_metal_cpp
+NumericMatrix knn_umap_refine_rows_metal_cpp(IntegerMatrix indices, NumericMatrix distances, IntegerVector row_ids, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int seed);
+RcppExport SEXP _fastEmbedR_knn_umap_refine_rows_metal_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP row_idsSEXP, SEXP init_embeddingSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type row_ids(row_idsSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type init_embedding(init_embeddingSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_umap_refine_rows_metal_cpp(indices, distances, row_ids, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, seed));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -642,6 +680,25 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type ridge(ridgeSEXP);
     Rcpp::traits::input_parameter< double >::type max_extrapolation(max_extrapolationSEXP);
     rcpp_result_gen = Rcpp::wrap(project_embedding_affine_cpp(reference_data, query_data, reference_layout, projection_indices, projection_distances, max_neighbors, ridge, max_extrapolation));
+    return rcpp_result_gen;
+END_RCPP
+}
+// project_embedding_affine_parallel_cpp
+List project_embedding_affine_parallel_cpp(NumericMatrix reference_data, NumericMatrix query_data, NumericMatrix reference_layout, IntegerMatrix projection_indices, NumericMatrix projection_distances, int max_neighbors, double ridge, double max_extrapolation, int n_threads);
+RcppExport SEXP _fastEmbedR_project_embedding_affine_parallel_cpp(SEXP reference_dataSEXP, SEXP query_dataSEXP, SEXP reference_layoutSEXP, SEXP projection_indicesSEXP, SEXP projection_distancesSEXP, SEXP max_neighborsSEXP, SEXP ridgeSEXP, SEXP max_extrapolationSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type reference_data(reference_dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type query_data(query_dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type reference_layout(reference_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type projection_indices(projection_indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type projection_distances(projection_distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type max_neighbors(max_neighborsSEXP);
+    Rcpp::traits::input_parameter< double >::type ridge(ridgeSEXP);
+    Rcpp::traits::input_parameter< double >::type max_extrapolation(max_extrapolationSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(project_embedding_affine_parallel_cpp(reference_data, query_data, reference_layout, projection_indices, projection_distances, max_neighbors, ridge, max_extrapolation, n_threads));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1345,6 +1402,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_spectral_knn_init_metal_cpp", (DL_FUNC) &_fastEmbedR_spectral_knn_init_metal_cpp, 5},
     {"_fastEmbedR_standardize_metal_cpp", (DL_FUNC) &_fastEmbedR_standardize_metal_cpp, 1},
     {"_fastEmbedR_project_embedding_knn_metal_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_knn_metal_cpp, 3},
+    {"_fastEmbedR_project_embedding_affine_metal_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_metal_cpp, 8},
     {"_fastEmbedR_interpolate_landmark_layout_metal_cpp", (DL_FUNC) &_fastEmbedR_interpolate_landmark_layout_metal_cpp, 5},
     {"_fastEmbedR_landmark_project_interpolate_metal_cpp", (DL_FUNC) &_fastEmbedR_landmark_project_interpolate_metal_cpp, 5},
     {"_fastEmbedR_landmark_project_interpolate_knn_confidence_metal_cpp", (DL_FUNC) &_fastEmbedR_landmark_project_interpolate_knn_confidence_metal_cpp, 5},
@@ -1352,6 +1410,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_silhouette_score_metal_cpp", (DL_FUNC) &_fastEmbedR_silhouette_score_metal_cpp, 3},
     {"_fastEmbedR_knn_embed_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_metal_cpp, 9},
     {"_fastEmbedR_knn_embed_metal_csr_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_metal_csr_cpp, 10},
+    {"_fastEmbedR_knn_umap_refine_rows_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_rows_metal_cpp, 10},
     {"_fastEmbedR_rsvd_multiply_metal_cpp", (DL_FUNC) &_fastEmbedR_rsvd_multiply_metal_cpp, 3},
     {"_fastEmbedR_transform_tsne_metal_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_metal_cpp, 19},
     {"_fastEmbedR_knn_tsne_opentsne_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_metal_cpp, 19},
@@ -1369,6 +1428,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_select_low_confidence_rows_cpp", (DL_FUNC) &_fastEmbedR_select_low_confidence_rows_cpp, 3},
     {"_fastEmbedR_project_embedding_knn_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_knn_cpp, 3},
     {"_fastEmbedR_project_embedding_affine_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_cpp, 8},
+    {"_fastEmbedR_project_embedding_affine_parallel_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_parallel_cpp, 9},
     {"_fastEmbedR_knn_connectivity_range_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_range_cpp, 3},
     {"_fastEmbedR_knn_connectivity_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_cpp, 1},
     {"_fastEmbedR_umap_graph_csr_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_cpp, 6},

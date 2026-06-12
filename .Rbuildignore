@@ -16,6 +16,7 @@
 ^src/.*[.]o$
 ^src/.*[.]so$
 ^src/.*[.]dylib$
+^src/symbols[.]rds$
 ^results$
 ^results/
 ^examples$

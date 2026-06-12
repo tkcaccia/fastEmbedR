@@ -105,6 +105,110 @@ bool cholesky_solve_inplace(const std::vector<double>& chol,
   return true;
 }
 
+int resolve_projection_threads(int n_threads, const int n) {
+  if (n <= 1) return 1;
+  if (n_threads < 1) {
+    const unsigned int hw = std::thread::hardware_concurrency();
+    n_threads = hw == 0 ? 1 : static_cast<int>(hw);
+  }
+  return std::max(1, std::min(n_threads, n));
+}
+
+template <typename Function>
+void parallel_for_rows(const int n, const int n_threads, Function fn) {
+  const int threads = resolve_projection_threads(n_threads, n);
+  if (threads <= 1 || n < 2) {
+    fn(0, n, 0);
+    return;
+  }
+  std::vector<std::thread> workers;
+  workers.reserve(static_cast<std::size_t>(threads));
+  for (int t = 0; t < threads; ++t) {
+    const int begin = (n * t) / threads;
+    const int end = (n * (t + 1)) / threads;
+    workers.emplace_back([&, begin, end, t]() {
+      fn(begin, end, t);
+    });
+  }
+  for (auto& worker : workers) worker.join();
+}
+
+void weighted_projection_row(const NumericMatrix& reference_layout,
+                             const IntegerMatrix& projection_indices,
+                             const NumericMatrix& projection_distances,
+                             const int row,
+                             NumericMatrix& layout,
+                             std::vector<float>& adjusted,
+                             std::vector<float>& positive,
+                             std::vector<float>& row_distances) {
+  const int n_reference = reference_layout.nrow();
+  const int n_components = reference_layout.ncol();
+  const int projection_k = projection_indices.ncol();
+  const double eps = std::sqrt(std::numeric_limits<double>::epsilon());
+  int zero_count = 0;
+  double rho = std::numeric_limits<double>::infinity();
+  row_distances.clear();
+  for (int j = 0; j < projection_k; ++j) {
+    const int idx = projection_indices(row, j);
+    if (idx < 1 || idx > n_reference) Rcpp::stop("projection indices out of range");
+    const double d = projection_distances(row, j);
+    if (!std::isfinite(d) || d < 0.0) {
+      Rcpp::stop("projection distances must be finite and non-negative");
+    }
+    row_distances.push_back(static_cast<float>(d));
+    if (d <= eps) ++zero_count;
+    if (d < rho) rho = d;
+  }
+
+  if (zero_count > 0) {
+    const double inv_zero_count = 1.0 / static_cast<double>(zero_count);
+    for (int c = 0; c < n_components; ++c) {
+      double value = 0.0;
+      for (int j = 0; j < projection_k; ++j) {
+        if (static_cast<double>(row_distances[static_cast<std::size_t>(j)]) <= eps) {
+          value += inv_zero_count * reference_layout(projection_indices(row, j) - 1, c);
+        }
+      }
+      layout(row, c) = value;
+    }
+    return;
+  }
+
+  adjusted.clear();
+  positive.clear();
+  for (int j = 0; j < projection_k; ++j) {
+    const double value = std::max(
+      0.0,
+      static_cast<double>(row_distances[static_cast<std::size_t>(j)]) - rho
+    );
+    adjusted.push_back(static_cast<float>(value));
+    if (value > eps) positive.push_back(static_cast<float>(value));
+  }
+
+  double sigma = positive.empty() ? median_inplace(row_distances) : median_inplace(positive);
+  if (!std::isfinite(sigma) || sigma < eps) sigma = eps;
+
+  double weight_sum = 0.0;
+  for (int j = 0; j < projection_k; ++j) {
+    const double w = std::exp(-adjusted[static_cast<std::size_t>(j)] / sigma);
+    adjusted[static_cast<std::size_t>(j)] = static_cast<float>(w);
+    weight_sum += w;
+  }
+  if (!std::isfinite(weight_sum) || weight_sum <= 0.0) {
+    weight_sum = static_cast<double>(projection_k);
+    std::fill(adjusted.begin(), adjusted.end(), 1.0f);
+  }
+
+  for (int c = 0; c < n_components; ++c) {
+    double value = 0.0;
+    for (int j = 0; j < projection_k; ++j) {
+      value += static_cast<double>(adjusted[static_cast<std::size_t>(j)]) *
+        reference_layout(projection_indices(row, j) - 1, c);
+    }
+    layout(row, c) = value / weight_sum;
+  }
+}
+
 } // namespace
 
 // [[Rcpp::export]]
@@ -1307,5 +1411,249 @@ List project_embedding_affine_cpp(NumericMatrix reference_data,
     Rcpp::Named("max_neighbors") = max_neighbors,
     Rcpp::Named("ridge") = ridge,
     Rcpp::Named("max_extrapolation") = max_extrapolation
+  );
+}
+
+// [[Rcpp::export]]
+List project_embedding_affine_parallel_cpp(NumericMatrix reference_data,
+                                           NumericMatrix query_data,
+                                           NumericMatrix reference_layout,
+                                           IntegerMatrix projection_indices,
+                                           NumericMatrix projection_distances,
+                                           int max_neighbors = 12,
+                                           double ridge = 1e-3,
+                                           double max_extrapolation = 2.5,
+                                           int n_threads = 1) {
+  const int n_reference = reference_layout.nrow();
+  const int n_components = reference_layout.ncol();
+  const int n_query = projection_indices.nrow();
+  const int projection_k = projection_indices.ncol();
+  const int n_features = reference_data.ncol();
+
+  if (n_reference < 1) Rcpp::stop("reference_layout must have at least one row");
+  if (reference_data.nrow() != n_reference) {
+    Rcpp::stop("reference_data and reference_layout must have the same number of rows");
+  }
+  if (query_data.nrow() != n_query) {
+    Rcpp::stop("query_data and projection_indices must have the same number of rows");
+  }
+  if (query_data.ncol() != n_features) {
+    Rcpp::stop("reference_data and query_data must have the same number of columns");
+  }
+  if (n_components < 1) Rcpp::stop("reference_layout must have at least one column");
+  if (n_query < 1) Rcpp::stop("projection_indices must have at least one row");
+  if (projection_k < 1) Rcpp::stop("projection_indices must have at least one column");
+  if (projection_distances.nrow() != n_query ||
+      projection_distances.ncol() != projection_k) {
+    Rcpp::stop("projection_indices and projection_distances must have the same dimensions");
+  }
+  if (max_neighbors < 3) max_neighbors = 3;
+  max_neighbors = std::min(max_neighbors, projection_k);
+  if (!std::isfinite(ridge) || ridge <= 0.0) ridge = 1e-3;
+  if (!std::isfinite(max_extrapolation) || max_extrapolation <= 0.0) {
+    max_extrapolation = 2.5;
+  }
+  for (int i = 0; i < n_query; ++i) {
+    for (int j = 0; j < projection_k; ++j) {
+      const int idx = projection_indices(i, j);
+      const double d = projection_distances(i, j);
+      if (idx < 1 || idx > n_reference) Rcpp::stop("projection indices out of range");
+      if (!std::isfinite(d) || d < 0.0) {
+        Rcpp::stop("projection distances must be finite and non-negative");
+      }
+    }
+  }
+
+  NumericMatrix layout(n_query, n_components);
+  NumericVector confidence(n_query);
+  IntegerVector used_neighbors(n_query);
+  IntegerVector fallback(n_query);
+  const double eps = std::sqrt(std::numeric_limits<double>::epsilon());
+  const int threads = resolve_projection_threads(n_threads, n_query);
+
+  parallel_for_rows(n_query, threads, [&](const int begin, const int end, const int) {
+    std::vector<double> weights(static_cast<std::size_t>(max_neighbors), 0.0);
+    std::vector<double> x_center(static_cast<std::size_t>(n_features), 0.0);
+    std::vector<double> y_center(static_cast<std::size_t>(n_components), 0.0);
+    std::vector<double> x_centered(static_cast<std::size_t>(max_neighbors) * n_features, 0.0);
+    std::vector<double> y_rhs(static_cast<std::size_t>(max_neighbors) * n_components, 0.0);
+    std::vector<double> kernel(static_cast<std::size_t>(max_neighbors) * max_neighbors, 0.0);
+    std::vector<double> q(static_cast<std::size_t>(max_neighbors), 0.0);
+    std::vector<float> positive;
+    std::vector<float> weighted_adjusted;
+    std::vector<float> weighted_positive;
+    std::vector<float> weighted_distances;
+    positive.reserve(static_cast<std::size_t>(projection_k));
+    weighted_adjusted.reserve(static_cast<std::size_t>(projection_k));
+    weighted_positive.reserve(static_cast<std::size_t>(projection_k));
+    weighted_distances.reserve(static_cast<std::size_t>(projection_k));
+
+    for (int i = begin; i < end; ++i) {
+      int zero_col = -1;
+      double rho = std::numeric_limits<double>::infinity();
+      for (int j = 0; j < projection_k; ++j) {
+        const double d = projection_distances(i, j);
+        if (d <= eps && zero_col < 0) zero_col = j;
+        rho = std::min(rho, d);
+      }
+      if (zero_col >= 0) {
+        const int ref = projection_indices(i, zero_col) - 1;
+        for (int c = 0; c < n_components; ++c) layout(i, c) = reference_layout(ref, c);
+        confidence[i] = 1.0;
+        used_neighbors[i] = 1;
+        fallback[i] = 0;
+        continue;
+      }
+
+      const int m = std::min(max_neighbors, projection_k);
+      positive.clear();
+      for (int j = 0; j < projection_k; ++j) {
+        const double adjusted = std::max(0.0, projection_distances(i, j) - rho);
+        if (adjusted > eps) positive.push_back(static_cast<float>(adjusted));
+      }
+      double sigma = positive.empty() ? std::max(rho, eps) : median_inplace(positive);
+      if (!std::isfinite(sigma) || sigma < eps) sigma = eps;
+
+      double weight_sum = 0.0;
+      double weight_sq_sum = 0.0;
+      for (int j = 0; j < m; ++j) {
+        const double adjusted = std::max(0.0, projection_distances(i, j) - rho);
+        const double w = std::exp(-adjusted / sigma);
+        weights[static_cast<std::size_t>(j)] = w;
+        weight_sum += w;
+        weight_sq_sum += w * w;
+      }
+      if (!std::isfinite(weight_sum) || weight_sum <= 0.0) {
+        weighted_projection_row(
+          reference_layout,
+          projection_indices,
+          projection_distances,
+          i,
+          layout,
+          weighted_adjusted,
+          weighted_positive,
+          weighted_distances
+        );
+        confidence[i] = 0.0;
+        used_neighbors[i] = m;
+        fallback[i] = 1;
+        continue;
+      }
+      for (int j = 0; j < m; ++j) weights[static_cast<std::size_t>(j)] /= weight_sum;
+
+      std::fill(x_center.begin(), x_center.end(), 0.0);
+      std::fill(y_center.begin(), y_center.end(), 0.0);
+      for (int j = 0; j < m; ++j) {
+        const int ref = projection_indices(i, j) - 1;
+        const double w = weights[static_cast<std::size_t>(j)];
+        for (int f = 0; f < n_features; ++f) x_center[static_cast<std::size_t>(f)] += w * reference_data(ref, f);
+        for (int c = 0; c < n_components; ++c) y_center[static_cast<std::size_t>(c)] += w * reference_layout(ref, c);
+      }
+
+      double layout_radius_sq = 0.0;
+      double trace = 0.0;
+      for (int a = 0; a < m; ++a) {
+        const int ref_a = projection_indices(i, a) - 1;
+        const double sqrt_wa = std::sqrt(weights[static_cast<std::size_t>(a)]);
+        double row_norm = 0.0;
+        double y_radius = 0.0;
+        for (int f = 0; f < n_features; ++f) {
+          const double xc = reference_data(ref_a, f) - x_center[static_cast<std::size_t>(f)];
+          x_centered[static_cast<std::size_t>(a) * n_features + f] = xc;
+          row_norm += xc * xc;
+        }
+        trace += weights[static_cast<std::size_t>(a)] * row_norm;
+        for (int c = 0; c < n_components; ++c) {
+          const double yc = reference_layout(ref_a, c) - y_center[static_cast<std::size_t>(c)];
+          y_rhs[static_cast<std::size_t>(a) * n_components + c] = sqrt_wa * yc;
+          y_radius += yc * yc;
+        }
+        layout_radius_sq = std::max(layout_radius_sq, y_radius);
+      }
+
+      std::fill(kernel.begin(), kernel.end(), 0.0);
+      for (int a = 0; a < m; ++a) {
+        const double sqrt_wa = std::sqrt(weights[static_cast<std::size_t>(a)]);
+        for (int b = 0; b <= a; ++b) {
+          const double sqrt_wb = std::sqrt(weights[static_cast<std::size_t>(b)]);
+          double dot = 0.0;
+          for (int f = 0; f < n_features; ++f) {
+            dot += x_centered[static_cast<std::size_t>(a) * n_features + f] *
+              x_centered[static_cast<std::size_t>(b) * n_features + f];
+          }
+          const double value = sqrt_wa * sqrt_wb * dot;
+          kernel[static_cast<std::size_t>(a) * m + b] = value;
+          kernel[static_cast<std::size_t>(b) * m + a] = value;
+        }
+      }
+      const double lambda = ridge * std::max(trace, eps) + eps;
+      for (int a = 0; a < m; ++a) kernel[static_cast<std::size_t>(a) * m + a] += lambda;
+
+      bool ok = cholesky_decompose_inplace(kernel, m) &&
+        cholesky_solve_inplace(kernel, y_rhs, m, n_components);
+      if (!ok) {
+        weighted_projection_row(
+          reference_layout,
+          projection_indices,
+          projection_distances,
+          i,
+          layout,
+          weighted_adjusted,
+          weighted_positive,
+          weighted_distances
+        );
+        confidence[i] = 0.0;
+        used_neighbors[i] = m;
+        fallback[i] = 1;
+        continue;
+      }
+
+      for (int a = 0; a < m; ++a) {
+        const double sqrt_wa = std::sqrt(weights[static_cast<std::size_t>(a)]);
+        double dot = 0.0;
+        for (int f = 0; f < n_features; ++f) {
+          dot += (query_data(i, f) - x_center[static_cast<std::size_t>(f)]) *
+            x_centered[static_cast<std::size_t>(a) * n_features + f];
+        }
+        q[static_cast<std::size_t>(a)] = sqrt_wa * dot;
+      }
+
+      double disp_sq = 0.0;
+      for (int c = 0; c < n_components; ++c) {
+        double displacement = 0.0;
+        for (int a = 0; a < m; ++a) {
+          displacement += q[static_cast<std::size_t>(a)] *
+            y_rhs[static_cast<std::size_t>(a) * n_components + c];
+        }
+        layout(i, c) = y_center[static_cast<std::size_t>(c)] + displacement;
+        disp_sq += displacement * displacement;
+      }
+
+      const double max_disp = max_extrapolation * std::sqrt(std::max(layout_radius_sq, eps));
+      if (disp_sq > max_disp * max_disp) {
+        const double scale = max_disp / (std::sqrt(disp_sq) + eps);
+        for (int c = 0; c < n_components; ++c) {
+          layout(i, c) = y_center[static_cast<std::size_t>(c)] +
+            (layout(i, c) - y_center[static_cast<std::size_t>(c)]) * scale;
+        }
+      }
+
+      const double effective_n = weight_sq_sum > 0.0 ? (weight_sum * weight_sum) / weight_sq_sum : 1.0;
+      confidence[i] = std::max(0.0, std::min(1.0, effective_n / static_cast<double>(m)));
+      used_neighbors[i] = m;
+      fallback[i] = 0;
+    }
+  });
+
+  return List::create(
+    Rcpp::Named("layout") = layout,
+    Rcpp::Named("confidence") = confidence,
+    Rcpp::Named("used_neighbors") = used_neighbors,
+    Rcpp::Named("fallback") = fallback,
+    Rcpp::Named("method") = "local_affine_knn_projection_parallel",
+    Rcpp::Named("max_neighbors") = max_neighbors,
+    Rcpp::Named("ridge") = ridge,
+    Rcpp::Named("max_extrapolation") = max_extrapolation,
+    Rcpp::Named("n_threads") = threads
   );
 }

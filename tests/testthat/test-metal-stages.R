@@ -44,6 +44,81 @@ test_that("Metal UMAP auto policy keeps the visually validated atomic-inplace pa
   expect_equal(fastEmbedR:::fast_knn_umap_gpu_hybrid_plan(cfg)$reason, "auto_policy_keeps_pure_gpu")
 })
 
+test_that("Metal UMAP landmark refinement stays native and reports its backend", {
+  skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
+
+  old_refine <- getOption("fastEmbedR.landmark_umap_refine_epochs", NULL)
+  on.exit({
+    if (is.null(old_refine)) {
+      options(fastEmbedR.landmark_umap_refine_epochs = NULL)
+    } else {
+      options(fastEmbedR.landmark_umap_refine_epochs = old_refine)
+    }
+  }, add = TRUE)
+
+  set.seed(91)
+  x <- matrix(rnorm(360L), nrow = 60L, ncol = 6L)
+  options(fastEmbedR.landmark_umap_refine_epochs = 2L)
+  fit <- fastEmbedR::landmark_umap(
+    x,
+    landmarks = 0.5,
+    n_neighbors = 8L,
+    backend = "metal",
+    n_threads = 2L,
+    seed = 91L,
+    standardize = FALSE,
+    preserve_sample = NULL,
+    silhouette_sample = NULL,
+    verbose = FALSE
+  )
+
+  expect_equal(fit$parameters$landmark_refinement_backend, "metal")
+  expect_equal(attr(fit$layout, "metal_refinement"), "landmark_rows_atomic_inplace")
+  expect_equal(dim(fit$layout), c(60L, 2L))
+  expect_false(anyNA(fit$layout))
+})
+
+test_that("Metal affine landmark projection matches CPU local affine correction", {
+  skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
+
+  set.seed(92)
+  reference_data <- matrix(rnorm(50L * 6L), nrow = 50L, ncol = 6L)
+  query_data <- matrix(rnorm(12L * 6L), nrow = 12L, ncol = 6L)
+  reference_layout <- cbind(rnorm(50L), rnorm(50L))
+  projection <- fastEmbedR::nn(reference_data, query_data, k = 14L, backend = "cpu")
+
+  cpu <- fastEmbedR:::project_embedding_affine_parallel_cpp(
+    reference_data,
+    query_data,
+    reference_layout,
+    projection$indices,
+    projection$distances,
+    12L,
+    1e-3,
+    2.5,
+    2L
+  )
+  metal <- fastEmbedR:::project_embedding_affine_metal_cpp(
+    reference_data,
+    query_data,
+    reference_layout,
+    projection$indices,
+    projection$distances,
+    12L,
+    1e-3,
+    2.5
+  )
+
+  expect_equal(metal$method, "local_affine_knn_projection_metal")
+  expect_equal(metal$backend, "metal")
+  expect_false(anyNA(metal$layout))
+  metal_layout <- metal$layout
+  cpu_layout <- cpu$layout
+  attributes(metal_layout) <- attributes(cpu_layout) <- list(dim = dim(cpu$layout))
+  expect_equal(metal_layout, cpu_layout, tolerance = 1e-4)
+  expect_equal(metal$fallback, cpu$fallback)
+})
+
 test_that("Metal preprocessing, projection, interpolation, and scoring match CPU", {
   skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
 

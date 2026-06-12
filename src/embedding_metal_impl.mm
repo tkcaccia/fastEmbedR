@@ -35,14 +35,25 @@ struct EmbedParams {
   float max_weight;
 };
 
+struct RefinePrepareParams {
+  std::uint32_t n_total;
+  std::uint32_t n_rows;
+  std::uint32_t k;
+  std::uint32_t n_epochs;
+  float global_mean;
+};
+
 struct MetalEmbeddingState {
   id<MTLDevice> device;
   id<MTLLibrary> library;
   id<MTLComputePipelineState> embed_pipeline;
   id<MTLComputePipelineState> embed_atomic_inplace_pipeline;
+  id<MTLComputePipelineState> refine_prepare_pipeline;
+  id<MTLComputePipelineState> refine_rows_pipeline;
   id<MTLComputePipelineState> standardize_stats_pipeline;
   id<MTLComputePipelineState> standardize_apply_pipeline;
   id<MTLComputePipelineState> project_pipeline;
+  id<MTLComputePipelineState> affine_project_pipeline;
   id<MTLComputePipelineState> landmark_project_interpolate_pipeline;
   id<MTLComputePipelineState> landmark_project_interpolate_knn_confidence_pipeline;
   id<MTLComputePipelineState> overwrite_landmarks_pipeline;
@@ -207,6 +218,9 @@ MetalEmbeddingState& metal_embedding_state() {
   static MetalEmbeddingState state{};
   if (state.device != nil && state.embed_pipeline != nil &&
       state.embed_atomic_inplace_pipeline != nil &&
+      state.refine_prepare_pipeline != nil &&
+      state.refine_rows_pipeline != nil &&
+      state.affine_project_pipeline != nil &&
       state.opentsne_sum_q_pipeline != nil &&
       state.opentsne_epoch_pipeline != nil &&
       state.opentsne_center_pipeline != nil &&
@@ -243,9 +257,12 @@ MetalEmbeddingState& metal_embedding_state() {
 
   state.embed_pipeline = make_pipeline(state, "embed_epoch");
   state.embed_atomic_inplace_pipeline = make_pipeline(state, "embed_epoch_atomic_inplace");
+  state.refine_prepare_pipeline = make_pipeline(state, "umap_refine_prepare_rows");
+  state.refine_rows_pipeline = make_pipeline(state, "umap_refine_rows_atomic_inplace");
   state.standardize_stats_pipeline = make_pipeline(state, "standardize_stats");
   state.standardize_apply_pipeline = make_pipeline(state, "standardize_apply");
   state.project_pipeline = make_pipeline(state, "project_membership");
+  state.affine_project_pipeline = make_pipeline(state, "project_embedding_affine_rows");
   state.landmark_project_interpolate_pipeline = make_pipeline(state, "landmark_project_interpolate");
   state.landmark_project_interpolate_knn_confidence_pipeline =
     make_pipeline(state, "landmark_project_interpolate_knn_confidence");
@@ -836,6 +853,14 @@ struct EmbedParams {
   float max_weight;
 };
 
+struct RefinePrepareParams {
+  uint n_total;
+  uint n_rows;
+  uint k;
+  uint n_epochs;
+  float global_mean;
+};
+
 struct MatrixMultiplyParams {
   uint left_rows;
   uint left_cols;
@@ -1153,6 +1178,150 @@ kernel void embed_epoch_atomic_inplace(
   }
 }
 
+kernel void umap_refine_prepare_rows(
+  device const int* row_ids [[buffer(0)]],
+  device const int* neighbors [[buffer(1)]],
+  device const float* distances [[buffer(2)]],
+  device float* weights [[buffer(3)]],
+  device float* epochs_per_sample [[buffer(4)]],
+  constant RefinePrepareParams& p [[buffer(5)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= p.n_rows) return;
+
+  uint row = uint(row_ids[gid]);
+  uint base = gid * p.k;
+  float rho = INFINITY;
+  float row_sum = 0.0f;
+  uint row_count = 0u;
+
+  for (uint e = 0; e < p.k; ++e) {
+    float d = distances[base + e];
+    if (!isfinite(d)) continue;
+    if (d >= 0.0f) {
+      row_sum += d;
+      row_count += 1u;
+    }
+    if (d > 0.0f && d < rho) rho = d;
+  }
+  if (!isfinite(rho)) rho = 0.0f;
+
+  float target = log2(max(1.0f, float(p.k)));
+  float lo = 0.0f;
+  float hi = INFINITY;
+  float sigma = 1.0f;
+  float best_sigma = sigma;
+  float best_diff = INFINITY;
+
+  for (uint iter = 0u; iter < 64u; ++iter) {
+    float psum = 0.0f;
+    float safe_sigma = max(sigma, 1.0e-12f);
+    for (uint e = 0; e < p.k; ++e) {
+      float raw = distances[base + e];
+      if (!isfinite(raw)) continue;
+      float d = raw - rho;
+      psum += d <= 0.0f ? 1.0f : exp(-d / safe_sigma);
+    }
+    float diff = abs(psum - target);
+    if (diff < best_diff) {
+      best_diff = diff;
+      best_sigma = sigma;
+    }
+    if (psum > target) {
+      hi = sigma;
+      sigma = 0.5f * (lo + hi);
+    } else {
+      lo = sigma;
+      sigma = isinf(hi) ? sigma * 2.0f : 0.5f * (lo + hi);
+    }
+    if (diff < 1.0e-5f) break;
+  }
+
+  float row_mean = row_count > 0u ? row_sum / float(row_count) : p.global_mean;
+  float sigma_floor = 1.0e-3f * (rho > 0.0f ? row_mean : p.global_mean);
+  best_sigma = max(max(best_sigma, sigma_floor), 1.0e-12f);
+
+  for (uint e = 0; e < p.k; ++e) {
+    uint pos = base + e;
+    int nb_i = neighbors[pos];
+    float d = distances[pos];
+    float w = 0.0f;
+    if (nb_i >= 0 && uint(nb_i) < p.n_total && uint(nb_i) != row &&
+        isfinite(d) && d >= 0.0f) {
+      w = d <= rho ? 1.0f : exp(-(d - rho) / best_sigma);
+      if (!isfinite(w) || w <= 0.0f) w = 0.0f;
+    }
+    weights[pos] = w;
+    epochs_per_sample[pos] = w > 0.0f ? 1.0f / max(w, 1.0e-6f) : 0.0f;
+  }
+}
+
+kernel void umap_refine_rows_atomic_inplace(
+  device atomic_int* layout [[buffer(0)]],
+  device const int* row_ids [[buffer(1)]],
+  device const int* neighbors [[buffer(2)]],
+  device const float* weights [[buffer(3)]],
+  device const float* epochs_per_sample [[buffer(4)]],
+  constant EmbedParams& p [[buffer(5)]],
+  constant uint& n_rows [[buffer(6)]],
+  constant uint& epoch [[buffer(7)]],
+  device const uchar* update_mask [[buffer(8)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= n_rows) return;
+
+  constexpr float inv_scale = 1.0f / 65536.0f;
+  float alpha = p.learning_rate * (1.0f - float(epoch) / max(1.0f, float(p.n_epochs)));
+  uint row = uint(row_ids[gid]);
+  if (row >= p.n) return;
+  uint head_base = row * 2u;
+
+  for (uint e = 0; e < p.k; ++e) {
+    uint pos = gid * p.k + e;
+    int nb_i = neighbors[pos];
+    if (nb_i < 0 || uint(nb_i) >= p.n || uint(nb_i) == row) continue;
+    float period = epochs_per_sample[pos];
+    int positive_samples = positive_samples_this_epoch_period(period, p, epoch);
+    if (positive_samples <= 0) continue;
+
+    uint nb = uint(nb_i);
+    uint tail_base = nb * 2u;
+    float head_x = float(atomic_load_explicit(&layout[head_base], memory_order_relaxed)) * inv_scale;
+    float head_y = float(atomic_load_explicit(&layout[head_base + 1u], memory_order_relaxed)) * inv_scale;
+    float tail_x = float(atomic_load_explicit(&layout[tail_base], memory_order_relaxed)) * inv_scale;
+    float tail_y = float(atomic_load_explicit(&layout[tail_base + 1u], memory_order_relaxed)) * inv_scale;
+
+    float2 diff = float2(head_x - tail_x, head_y - tail_y);
+    float d2 = max(1.1920928955078125e-7f, dot(diff, diff));
+    float coeff = attractive_coeff(d2, weights[pos], p);
+    float2 attractive = alpha * float2(clip4(coeff * diff.x), clip4(coeff * diff.y));
+
+    atomic_fetch_add_explicit(&layout[head_base], fixed_delta(attractive.x), memory_order_relaxed);
+    atomic_fetch_add_explicit(&layout[head_base + 1u], fixed_delta(attractive.y), memory_order_relaxed);
+    if (update_mask[nb] != uchar(0)) {
+      atomic_fetch_add_explicit(&layout[tail_base], fixed_delta(-attractive.x), memory_order_relaxed);
+      atomic_fetch_add_explicit(&layout[tail_base + 1u], fixed_delta(-attractive.y), memory_order_relaxed);
+    }
+
+    uint neg_samples = uint(negative_samples_this_epoch_period(period, p, epoch));
+    for (uint s = 0; s < neg_samples; ++s) {
+      uint neg = deterministic_vertex(p.n, p.seed, epoch, row, e, s);
+      if (neg == row || neg == nb) continue;
+      uint neg_base = neg * 2u;
+      head_x = float(atomic_load_explicit(&layout[head_base], memory_order_relaxed)) * inv_scale;
+      head_y = float(atomic_load_explicit(&layout[head_base + 1u], memory_order_relaxed)) * inv_scale;
+      float neg_x = float(atomic_load_explicit(&layout[neg_base], memory_order_relaxed)) * inv_scale;
+      float neg_y = float(atomic_load_explicit(&layout[neg_base + 1u], memory_order_relaxed)) * inv_scale;
+      float2 ndiff = float2(head_x - neg_x, head_y - neg_y);
+      float nd2 = max(1.1920928955078125e-7f, dot(ndiff, ndiff));
+      float rcoeff = repulsive_coeff(nd2, p);
+      float2 repulsive = alpha * float2(clip4(rcoeff * ndiff.x), clip4(rcoeff * ndiff.y));
+      atomic_fetch_add_explicit(&layout[head_base], fixed_delta(repulsive.x), memory_order_relaxed);
+      atomic_fetch_add_explicit(&layout[head_base + 1u], fixed_delta(repulsive.y), memory_order_relaxed);
+    }
+  }
+}
+
 kernel void matrix_multiply(
   device const float* left [[buffer(0)]],
   device const float* right [[buffer(1)]],
@@ -1295,6 +1464,7 @@ kernel void spectral_normalize(
 }
 
 #define FASTEMBEDR_METAL_PROJECTION_MAX_K 128
+#define FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS 12
 #define FASTEMBEDR_METAL_SCORE_MAX_K 64
 #define FASTEMBEDR_METAL_SCORE_WIDTH 6
 #define FASTEMBEDR_METAL_MAX_LABELS 128
@@ -1847,6 +2017,7 @@ kernel void opentsne_fft_butterfly_rows(
   constant uint& n_fft [[buffer(1)]],
   constant uint& stage [[buffer(2)]],
   constant uint& inverse [[buffer(3)]],
+  device const float2* twiddles [[buffer(4)]],
   uint2 gid [[thread_position_in_grid]]
 ) {
   uint half_count = n_fft >> 1u;
@@ -1856,10 +2027,8 @@ kernel void opentsne_fft_butterfly_rows(
   uint group = gid.x / span_half;
   uint j = gid.x - group * span_half;
   uint base = gid.y * n_fft + group * width + j;
-  constexpr float two_pi = 6.2831853071795864769f;
-  float direction = inverse == 0u ? 1.0f : -1.0f;
-  float angle = direction * two_pi * float(j) / float(width);
-  float2 w = float2(cos(angle), sin(angle));
+  float2 w = twiddles[(stage - 1u) * half_count + j];
+  if (inverse != 0u) w.y = -w.y;
   float2 u = values[base];
   float2 v = complex_mul(values[base + span_half], w);
   values[base] = u + v;
@@ -1871,6 +2040,7 @@ kernel void opentsne_fft_butterfly_cols(
   constant uint& n_fft [[buffer(1)]],
   constant uint& stage [[buffer(2)]],
   constant uint& inverse [[buffer(3)]],
+  device const float2* twiddles [[buffer(4)]],
   uint2 gid [[thread_position_in_grid]]
 ) {
   uint half_count = n_fft >> 1u;
@@ -1882,10 +2052,8 @@ kernel void opentsne_fft_butterfly_cols(
   uint row0 = group * width + j;
   uint idx0 = row0 * n_fft + gid.x;
   uint idx1 = (row0 + span_half) * n_fft + gid.x;
-  constexpr float two_pi = 6.2831853071795864769f;
-  float direction = inverse == 0u ? 1.0f : -1.0f;
-  float angle = direction * two_pi * float(j) / float(width);
-  float2 w = float2(cos(angle), sin(angle));
+  float2 w = twiddles[(stage - 1u) * half_count + j];
+  if (inverse != 0u) w.y = -w.y;
   float2 u = values[idx0];
   float2 v = complex_mul(values[idx1], w);
   values[idx0] = u + v;
@@ -2127,6 +2295,303 @@ kernel void opentsne_epoch_fft_grid(
   current[row] = yi + update;
   gains[row] = gain;
   updates[row] = update;
+}
+
+void affine_weighted_fallback(
+  device const float* reference_layout,
+  device const int* projection_indices,
+  device const float* projection_distances,
+  device float* out,
+  device float* confidence_out,
+  device int* used_neighbors_out,
+  device int* fallback_out,
+  uint n_reference,
+  uint n_query,
+  uint projection_k,
+  uint used_neighbors,
+  uint row,
+  float rho,
+  float sigma
+) {
+  float all_weight_sum = 0.0f;
+  float y0 = 0.0f;
+  float y1 = 0.0f;
+  for (uint j = 0u; j < projection_k; ++j) {
+    int idx = projection_indices[j * n_query + row] - 1;
+    if (idx < 0 || uint(idx) >= n_reference) continue;
+    float d = projection_distances[j * n_query + row];
+    if (!isfinite(d) || d < 0.0f) continue;
+    float adjusted = max(0.0f, d - rho);
+    float w = exp(-adjusted / max(sigma, 1.4901161193847656e-8f));
+    if (!isfinite(w) || w <= 0.0f) continue;
+    all_weight_sum += w;
+    y0 += w * reference_layout[uint(idx)];
+    y1 += w * reference_layout[n_reference + uint(idx)];
+  }
+  if (!isfinite(all_weight_sum) || all_weight_sum <= 0.0f) {
+    all_weight_sum = 1.0f;
+  }
+  out[row] = y0 / all_weight_sum;
+  out[n_query + row] = y1 / all_weight_sum;
+  confidence_out[row] = 0.0f;
+  used_neighbors_out[row] = int(used_neighbors);
+  fallback_out[row] = 1;
+}
+
+kernel void project_embedding_affine_rows(
+  device const float* reference_data [[buffer(0)]],
+  device const float* query_data [[buffer(1)]],
+  device const float* reference_layout [[buffer(2)]],
+  device const int* projection_indices [[buffer(3)]],
+  device const float* projection_distances [[buffer(4)]],
+  device float* out [[buffer(5)]],
+  device float* confidence_out [[buffer(6)]],
+  device int* used_neighbors_out [[buffer(7)]],
+  device int* fallback_out [[buffer(8)]],
+  constant uint& n_reference [[buffer(9)]],
+  constant uint& n_query [[buffer(10)]],
+  constant uint& n_features [[buffer(11)]],
+  constant uint& projection_k [[buffer(12)]],
+  constant uint& max_neighbors [[buffer(13)]],
+  constant float& ridge [[buffer(14)]],
+  constant float& max_extrapolation [[buffer(15)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= n_query) return;
+
+  constexpr float eps = 1.4901161193847656e-8f;
+  constexpr float inf = 3.4028234663852886e+38f;
+  uint m = min(max(max_neighbors, 3u), min(projection_k, uint(FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS)));
+
+  float distances[FASTEMBEDR_METAL_PROJECTION_MAX_K];
+  float scratch[FASTEMBEDR_METAL_PROJECTION_MAX_K];
+  float weights[FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS];
+  int refs[FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS];
+  float y_center[2];
+  float gram[FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS * FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS];
+  float rhs[FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS * 2];
+  float q[FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS];
+
+  int zero_col = -1;
+  float rho = inf;
+  for (uint j = 0u; j < projection_k; ++j) {
+    uint pos = j * n_query + row;
+    int idx = projection_indices[pos] - 1;
+    float d = projection_distances[pos];
+    bool valid = idx >= 0 && uint(idx) < n_reference && isfinite(d) && d >= 0.0f;
+    distances[j] = valid ? d : inf;
+    if (valid && d <= eps && zero_col < 0) zero_col = int(j);
+    if (valid) rho = min(rho, d);
+  }
+  if (!isfinite(rho)) rho = 0.0f;
+
+  if (zero_col >= 0) {
+    int ref = projection_indices[uint(zero_col) * n_query + row] - 1;
+    out[row] = reference_layout[uint(ref)];
+    out[n_query + row] = reference_layout[n_reference + uint(ref)];
+    confidence_out[row] = 1.0f;
+    used_neighbors_out[row] = 1;
+    fallback_out[row] = 0;
+    return;
+  }
+
+  int positive_count = 0;
+  for (uint j = 0u; j < projection_k; ++j) {
+    float adjusted = max(0.0f, distances[j] - rho);
+    if (isfinite(adjusted) && adjusted > eps) scratch[positive_count++] = adjusted;
+  }
+  float sigma = positive_count > 0 ? median_local(scratch, positive_count) : max(rho, eps);
+  if (!isfinite(sigma) || sigma < eps) sigma = eps;
+
+  float weight_sum = 0.0f;
+  float weight_sq_sum = 0.0f;
+  for (uint j = 0u; j < m; ++j) {
+    int idx = projection_indices[j * n_query + row] - 1;
+    refs[j] = idx;
+    float adjusted = max(0.0f, distances[j] - rho);
+    float w = (idx >= 0 && uint(idx) < n_reference && isfinite(adjusted)) ? exp(-adjusted / sigma) : 0.0f;
+    weights[j] = w;
+    weight_sum += w;
+    weight_sq_sum += w * w;
+  }
+
+  if (!isfinite(weight_sum) || weight_sum <= 0.0f) {
+    affine_weighted_fallback(
+      reference_layout, projection_indices, projection_distances, out,
+      confidence_out, used_neighbors_out, fallback_out, n_reference, n_query,
+      projection_k, m, row, rho, sigma
+    );
+    return;
+  }
+  for (uint j = 0u; j < m; ++j) weights[j] /= weight_sum;
+
+  y_center[0] = 0.0f;
+  y_center[1] = 0.0f;
+  for (uint j = 0u; j < m; ++j) {
+    int ref = refs[j];
+    if (ref < 0 || uint(ref) >= n_reference) continue;
+    float w = weights[j];
+    y_center[0] += w * reference_layout[uint(ref)];
+    y_center[1] += w * reference_layout[n_reference + uint(ref)];
+  }
+
+  float layout_radius_sq = 0.0f;
+  float trace = 0.0f;
+  for (uint a = 0u; a < m; ++a) {
+    int ref_a = refs[a];
+    float sqrt_wa = sqrt(max(weights[a], 0.0f));
+    float row_norm = 0.0f;
+    for (uint f = 0u; f < n_features; ++f) {
+      float x_center_f = 0.0f;
+      for (uint j = 0u; j < m; ++j) {
+        int ref_j = refs[j];
+        if (ref_j >= 0 && uint(ref_j) < n_reference) {
+          x_center_f += weights[j] * reference_data[uint(ref_j) + f * n_reference];
+        }
+      }
+      float xc = (ref_a >= 0 && uint(ref_a) < n_reference) ?
+        reference_data[uint(ref_a) + f * n_reference] - x_center_f :
+        0.0f;
+      row_norm += xc * xc;
+    }
+    trace += weights[a] * row_norm;
+    float yc0 = (ref_a >= 0 && uint(ref_a) < n_reference) ?
+      reference_layout[uint(ref_a)] - y_center[0] :
+      0.0f;
+    float yc1 = (ref_a >= 0 && uint(ref_a) < n_reference) ?
+      reference_layout[n_reference + uint(ref_a)] - y_center[1] :
+      0.0f;
+    rhs[a * 2u] = sqrt_wa * yc0;
+    rhs[a * 2u + 1u] = sqrt_wa * yc1;
+    layout_radius_sq = max(layout_radius_sq, yc0 * yc0 + yc1 * yc1);
+  }
+
+  for (uint a = 0u; a < m; ++a) {
+    int ref_a = refs[a];
+    float sqrt_wa = sqrt(max(weights[a], 0.0f));
+    for (uint b = 0u; b <= a; ++b) {
+      int ref_b = refs[b];
+      float sqrt_wb = sqrt(max(weights[b], 0.0f));
+      float dot_value = 0.0f;
+      for (uint f = 0u; f < n_features; ++f) {
+        float x_center_f = 0.0f;
+        for (uint j = 0u; j < m; ++j) {
+          int ref_j = refs[j];
+          if (ref_j >= 0 && uint(ref_j) < n_reference) {
+            x_center_f += weights[j] * reference_data[uint(ref_j) + f * n_reference];
+          }
+        }
+        float xa = (ref_a >= 0 && uint(ref_a) < n_reference) ?
+          reference_data[uint(ref_a) + f * n_reference] - x_center_f :
+          0.0f;
+        float xb = (ref_b >= 0 && uint(ref_b) < n_reference) ?
+          reference_data[uint(ref_b) + f * n_reference] - x_center_f :
+          0.0f;
+        dot_value += xa * xb;
+      }
+      float value = sqrt_wa * sqrt_wb * dot_value;
+      gram[a * m + b] = value;
+      gram[b * m + a] = value;
+    }
+  }
+  float lambda = ridge * max(trace, eps) + eps;
+  for (uint a = 0u; a < m; ++a) gram[a * m + a] += lambda;
+
+  bool ok = true;
+  for (uint j = 0u; j < m && ok; ++j) {
+    float sum_value = gram[j * m + j];
+    for (uint kk = 0u; kk < j; ++kk) {
+      float l = gram[j * m + kk];
+      sum_value -= l * l;
+    }
+    if (!isfinite(sum_value) || sum_value <= eps) {
+      ok = false;
+      break;
+    }
+    float diag = sqrt(sum_value);
+    gram[j * m + j] = diag;
+    for (uint i = j + 1u; i < m; ++i) {
+      float s = gram[i * m + j];
+      for (uint kk = 0u; kk < j; ++kk) s -= gram[i * m + kk] * gram[j * m + kk];
+      gram[i * m + j] = s / diag;
+    }
+  }
+  if (!ok) {
+    affine_weighted_fallback(
+      reference_layout, projection_indices, projection_distances, out,
+      confidence_out, used_neighbors_out, fallback_out, n_reference, n_query,
+      projection_k, m, row, rho, sigma
+    );
+    return;
+  }
+
+  for (uint c = 0u; c < 2u; ++c) {
+    for (uint i = 0u; i < m; ++i) {
+      float s = rhs[i * 2u + c];
+      for (uint kk = 0u; kk < i; ++kk) s -= gram[i * m + kk] * rhs[kk * 2u + c];
+      rhs[i * 2u + c] = s / gram[i * m + i];
+    }
+    for (int ii = int(m) - 1; ii >= 0; --ii) {
+      uint i = uint(ii);
+      float s = rhs[i * 2u + c];
+      for (uint kk = i + 1u; kk < m; ++kk) s -= gram[kk * m + i] * rhs[kk * 2u + c];
+      rhs[i * 2u + c] = s / gram[i * m + i];
+    }
+  }
+
+  for (uint a = 0u; a < m; ++a) {
+    int ref_a = refs[a];
+    float sqrt_wa = sqrt(max(weights[a], 0.0f));
+    float dot_value = 0.0f;
+    for (uint f = 0u; f < n_features; ++f) {
+      float x_center_f = 0.0f;
+      for (uint j = 0u; j < m; ++j) {
+        int ref_j = refs[j];
+        if (ref_j >= 0 && uint(ref_j) < n_reference) {
+          x_center_f += weights[j] * reference_data[uint(ref_j) + f * n_reference];
+        }
+      }
+      float qa = query_data[row + f * n_query] - x_center_f;
+      float xa = (ref_a >= 0 && uint(ref_a) < n_reference) ?
+        reference_data[uint(ref_a) + f * n_reference] - x_center_f :
+        0.0f;
+      dot_value += qa * xa;
+    }
+    q[a] = sqrt_wa * dot_value;
+  }
+
+  float displacement0 = 0.0f;
+  float displacement1 = 0.0f;
+  for (uint a = 0u; a < m; ++a) {
+    displacement0 += q[a] * rhs[a * 2u];
+    displacement1 += q[a] * rhs[a * 2u + 1u];
+  }
+  float y0 = y_center[0] + displacement0;
+  float y1 = y_center[1] + displacement1;
+
+  float disp_sq = displacement0 * displacement0 + displacement1 * displacement1;
+  float max_disp = max_extrapolation * sqrt(max(layout_radius_sq, eps));
+  if (disp_sq > max_disp * max_disp) {
+    float scale = max_disp / (sqrt(disp_sq) + eps);
+    y0 = y_center[0] + displacement0 * scale;
+    y1 = y_center[1] + displacement1 * scale;
+  }
+
+  if (!isfinite(y0) || !isfinite(y1)) {
+    affine_weighted_fallback(
+      reference_layout, projection_indices, projection_distances, out,
+      confidence_out, used_neighbors_out, fallback_out, n_reference, n_query,
+      projection_k, m, row, rho, sigma
+    );
+    return;
+  }
+
+  out[row] = y0;
+  out[n_query + row] = y1;
+  float effective_n = weight_sq_sum > 0.0f ? (weight_sum * weight_sum) / weight_sq_sum : 1.0f;
+  confidence_out[row] = clamp(effective_n / float(m), 0.0f, 1.0f);
+  used_neighbors_out[row] = int(m);
+  fallback_out[row] = 0;
 }
 
 kernel void landmark_project_interpolate(
@@ -2617,10 +3082,30 @@ std::uint32_t log2_power_of_two(const std::uint32_t value) {
   return out;
 }
 
+std::vector<float> make_fft_twiddles(const std::uint32_t fft_size,
+                                     const std::uint32_t log_fft) {
+  const std::uint32_t half_count = fft_size >> 1u;
+  std::vector<float> twiddles(static_cast<std::size_t>(log_fft) * half_count * 2u, 0.0f);
+  constexpr double two_pi = 6.283185307179586476925286766559;
+  for (std::uint32_t stage = 1u; stage <= log_fft; ++stage) {
+    const std::uint32_t span_half = 1u << (stage - 1u);
+    const std::uint32_t width = span_half << 1u;
+    const std::size_t base = static_cast<std::size_t>(stage - 1u) * half_count * 2u;
+    for (std::uint32_t j = 0u; j < span_half; ++j) {
+      const double angle = two_pi * static_cast<double>(j) / static_cast<double>(width);
+      const std::size_t pos = base + static_cast<std::size_t>(j) * 2u;
+      twiddles[pos] = static_cast<float>(std::cos(angle));
+      twiddles[pos + 1u] = static_cast<float>(std::sin(angle));
+    }
+  }
+  return twiddles;
+}
+
 void encode_fft_2d_metal(MetalEmbeddingState& state,
                          id<MTLCommandBuffer> command_buffer,
                          id<MTLBuffer> values,
                          id<MTLBuffer> scratch,
+                         id<MTLBuffer> twiddles,
                          const std::uint32_t fft_size,
                          const std::uint32_t log_fft,
                          const bool inverse) {
@@ -2654,6 +3139,7 @@ void encode_fft_2d_metal(MetalEmbeddingState& state,
     [encoder setBytes:&fft_size length:sizeof(std::uint32_t) atIndex:1];
     [encoder setBytes:&stage length:sizeof(std::uint32_t) atIndex:2];
     [encoder setBytes:&inverse_u length:sizeof(std::uint32_t) atIndex:3];
+    [encoder setBuffer:twiddles offset:0 atIndex:4];
     [encoder dispatchThreads:half_row_grid
        threadsPerThreadgroup:metal_threadgroup_2d(state.opentsne_fft_butterfly_rows_pipeline)];
     [encoder endEncoding];
@@ -2678,6 +3164,7 @@ void encode_fft_2d_metal(MetalEmbeddingState& state,
     [encoder setBytes:&fft_size length:sizeof(std::uint32_t) atIndex:1];
     [encoder setBytes:&stage length:sizeof(std::uint32_t) atIndex:2];
     [encoder setBytes:&inverse_u length:sizeof(std::uint32_t) atIndex:3];
+    [encoder setBuffer:twiddles offset:0 atIndex:4];
     [encoder dispatchThreads:half_col_grid
        threadsPerThreadgroup:metal_threadgroup_2d(state.opentsne_fft_butterfly_cols_pipeline)];
     [encoder endEncoding];
@@ -2703,6 +3190,7 @@ void encode_fft_convolution_metal(MetalEmbeddingState& state,
                                   id<MTLBuffer> transformed_kernel,
                                   id<MTLBuffer> out,
                                   id<MTLBuffer> scratch,
+                                  id<MTLBuffer> twiddles,
                                   const std::uint32_t fft_size,
                                   const std::uint32_t log_fft,
                                   const std::uint32_t total) {
@@ -2717,7 +3205,7 @@ void encode_fft_convolution_metal(MetalEmbeddingState& state,
        threadsPerThreadgroup:MTLSizeMake(bounded_threads(state.opentsne_fft_multiply_pipeline), 1, 1)];
     [encoder endEncoding];
   }
-  encode_fft_2d_metal(state, command_buffer, out, scratch, fft_size, log_fft, true);
+  encode_fft_2d_metal(state, command_buffer, out, scratch, twiddles, fft_size, log_fft, true);
 }
 
 std::vector<float> numeric_matrix_to_float(const NumericMatrix& x) {
@@ -3582,6 +4070,7 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
       const std::uint32_t fft_total = fft_n * fft_n;
       const std::size_t grid_bytes = static_cast<std::size_t>(grid_total) * sizeof(float);
       const std::size_t complex_bytes = static_cast<std::size_t>(fft_total) * sizeof(float) * 2u;
+      std::vector<float> fft_twiddles = make_fft_twiddles(fft_n, log_fft);
       const std::uint32_t stats_block_size = 256u;
       const std::uint32_t stats_block_count =
         (static_cast<std::uint32_t>(n) + stats_block_size - 1u) / stats_block_size;
@@ -3612,6 +4101,9 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
                                                                 options:MTLResourceStorageModePrivate];
       id<MTLBuffer> fft_scratch_buffer = [state.device newBufferWithLength:complex_bytes
                                                                    options:MTLResourceStorageModePrivate];
+      id<MTLBuffer> fft_twiddle_buffer = [state.device newBufferWithBytes:fft_twiddles.data()
+                                                                   length:fft_twiddles.size() * sizeof(float)
+                                                                  options:MTLResourceStorageModeShared];
       id<MTLBuffer> layout_stats_buffer = [state.device newBufferWithLength:static_cast<std::size_t>(stats_block_count) * sizeof(OpenTsneLayoutStats)
                                                                      options:MTLResourceStorageModePrivate];
       id<MTLBuffer> fft_grid_params_buffer = [state.device newBufferWithLength:sizeof(OpenTsneFFTGridParams)
@@ -3622,7 +4114,7 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
           mass_fft_buffer == nil || mass_x_fft_buffer == nil || mass_y_fft_buffer == nil ||
           kernel_q_buffer == nil || kernel_q2_buffer == nil || q_grid_buffer == nil ||
           q2_grid_buffer == nil || xq2_grid_buffer == nil || yq2_grid_buffer == nil ||
-          fft_scratch_buffer == nil || layout_stats_buffer == nil ||
+          fft_scratch_buffer == nil || fft_twiddle_buffer == nil || layout_stats_buffer == nil ||
           fft_grid_params_buffer == nil || center_buffer == nil) {
         Rcpp::stop("Failed to allocate Metal openTSNE FFT-grid buffers.");
       }
@@ -3725,19 +4217,19 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
           [encoder endEncoding];
         }
 
-        encode_fft_2d_metal(state, fft_command, mass_fft_buffer, fft_scratch_buffer, fft_n, log_fft, false);
-        encode_fft_2d_metal(state, fft_command, mass_x_fft_buffer, fft_scratch_buffer, fft_n, log_fft, false);
-        encode_fft_2d_metal(state, fft_command, mass_y_fft_buffer, fft_scratch_buffer, fft_n, log_fft, false);
-        encode_fft_2d_metal(state, fft_command, kernel_q_buffer, fft_scratch_buffer, fft_n, log_fft, false);
-        encode_fft_2d_metal(state, fft_command, kernel_q2_buffer, fft_scratch_buffer, fft_n, log_fft, false);
+        encode_fft_2d_metal(state, fft_command, mass_fft_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, false);
+        encode_fft_2d_metal(state, fft_command, mass_x_fft_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, false);
+        encode_fft_2d_metal(state, fft_command, mass_y_fft_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, false);
+        encode_fft_2d_metal(state, fft_command, kernel_q_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, false);
+        encode_fft_2d_metal(state, fft_command, kernel_q2_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, false);
         encode_fft_convolution_metal(state, fft_command, mass_fft_buffer, kernel_q_buffer,
-                                     q_grid_buffer, fft_scratch_buffer, fft_n, log_fft, fft_total);
+                                     q_grid_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, fft_total);
         encode_fft_convolution_metal(state, fft_command, mass_fft_buffer, kernel_q2_buffer,
-                                     q2_grid_buffer, fft_scratch_buffer, fft_n, log_fft, fft_total);
+                                     q2_grid_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, fft_total);
         encode_fft_convolution_metal(state, fft_command, mass_x_fft_buffer, kernel_q2_buffer,
-                                     xq2_grid_buffer, fft_scratch_buffer, fft_n, log_fft, fft_total);
+                                     xq2_grid_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, fft_total);
         encode_fft_convolution_metal(state, fft_command, mass_y_fft_buffer, kernel_q2_buffer,
-                                     yq2_grid_buffer, fft_scratch_buffer, fft_n, log_fft, fft_total);
+                                     yq2_grid_buffer, fft_scratch_buffer, fft_twiddle_buffer, fft_n, log_fft, fft_total);
         {
           id<MTLComputeCommandEncoder> encoder = [fft_command computeCommandEncoder];
           [encoder setComputePipelineState:state.opentsne_fft_sum_q_blocks_pipeline];
@@ -3824,6 +4316,7 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
       [xq2_grid_buffer release];
       [yq2_grid_buffer release];
       [fft_scratch_buffer release];
+      [fft_twiddle_buffer release];
       [layout_stats_buffer release];
       [fft_grid_params_buffer release];
       [center_buffer release];
@@ -3984,6 +4477,176 @@ NumericMatrix project_embedding_knn_metal_impl(NumericMatrix reference_layout,
       out,
       projection_indices.nrow(),
       reference_layout.ncol()
+    );
+  }
+}
+
+List project_embedding_affine_metal_impl(NumericMatrix reference_data,
+                                         NumericMatrix query_data,
+                                         NumericMatrix reference_layout,
+                                         IntegerMatrix projection_indices,
+                                         NumericMatrix projection_distances,
+                                         int max_neighbors,
+                                         double ridge,
+                                         double max_extrapolation) {
+  const int n_reference = reference_layout.nrow();
+  const int n_components = reference_layout.ncol();
+  const int n_query = projection_indices.nrow();
+  const int projection_k = projection_indices.ncol();
+  const int n_features = reference_data.ncol();
+
+  if (n_reference < 1) Rcpp::stop("reference_layout must have at least one row");
+  if (reference_data.nrow() != n_reference) {
+    Rcpp::stop("reference_data and reference_layout must have the same number of rows");
+  }
+  if (query_data.nrow() != n_query) {
+    Rcpp::stop("query_data and projection_indices must have the same number of rows");
+  }
+  if (query_data.ncol() != n_features) {
+    Rcpp::stop("reference_data and query_data must have the same number of columns");
+  }
+  if (n_components != 2) {
+    Rcpp::stop("Metal affine landmark projection currently supports two-dimensional layouts.");
+  }
+  if (n_query < 1) Rcpp::stop("projection_indices must have at least one row");
+  if (projection_k < 1) Rcpp::stop("projection_indices must have at least one column");
+  if (projection_k > kMaxMetalProjectionNeighbors) {
+    Rcpp::stop("Metal affine landmark projection supports at most %d projection neighbors.", kMaxMetalProjectionNeighbors);
+  }
+  if (projection_distances.nrow() != n_query ||
+      projection_distances.ncol() != projection_k) {
+    Rcpp::stop("projection_indices and projection_distances must have the same dimensions");
+  }
+  if (max_neighbors < 3) max_neighbors = 3;
+  max_neighbors = std::min(max_neighbors, projection_k);
+  max_neighbors = std::min(max_neighbors, 12);
+  if (!std::isfinite(ridge) || ridge <= 0.0) ridge = 1e-3;
+  if (!std::isfinite(max_extrapolation) || max_extrapolation <= 0.0) {
+    max_extrapolation = 2.5;
+  }
+  for (int i = 0; i < n_query; ++i) {
+    for (int j = 0; j < projection_k; ++j) {
+      const int idx = projection_indices(i, j);
+      const double d = projection_distances(i, j);
+      if (idx < 1 || idx > n_reference) Rcpp::stop("projection indices out of range");
+      if (!std::isfinite(d) || d < 0.0) {
+        Rcpp::stop("projection distances must be finite and non-negative");
+      }
+    }
+  }
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    std::vector<float> reference_values = numeric_matrix_to_float(reference_data);
+    std::vector<float> query_values = numeric_matrix_to_float(query_data);
+    std::vector<float> layout_values = numeric_matrix_to_float(reference_layout);
+    std::vector<float> distance_values = numeric_matrix_to_float(projection_distances);
+    std::vector<float> out(static_cast<std::size_t>(n_query) * 2u, 0.0f);
+    std::vector<float> confidence(static_cast<std::size_t>(n_query), 0.0f);
+    std::vector<std::int32_t> used(static_cast<std::size_t>(n_query), 0);
+    std::vector<std::int32_t> fallback(static_cast<std::size_t>(n_query), 0);
+
+    const std::uint32_t n_reference_u = static_cast<std::uint32_t>(n_reference);
+    const std::uint32_t n_query_u = static_cast<std::uint32_t>(n_query);
+    const std::uint32_t n_features_u = static_cast<std::uint32_t>(n_features);
+    const std::uint32_t projection_k_u = static_cast<std::uint32_t>(projection_k);
+    const std::uint32_t max_neighbors_u = static_cast<std::uint32_t>(max_neighbors);
+    const float ridge_f = static_cast<float>(ridge);
+    const float max_extrapolation_f = static_cast<float>(max_extrapolation);
+
+    id<MTLBuffer> reference_buffer = [state.device newBufferWithBytes:reference_values.data()
+                                                               length:reference_values.size() * sizeof(float)
+                                                              options:MTLResourceStorageModeShared];
+    id<MTLBuffer> query_buffer = [state.device newBufferWithBytes:query_values.data()
+                                                           length:query_values.size() * sizeof(float)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> layout_buffer = [state.device newBufferWithBytes:layout_values.data()
+                                                            length:layout_values.size() * sizeof(float)
+                                                           options:MTLResourceStorageModeShared];
+    id<MTLBuffer> index_buffer = [state.device newBufferWithBytes:projection_indices.begin()
+                                                           length:static_cast<std::size_t>(n_query) * projection_k * sizeof(int)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> distance_buffer = [state.device newBufferWithBytes:distance_values.data()
+                                                              length:distance_values.size() * sizeof(float)
+                                                             options:MTLResourceStorageModeShared];
+    id<MTLBuffer> out_buffer = [state.device newBufferWithBytes:out.data()
+                                                        length:out.size() * sizeof(float)
+                                                       options:MTLResourceStorageModeShared];
+    id<MTLBuffer> confidence_buffer = [state.device newBufferWithBytes:confidence.data()
+                                                                length:confidence.size() * sizeof(float)
+                                                               options:MTLResourceStorageModeShared];
+    id<MTLBuffer> used_buffer = [state.device newBufferWithBytes:used.data()
+                                                         length:used.size() * sizeof(std::int32_t)
+                                                        options:MTLResourceStorageModeShared];
+    id<MTLBuffer> fallback_buffer = [state.device newBufferWithBytes:fallback.data()
+                                                             length:fallback.size() * sizeof(std::int32_t)
+                                                            options:MTLResourceStorageModeShared];
+    if (reference_buffer == nil || query_buffer == nil || layout_buffer == nil ||
+        index_buffer == nil || distance_buffer == nil || out_buffer == nil ||
+        confidence_buffer == nil || used_buffer == nil || fallback_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal affine projection buffers.");
+    }
+
+    id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    [encoder setComputePipelineState:state.affine_project_pipeline];
+    [encoder setBuffer:reference_buffer offset:0 atIndex:0];
+    [encoder setBuffer:query_buffer offset:0 atIndex:1];
+    [encoder setBuffer:layout_buffer offset:0 atIndex:2];
+    [encoder setBuffer:index_buffer offset:0 atIndex:3];
+    [encoder setBuffer:distance_buffer offset:0 atIndex:4];
+    [encoder setBuffer:out_buffer offset:0 atIndex:5];
+    [encoder setBuffer:confidence_buffer offset:0 atIndex:6];
+    [encoder setBuffer:used_buffer offset:0 atIndex:7];
+    [encoder setBuffer:fallback_buffer offset:0 atIndex:8];
+    [encoder setBytes:&n_reference_u length:sizeof(std::uint32_t) atIndex:9];
+    [encoder setBytes:&n_query_u length:sizeof(std::uint32_t) atIndex:10];
+    [encoder setBytes:&n_features_u length:sizeof(std::uint32_t) atIndex:11];
+    [encoder setBytes:&projection_k_u length:sizeof(std::uint32_t) atIndex:12];
+    [encoder setBytes:&max_neighbors_u length:sizeof(std::uint32_t) atIndex:13];
+    [encoder setBytes:&ridge_f length:sizeof(float) atIndex:14];
+    [encoder setBytes:&max_extrapolation_f length:sizeof(float) atIndex:15];
+    dispatch_rows(encoder, state.affine_project_pipeline, n_query);
+    [encoder endEncoding];
+    wait_for_command(command_buffer, "Metal affine landmark projection");
+
+    std::memcpy(out.data(), [out_buffer contents], out.size() * sizeof(float));
+    std::memcpy(confidence.data(), [confidence_buffer contents], confidence.size() * sizeof(float));
+    std::memcpy(used.data(), [used_buffer contents], used.size() * sizeof(std::int32_t));
+    std::memcpy(fallback.data(), [fallback_buffer contents], fallback.size() * sizeof(std::int32_t));
+
+    NumericMatrix layout = float_to_numeric_matrix(out, n_query, 2);
+    NumericVector confidence_out(n_query);
+    IntegerVector used_out(n_query);
+    IntegerVector fallback_out(n_query);
+    for (int i = 0; i < n_query; ++i) {
+      confidence_out[i] = static_cast<double>(confidence[static_cast<std::size_t>(i)]);
+      used_out[i] = used[static_cast<std::size_t>(i)];
+      fallback_out[i] = fallback[static_cast<std::size_t>(i)];
+    }
+    layout.attr("projection_method") = "local_affine_knn_projection_metal";
+    layout.attr("projection_backend") = "metal";
+
+    [reference_buffer release];
+    [query_buffer release];
+    [layout_buffer release];
+    [index_buffer release];
+    [distance_buffer release];
+    [out_buffer release];
+    [confidence_buffer release];
+    [used_buffer release];
+    [fallback_buffer release];
+
+    return List::create(
+      Rcpp::Named("layout") = layout,
+      Rcpp::Named("confidence") = confidence_out,
+      Rcpp::Named("used_neighbors") = used_out,
+      Rcpp::Named("fallback") = fallback_out,
+      Rcpp::Named("method") = "local_affine_knn_projection_metal",
+      Rcpp::Named("backend") = "metal",
+      Rcpp::Named("max_neighbors") = max_neighbors,
+      Rcpp::Named("ridge") = ridge,
+      Rcpp::Named("max_extrapolation") = max_extrapolation
     );
   }
 }
@@ -4764,6 +5427,230 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
     [weights_buffer release];
     [epochs_buffer release];
     [params_buffer release];
+    return out;
+  }
+}
+
+NumericMatrix knn_umap_refine_rows_metal_impl(IntegerMatrix indices,
+                                              NumericMatrix distances,
+                                              IntegerVector row_ids,
+                                              NumericMatrix init_embedding,
+                                              int n_epochs,
+                                              double min_dist,
+                                              int negative_sample_rate,
+                                              double learning_rate,
+                                              double repulsion_strength,
+                                              int seed) {
+  if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
+    Rcpp::stop("indices and distances must have the same dimensions");
+  }
+  if (row_ids.size() != indices.nrow()) {
+    Rcpp::stop("row_ids length must match the number of KNN rows");
+  }
+  if (init_embedding.ncol() != 2) {
+    Rcpp::stop("Metal UMAP landmark refinement currently requires a two-dimensional layout.");
+  }
+  if (n_epochs < 1) Rcpp::stop("n_epochs must be positive");
+  if (min_dist < 0.0) Rcpp::stop("min_dist must be non-negative");
+  if (negative_sample_rate < 0) Rcpp::stop("negative_sample_rate must be non-negative");
+  if (learning_rate <= 0.0) Rcpp::stop("learning_rate must be positive");
+  if (repulsion_strength <= 0.0) Rcpp::stop("repulsion_strength must be positive");
+
+  const int n = init_embedding.nrow();
+  const int m = indices.nrow();
+  const int k = indices.ncol();
+  if (n < 2) Rcpp::stop("init_embedding must have at least two rows");
+  if (m < 1) return Rcpp::clone(init_embedding);
+  if (k < 1) Rcpp::stop("indices must have at least one neighbor column");
+  if (k > kMaxMetalNeighbors) {
+    Rcpp::stop("Metal UMAP landmark refinement currently supports at most %d neighbors.", kMaxMetalNeighbors);
+  }
+
+  std::vector<std::int32_t> rows(static_cast<std::size_t>(m));
+  std::vector<std::uint8_t> update_mask(static_cast<std::size_t>(n), 0u);
+  for (int i = 0; i < m; ++i) {
+    const int row = row_ids[i] - 1;
+    if (row < 0 || row >= n) Rcpp::stop("row_ids must contain 1-based row indices");
+    rows[static_cast<std::size_t>(i)] = static_cast<std::int32_t>(row);
+    update_mask[static_cast<std::size_t>(row)] = 1u;
+  }
+
+  int min_idx = std::numeric_limits<int>::max();
+  int max_idx = std::numeric_limits<int>::min();
+  for (int i = 0; i < m; ++i) {
+    for (int j = 0; j < k; ++j) {
+      const int idx = indices(i, j);
+      min_idx = std::min(min_idx, idx);
+      max_idx = std::max(max_idx, idx);
+    }
+  }
+  const int index_offset = (min_idx >= 1 && max_idx <= n) ? 1 : 0;
+
+  std::vector<std::int32_t> neighbors(static_cast<std::size_t>(m) * static_cast<std::size_t>(k));
+  std::vector<float> distance_values(neighbors.size(), std::numeric_limits<float>::infinity());
+  long double distance_sum = 0.0L;
+  std::size_t distance_count = 0u;
+  for (int i = 0; i < m; ++i) {
+    for (int j = 0; j < k; ++j) {
+      const std::size_t pos =
+        static_cast<std::size_t>(i) * static_cast<std::size_t>(k) +
+        static_cast<std::size_t>(j);
+      const int nb = indices(i, j) - index_offset;
+      neighbors[pos] = (nb >= 0 && nb < n) ? static_cast<std::int32_t>(nb) : -1;
+      const double d = distances(i, j);
+      if (std::isfinite(d)) {
+        distance_values[pos] = static_cast<float>(d);
+        if (d >= 0.0) {
+          distance_sum += static_cast<long double>(d);
+          ++distance_count;
+        }
+      }
+    }
+  }
+  const float global_mean = distance_count > 0u ?
+    static_cast<float>(distance_sum / static_cast<long double>(distance_count)) :
+    1.0f;
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+
+    std::vector<float> current = init_to_float_2d(init_embedding);
+    std::vector<std::int32_t> fixed_layout(current.size());
+    constexpr float fixed_scale = 65536.0f;
+    for (std::size_t i = 0; i < current.size(); ++i) {
+      const float value = std::max(-2140000000.0f, std::min(2140000000.0f, current[i] * fixed_scale));
+      fixed_layout[i] = static_cast<std::int32_t>(value);
+    }
+
+    std::vector<float> weights(neighbors.size(), 0.0f);
+    std::vector<float> epochs_per_sample(neighbors.size(), 0.0f);
+    const auto ab = find_ab_params(1.0, min_dist);
+    EmbedParams embed_params{
+      static_cast<std::uint32_t>(n),
+      static_cast<std::uint32_t>(k),
+      static_cast<std::uint32_t>(n_epochs),
+      static_cast<std::uint32_t>(negative_sample_rate),
+      kObjectiveUmap,
+      static_cast<std::uint32_t>(seed),
+      static_cast<float>(learning_rate),
+      static_cast<float>(ab.first),
+      static_cast<float>(ab.second),
+      1.0f
+    };
+    RefinePrepareParams prepare_params{
+      static_cast<std::uint32_t>(n),
+      static_cast<std::uint32_t>(m),
+      static_cast<std::uint32_t>(k),
+      static_cast<std::uint32_t>(n_epochs),
+      global_mean
+    };
+    const std::uint32_t n_rows_u = static_cast<std::uint32_t>(m);
+
+    id<MTLBuffer> layout_buffer = [state.device newBufferWithBytes:fixed_layout.data()
+                                                            length:fixed_layout.size() * sizeof(std::int32_t)
+                                                           options:MTLResourceStorageModeShared];
+    id<MTLBuffer> row_buffer = [state.device newBufferWithBytes:rows.data()
+                                                         length:rows.size() * sizeof(std::int32_t)
+                                                        options:MTLResourceStorageModeShared];
+    id<MTLBuffer> neighbor_buffer = [state.device newBufferWithBytes:neighbors.data()
+                                                              length:neighbors.size() * sizeof(std::int32_t)
+                                                             options:MTLResourceStorageModeShared];
+    id<MTLBuffer> distance_buffer = [state.device newBufferWithBytes:distance_values.data()
+                                                              length:distance_values.size() * sizeof(float)
+                                                             options:MTLResourceStorageModeShared];
+    id<MTLBuffer> weight_buffer = [state.device newBufferWithBytes:weights.data()
+                                                            length:weights.size() * sizeof(float)
+                                                           options:MTLResourceStorageModeShared];
+    id<MTLBuffer> epoch_buffer = [state.device newBufferWithBytes:epochs_per_sample.data()
+                                                           length:epochs_per_sample.size() * sizeof(float)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> mask_buffer = [state.device newBufferWithBytes:update_mask.data()
+                                                          length:update_mask.size() * sizeof(std::uint8_t)
+                                                         options:MTLResourceStorageModeShared];
+    id<MTLBuffer> embed_params_buffer = [state.device newBufferWithBytes:&embed_params
+                                                                  length:sizeof(EmbedParams)
+                                                                 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> prepare_params_buffer = [state.device newBufferWithBytes:&prepare_params
+                                                                    length:sizeof(RefinePrepareParams)
+                                                                   options:MTLResourceStorageModeShared];
+    if (layout_buffer == nil || row_buffer == nil || neighbor_buffer == nil ||
+        distance_buffer == nil || weight_buffer == nil || epoch_buffer == nil ||
+        mask_buffer == nil || embed_params_buffer == nil || prepare_params_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal UMAP landmark refinement buffers.");
+    }
+
+    {
+      id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+      id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+      [encoder setComputePipelineState:state.refine_prepare_pipeline];
+      [encoder setBuffer:row_buffer offset:0 atIndex:0];
+      [encoder setBuffer:neighbor_buffer offset:0 atIndex:1];
+      [encoder setBuffer:distance_buffer offset:0 atIndex:2];
+      [encoder setBuffer:weight_buffer offset:0 atIndex:3];
+      [encoder setBuffer:epoch_buffer offset:0 atIndex:4];
+      [encoder setBuffer:prepare_params_buffer offset:0 atIndex:5];
+      dispatch_rows(encoder, state.refine_prepare_pipeline, m);
+      [encoder endEncoding];
+      wait_for_command(command_buffer, "Metal UMAP landmark refinement preparation");
+    }
+
+    const NSUInteger refine_threads = bounded_threads(state.refine_rows_pipeline);
+    const MTLSize refine_grid = MTLSizeMake(static_cast<NSUInteger>(m), 1, 1);
+    const MTLSize refine_threadgroup = MTLSizeMake(refine_threads, 1, 1);
+    const std::uint32_t epochs_per_command = kMetalEmbeddingEpochsPerCommand;
+    for (std::uint32_t epoch0 = 0; epoch0 < static_cast<std::uint32_t>(n_epochs); epoch0 += epochs_per_command) {
+      id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+      const std::uint32_t epoch_end = std::min<std::uint32_t>(
+        static_cast<std::uint32_t>(n_epochs),
+        epoch0 + epochs_per_command
+      );
+      for (std::uint32_t epoch = epoch0; epoch < epoch_end; ++epoch) {
+        id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+        [encoder setComputePipelineState:state.refine_rows_pipeline];
+        [encoder setBuffer:layout_buffer offset:0 atIndex:0];
+        [encoder setBuffer:row_buffer offset:0 atIndex:1];
+        [encoder setBuffer:neighbor_buffer offset:0 atIndex:2];
+        [encoder setBuffer:weight_buffer offset:0 atIndex:3];
+        [encoder setBuffer:epoch_buffer offset:0 atIndex:4];
+        [encoder setBuffer:embed_params_buffer offset:0 atIndex:5];
+        [encoder setBytes:&n_rows_u length:sizeof(std::uint32_t) atIndex:6];
+        [encoder setBytes:&epoch length:sizeof(std::uint32_t) atIndex:7];
+        [encoder setBuffer:mask_buffer offset:0 atIndex:8];
+        [encoder dispatchThreads:refine_grid threadsPerThreadgroup:refine_threadgroup];
+        [encoder endEncoding];
+      }
+      [command_buffer commit];
+      [command_buffer waitUntilCompleted];
+      if (command_buffer.status == MTLCommandBufferStatusError) {
+        Rcpp::stop(
+          "Metal UMAP landmark refinement command failed: %s",
+          ns_error_message(command_buffer.error).c_str()
+        );
+      }
+    }
+
+    std::memcpy(fixed_layout.data(), [layout_buffer contents], fixed_layout.size() * sizeof(std::int32_t));
+    constexpr float inv_fixed_scale = 1.0f / 65536.0f;
+    NumericMatrix out(n, 2);
+    for (int i = 0; i < n; ++i) {
+      const std::size_t base = static_cast<std::size_t>(i) * 2u;
+      out(i, 0) = static_cast<double>(fixed_layout[base]) * inv_fixed_scale;
+      out(i, 1) = static_cast<double>(fixed_layout[base + 1u]) * inv_fixed_scale;
+    }
+    out.attr("metal_refinement") = "landmark_rows_atomic_inplace";
+    out.attr("metal_refinement_weight_prep") = "smooth_knn_dist_rows";
+    out.attr("metal_refinement_rows") = m;
+    out.attr("metal_refinement_neighbors") = k;
+
+    [layout_buffer release];
+    [row_buffer release];
+    [neighbor_buffer release];
+    [distance_buffer release];
+    [weight_buffer release];
+    [epoch_buffer release];
+    [mask_buffer release];
+    [embed_params_buffer release];
+    [prepare_params_buffer release];
     return out;
   }
 }

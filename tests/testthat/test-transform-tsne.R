@@ -291,6 +291,21 @@ test_that("native affine landmark projection returns finite local placements", {
   expect_equal(as.numeric(projected$layout[1L, ]), c(0, 0), tolerance = 1e-12)
   expect_true(all(projected$confidence >= 0 & projected$confidence <= 1))
   expect_equal(projected$method, "local_affine_knn_projection")
+
+  projected_parallel <- fastEmbedR:::project_embedding_affine_parallel_cpp(
+    reference_data,
+    query_data,
+    reference_layout,
+    indices,
+    distances,
+    4L,
+    1e-3,
+    2.5,
+    2L
+  )
+  expect_equal(projected_parallel$layout, projected$layout, tolerance = 1e-12)
+  expect_equal(projected_parallel$fallback, projected$fallback)
+  expect_equal(projected_parallel$n_threads, 2L)
 })
 
 test_that("landmark_tsne can use projection-specific approximate KNN", {
@@ -337,6 +352,15 @@ test_that("landmark_tsne uses fused Metal projection when requested", {
   skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
   skip_if_not(fastEmbedR:::metal_opentsne_native_available())
   skip_if_not(metal_available())
+  old_fused <- getOption("fastEmbedR.landmark_projection_fused", NULL)
+  on.exit({
+    if (is.null(old_fused)) {
+      options(fastEmbedR.landmark_projection_fused = NULL)
+    } else {
+      options(fastEmbedR.landmark_projection_fused = old_fused)
+    }
+  }, add = TRUE)
+  options(fastEmbedR.landmark_projection_fused = TRUE)
 
   set.seed(405)
   x <- rbind(
@@ -403,8 +427,8 @@ test_that("landmark_tsne keeps Metal projection and transform native when interm
 
   expect_s3_class(fit, "fastEmbedR_embedding")
   expect_equal(dim(fit$layout), c(nrow(x), 2L))
-  expect_equal(fit$parameters$projection_nn_backend, "metal_fused_projection")
-  expect_equal(fit$parameters$projection_strategy, "query_only_exact_fused_landmark_projection_knn_confidence")
+  expect_equal(fit$parameters$projection_nn_backend, "metal")
+  expect_equal(fit$parameters$projection_strategy, "query_only_exact_metal_projection_knn")
   expect_equal(fit$parameters$transform_optimizer, "opentsne_style_fixed_reference_transform_metal")
   expect_true(is.null(fit$landmarks$projection_knn))
 })

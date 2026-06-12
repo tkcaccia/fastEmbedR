@@ -321,7 +321,8 @@ landmark_umap <- function(data,
       x_landmarks,
       x[non_landmarks, , drop = FALSE],
       reference_fit$layout,
-      projection_knn
+      projection_knn,
+      n_threads = n_threads
     )
     if (is.matrix(affine_projected) &&
         nrow(affine_projected) == length(non_landmarks) &&
@@ -363,6 +364,7 @@ landmark_umap <- function(data,
   colnames(layout) <- colnames(reference_fit$layout)
 
   refinement_time <- zero_proc_time()
+  refinement_backend <- NA_character_
   refinement_epochs <- getOption("fastEmbedR.landmark_umap_refine_epochs", 50L)
   refinement_epochs <- suppressWarnings(as.integer(refinement_epochs))
   if (length(refinement_epochs) != 1L || is.na(refinement_epochs) || refinement_epochs < 0L) {
@@ -384,20 +386,72 @@ landmark_umap <- function(data,
       if (is.na(ref_negative_sample_rate) || ref_negative_sample_rate < 0L) ref_negative_sample_rate <- 5L
       if (!is.finite(ref_learning_rate) || ref_learning_rate <= 0) ref_learning_rate <- 1
       if (!is.finite(ref_repulsion_strength) || ref_repulsion_strength <= 0) ref_repulsion_strength <- 1
-      layout <- knn_umap_refine_rows_cpp(
-        projection_global_indices,
-        projection_knn$distances,
-        as.integer(non_landmarks),
-        layout,
-        as.integer(refinement_epochs),
-        ref_min_dist,
-        ref_negative_sample_rate,
-        ref_learning_rate,
-        ref_repulsion_strength,
-        as.integer(normalize_nn_threads(n_threads)),
-        as.integer(seed + 2003L),
-        isTRUE(verbose)
-      )
+      use_metal_refinement <- n_components == 2L &&
+        backend %in% c("metal", "gpu") &&
+        isTRUE(embedding_metal_available_cpp())
+      if (use_metal_refinement) {
+        refined_result <- tryCatch(
+          {
+            refined <- knn_umap_refine_rows_metal_cpp(
+              projection_global_indices,
+              projection_knn$distances,
+              as.integer(non_landmarks),
+              layout,
+              as.integer(refinement_epochs),
+              ref_min_dist,
+              ref_negative_sample_rate,
+              ref_learning_rate,
+              ref_repulsion_strength,
+              as.integer(seed + 2003L)
+            )
+            list(layout = refined, backend = "metal")
+          },
+          error = function(e) {
+            msg <- conditionMessage(e)
+            if (identical(backend, "metal")) {
+              stop("Metal UMAP landmark refinement failed: ", msg, call. = FALSE)
+            }
+            warning(
+              "Metal UMAP landmark refinement failed; using CPU refinement and reporting backend='cpu': ",
+              msg,
+              call. = FALSE
+            )
+            refined <- knn_umap_refine_rows_cpp(
+              projection_global_indices,
+              projection_knn$distances,
+              as.integer(non_landmarks),
+              layout,
+              as.integer(refinement_epochs),
+              ref_min_dist,
+              ref_negative_sample_rate,
+              ref_learning_rate,
+              ref_repulsion_strength,
+              as.integer(normalize_nn_threads(n_threads)),
+              as.integer(seed + 2003L),
+              isTRUE(verbose)
+            )
+            list(layout = refined, backend = "cpu")
+          }
+        )
+        layout <- refined_result$layout
+        refinement_backend <- refined_result$backend
+      } else {
+        refinement_backend <- "cpu"
+        layout <- knn_umap_refine_rows_cpp(
+          projection_global_indices,
+          projection_knn$distances,
+          as.integer(non_landmarks),
+          layout,
+          as.integer(refinement_epochs),
+          ref_min_dist,
+          ref_negative_sample_rate,
+          ref_learning_rate,
+          ref_repulsion_strength,
+          as.integer(normalize_nn_threads(n_threads)),
+          as.integer(seed + 2003L),
+          isTRUE(verbose)
+        )
+      }
       layout[landmark_indices, ] <- reference_fit$layout
       colnames(layout) <- colnames(reference_fit$layout)
     })
@@ -475,7 +529,7 @@ landmark_umap <- function(data,
       transform_k = transform_k,
       landmark_refinement = if (refinement_epochs > 0L) "fixed_landmark_umap_rows" else "none",
       landmark_refinement_epochs = as.integer(refinement_epochs),
-      landmark_refinement_backend = if (refinement_epochs > 0L) "cpu" else NA_character_,
+      landmark_refinement_backend = if (refinement_epochs > 0L) refinement_backend else NA_character_,
       keep_knn = keep_knn,
       provenance = "UMAP_landmark_projection_native_cpp"
     ),

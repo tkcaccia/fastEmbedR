@@ -312,7 +312,7 @@ run_landmark_option <- function(x,
   })
 }
 
-plot_layouts <- function(layouts, rows, labels, out_path) {
+plot_layouts <- function(layouts, rows, labels, out_path, point_cex = 0.11) {
   ok <- names(layouts)[vapply(layouts, function(x) !is.null(x), logical(1L))]
   if (!length(ok)) return(invisible(FALSE))
   n_col <- min(3L, length(ok))
@@ -332,7 +332,7 @@ plot_layouts <- function(layouts, rows, labels, out_path) {
       layout[, 2L],
       col = cols,
       pch = 16,
-      cex = 0.055,
+      cex = point_cex,
       xlab = "Dim 1",
       ylab = "Dim 2",
       main = sprintf(
@@ -352,6 +352,7 @@ seed <- arg_int("seed", 6L)
 n <- arg_int("n", 70000L)
 k <- arg_int("k", 50L)
 n_threads <- arg_int("threads", 4L)
+point_cex <- arg_num("point-cex", 0.11)
 early_iter <- arg_int("early-iter", 100L)
 normal_iter <- arg_int("normal-iter", 150L)
 transform_iter <- arg_int("transform-iter", early_iter + normal_iter)
@@ -400,7 +401,6 @@ layouts <- list()
 for (backend in backends) {
   for (negative_method in negative_methods) {
     if (identical(backend, "cpu") && !negative_method %in% c("auto", "fft")) next
-    if (backend %in% c("metal", "cuda")) next
     message("Running landmark option backend=", backend, " negative_gradient_method=", negative_method)
     out <- run_landmark_option(
       x = x,
@@ -431,7 +431,7 @@ for (backend in backends) {
 
 results <- do.call(rbind, rows)
 write.csv(results, file.path(out_dir, "mnist70k_landmark50_results.csv"), row.names = FALSE)
-plot_layouts(layouts, results, labels, plot_path)
+plot_layouts(layouts, results, labels, plot_path, point_cex = point_cex)
 writeLines(capture.output(fastEmbedR::backend_info()), file.path(out_dir, "backend_info.txt"))
 
 message("Results CSV: ", normalizePath(file.path(out_dir, "mnist70k_landmark50_results.csv"), winslash = "/", mustWork = FALSE))

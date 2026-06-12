@@ -199,7 +199,7 @@ int tsne_transform_batch_size(const int n_query,
   const double bytes_per_row =
     static_cast<double>(k) * sizeof(double) +
     static_cast<double>(dims) * 4.0 * sizeof(double);
-  const double target_bytes = 8.0 * 1024.0 * 1024.0;
+  const double target_bytes = 64.0 * 1024.0 * 1024.0;
   const int auto_batch = static_cast<int>(std::floor(target_bytes / std::max(1.0, bytes_per_row)));
   return std::max(1024, std::min(n_query, std::max(1, auto_batch)));
 }
@@ -1147,6 +1147,100 @@ void compute_tsne_transform_gradient(const NumericMatrix& reference_layout,
   });
 }
 
+void compute_tsne_transform_gradient_2d_flat(const std::vector<double>& reference_layout,
+                                             const IntegerMatrix& indices,
+                                             const std::vector<double>& probabilities,
+                                             const std::vector<double>& y,
+                                             const int offset,
+                                             const int query_begin,
+                                             const int batch_n,
+                                             const double exaggeration,
+                                             const int n_negatives,
+                                             const int exact_repulsion_threshold,
+                                             const int n_threads,
+                                             const int seed,
+                                             std::vector<double>& grad) {
+  const int k = indices.ncol();
+  const int n_reference = static_cast<int>(reference_layout.size() / 2u);
+  const bool exact_repulsion = n_reference <= exact_repulsion_threshold ||
+    n_negatives >= n_reference;
+  std::fill(grad.begin(), grad.begin() + static_cast<std::size_t>(batch_n) * 2u, 0.0);
+
+  parallel_for(batch_n, n_threads, [&](const int begin, const int end, const int) {
+    std::vector<int> sampled(static_cast<std::size_t>(std::max(1, n_negatives)), 0);
+    std::vector<double> q_values(static_cast<std::size_t>(
+      exact_repulsion ? n_reference : std::max(1, n_negatives)
+    ), 0.0);
+
+    for (int i = begin; i < end; ++i) {
+      const int global_i = query_begin + i;
+      const std::size_t ib = static_cast<std::size_t>(i) * 2u;
+      const double yi0 = y[ib];
+      const double yi1 = y[ib + 1u];
+      double g0 = 0.0;
+      double g1 = 0.0;
+      double sum_q = DBL_MIN;
+      std::uint32_t rng_state = mix_uint32(
+        static_cast<std::uint32_t>(seed) ^
+          (static_cast<std::uint32_t>(global_i + 1) * 0x9e3779b9u)
+      );
+
+      if (exact_repulsion) {
+        for (int ref = 0; ref < n_reference; ++ref) {
+          const std::size_t rb = static_cast<std::size_t>(ref) * 2u;
+          const double dx = yi0 - reference_layout[rb];
+          const double dy = yi1 - reference_layout[rb + 1u];
+          const double q = 1.0 / (1.0 + dx * dx + dy * dy);
+          q_values[static_cast<std::size_t>(ref)] = q;
+          sum_q += q;
+        }
+        const double inv_sum_q = 1.0 / sum_q;
+        for (int ref = 0; ref < n_reference; ++ref) {
+          const std::size_t rb = static_cast<std::size_t>(ref) * 2u;
+          const double q = q_values[static_cast<std::size_t>(ref)];
+          const double coeff = -(q * q) * inv_sum_q;
+          g0 += coeff * (yi0 - reference_layout[rb]);
+          g1 += coeff * (yi1 - reference_layout[rb + 1u]);
+        }
+      } else {
+        for (int m = 0; m < n_negatives; ++m) {
+          const int ref = uniform_index(rng_state, n_reference);
+          sampled[static_cast<std::size_t>(m)] = ref;
+          const std::size_t rb = static_cast<std::size_t>(ref) * 2u;
+          const double dx = yi0 - reference_layout[rb];
+          const double dy = yi1 - reference_layout[rb + 1u];
+          const double q = 1.0 / (1.0 + dx * dx + dy * dy);
+          q_values[static_cast<std::size_t>(m)] = q;
+          sum_q += q;
+        }
+        const double inv_sum_q = 1.0 / sum_q;
+        for (int m = 0; m < n_negatives; ++m) {
+          const int ref = sampled[static_cast<std::size_t>(m)];
+          const std::size_t rb = static_cast<std::size_t>(ref) * 2u;
+          const double q = q_values[static_cast<std::size_t>(m)];
+          const double coeff = -(q * q) * inv_sum_q;
+          g0 += coeff * (yi0 - reference_layout[rb]);
+          g1 += coeff * (yi1 - reference_layout[rb + 1u]);
+        }
+      }
+
+      const std::size_t p_base = static_cast<std::size_t>(i) * k;
+      for (int j = 0; j < k; ++j) {
+        const int ref = indices(global_i, j) - offset;
+        const std::size_t rb = static_cast<std::size_t>(ref) * 2u;
+        const double dx = yi0 - reference_layout[rb];
+        const double dy = yi1 - reference_layout[rb + 1u];
+        const double q = 1.0 / (1.0 + dx * dx + dy * dy);
+        const double coeff = exaggeration * probabilities[p_base + j] * q;
+        g0 += coeff * dx;
+        g1 += coeff * dy;
+      }
+      grad[ib] = g0;
+      grad[ib + 1u] = g1;
+    }
+  });
+}
+
 double evaluate_kl(const SparseProbabilities& p,
                    const std::vector<double>& y,
                    const int n,
@@ -1456,6 +1550,14 @@ List transform_tsne_cpp(NumericMatrix reference_layout,
   std::vector<double> grad(y.size(), 0.0);
   std::vector<double> update(y.size(), 0.0);
   std::vector<double> gains(y.size(), 1.0);
+  std::vector<double> reference_layout_flat;
+  if (dims == 2) {
+    reference_layout_flat.resize(static_cast<std::size_t>(n_reference) * 2u);
+    for (int ref = 0; ref < n_reference; ++ref) {
+      reference_layout_flat[static_cast<std::size_t>(ref) * 2u] = reference_layout(ref, 0);
+      reference_layout_flat[static_cast<std::size_t>(ref) * 2u + 1u] = reference_layout(ref, 1);
+    }
+  }
   const int total_iter = early_exaggeration_iter + n_iter;
   NumericMatrix layout(n_query, dims);
 
@@ -1514,21 +1616,39 @@ List transform_tsne_cpp(NumericMatrix reference_layout,
       const double current_momentum = in_early ? initial_momentum : final_momentum;
       const int iter_seed = (seed == NA_INTEGER ? 5489 : seed) + 65537 * (iter + 1);
 
-      compute_tsne_transform_gradient(
-        reference_layout,
-        indices,
-        probabilities,
-        y,
-        offset,
-        query_begin,
-        batch_n,
-        current_exaggeration,
-        n_negatives,
-        exact_repulsion_threshold,
-        batch_threads,
-        iter_seed,
-        grad
-      );
+      if (dims == 2) {
+        compute_tsne_transform_gradient_2d_flat(
+          reference_layout_flat,
+          indices,
+          probabilities,
+          y,
+          offset,
+          query_begin,
+          batch_n,
+          current_exaggeration,
+          n_negatives,
+          exact_repulsion_threshold,
+          batch_threads,
+          iter_seed,
+          grad
+        );
+      } else {
+        compute_tsne_transform_gradient(
+          reference_layout,
+          indices,
+          probabilities,
+          y,
+          offset,
+          query_begin,
+          batch_n,
+          current_exaggeration,
+          n_negatives,
+          exact_repulsion_threshold,
+          batch_threads,
+          iter_seed,
+          grad
+        );
+      }
 
       parallel_for(batch_n, batch_threads, [&](const int begin, const int end, const int) {
         for (int i = begin; i < end; ++i) {

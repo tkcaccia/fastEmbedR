@@ -16,6 +16,14 @@ List standardize_metal_impl(NumericMatrix data);
 NumericMatrix project_embedding_knn_metal_impl(NumericMatrix reference_layout,
                                                IntegerMatrix projection_indices,
                                                NumericMatrix projection_distances);
+List project_embedding_affine_metal_impl(NumericMatrix reference_data,
+                                         NumericMatrix query_data,
+                                         NumericMatrix reference_layout,
+                                         IntegerMatrix projection_indices,
+                                         NumericMatrix projection_distances,
+                                         int max_neighbors,
+                                         double ridge,
+                                         double max_extrapolation);
 NumericMatrix interpolate_landmark_layout_metal_impl(NumericMatrix landmark_layout,
                                                      IntegerVector landmark_indices,
                                                      IntegerMatrix projection_indices,
@@ -59,6 +67,16 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
                                        double min_dist,
                                        double max_weight,
                                        int seed);
+NumericMatrix knn_umap_refine_rows_metal_impl(IntegerMatrix indices,
+                                              NumericMatrix distances,
+                                              IntegerVector row_ids,
+                                              NumericMatrix init_embedding,
+                                              int n_epochs,
+                                              double min_dist,
+                                              int negative_sample_rate,
+                                              double learning_rate,
+                                              double repulsion_strength,
+                                              int seed);
 NumericMatrix rsvd_multiply_metal_impl(NumericMatrix left,
                                        NumericMatrix right,
                                        bool transpose_left);
@@ -128,6 +146,27 @@ NumericMatrix project_embedding_knn_metal_cpp(NumericMatrix reference_layout,
                                               NumericMatrix projection_distances) {
   return project_embedding_knn_metal_impl(
     reference_layout, projection_indices, projection_distances
+  );
+}
+
+// [[Rcpp::export]]
+List project_embedding_affine_metal_cpp(NumericMatrix reference_data,
+                                        NumericMatrix query_data,
+                                        NumericMatrix reference_layout,
+                                        IntegerMatrix projection_indices,
+                                        NumericMatrix projection_distances,
+                                        int max_neighbors = 12,
+                                        double ridge = 1e-3,
+                                        double max_extrapolation = 2.5) {
+  return project_embedding_affine_metal_impl(
+    reference_data,
+    query_data,
+    reference_layout,
+    projection_indices,
+    projection_distances,
+    max_neighbors,
+    ridge,
+    max_extrapolation
   );
 }
 
@@ -225,6 +264,31 @@ NumericMatrix knn_embed_metal_csr_cpp(IntegerVector offsets,
   return knn_embed_metal_csr_impl(
     offsets, neighbors, weights, init, n_epochs,
     negative_sample_rate, learning_rate, min_dist, max_weight, seed
+  );
+}
+
+// [[Rcpp::export]]
+NumericMatrix knn_umap_refine_rows_metal_cpp(IntegerMatrix indices,
+                                             NumericMatrix distances,
+                                             IntegerVector row_ids,
+                                             NumericMatrix init_embedding,
+                                             int n_epochs,
+                                             double min_dist,
+                                             int negative_sample_rate,
+                                             double learning_rate,
+                                             double repulsion_strength,
+                                             int seed) {
+  return knn_umap_refine_rows_metal_impl(
+    indices,
+    distances,
+    row_ids,
+    init_embedding,
+    n_epochs,
+    min_dist,
+    negative_sample_rate,
+    learning_rate,
+    repulsion_strength,
+    seed
   );
 }
 
