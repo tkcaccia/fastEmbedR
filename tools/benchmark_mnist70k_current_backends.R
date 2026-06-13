@@ -401,6 +401,15 @@ message("MNIST current backend benchmark")
 message("  feature_source=", feature_source, " dataset=", dataset)
 message("  n=", nrow(x), " p=", ncol(x), " k=", k, " perplexity=", perplexity)
 message("  backends=", paste(backends, collapse = ","), " out_dir=", out_dir)
+message(
+  "  timing_protocol=",
+  if (isTRUE(use_knn_cache) && !isTRUE(force_knn_recompute)) {
+    "cached_or_build_once_knn"
+  } else {
+    "fresh_knn_recomputed"
+  },
+  " (NN sec and embed sec are separate; use embed sec for optimizer-only comparisons)"
+)
 
 opentsne_init_time <- system.time({
   opentsne_y_init <- fastEmbedR:::make_opentsne_pca_init(
@@ -957,6 +966,14 @@ table_out$method_label <- ifelse(
   table_out$method,
   paste(table_out$method, table_out$variant)
 )
+knn_timing <- rep("not_applicable", nrow(table_out))
+if (nrow(table_out) > 0L) {
+  has_nn <- !is.na(table_out$nn_sec)
+  knn_timing[has_nn] <- "shared_knn_unknown_cache"
+  knn_timing[grepl('"knn_cache_hit":true', table_out$parameters_json, fixed = TRUE)] <- "cached_knn"
+  knn_timing[grepl('"knn_cache_hit":false', table_out$parameters_json, fixed = TRUE)] <- "fresh_knn"
+  knn_timing[grepl("internal NN", table_out$parameters_json, fixed = TRUE)] <- "package_internal"
+}
 proj_transform_sec <- rep(NA_real_, nrow(table_out))
 if (nrow(table_out) > 0L) {
   proj_transform_sec <- rowSums(
@@ -969,6 +986,7 @@ contract <- data.frame(
   machine = table_out$machine,
   method = table_out$method_label,
   backend = table_out$backend_requested,
+  `KNN timing` = knn_timing,
   `NN sec` = table_out$nn_sec,
   `embed sec` = table_out$embedding_sec,
   `proj+transform sec` = proj_transform_sec,
@@ -982,7 +1000,7 @@ contract_csv <- file.path(out_dir, "mnist70k_contract_table.csv")
 write.csv(contract, contract_csv, row.names = FALSE)
 message("Contract table CSV: ", normalizePath(contract_csv, winslash = "/", mustWork = FALSE))
 if (nrow(contract) > 0L) {
-  print(contract[, c("machine", "method", "backend", "NN sec", "embed sec",
+  print(contract[, c("machine", "method", "backend", "KNN timing", "NN sec", "embed sec",
                      "proj+transform sec", "trust", "status")],
         row.names = FALSE)
 } else {
