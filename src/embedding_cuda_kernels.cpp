@@ -2233,6 +2233,22 @@ __global__ void embed_epoch_coo_atomic_kernel(float* layout,
   }
 }
 
+__global__ void umap_sanitize_layout_kernel(float* layout,
+                                            int n,
+                                            float max_abs_coord) {
+  const int row = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (row >= n) return;
+  const std::size_t base = static_cast<std::size_t>(row) * 2u;
+  float x = layout[base];
+  float y = layout[base + 1u];
+  if (!isfinite(x)) x = 0.0f;
+  if (!isfinite(y)) y = 0.0f;
+  x = fminf(max_abs_coord, fmaxf(-max_abs_coord, x));
+  y = fminf(max_abs_coord, fmaxf(-max_abs_coord, y));
+  layout[base] = x;
+  layout[base + 1u] = y;
+}
+
 int prepare_device_knn_graph(const int* d_indices,
                              const double* d_distances,
                              int* d_neighbors,
@@ -3338,6 +3354,7 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
 
   const int edge_blocks =
     (static_cast<int>(graph_items) + threads - 1) / threads;
+  const float max_abs_coord = 16.0f;
   for (int epoch = 0; epoch < n_epochs; ++epoch) {
     embed_epoch_coo_atomic_kernel<<<edge_blocks, threads>>>(
       d_current, d_coo_heads, d_coo_tails, d_coo_weights,
@@ -3345,6 +3362,11 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
       static_cast<int>(graph_items)
     );
     if (check_cuda(cudaGetLastError(), "embed_epoch_coo_atomic_kernel(fused umap) launch")) {
+      cleanup();
+      return 1;
+    }
+    umap_sanitize_layout_kernel<<<blocks, threads>>>(d_current, n, max_abs_coord);
+    if (check_cuda(cudaGetLastError(), "umap_sanitize_layout_kernel(fused umap) launch")) {
       cleanup();
       return 1;
     }

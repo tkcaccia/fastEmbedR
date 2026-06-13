@@ -113,8 +113,9 @@ layout <- opentsne_knn(
 cfg <- attr(layout, "fastEmbedR_config")
 stopifnot(is.matrix(layout), ncol(layout) == 2L, all(is.finite(layout)))
 stopifnot(identical(cfg$backend, "cuda"))
-stopifnot(identical(cfg$optimizer, "opentsne_exact_dense_native_cuda"))
-stopifnot(identical(cfg$probabilities, "dense_symmetric_knn_cuda_perplexity"))
+stopifnot(identical(cfg$optimizer, "opentsne_fitsne_fft_grid_native_cuda"))
+stopifnot(identical(cfg$repulsion, "fft_grid_cuda_cufft"))
+stopifnot(identical(cfg$probabilities, "symmetric_sparse_knn_cuda"))
 
 fit <- opentsne(
   x,

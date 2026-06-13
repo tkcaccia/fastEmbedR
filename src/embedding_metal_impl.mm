@@ -2542,15 +2542,16 @@ kernel void opentsne_epoch_fft_grid(
   device const int* row_ptr [[buffer(0)]],
   device const int* col_idx [[buffer(1)]],
   device const float* p_val [[buffer(2)]],
-  device float2* current [[buffer(3)]],
-  device float2* gains [[buffer(4)]],
-  device float2* updates [[buffer(5)]],
-  device const float2* q2_grid [[buffer(6)]],
-  device const float2* xq2_grid [[buffer(7)]],
-  device const float2* yq2_grid [[buffer(8)]],
-  constant OpenTsneMetalParams& p [[buffer(9)]],
-  constant OpenTsneFFTGridParams& g [[buffer(10)]],
-  device const float* inv_sum_q_device [[buffer(11)]],
+  device const float2* current [[buffer(3)]],
+  device float2* next_current [[buffer(4)]],
+  device float2* gains [[buffer(5)]],
+  device float2* updates [[buffer(6)]],
+  device const float2* q2_grid [[buffer(7)]],
+  device const float2* xq2_grid [[buffer(8)]],
+  device const float2* yq2_grid [[buffer(9)]],
+  constant OpenTsneMetalParams& p [[buffer(10)]],
+  constant OpenTsneFFTGridParams& g [[buffer(11)]],
+  device const float* inv_sum_q_device [[buffer(12)]],
   uint row [[thread_position_in_grid]]
 ) {
   if (row >= p.n) return;
@@ -2595,7 +2596,7 @@ kernel void opentsne_epoch_fft_grid(
     update *= p.max_step_norm / (sqrt(step_norm2) + eps);
   }
 
-  current[row] = yi + update;
+  next_current[row] = yi + update;
   gains[row] = gain;
   updates[row] = update;
 }
@@ -2604,20 +2605,21 @@ kernel void opentsne_epoch_fft_grid_debug(
   device const int* row_ptr [[buffer(0)]],
   device const int* col_idx [[buffer(1)]],
   device const float* p_val [[buffer(2)]],
-  device float2* current [[buffer(3)]],
-  device float2* gains [[buffer(4)]],
-  device float2* updates [[buffer(5)]],
-  device const float2* q2_grid [[buffer(6)]],
-  device const float2* xq2_grid [[buffer(7)]],
-  device const float2* yq2_grid [[buffer(8)]],
-  constant OpenTsneMetalParams& p [[buffer(9)]],
-  constant OpenTsneFFTGridParams& g [[buffer(10)]],
-  device const float* inv_sum_q_device [[buffer(11)]],
-  device float* repulsive_norm2 [[buffer(12)]],
-  device float* attractive_norm2 [[buffer(13)]],
-  device float* gradient_norm2 [[buffer(14)]],
-  device float* update_norm2 [[buffer(15)]],
-  device float* layout_norm2 [[buffer(16)]],
+  device const float2* current [[buffer(3)]],
+  device float2* next_current [[buffer(4)]],
+  device float2* gains [[buffer(5)]],
+  device float2* updates [[buffer(6)]],
+  device const float2* q2_grid [[buffer(7)]],
+  device const float2* xq2_grid [[buffer(8)]],
+  device const float2* yq2_grid [[buffer(9)]],
+  constant OpenTsneMetalParams& p [[buffer(10)]],
+  constant OpenTsneFFTGridParams& g [[buffer(11)]],
+  device const float* inv_sum_q_device [[buffer(12)]],
+  device float* repulsive_norm2 [[buffer(13)]],
+  device float* attractive_norm2 [[buffer(14)]],
+  device float* gradient_norm2 [[buffer(15)]],
+  device float* update_norm2 [[buffer(16)]],
+  device float* layout_norm2 [[buffer(17)]],
   uint row [[thread_position_in_grid]]
 ) {
   if (row >= p.n) return;
@@ -2667,7 +2669,7 @@ kernel void opentsne_epoch_fft_grid_debug(
   }
 
   float2 next = yi + update;
-  current[row] = next;
+  next_current[row] = next;
   gains[row] = gain;
   updates[row] = update;
 
@@ -4612,6 +4614,8 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
     id<MTLBuffer> current_buffer = [state.device newBufferWithBytes:current.data()
                                                              length:current.size() * sizeof(float)
                                                             options:MTLResourceStorageModeShared];
+    id<MTLBuffer> next_buffer = [state.device newBufferWithLength:current.size() * sizeof(float)
+                                                          options:MTLResourceStorageModeShared];
     id<MTLBuffer> gains_buffer = [state.device newBufferWithBytes:gains.data()
                                                            length:gains.size() * sizeof(float)
                                                           options:MTLResourceStorageModeShared];
@@ -4625,7 +4629,8 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
                                                                length:sizeof(float)
                                                               options:MTLResourceStorageModeShared];
     if (row_ptr_buffer == nil || col_buffer == nil || val_buffer == nil ||
-        current_buffer == nil || gains_buffer == nil || updates_buffer == nil ||
+        current_buffer == nil || next_buffer == nil ||
+        gains_buffer == nil || updates_buffer == nil ||
         row_sums_buffer == nil || inv_sum_q_buffer == nil) {
       Rcpp::stop("Failed to allocate Metal openTSNE buffers.");
     }
@@ -5038,22 +5043,48 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
             [encoder setBuffer:col_buffer offset:0 atIndex:1];
             [encoder setBuffer:val_buffer offset:0 atIndex:2];
             [encoder setBuffer:current_buffer offset:0 atIndex:3];
-            [encoder setBuffer:gains_buffer offset:0 atIndex:4];
-            [encoder setBuffer:updates_buffer offset:0 atIndex:5];
-            [encoder setBuffer:q2_grid_buffer offset:0 atIndex:6];
-            [encoder setBuffer:xq2_grid_buffer offset:0 atIndex:7];
-            [encoder setBuffer:yq2_grid_buffer offset:0 atIndex:8];
-            [encoder setBytes:&params length:sizeof(OpenTsneMetalParams) atIndex:9];
-            [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:10];
-            [encoder setBuffer:inv_sum_q_buffer offset:0 atIndex:11];
+            [encoder setBuffer:next_buffer offset:0 atIndex:4];
+            [encoder setBuffer:gains_buffer offset:0 atIndex:5];
+            [encoder setBuffer:updates_buffer offset:0 atIndex:6];
+            [encoder setBuffer:q2_grid_buffer offset:0 atIndex:7];
+            [encoder setBuffer:xq2_grid_buffer offset:0 atIndex:8];
+            [encoder setBuffer:yq2_grid_buffer offset:0 atIndex:9];
+            [encoder setBytes:&params length:sizeof(OpenTsneMetalParams) atIndex:10];
+            [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:11];
+            [encoder setBuffer:inv_sum_q_buffer offset:0 atIndex:12];
             [encoder dispatchThreads:point_grid
                threadsPerThreadgroup:MTLSizeMake(threads_epoch, 1, 1)];
             [encoder endEncoding];
           }
           {
+            id<MTLComputeCommandEncoder> encoder = [update_command computeCommandEncoder];
+            [encoder setComputePipelineState:state.opentsne_fft_layout_stats_blocks_pipeline];
+            [encoder setBuffer:next_buffer offset:0 atIndex:0];
+            [encoder setBuffer:layout_stats_buffer offset:0 atIndex:1];
+            [encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
+            [encoder setBytes:&stats_block_size length:sizeof(std::uint32_t) atIndex:3];
+            [encoder dispatchThreads:stats_blocks
+               threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+            [encoder endEncoding];
+          }
+          {
+            id<MTLComputeCommandEncoder> encoder = [update_command computeCommandEncoder];
+            [encoder setComputePipelineState:state.opentsne_fft_finalize_layout_stats_pipeline];
+            [encoder setBuffer:layout_stats_buffer offset:0 atIndex:0];
+            [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:1];
+            [encoder setBuffer:center_buffer offset:0 atIndex:2];
+            [encoder setBytes:&stats_block_count length:sizeof(std::uint32_t) atIndex:3];
+            [encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:4];
+            [encoder setBytes:&grid_n length:sizeof(std::uint32_t) atIndex:5];
+            [encoder setBytes:&fft_n length:sizeof(std::uint32_t) atIndex:6];
+            [encoder dispatchThreads:MTLSizeMake(1, 1, 1)
+               threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+            [encoder endEncoding];
+          }
+          {
             id<MTLComputeCommandEncoder> center_encoder = [update_command computeCommandEncoder];
             [center_encoder setComputePipelineState:state.opentsne_center_pipeline];
-            [center_encoder setBuffer:current_buffer offset:0 atIndex:0];
+            [center_encoder setBuffer:next_buffer offset:0 atIndex:0];
             [center_encoder setBuffer:center_buffer offset:0 atIndex:1];
             [center_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
             [center_encoder dispatchThreads:point_grid
@@ -5066,6 +5097,7 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
             Rcpp::stop("Metal openTSNE MPSGraph update failed: %s",
                        ns_error_message(update_command.error).c_str());
           }
+          std::swap(current_buffer, next_buffer);
           continue;
         }
 
@@ -5192,23 +5224,49 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
             [encoder setBuffer:col_buffer offset:0 atIndex:1];
             [encoder setBuffer:val_buffer offset:0 atIndex:2];
             [encoder setBuffer:current_buffer offset:0 atIndex:3];
-            [encoder setBuffer:gains_buffer offset:0 atIndex:4];
-            [encoder setBuffer:updates_buffer offset:0 atIndex:5];
-            [encoder setBuffer:q2_grid_buffer offset:0 atIndex:6];
-            [encoder setBuffer:xq2_grid_buffer offset:0 atIndex:7];
-            [encoder setBuffer:yq2_grid_buffer offset:0 atIndex:8];
-            [encoder setBytes:&params length:sizeof(OpenTsneMetalParams) atIndex:9];
-            [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:10];
-            [encoder setBuffer:inv_sum_q_buffer offset:0 atIndex:11];
+            [encoder setBuffer:next_buffer offset:0 atIndex:4];
+            [encoder setBuffer:gains_buffer offset:0 atIndex:5];
+            [encoder setBuffer:updates_buffer offset:0 atIndex:6];
+            [encoder setBuffer:q2_grid_buffer offset:0 atIndex:7];
+            [encoder setBuffer:xq2_grid_buffer offset:0 atIndex:8];
+            [encoder setBuffer:yq2_grid_buffer offset:0 atIndex:9];
+            [encoder setBytes:&params length:sizeof(OpenTsneMetalParams) atIndex:10];
+            [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:11];
+            [encoder setBuffer:inv_sum_q_buffer offset:0 atIndex:12];
             [encoder dispatchThreads:point_grid
                threadsPerThreadgroup:MTLSizeMake(threads_epoch, 1, 1)];
             [encoder endEncoding];
           };
 
           auto encode_center = [&](id<MTLCommandBuffer> command_buffer) {
+            {
+              id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+              [encoder setComputePipelineState:state.opentsne_fft_layout_stats_blocks_pipeline];
+              [encoder setBuffer:next_buffer offset:0 atIndex:0];
+              [encoder setBuffer:layout_stats_buffer offset:0 atIndex:1];
+              [encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
+              [encoder setBytes:&stats_block_size length:sizeof(std::uint32_t) atIndex:3];
+              [encoder dispatchThreads:stats_blocks
+                 threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+              [encoder endEncoding];
+            }
+            {
+              id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+              [encoder setComputePipelineState:state.opentsne_fft_finalize_layout_stats_pipeline];
+              [encoder setBuffer:layout_stats_buffer offset:0 atIndex:0];
+              [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:1];
+              [encoder setBuffer:center_buffer offset:0 atIndex:2];
+              [encoder setBytes:&stats_block_count length:sizeof(std::uint32_t) atIndex:3];
+              [encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:4];
+              [encoder setBytes:&grid_n length:sizeof(std::uint32_t) atIndex:5];
+              [encoder setBytes:&fft_n length:sizeof(std::uint32_t) atIndex:6];
+              [encoder dispatchThreads:MTLSizeMake(1, 1, 1)
+                 threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+              [encoder endEncoding];
+            }
             id<MTLComputeCommandEncoder> center_encoder = [command_buffer computeCommandEncoder];
             [center_encoder setComputePipelineState:state.opentsne_center_pipeline];
-            [center_encoder setBuffer:current_buffer offset:0 atIndex:0];
+            [center_encoder setBuffer:next_buffer offset:0 atIndex:0];
             [center_encoder setBuffer:center_buffer offset:0 atIndex:1];
             [center_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
             [center_encoder dispatchThreads:point_grid
@@ -5223,6 +5281,7 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
           run_timed_metal_stage(state, stage_timer, "sum_q", encode_sum_q);
           run_timed_metal_stage(state, stage_timer, "epoch_update", encode_epoch_update);
           run_timed_metal_stage(state, stage_timer, "center", encode_center);
+          std::swap(current_buffer, next_buffer);
           continue;
         }
 
@@ -5337,29 +5396,55 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
           [encoder setBuffer:col_buffer offset:0 atIndex:1];
           [encoder setBuffer:val_buffer offset:0 atIndex:2];
           [encoder setBuffer:current_buffer offset:0 atIndex:3];
-          [encoder setBuffer:gains_buffer offset:0 atIndex:4];
-          [encoder setBuffer:updates_buffer offset:0 atIndex:5];
-          [encoder setBuffer:q2_grid_buffer offset:0 atIndex:6];
-          [encoder setBuffer:xq2_grid_buffer offset:0 atIndex:7];
-          [encoder setBuffer:yq2_grid_buffer offset:0 atIndex:8];
-          [encoder setBytes:&params length:sizeof(OpenTsneMetalParams) atIndex:9];
-          [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:10];
-          [encoder setBuffer:inv_sum_q_buffer offset:0 atIndex:11];
+          [encoder setBuffer:next_buffer offset:0 atIndex:4];
+          [encoder setBuffer:gains_buffer offset:0 atIndex:5];
+          [encoder setBuffer:updates_buffer offset:0 atIndex:6];
+          [encoder setBuffer:q2_grid_buffer offset:0 atIndex:7];
+          [encoder setBuffer:xq2_grid_buffer offset:0 atIndex:8];
+          [encoder setBuffer:yq2_grid_buffer offset:0 atIndex:9];
+          [encoder setBytes:&params length:sizeof(OpenTsneMetalParams) atIndex:10];
+          [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:11];
+          [encoder setBuffer:inv_sum_q_buffer offset:0 atIndex:12];
           if (record_costs) {
-            [encoder setBuffer:repulsive_norm_buffer offset:0 atIndex:12];
-            [encoder setBuffer:attractive_norm_buffer offset:0 atIndex:13];
-            [encoder setBuffer:gradient_norm_buffer offset:0 atIndex:14];
-            [encoder setBuffer:update_norm_buffer offset:0 atIndex:15];
-            [encoder setBuffer:layout_norm_buffer offset:0 atIndex:16];
+            [encoder setBuffer:repulsive_norm_buffer offset:0 atIndex:13];
+            [encoder setBuffer:attractive_norm_buffer offset:0 atIndex:14];
+            [encoder setBuffer:gradient_norm_buffer offset:0 atIndex:15];
+            [encoder setBuffer:update_norm_buffer offset:0 atIndex:16];
+            [encoder setBuffer:layout_norm_buffer offset:0 atIndex:17];
           }
           [encoder dispatchThreads:point_grid
              threadsPerThreadgroup:MTLSizeMake(threads_epoch, 1, 1)];
           [encoder endEncoding];
         }
         {
+          id<MTLComputeCommandEncoder> encoder = [fft_command computeCommandEncoder];
+          [encoder setComputePipelineState:state.opentsne_fft_layout_stats_blocks_pipeline];
+          [encoder setBuffer:next_buffer offset:0 atIndex:0];
+          [encoder setBuffer:layout_stats_buffer offset:0 atIndex:1];
+          [encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
+          [encoder setBytes:&stats_block_size length:sizeof(std::uint32_t) atIndex:3];
+          [encoder dispatchThreads:stats_blocks
+             threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+          [encoder endEncoding];
+        }
+        {
+          id<MTLComputeCommandEncoder> encoder = [fft_command computeCommandEncoder];
+          [encoder setComputePipelineState:state.opentsne_fft_finalize_layout_stats_pipeline];
+          [encoder setBuffer:layout_stats_buffer offset:0 atIndex:0];
+          [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:1];
+          [encoder setBuffer:center_buffer offset:0 atIndex:2];
+          [encoder setBytes:&stats_block_count length:sizeof(std::uint32_t) atIndex:3];
+          [encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:4];
+          [encoder setBytes:&grid_n length:sizeof(std::uint32_t) atIndex:5];
+          [encoder setBytes:&fft_n length:sizeof(std::uint32_t) atIndex:6];
+          [encoder dispatchThreads:MTLSizeMake(1, 1, 1)
+             threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+          [encoder endEncoding];
+        }
+        {
           id<MTLComputeCommandEncoder> center_encoder = [fft_command computeCommandEncoder];
           [center_encoder setComputePipelineState:state.opentsne_center_pipeline];
-          [center_encoder setBuffer:current_buffer offset:0 atIndex:0];
+          [center_encoder setBuffer:next_buffer offset:0 atIndex:0];
           [center_encoder setBuffer:center_buffer offset:0 atIndex:1];
           [center_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
           [center_encoder dispatchThreads:point_grid
@@ -5371,6 +5456,7 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
         if (fft_command.status == MTLCommandBufferStatusError) {
           Rcpp::stop("Metal openTSNE FFT-grid command failed: %s", ns_error_message(fft_command.error).c_str());
         }
+        std::swap(current_buffer, next_buffer);
         if (record_costs) {
           auto sum_norm_buffer = [&](id<MTLBuffer> buffer) -> double {
             const float* values = static_cast<const float*>([buffer contents]);
@@ -5409,6 +5495,7 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
       [col_buffer release];
       [val_buffer release];
       [current_buffer release];
+      [next_buffer release];
       [gains_buffer release];
       [updates_buffer release];
       [row_sums_buffer release];
