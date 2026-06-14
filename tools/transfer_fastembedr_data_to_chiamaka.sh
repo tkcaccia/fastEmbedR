@@ -21,7 +21,7 @@ fi
 "${ssh_base[@]}" "${REMOTE_USER}@${REMOTE_HOST}" \
   "mkdir -p '${REMOTE_DIR}' && df -h /mnt/sata_ssd"
 
-rsync -avh --info=progress2 -e "${rsync_ssh}" \
+rsync -avh --progress -e "${rsync_ssh}" \
   --exclude "_downloads/" \
   "${LOCAL_DATA_DIR}/" \
   "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/"
