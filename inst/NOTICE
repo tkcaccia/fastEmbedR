@@ -82,6 +82,28 @@ KNN bandwidths, fuzzy graph weights, epoch schedules, graph-smoothed
 initialization, and UMAP SGD in C++/Metal kernels. It does not call Python/MLX
 or reuse CPU UMAP graph builders for Metal-labelled UMAP runs.
 
+Shared-nearest-neighbour graph reference
+----------------------------------------
+
+The `knn_graph(..., weight = "snn")` path was informed by:
+
+  bluster
+  Author: Aaron Lun and contributors
+  Repository: https://bioconductor.org/packages/bluster
+  License: GPL-3
+
+  scran_graph_cluster
+  Repository: https://github.com/LTLA/scran_graph_cluster
+  License: MIT
+
+The transferred idea is the graph construction strategy used by
+`bluster::neighborsToSNNGraph()`: build a full SNN graph from a neighbour-index
+matrix by connecting all pairs of observations that share at least one
+neighbour, then use Jaccard weights for `type = "jaccard"`. fastEmbedR
+implements this directly in `src/graph.cpp` using an inverted neighbour index
+and sparse co-occurrence counting. It does not link to, call, or require
+bluster at runtime.
+
 Native Metal FFT design reference
 ---------------------------------
 

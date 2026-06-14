@@ -159,11 +159,13 @@ finish_nn_result <- function(out,
                              backend,
                              k,
                              self_query,
-                             exact = TRUE) {
+                             exact = TRUE,
+                             metric = "euclidean") {
   attr(out, "backend") <- backend
   attr(out, "k") <- as.integer(k)
   attr(out, "self_query") <- isTRUE(self_query)
   attr(out, "exact") <- isTRUE(exact)
+  attr(out, "metric") <- metric
   class(out) <- c("fastEmbedR_nn", "list")
   out
 }

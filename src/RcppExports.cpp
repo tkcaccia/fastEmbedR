@@ -953,6 +953,21 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// knn_graph_edges_cpp
+List knn_graph_edges_cpp(IntegerMatrix indices, NumericMatrix distances, std::string weight_type, double prune, bool mutual);
+RcppExport SEXP _fastEmbedR_knn_graph_edges_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP weight_typeSEXP, SEXP pruneSEXP, SEXP mutualSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type weight_type(weight_typeSEXP);
+    Rcpp::traits::input_parameter< double >::type prune(pruneSEXP);
+    Rcpp::traits::input_parameter< bool >::type mutual(mutualSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_graph_edges_cpp(indices, distances, weight_type, prune, mutual));
+    return rcpp_result_gen;
+END_RCPP
+}
 // nn_cpp
 List nn_cpp(NumericMatrix data, NumericMatrix points, int k, std::string method, bool square, bool sorted, double p, bool parallel, int cores, bool exclude_self);
 RcppExport SEXP _fastEmbedR_nn_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP squareSEXP, SEXP sortedSEXP, SEXP pSEXP, SEXP parallelSEXP, SEXP coresSEXP, SEXP exclude_selfSEXP) {
@@ -999,6 +1014,21 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type use_reverse(use_reverseSEXP);
     Rcpp::traits::input_parameter< bool >::type active_only(active_onlySEXP);
     rcpp_result_gen = Rcpp::wrap(nndescent_candidate_matrix_mlx_cpp(indices, flags, n_sources, n_neighbors, use_reverse, active_only));
+    return rcpp_result_gen;
+END_RCPP
+}
+// nndescent_candidate_matrix_mlx_subset_cpp
+List nndescent_candidate_matrix_mlx_subset_cpp(IntegerMatrix indices, LogicalMatrix flags, int n_sources, int n_neighbors, bool use_reverse);
+RcppExport SEXP _fastEmbedR_nndescent_candidate_matrix_mlx_subset_cpp(SEXP indicesSEXP, SEXP flagsSEXP, SEXP n_sourcesSEXP, SEXP n_neighborsSEXP, SEXP use_reverseSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< LogicalMatrix >::type flags(flagsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_sources(n_sourcesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_neighbors(n_neighborsSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_reverse(use_reverseSEXP);
+    rcpp_result_gen = Rcpp::wrap(nndescent_candidate_matrix_mlx_subset_cpp(indices, flags, n_sources, n_neighbors, use_reverse));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1304,6 +1334,94 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// nn_faiss_flat_ip_cpp
+List nn_faiss_flat_ip_cpp(NumericMatrix data, NumericMatrix points, int k, bool exclude_self, int n_threads);
+RcppExport SEXP _fastEmbedR_nn_faiss_flat_ip_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP exclude_selfSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type points(pointsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< bool >::type exclude_self(exclude_selfSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(nn_faiss_flat_ip_cpp(data, points, k, exclude_self, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
+// nn_faiss_ivfpq_cpp
+List nn_faiss_ivfpq_cpp(NumericMatrix data, NumericMatrix points, int k, int nlist, int nprobe, int pq_m, int pq_nbits, bool exclude_self, int n_threads);
+RcppExport SEXP _fastEmbedR_nn_faiss_ivfpq_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP nlistSEXP, SEXP nprobeSEXP, SEXP pq_mSEXP, SEXP pq_nbitsSEXP, SEXP exclude_selfSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type points(pointsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type nlist(nlistSEXP);
+    Rcpp::traits::input_parameter< int >::type nprobe(nprobeSEXP);
+    Rcpp::traits::input_parameter< int >::type pq_m(pq_mSEXP);
+    Rcpp::traits::input_parameter< int >::type pq_nbits(pq_nbitsSEXP);
+    Rcpp::traits::input_parameter< bool >::type exclude_self(exclude_selfSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(nn_faiss_ivfpq_cpp(data, points, k, nlist, nprobe, pq_m, pq_nbits, exclude_self, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
+// nn_faiss_hnsw_cpp
+List nn_faiss_hnsw_cpp(NumericMatrix data, NumericMatrix points, int k, int m, int ef_construction, int ef_search, bool exclude_self, int n_threads);
+RcppExport SEXP _fastEmbedR_nn_faiss_hnsw_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP mSEXP, SEXP ef_constructionSEXP, SEXP ef_searchSEXP, SEXP exclude_selfSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type points(pointsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type m(mSEXP);
+    Rcpp::traits::input_parameter< int >::type ef_construction(ef_constructionSEXP);
+    Rcpp::traits::input_parameter< int >::type ef_search(ef_searchSEXP);
+    Rcpp::traits::input_parameter< bool >::type exclude_self(exclude_selfSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(nn_faiss_hnsw_cpp(data, points, k, m, ef_construction, ef_search, exclude_self, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
+// nn_faiss_nsg_cpp
+List nn_faiss_nsg_cpp(NumericMatrix data, NumericMatrix points, int k, int r, int search_l, int build_type, bool exclude_self, int n_threads);
+RcppExport SEXP _fastEmbedR_nn_faiss_nsg_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP rSEXP, SEXP search_lSEXP, SEXP build_typeSEXP, SEXP exclude_selfSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type points(pointsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type r(rSEXP);
+    Rcpp::traits::input_parameter< int >::type search_l(search_lSEXP);
+    Rcpp::traits::input_parameter< int >::type build_type(build_typeSEXP);
+    Rcpp::traits::input_parameter< bool >::type exclude_self(exclude_selfSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(nn_faiss_nsg_cpp(data, points, k, r, search_l, build_type, exclude_self, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
+// nn_faiss_nndescent_cpp
+List nn_faiss_nndescent_cpp(NumericMatrix data, NumericMatrix points, int k, int graph_k, int n_iter, int search_l, bool exclude_self, int n_threads);
+RcppExport SEXP _fastEmbedR_nn_faiss_nndescent_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP graph_kSEXP, SEXP n_iterSEXP, SEXP search_lSEXP, SEXP exclude_selfSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type points(pointsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type graph_k(graph_kSEXP);
+    Rcpp::traits::input_parameter< int >::type n_iter(n_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type search_l(search_lSEXP);
+    Rcpp::traits::input_parameter< bool >::type exclude_self(exclude_selfSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(nn_faiss_nndescent_cpp(data, points, k, graph_k, n_iter, search_l, exclude_self, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
 // metal_available_cpp
 bool metal_available_cpp();
 RcppExport SEXP _fastEmbedR_metal_available_cpp() {
@@ -1368,6 +1486,59 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< IntegerMatrix >::type candidate_indices(candidate_indicesSEXP);
     Rcpp::traits::input_parameter< int >::type k(kSEXP);
     rcpp_result_gen = Rcpp::wrap(row_candidate_knn_metal_cpp(data, candidate_indices, k));
+    return rcpp_result_gen;
+END_RCPP
+}
+// candidate_topk_l2_batched_metal_cpp
+List candidate_topk_l2_batched_metal_cpp(NumericMatrix data, IntegerMatrix candidate_indices, int k);
+RcppExport SEXP _fastEmbedR_candidate_topk_l2_batched_metal_cpp(SEXP dataSEXP, SEXP candidate_indicesSEXP, SEXP kSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type candidate_indices(candidate_indicesSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    rcpp_result_gen = Rcpp::wrap(candidate_topk_l2_batched_metal_cpp(data, candidate_indices, k));
+    return rcpp_result_gen;
+END_RCPP
+}
+// metal_knn_data_handle_cpp
+SEXP metal_knn_data_handle_cpp(NumericMatrix data);
+RcppExport SEXP _fastEmbedR_metal_knn_data_handle_cpp(SEXP dataSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    rcpp_result_gen = Rcpp::wrap(metal_knn_data_handle_cpp(data));
+    return rcpp_result_gen;
+END_RCPP
+}
+// row_candidate_knn_metal_handle_cpp
+List row_candidate_knn_metal_handle_cpp(SEXP handle, IntegerMatrix candidate_indices, int k, bool return_distances);
+RcppExport SEXP _fastEmbedR_row_candidate_knn_metal_handle_cpp(SEXP handleSEXP, SEXP candidate_indicesSEXP, SEXP kSEXP, SEXP return_distancesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type handle(handleSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type candidate_indices(candidate_indicesSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< bool >::type return_distances(return_distancesSEXP);
+    rcpp_result_gen = Rcpp::wrap(row_candidate_knn_metal_handle_cpp(handle, candidate_indices, k, return_distances));
+    return rcpp_result_gen;
+END_RCPP
+}
+// row_candidate_knn_metal_subset_handle_cpp
+List row_candidate_knn_metal_subset_handle_cpp(SEXP handle, IntegerMatrix candidate_indices, IntegerVector query_rows, int k, bool return_distances);
+RcppExport SEXP _fastEmbedR_row_candidate_knn_metal_subset_handle_cpp(SEXP handleSEXP, SEXP candidate_indicesSEXP, SEXP query_rowsSEXP, SEXP kSEXP, SEXP return_distancesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type handle(handleSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type candidate_indices(candidate_indicesSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type query_rows(query_rowsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< bool >::type return_distances(return_distancesSEXP);
+    rcpp_result_gen = Rcpp::wrap(row_candidate_knn_metal_subset_handle_cpp(handle, candidate_indices, query_rows, k, return_distances));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1534,9 +1705,11 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_knn_umap_refine_rows_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_rows_cpp, 12},
     {"_fastEmbedR_fast_knn_umap_csr_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_csr_cpp, 14},
     {"_fastEmbedR_umap_auto_parameters_cpp", (DL_FUNC) &_fastEmbedR_umap_auto_parameters_cpp, 3},
+    {"_fastEmbedR_knn_graph_edges_cpp", (DL_FUNC) &_fastEmbedR_knn_graph_edges_cpp, 5},
     {"_fastEmbedR_nn_cpp", (DL_FUNC) &_fastEmbedR_nn_cpp, 10},
     {"_fastEmbedR_nndescent_candidate_matrix_cpp", (DL_FUNC) &_fastEmbedR_nndescent_candidate_matrix_cpp, 3},
     {"_fastEmbedR_nndescent_candidate_matrix_mlx_cpp", (DL_FUNC) &_fastEmbedR_nndescent_candidate_matrix_mlx_cpp, 6},
+    {"_fastEmbedR_nndescent_candidate_matrix_mlx_subset_cpp", (DL_FUNC) &_fastEmbedR_nndescent_candidate_matrix_mlx_subset_cpp, 5},
     {"_fastEmbedR_landmark_candidate_knn_cpp", (DL_FUNC) &_fastEmbedR_landmark_candidate_knn_cpp, 7},
     {"_fastEmbedR_landmark_candidate_knn_subset_cpp", (DL_FUNC) &_fastEmbedR_landmark_candidate_knn_subset_cpp, 8},
     {"_fastEmbedR_landmark_projection_knn_approx_cpp", (DL_FUNC) &_fastEmbedR_landmark_projection_knn_approx_cpp, 8},
@@ -1558,11 +1731,20 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_faiss_info_json_cpp", (DL_FUNC) &_fastEmbedR_faiss_info_json_cpp, 0},
     {"_fastEmbedR_nn_faiss_flat_cpp", (DL_FUNC) &_fastEmbedR_nn_faiss_flat_cpp, 5},
     {"_fastEmbedR_nn_faiss_ivf_cpp", (DL_FUNC) &_fastEmbedR_nn_faiss_ivf_cpp, 7},
+    {"_fastEmbedR_nn_faiss_flat_ip_cpp", (DL_FUNC) &_fastEmbedR_nn_faiss_flat_ip_cpp, 5},
+    {"_fastEmbedR_nn_faiss_ivfpq_cpp", (DL_FUNC) &_fastEmbedR_nn_faiss_ivfpq_cpp, 9},
+    {"_fastEmbedR_nn_faiss_hnsw_cpp", (DL_FUNC) &_fastEmbedR_nn_faiss_hnsw_cpp, 8},
+    {"_fastEmbedR_nn_faiss_nsg_cpp", (DL_FUNC) &_fastEmbedR_nn_faiss_nsg_cpp, 8},
+    {"_fastEmbedR_nn_faiss_nndescent_cpp", (DL_FUNC) &_fastEmbedR_nn_faiss_nndescent_cpp, 8},
     {"_fastEmbedR_metal_available_cpp", (DL_FUNC) &_fastEmbedR_metal_available_cpp, 0},
     {"_fastEmbedR_nn_metal_cpp", (DL_FUNC) &_fastEmbedR_nn_metal_cpp, 4},
     {"_fastEmbedR_landmark_candidate_knn_metal_cpp", (DL_FUNC) &_fastEmbedR_landmark_candidate_knn_metal_cpp, 5},
     {"_fastEmbedR_grid_knn_metal_cpp", (DL_FUNC) &_fastEmbedR_grid_knn_metal_cpp, 5},
     {"_fastEmbedR_row_candidate_knn_metal_cpp", (DL_FUNC) &_fastEmbedR_row_candidate_knn_metal_cpp, 3},
+    {"_fastEmbedR_candidate_topk_l2_batched_metal_cpp", (DL_FUNC) &_fastEmbedR_candidate_topk_l2_batched_metal_cpp, 3},
+    {"_fastEmbedR_metal_knn_data_handle_cpp", (DL_FUNC) &_fastEmbedR_metal_knn_data_handle_cpp, 1},
+    {"_fastEmbedR_row_candidate_knn_metal_handle_cpp", (DL_FUNC) &_fastEmbedR_row_candidate_knn_metal_handle_cpp, 4},
+    {"_fastEmbedR_row_candidate_knn_metal_subset_handle_cpp", (DL_FUNC) &_fastEmbedR_row_candidate_knn_metal_subset_handle_cpp, 5},
     {"_fastEmbedR_tsne_auto_parameters_cpp", (DL_FUNC) &_fastEmbedR_tsne_auto_parameters_cpp, 6},
     {"_fastEmbedR_knn_tsne_opentsne_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cpp, 24},
     {"_fastEmbedR_opentsne_cpu_trace_cpp", (DL_FUNC) &_fastEmbedR_opentsne_cpu_trace_cpp, 12},

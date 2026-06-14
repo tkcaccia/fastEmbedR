@@ -11,7 +11,7 @@ test_that("Metal public paths stay native and do not depend on Python bridges", 
   transform_body <- paste(deparse(body(fastEmbedR::transform_tsne)), collapse = "\n")
   opentsne_body <- paste(deparse(body(fastEmbedR:::fast_knn_opentsne_materialized)), collapse = "\n")
 
-  expect_match(nn_body, "nn_metal_cpp", fixed = TRUE)
+  expect_false(grepl("nn_metal_cpp", nn_body, fixed = TRUE))
   expect_match(prepare_body, "standardize_metal_cpp", fixed = TRUE)
   expect_match(transform_body, "transform_tsne_metal_cpp", fixed = TRUE)
   expect_match(opentsne_body, "knn_tsne_opentsne_metal_cpp", fixed = TRUE)
@@ -37,7 +37,7 @@ test_that("Metal openTSNE FFT-grid exposes opt-in per-stage timing", {
   Sys.setenv(FASTEMBEDR_METAL_STAGE_TIMING = "1")
   set.seed(93)
   x <- matrix(rnorm(120L * 6L), nrow = 120L, ncol = 6L)
-  knn <- fastEmbedR::nn(x, k = 12L, backend = "metal")
+  knn <- fastEmbedR::nn(x, k = 12L, backend = "cpu")
   layout <- fastEmbedR::opentsne_knn(
     knn,
     perplexity = 3,

@@ -47,26 +47,30 @@ faiss_home=${FAISS_HOME:-}
 faiss_objects="nn_faiss_bridge.o nn_faiss_stub.o"
 faiss_cppflags=""
 faiss_libs=""
+faiss_libdir=""
 
 if [ "$use_faiss" != "0" ]; then
   if [ -n "$faiss_home" ] && [ -f "$faiss_home/include/faiss/IndexFlat.h" ]; then
     faiss_cppflags="-I$faiss_home/include"
     if [ -d "$faiss_home/lib64" ]; then
-      faiss_libs="-L$faiss_home/lib64 -lfaiss"
+      faiss_libdir="$faiss_home/lib64"
     else
-      faiss_libs="-L$faiss_home/lib -lfaiss"
+      faiss_libdir="$faiss_home/lib"
     fi
+    faiss_libs="-L$faiss_libdir -Wl,-rpath,$faiss_libdir -lfaiss"
   elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists faiss 2>/dev/null; then
     faiss_cppflags=$(pkg-config --cflags faiss)
     faiss_libs=$(pkg-config --libs faiss)
   elif [ -f /opt/homebrew/include/faiss/IndexFlat.h ] && \
        { [ -f /opt/homebrew/lib/libfaiss.dylib ] || [ -f /opt/homebrew/lib/libfaiss.a ]; }; then
     faiss_cppflags="-I/opt/homebrew/include"
-    faiss_libs="-L/opt/homebrew/lib -lfaiss"
+    faiss_libdir="/opt/homebrew/lib"
+    faiss_libs="-L$faiss_libdir -Wl,-rpath,$faiss_libdir -lfaiss"
   elif [ -f /usr/local/include/faiss/IndexFlat.h ] && \
        { [ -f /usr/local/lib/libfaiss.dylib ] || [ -f /usr/local/lib/libfaiss.so ] || [ -f /usr/local/lib/libfaiss.a ]; }; then
     faiss_cppflags="-I/usr/local/include"
-    faiss_libs="-L/usr/local/lib -lfaiss"
+    faiss_libdir="/usr/local/lib"
+    faiss_libs="-L$faiss_libdir -Wl,-rpath,$faiss_libdir -lfaiss"
   fi
 
   if [ -n "$faiss_cppflags" ] && [ -n "$faiss_libs" ]; then
@@ -211,5 +215,5 @@ fi
     echo "NVCC = $nvcc"
     printf "%s" "$cuda_rule"
   fi
-  echo "OBJECTS = RcppExports.o tsne_neighbors.o embedding_utils.o fast_knn_umap.o nn.o nn_fortran.o $faiss_objects $cuvs_objects $metal_objects nn_cuda_bridge.o embedding_cuda_bridge.o $cuda_objects"
+  echo "OBJECTS = RcppExports.o tsne_neighbors.o embedding_utils.o fast_knn_umap.o graph.o nn.o nn_fortran.o $faiss_objects $cuvs_objects $metal_objects nn_cuda_bridge.o embedding_cuda_bridge.o $cuda_objects"
 } > src/Makevars

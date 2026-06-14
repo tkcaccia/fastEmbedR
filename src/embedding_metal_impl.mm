@@ -222,6 +222,30 @@ id<MTLComputePipelineState> make_pipeline(MetalEmbeddingState& state,
   return pipeline;
 }
 
+MTLCompileOptions* metal_embedding_compile_options() {
+  MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
+#if defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 140000
+  if (@available(macOS 14.0, *)) {
+    options.languageVersion = MTLLanguageVersion3_1;
+    return options;
+  }
+#endif
+#if defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 130000
+  if (@available(macOS 13.0, *)) {
+    options.languageVersion = MTLLanguageVersion3_0;
+    return options;
+  }
+#endif
+#if defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 120000
+  if (@available(macOS 12.0, *)) {
+    options.languageVersion = MTLLanguageVersion2_4;
+    return options;
+  }
+#endif
+  options.languageVersion = MTLLanguageVersion2_3;
+  return options;
+}
+
 MetalEmbeddingState& metal_embedding_state() {
   static MetalEmbeddingState state{};
   if (state.device != nil && state.embed_pipeline != nil &&
@@ -263,7 +287,9 @@ MetalEmbeddingState& metal_embedding_state() {
 
   NSError* error = nil;
   NSString* source = [NSString stringWithUTF8String:metal_embed_kernel_source()];
-  state.library = [state.device newLibraryWithSource:source options:nil error:&error];
+  MTLCompileOptions* compile_options = metal_embedding_compile_options();
+  state.library = [state.device newLibraryWithSource:source options:compile_options error:&error];
+  [compile_options release];
   if (state.library == nil) {
     Rcpp::stop("Failed to compile Metal embedding kernel: %s", ns_error_message(error).c_str());
   }

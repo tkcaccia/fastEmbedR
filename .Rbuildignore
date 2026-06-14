@@ -5,6 +5,7 @@
 ^LICENSE[.]md$
 ^LICENSE-IMPLICATIONS[.]md$
 ^BENCHMARK_SUMMARY[.]md$
+^cran-comments[.]md$
 ^_pkgdown[.]yml$
 ^\.Rcheck$
 ^\.Rcheck/

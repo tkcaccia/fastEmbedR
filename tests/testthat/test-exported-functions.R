@@ -126,12 +126,10 @@ test_that("core exported functions have tiny openTSNE smoke tests", {
     n_threads = 2L,
     dataset = "toy"
   )
-  if (isTRUE(fastEmbedR:::metal_metric_available())) {
-    expect_equal(gpu_scores$metric_backend, "metal")
-  } else if (isTRUE(fastEmbedR:::cuda_metric_available())) {
+  if (isTRUE(fastEmbedR:::cuda_metric_available())) {
     expect_equal(gpu_scores$metric_backend, "cuda")
   } else {
     expect_equal(gpu_scores$metric_backend, "cpu")
-    expect_match(gpu_scores$metric_backend_reason, "gpu_metric_backend_unavailable")
+    expect_match(gpu_scores$metric_backend_reason, "metric_backend_unavailable")
   }
 })

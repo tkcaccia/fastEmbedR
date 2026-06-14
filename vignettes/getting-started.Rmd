@@ -23,7 +23,7 @@ package API. The kept path is:
 3. optionally place query/non-landmark points with `transform_tsne()`.
 
 CPU-capable public functions expose `n_threads`, for example
-`n_threads = 4` for a fixed four-core run. Native Apple GPU paths use
+`n_threads = 2` for a fixed two-core run. Native Apple GPU paths use
 `backend = "metal"`; `backend = "gpu"` is a convenience request for a real GPU
 path and is not silently relabelled when unavailable.
 
@@ -40,8 +40,8 @@ library(fastEmbedR)
 x <- scale(as.matrix(iris[, 1:4]))
 labels <- iris$Species
 
-knn <- nn(x, k = 31)
-layout <- umap_knn(knn, n_threads = 4, seed = 4)
+knn <- nn(x, k = 31, n_threads = 2)
+layout <- umap_knn(knn, n_threads = 2, seed = 4)
 
 plot(layout, pch = 21, bg = labels)
 ```
@@ -70,7 +70,7 @@ fit <- umap(
   x,
   labels = labels,
   n_neighbors = 30,
-  n_threads = 4,
+  n_threads = 2,
   seed = 4,
   silhouette_sample = NULL,
   preserve_sample = NULL
@@ -108,7 +108,7 @@ from a supplied KNN graph. The older Barnes-Hut route has been removed.
 Native Metal FFT openTSNE uses Objective-C++/Metal kernels when compiled.
 Native CUDA FFT openTSNE uses package CUDA kernels and cuFFT when compiled.
 
-```{r, eval = fastEmbedR:::embedding_metal_available_cpp()}
+```{r, eval = FALSE}
 metal_layout <- umap_knn(
   knn,
   backend = "metal",

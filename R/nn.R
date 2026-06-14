@@ -4,7 +4,8 @@ nn_compute <- function(data,
                        backend,
                        points_missing,
                        exclude_self = FALSE,
-                       n_threads = NULL) {
+                       n_threads = NULL,
+                       metric = "euclidean") {
   data <- as.matrix(data)
   storage.mode(data) <- "double"
   if (isTRUE(points_missing)) {
@@ -55,12 +56,22 @@ nn_compute <- function(data,
     stop("`data` and `points` must contain only finite values.", call. = FALSE)
   }
   n_threads <- normalize_nn_threads(n_threads)
-
-  if (backend %in% c("cuda_nndescent", "cuda_approx")) {
-    backend <- "cuda_cuvs_nndescent"
+  metric <- normalize_nn_metric(metric)
+  if (!identical(metric, "euclidean")) {
+    if (identical(backend, "auto")) {
+      backend <- "cpu"
+    } else if (!backend %in% c("cpu", "hnsw", "rcpphnsw", "cpu_hnsw")) {
+      stop(
+        "`metric = \"", metric, "\"` currently supports only `backend = \"cpu\"` ",
+        "or `backend = \"hnsw\"`. ",
+        "The FAISS, CUDA, and cuVS KNN paths in this build ",
+        "have validated Euclidean-distance semantics only.",
+        call. = FALSE
+      )
+    }
   }
-  if (backend %in% c("gpu_nndescent", "gpu_approx") &&
-      identical(available_native_gpu_backend(need_knn = TRUE), "cuda")) {
+
+  if (backend %in% c("cuda_nndescent", "cuda_approx", "gpu_nndescent", "gpu_approx")) {
     backend <- "cuda_cuvs_nndescent"
   }
 
@@ -69,11 +80,14 @@ nn_compute <- function(data,
   auto_gpu <- resolve_auto_knn_gpu_backend(
     backend = backend,
     self_query = self_query,
+    n = nrow(data),
     k = k,
     work_size = work_size
   )
   if (!is.na(auto_gpu)) {
     backend <- auto_gpu
+  } else if (backend %in% c("cuda", "gpu") && isTRUE(self_query)) {
+    backend <- select_self_approx_backend(prefer_cuda = TRUE)
   } else if (identical(backend, "auto") &&
              should_use_auto_cpu_approx_self_knn(
                self_query = self_query,
@@ -88,51 +102,6 @@ nn_compute <- function(data,
       stop("`backend = \"cpu_approx\"` is only available for self-KNN searches.", call. = FALSE)
     }
     backend <- select_cpu_approx_backend(nrow(data), ncol(data), k)
-  }
-
-  gpu_nndescent <- resolve_gpu_nndescent_backend(
-    backend = backend,
-    self_query = self_query,
-    n = nrow(data),
-    p = ncol(data),
-    k = k,
-    exclude_self = isTRUE(exclude_self),
-    work_size = work_size
-  )
-  if (!is.na(gpu_nndescent)) {
-    selected_gpu <- sub("_nndescent$", "", gpu_nndescent)
-    nonself_k <- if (isTRUE(exclude_self)) k else max(0L, k - 1L)
-    if (nonself_k < 1L) {
-      out <- list(
-        indices = matrix(seq_len(nrow(data)), nrow(data), 1L),
-        distances = matrix(0, nrow(data), 1L)
-      )
-    } else {
-      out <- gpu_nndescent_self_knn(
-        data,
-        k = nonself_k,
-        backend = selected_gpu,
-        seed = fast_knn_approx_seed()
-      )
-      if (!isTRUE(exclude_self)) {
-        out$indices <- cbind(seq_len(nrow(data)), out$indices)
-        out$distances <- cbind(rep(0, nrow(data)), out$distances)
-      }
-    }
-    result <- finish_nn_result(out, gpu_nndescent, k, self_query, exact = FALSE)
-    attr(result, "approximation") <- attr(out, "approximation")
-    attr(result, "metal_kernel") <- attr(out, "metal_kernel")
-    attr(result, "cuda_kernel") <- attr(out, "cuda_kernel")
-    if (isTRUE(getOption("fastEmbedR.gpu_approx_recall", FALSE))) {
-      result <- attach_knn_recall_subset(
-        result,
-        data = data,
-        k = k,
-        exclude_self = isTRUE(exclude_self),
-        seed = fast_knn_approx_seed()
-      )
-    }
-    return(result)
   }
 
   gpu_ivf <- resolve_gpu_ivf_backend(
@@ -155,75 +124,7 @@ nn_compute <- function(data,
     ))
   }
 
-  if (identical(backend, "metal_grid")) {
-    if (!isTRUE(self_query)) {
-      stop("`backend = \"metal_grid\"` is only available for self-KNN searches.", call. = FALSE)
-    }
-    if (!isTRUE(metal_available())) {
-      stop("No Metal GPU backend is available on this machine.", call. = FALSE)
-    }
-    nonself_k <- if (isTRUE(exclude_self)) k else max(0L, k - 1L)
-    if (nonself_k < 1L) {
-      out <- list(
-        indices = matrix(seq_len(nrow(data)), nrow(data), 1L),
-        distances = matrix(0, nrow(data), 1L)
-      )
-    } else {
-      params <- metal_grid_params(nrow(data), ncol(data), nonself_k)
-      out <- grid_knn_metal_cpp(
-        data,
-        as.integer(nonself_k),
-        as.integer(params$grid_dims),
-        as.integer(params$bins_per_dim),
-        as.integer(params$radius)
-      )
-      if (!isTRUE(exclude_self)) {
-        out$indices <- cbind(seq_len(nrow(data)), out$indices)
-        out$distances <- cbind(rep(0, nrow(data)), out$distances)
-      }
-    }
-    result <- finish_nn_result(out, "metal_grid", k, self_query, exact = FALSE)
-    attr(result, "approximation") <- list(
-      strategy = "fastgraph_style_grid_candidate_native",
-      backend = "metal",
-      grid_dims = as.integer(attr(out, "grid_dims")),
-      bins_per_dim = as.integer(attr(out, "grid_bins")),
-      radius = as.integer(attr(out, "grid_radius")),
-      total_bins = as.numeric(attr(out, "grid_total_bins")),
-      max_cells = as.numeric(attr(out, "grid_max_cells"))
-    )
-    if (isTRUE(getOption("fastEmbedR.gpu_approx_recall", FALSE))) {
-      result <- attach_knn_recall_subset(
-        result,
-        data = data,
-        k = k,
-        exclude_self = isTRUE(exclude_self),
-        seed = fast_knn_approx_seed()
-      )
-    }
-    return(result)
-  }
-
-  approx_gpu <- resolve_gpu_approx_backend(
-    backend = backend,
-    self_query = self_query,
-    n = nrow(data),
-    p = ncol(data),
-    k = k,
-    exclude_self = isTRUE(exclude_self),
-    work_size = work_size
-  )
-  if (!is.na(approx_gpu)) {
-    return(gpu_approx_self_knn(
-      data,
-      k = k,
-      backend = approx_gpu,
-      exclude_self = isTRUE(exclude_self),
-      seed = fast_knn_approx_seed()
-    ))
-  }
-
-  if (backend %in% c("faiss", "cpu_faiss", "cpu_faiss_flat")) {
+  if (backend %in% c("faiss", "cpu_faiss", "cpu_faiss_flat", "faiss_flat", "faiss_flat_l2")) {
     if (!isTRUE(faiss_available())) {
       stop(
         "The real FAISS C++ backend is not available in this build. ",
@@ -248,7 +149,40 @@ nn_compute <- function(data,
     return(result)
   }
 
-  if (backend %in% c("faiss_ivf", "cpu_faiss_index_ivf")) {
+  if (identical(backend, "faiss_flat_ip")) {
+    if (!isTRUE(faiss_available())) {
+      stop(
+        "The real FAISS C++ backend is not available in this build. ",
+        "Reinstall with `FASTEMBEDR_USE_FAISS=1` and `FAISS_HOME` pointing ",
+        "to a FAISS installation.",
+        call. = FALSE
+      )
+    }
+    out <- nn_faiss_flat_ip_cpp(
+      data,
+      points,
+      as.integer(k),
+      isTRUE(exclude_self),
+      as.integer(n_threads)
+    )
+    result <- finish_nn_result(
+      out,
+      "faiss_flat_ip",
+      k,
+      self_query,
+      exact = TRUE,
+      metric = "inner_product"
+    )
+    attr(result, "faiss") <- list(
+      index_type = as.character(out$index_type),
+      library = "faiss",
+      backend = "cpu",
+      metric = as.character(out$metric)
+    )
+    return(result)
+  }
+
+  if (backend %in% c("faiss_ivf", "cpu_faiss_index_ivf", "faiss_ivf_flat")) {
     if (!isTRUE(faiss_available())) {
       stop(
         "The real FAISS C++ IVF backend is not available in this build. ",
@@ -278,9 +212,140 @@ nn_compute <- function(data,
     return(result)
   }
 
+  if (identical(backend, "faiss_ivfpq")) {
+    if (!isTRUE(faiss_available())) {
+      stop(
+        "The real FAISS C++ IVFPQ backend is not available in this build. ",
+        "Reinstall with `FASTEMBEDR_USE_FAISS=1` and `FAISS_HOME` pointing ",
+        "to a FAISS installation.",
+        call. = FALSE
+      )
+    }
+    params <- faiss_ivf_params(nrow(data), k)
+    pq <- faiss_pq_params(ncol(data))
+    out <- nn_faiss_ivfpq_cpp(
+      data,
+      points,
+      as.integer(k),
+      as.integer(params$nlist),
+      as.integer(params$nprobe),
+      as.integer(pq$m),
+      as.integer(pq$nbits),
+      isTRUE(exclude_self),
+      as.integer(n_threads)
+    )
+    result <- finish_nn_result(out, "faiss_ivfpq", k, self_query, exact = FALSE)
+    attr(result, "approximation") <- list(
+      strategy = "faiss_IndexIVFPQ",
+      backend = "faiss_ivfpq",
+      library = "faiss",
+      nlist = as.integer(out$nlist),
+      nprobe = as.integer(out$nprobe),
+      pq_m = as.integer(out$pq_m),
+      pq_nbits = as.integer(out$pq_nbits)
+    )
+    return(result)
+  }
+
+  if (identical(backend, "faiss_hnsw")) {
+    if (!isTRUE(faiss_available())) {
+      stop(
+        "The real FAISS C++ HNSW backend is not available in this build. ",
+        "Reinstall with `FASTEMBEDR_USE_FAISS=1` and `FAISS_HOME` pointing ",
+        "to a FAISS installation.",
+        call. = FALSE
+      )
+    }
+    params <- faiss_hnsw_params(k)
+    out <- nn_faiss_hnsw_cpp(
+      data,
+      points,
+      as.integer(k),
+      as.integer(params$m),
+      as.integer(params$ef_construction),
+      as.integer(params$ef_search),
+      isTRUE(exclude_self),
+      as.integer(n_threads)
+    )
+    result <- finish_nn_result(out, "faiss_hnsw", k, self_query, exact = FALSE)
+    attr(result, "approximation") <- list(
+      strategy = "faiss_IndexHNSWFlat",
+      backend = "faiss_hnsw",
+      library = "faiss",
+      m = as.integer(params$m),
+      ef_construction = as.integer(params$ef_construction),
+      ef_search = as.integer(params$ef_search)
+    )
+    return(result)
+  }
+
+  if (identical(backend, "faiss_nsg")) {
+    if (!isTRUE(faiss_available())) {
+      stop(
+        "The real FAISS C++ NSG backend is not available in this build. ",
+        "Reinstall with `FASTEMBEDR_USE_FAISS=1` and `FAISS_HOME` pointing ",
+        "to a FAISS installation.",
+        call. = FALSE
+      )
+    }
+    params <- faiss_nsg_params(k)
+    out <- nn_faiss_nsg_cpp(
+      data,
+      points,
+      as.integer(k),
+      as.integer(params$r),
+      as.integer(params$search_l),
+      as.integer(params$build_type),
+      isTRUE(exclude_self),
+      as.integer(n_threads)
+    )
+    result <- finish_nn_result(out, "faiss_nsg", k, self_query, exact = FALSE)
+    attr(result, "approximation") <- list(
+      strategy = "faiss_IndexNSGFlat",
+      backend = "faiss_nsg",
+      library = "faiss",
+      r = as.integer(params$r),
+      search_l = as.integer(params$search_l),
+      build_type = as.integer(params$build_type)
+    )
+    return(result)
+  }
+
+  if (identical(backend, "faiss_nndescent")) {
+    if (!isTRUE(faiss_available())) {
+      stop(
+        "The real FAISS C++ NNDescent backend is not available in this build. ",
+        "Reinstall with `FASTEMBEDR_USE_FAISS=1` and `FAISS_HOME` pointing ",
+        "to a FAISS installation.",
+        call. = FALSE
+      )
+    }
+    params <- faiss_nndescent_params(k)
+    out <- nn_faiss_nndescent_cpp(
+      data,
+      points,
+      as.integer(k),
+      as.integer(params$graph_k),
+      as.integer(params$n_iter),
+      as.integer(params$search_l),
+      isTRUE(exclude_self),
+      as.integer(n_threads)
+    )
+    result <- finish_nn_result(out, "faiss_nndescent", k, self_query, exact = FALSE)
+    attr(result, "approximation") <- list(
+      strategy = "faiss_IndexNNDescentFlat",
+      backend = "faiss_nndescent",
+      library = "faiss",
+      graph_k = as.integer(params$graph_k),
+      n_iter = as.integer(params$n_iter),
+      search_l = as.integer(params$search_l)
+    )
+    return(result)
+  }
+
   if (backend %in% c("cuvs", "gpu_cuvs", "cuda_cuvs")) {
     require_cuvs_backend("cuVS")
-    if (cuvs_should_use_nndescent(self_query, nrow(data))) {
+    if (isTRUE(self_query)) {
       backend <- "cuda_cuvs_nndescent"
     } else {
       backend <- "cuda_cuvs_bruteforce"
@@ -367,13 +432,26 @@ nn_compute <- function(data,
     return(result)
   }
 
+  if (backend %in% c("hnsw", "rcpphnsw", "cpu_hnsw")) {
+    out <- rcpphnsw_knn(
+      data,
+      points,
+      k = k,
+      self_query = self_query,
+      exclude_self = isTRUE(exclude_self),
+      metric = metric,
+      n_threads = n_threads
+    )
+    result <- finish_nn_result(out, "hnsw", k, self_query, exact = FALSE, metric = metric)
+    attr(result, "approximation") <- attr(out, "approximation")
+    return(result)
+  }
+
   selected_gpu <- NA_character_
   if (backend == "cuda") {
     selected_gpu <- "cuda"
-  } else if (backend == "metal") {
-    selected_gpu <- "metal"
   } else if (backend == "gpu") {
-    selected_gpu <- resolve_native_gpu_backend(need_knn = TRUE)
+    selected_gpu <- if (isTRUE(cuda_available())) "cuda" else NA_character_
   }
 
   if (!is.na(selected_gpu)) {
@@ -391,157 +469,14 @@ nn_compute <- function(data,
       }
       return(finish_nn_result(out, "cuda", k, self_query))
     }
-    if (selected_gpu == "metal") {
-      if (!isTRUE(metal_available())) {
-        stop("No Metal GPU backend is available on this machine.", call. = FALSE)
-      }
-      out <- nn_metal_cpp(data, points, as.integer(gpu_k), FALSE)
-      if (isTRUE(exclude_self)) {
-        out <- drop_self_knn_result(out, k)
-      }
-      return(finish_nn_result(out, "metal", k, self_query))
-    }
-    stop("No native GPU backend is available on this machine.", call. = FALSE)
-  }
-
-  if (should_use_nndescent_self_knn(
-    backend = backend,
-    self_query = self_query,
-    n = nrow(data),
-    p = ncol(data),
-    k = k,
-    exclude_self = isTRUE(exclude_self),
-    work_size = work_size
-  )) {
-    nonself_k <- if (isTRUE(exclude_self)) k else max(0L, k - 1L)
-    if (nonself_k < 1L) {
-      out <- list(
-        indices = matrix(seq_len(nrow(data)), nrow(data), 1L),
-        distances = matrix(0, nrow(data), 1L)
-      )
-    } else {
-      out <- nndescent_self_knn(data, nonself_k, n_threads = n_threads)
-      if (!isTRUE(exclude_self)) {
-        out$indices <- cbind(seq_len(nrow(data)), out$indices)
-        out$distances <- cbind(rep(0, nrow(data)), out$distances)
-      }
-    }
-    result <- finish_nn_result(out, "cpu_nndescent", k, self_query, exact = FALSE)
-    attr(result, "approximation") <- attr(out, "approximation")
-    return(result)
-  }
-
-  if (should_use_clustered_self_knn(
-    backend = backend,
-    self_query = self_query,
-    n = nrow(data),
-    p = ncol(data),
-    k = k,
-    work_size = work_size
-  )) {
-    out <- clustered_self_knn(data, k, exclude_self = isTRUE(exclude_self), n_threads = n_threads)
-    return(finish_nn_result(out, "cpu_clustered", k, self_query, exact = FALSE))
-  }
-
-  if (backend %in% c("cpu_ivf", "cpu_faiss_ivf")) {
-    if (!isTRUE(self_query)) {
-      stop("`backend = \"", backend, "\"` is only available for self-KNN searches.", call. = FALSE)
-    }
-    nonself_k <- if (isTRUE(exclude_self)) k else max(0L, k - 1L)
-    if (nonself_k < 1L) {
-      out <- list(
-        indices = matrix(seq_len(nrow(data)), nrow(data), 1L),
-        distances = matrix(0, nrow(data), 1L)
-      )
-    } else {
-      out <- ivf_self_knn(data, nonself_k, backend = backend, n_threads = n_threads)
-      if (!isTRUE(exclude_self)) {
-        out$indices <- cbind(seq_len(nrow(data)), out$indices)
-        out$distances <- cbind(rep(0, nrow(data)), out$distances)
-      }
-    }
-    result <- finish_nn_result(out, backend, k, self_query, exact = FALSE)
-    attr(result, "approximation") <- attr(out, "approximation")
-    return(result)
-  }
-
-  if (identical(backend, "cpu_annoy")) {
-    if (!isTRUE(self_query)) {
-      stop("`backend = \"cpu_annoy\"` is only available for self-KNN searches.", call. = FALSE)
-    }
-    nonself_k <- if (isTRUE(exclude_self)) k else max(0L, k - 1L)
-    if (nonself_k < 1L) {
-      out <- list(
-        indices = matrix(seq_len(nrow(data)), nrow(data), 1L),
-        distances = matrix(0, nrow(data), 1L)
-      )
-    } else {
-      out <- annoy_self_knn(data, nonself_k, n_threads = n_threads)
-      if (!isTRUE(exclude_self)) {
-        out$indices <- cbind(seq_len(nrow(data)), out$indices)
-        out$distances <- cbind(rep(0, nrow(data)), out$distances)
-      }
-    }
-    result <- finish_nn_result(out, "cpu_annoy", k, self_query, exact = FALSE)
-    attr(result, "approximation") <- attr(out, "approximation")
-    return(result)
-  }
-
-  if (identical(backend, "cpu_vptree")) {
-    if (!isTRUE(self_query)) {
-      stop("`backend = \"cpu_vptree\"` is only available for self-KNN searches.", call. = FALSE)
-    }
-    nonself_k <- if (isTRUE(exclude_self)) k else max(0L, k - 1L)
-    if (nonself_k < 1L) {
-      out <- list(
-        indices = matrix(seq_len(nrow(data)), nrow(data), 1L),
-        distances = matrix(0, nrow(data), 1L)
-      )
-    } else {
-      out <- vptree_self_knn(data, nonself_k, n_threads = n_threads)
-      if (!isTRUE(exclude_self)) {
-        out$indices <- cbind(seq_len(nrow(data)), out$indices)
-        out$distances <- cbind(rep(0, nrow(data)), out$distances)
-      }
-    }
-    return(finish_nn_result(out, "cpu_vptree", k, self_query, exact = TRUE))
-  }
-
-  if (identical(backend, "cpu_nndescent")) {
-    if (!isTRUE(self_query)) {
-      stop("`backend = \"cpu_nndescent\"` is only available for self-KNN searches.", call. = FALSE)
-    }
-    nonself_k <- if (isTRUE(exclude_self)) k else max(0L, k - 1L)
-    if (nonself_k < 1L) {
-      out <- list(
-        indices = matrix(seq_len(nrow(data)), nrow(data), 1L),
-        distances = matrix(0, nrow(data), 1L)
-      )
-    } else {
-      out <- nndescent_self_knn(data, nonself_k, n_threads = n_threads)
-      if (!isTRUE(exclude_self)) {
-        out$indices <- cbind(seq_len(nrow(data)), out$indices)
-        out$distances <- cbind(rep(0, nrow(data)), out$distances)
-      }
-    }
-    result <- finish_nn_result(out, "cpu_nndescent", k, self_query, exact = FALSE)
-    attr(result, "approximation") <- attr(out, "approximation")
-    return(result)
-  }
-
-  if (identical(backend, "cpu_clustered")) {
-    if (!isTRUE(self_query)) {
-      stop("`backend = \"cpu_clustered\"` is only available for self-KNN searches.", call. = FALSE)
-    }
-    out <- clustered_self_knn(data, k, exclude_self = isTRUE(exclude_self), n_threads = n_threads)
-    return(finish_nn_result(out, "cpu_clustered", k, self_query, exact = FALSE))
+    stop("No CUDA KNN backend is available on this machine.", call. = FALSE)
   }
 
   out <- nn_cpp(
     data,
     points,
     as.integer(k),
-    "euclidean",
+    metric,
     FALSE,
     FALSE,
     0,
@@ -549,24 +484,29 @@ nn_compute <- function(data,
     as.integer(n_threads),
     isTRUE(exclude_self)
   )
-  finish_nn_result(out, "cpu", k, self_query)
+  finish_nn_result(out, "cpu", k, self_query, metric = metric)
 }
 
 resolve_auto_knn_gpu_backend <- function(backend,
                                          self_query,
+                                         n,
                                          k,
                                          work_size) {
   if (!identical(backend, "auto")) return(NA_character_)
   if (!isTRUE(self_query)) return(NA_character_)
   if (k > 256L) return(NA_character_)
   if (work_size < 5e8) return(NA_character_)
-  selected <- available_native_gpu_backend(need_knn = TRUE)
-  if (is.na(selected)) return(NA_character_)
-  if (identical(selected, "cuda")) {
-    if (isTRUE(cuvs_available())) return("cuda_cuvs_nndescent")
-    return(NA_character_)
+  if (isTRUE(cuvs_available())) return("cuda_cuvs_nndescent")
+  NA_character_
+}
+
+should_auto_use_exact_metal_knn <- function(n) {
+  threshold <- getOption("fastEmbedR.metal_exact_auto_threshold", 15000L)
+  threshold <- suppressWarnings(as.integer(threshold))
+  if (length(threshold) != 1L || is.na(threshold) || !is.finite(threshold)) {
+    threshold <- 15000L
   }
-  paste0(selected, "_nndescent")
+  as.integer(n) <= max(1L, threshold)
 }
 
 should_use_auto_cpu_approx_self_knn <- function(self_query,
@@ -581,13 +521,20 @@ should_use_auto_cpu_approx_self_knn <- function(self_query,
 }
 
 select_cpu_approx_backend <- function(n, p, k) {
-  n <- as.integer(n)
-  p <- as.integer(p)
-  k <- as.integer(k)
-  if (n >= 10000L && p >= 2L && k >= 10L) {
-    return("cpu_nndescent")
+  select_self_approx_backend(prefer_cuda = FALSE)
+}
+
+select_self_approx_backend <- function(prefer_cuda = FALSE) {
+  if (isTRUE(prefer_cuda) && isTRUE(cuvs_available())) {
+    return("cuda_cuvs_nndescent")
   }
-  "cpu_ivf"
+  if (isTRUE(faiss_available())) {
+    return("faiss_nndescent")
+  }
+  if (isTRUE(requireNamespace("RcppHNSW", quietly = TRUE))) {
+    return("hnsw")
+  }
+  "cpu"
 }
 
 normalize_nn_threads <- function(n_threads) {
@@ -601,6 +548,24 @@ normalize_nn_threads <- function(n_threads) {
   as.integer(max(1L, min(64L, n_threads)))
 }
 
+normalize_nn_metric <- function(metric) {
+  metric <- tolower(as.character(metric))
+  match.arg(metric, c("euclidean", "cosine", "correlation"))
+}
+
+row_center_l2_normalize <- function(x) {
+  x <- as.matrix(x)
+  storage.mode(x) <- "double"
+  means <- rowMeans(x)
+  x <- x - means
+  norms <- sqrt(rowSums(x * x))
+  keep <- is.finite(norms) & norms > 0
+  if (any(keep)) {
+    x[keep, ] <- x[keep, , drop = FALSE] / norms[keep]
+  }
+  x
+}
+
 should_use_clustered_self_knn <- function(backend,
                                           self_query,
                                           n,
@@ -610,129 +575,6 @@ should_use_clustered_self_knn <- function(backend,
   FALSE
 }
 
-metal_grid_params <- function(n, p, k) {
-  grid_dims <- getOption("fastEmbedR.grid_dims", NULL)
-  if (is.null(grid_dims)) {
-    grid_dims <- min(5L, as.integer(p))
-  } else {
-    grid_dims <- suppressWarnings(as.integer(grid_dims))
-    if (length(grid_dims) != 1L || is.na(grid_dims) || !is.finite(grid_dims)) {
-      grid_dims <- min(5L, as.integer(p))
-    }
-  }
-  grid_dims <- as.integer(max(1L, min(5L, as.integer(p), grid_dims)))
-
-  bins <- getOption("fastEmbedR.grid_bins", NULL)
-  if (is.null(bins)) {
-    bins <- 0L
-  } else {
-    bins <- suppressWarnings(as.integer(bins))
-    if (length(bins) != 1L || is.na(bins) || !is.finite(bins)) bins <- 0L
-  }
-
-  radius <- getOption("fastEmbedR.grid_radius", NULL)
-  if (is.null(radius)) {
-    radius <- 1L
-  } else {
-    radius <- suppressWarnings(as.integer(radius))
-    if (length(radius) != 1L || is.na(radius) || !is.finite(radius)) radius <- 1L
-  }
-
-  list(
-    grid_dims = as.integer(grid_dims),
-    bins_per_dim = as.integer(bins),
-    radius = as.integer(max(1L, min(4L, radius)))
-  )
-}
-
-resolve_gpu_approx_backend <- function(backend,
-                                       self_query,
-                                       n,
-                                       p,
-                                       k,
-                                       exclude_self,
-                                       work_size) {
-  explicit <- backend %in% c("gpu_approx", "metal_approx")
-  if (!explicit) {
-    return(NA_character_)
-  }
-  if (!isTRUE(self_query)) {
-    if (explicit) {
-      stop("Approximate GPU KNN currently supports self-KNN only.", call. = FALSE)
-    }
-    return(NA_character_)
-  }
-  if (isTRUE(exclude_self) && n < 2L) return(NA_character_)
-  nonself_k <- if (isTRUE(exclude_self)) k else k - 1L
-  if (nonself_k < 1L) return(NA_character_)
-  if (k > 256L) {
-    if (explicit) {
-      stop("Approximate native GPU KNN currently supports `k <= 256`.", call. = FALSE)
-    }
-    return(NA_character_)
-  }
-
-  if (identical(backend, "metal_approx")) {
-    if (!isTRUE(metal_available())) {
-      stop("No Metal GPU backend is available on this machine.", call. = FALSE)
-    }
-    return("metal")
-  }
-  if (identical(backend, "gpu_approx")) {
-    selected <- resolve_native_gpu_backend(need_knn = TRUE)
-    if (identical(selected, "cuda")) {
-      stop(
-        "Native CUDA approximate KNN has been removed. ",
-        "Use `backend = \"cuda_cuvs_nndescent\"` for RAPIDS cuVS NN-descent.",
-        call. = FALSE
-      )
-    }
-    return(selected)
-  }
-  available_native_gpu_backend(need_knn = TRUE)
-}
-
-resolve_gpu_nndescent_backend <- function(backend,
-                                          self_query,
-                                          n,
-                                          p,
-                                          k,
-                                          exclude_self,
-                                          work_size) {
-  explicit <- backend %in% c(
-    "gpu_nndescent", "metal_nndescent",
-    "gpu_approx", "metal_approx"
-  )
-  if (!explicit) return(NA_character_)
-  if (!isTRUE(self_query)) {
-    stop("Native GPU NN-descent currently supports self-KNN only.", call. = FALSE)
-  }
-  if (isTRUE(exclude_self) && n < 2L) return(NA_character_)
-  nonself_k <- if (isTRUE(exclude_self)) k else k - 1L
-  if (nonself_k < 1L) return(NA_character_)
-  if (p < 2L) return(NA_character_)
-  if (k > 256L) {
-    stop("Native GPU NN-descent currently supports `k <= 256`.", call. = FALSE)
-  }
-
-  selected <- if (backend %in% c("metal_nndescent", "metal_approx")) {
-    if (!isTRUE(metal_available())) {
-      stop("No Metal GPU backend is available on this machine.", call. = FALSE)
-    }
-    "metal"
-  } else {
-    resolve_native_gpu_backend(need_knn = TRUE)
-  }
-  if (identical(selected, "cuda")) {
-    stop(
-      "Native CUDA NN-descent has been removed. ",
-      "Use `backend = \"cuda_cuvs_nndescent\"` for RAPIDS cuVS NN-descent.",
-      call. = FALSE
-    )
-  }
-  paste0(selected, "_nndescent")
-}
-
 resolve_gpu_ivf_backend <- function(backend,
                                     self_query,
                                     n,
@@ -740,10 +582,7 @@ resolve_gpu_ivf_backend <- function(backend,
                                     k,
                                     exclude_self) {
   out <- list(backend = NA_character_, label = NA_character_, strategy = NA_character_)
-  explicit <- backend %in% c(
-    "gpu_ivf", "cuda_ivf", "metal_ivf",
-    "gpu_faiss", "cuda_faiss", "metal_faiss"
-  )
+  explicit <- backend %in% c("cuda_ivf", "cuda_faiss")
   if (!explicit) return(out)
   if (!isTRUE(self_query)) {
     stop("GPU IVF/FAISS-style KNN currently supports self-KNN only.", call. = FALSE)
@@ -755,26 +594,14 @@ resolve_gpu_ivf_backend <- function(backend,
     stop("Native GPU IVF/FAISS-style KNN currently supports `k <= 256`.", call. = FALSE)
   }
 
-  selected <- if (backend %in% c("cuda_ivf", "cuda_faiss")) {
-    if (!isTRUE(cuda_available())) {
-      stop("No CUDA GPU backend is available on this machine.", call. = FALSE)
-    }
-    "cuda"
-  } else if (backend %in% c("metal_ivf", "metal_faiss")) {
-    if (!isTRUE(metal_available())) {
-      stop("No Metal GPU backend is available on this machine.", call. = FALSE)
-    }
-    "metal"
-  } else {
-    resolve_native_gpu_backend(need_knn = TRUE)
+  if (!isTRUE(cuda_available())) {
+    stop("No CUDA GPU backend is available on this machine.", call. = FALSE)
   }
+  selected <- "cuda"
   out$backend <- selected
   out$label <- switch(
     backend,
-    gpu_ivf = paste0(selected, "_ivf"),
-    gpu_faiss = paste0(selected, "_faiss_ivf"),
     cuda_faiss = "cuda_faiss_ivf",
-    metal_faiss = "metal_faiss_ivf",
     backend
   )
   out$strategy <- if (grepl("faiss", backend, fixed = TRUE)) {
@@ -792,7 +619,7 @@ should_use_gpu_approx_self_knn <- function(backend,
                                            k,
                                            exclude_self,
                                            work_size) {
-  if (!backend %in% c("gpu_approx", "cuda_approx", "metal_approx")) return(FALSE)
+  if (!backend %in% c("cuda_approx")) return(FALSE)
   if (!isTRUE(self_query)) return(FALSE)
   if (p < 2L || k < 10L || k > 256L) return(FALSE)
   nonself_k <- if (isTRUE(exclude_self)) k else k - 1L
@@ -806,7 +633,10 @@ fast_knn_approx_seed <- function() {
   if (length(value) != 1L || is.na(value) || !is.finite(value)) 4L else value
 }
 
-gpu_approx_params <- function(n, k) {
+gpu_approx_params <- function(n,
+                              k,
+                              backend = NULL,
+                              label = NULL) {
   n <- as.integer(n)
   k <- as.integer(k)
   anchors <- getOption("fastEmbedR.gpu_approx_anchors", NULL)
@@ -858,7 +688,7 @@ gpu_approx_self_knn <- function(data,
     return(finish_nn_result(out, label, k, TRUE, exact = FALSE))
   }
 
-  params <- gpu_approx_params(n, nonself_k)
+  params <- gpu_approx_params(n, nonself_k, backend = backend, label = label)
   anchors <- select_landmark_rows(data, params$anchors, seed)
   projection <- nn_compute(
     data[anchors, , drop = FALSE],
@@ -876,16 +706,8 @@ gpu_approx_self_knn <- function(data,
       as.integer(params$bucket_cols),
       as.integer(params$query_cols)
     )
-  } else if (identical(backend, "metal")) {
-    landmark_candidate_knn_metal_cpp(
-      data,
-      projection$indices,
-      as.integer(nonself_k),
-      as.integer(params$bucket_cols),
-      as.integer(params$query_cols)
-    )
   } else {
-    stop("Unsupported approximate GPU backend.", call. = FALSE)
+    stop("Unsupported CUDA KNN backend.", call. = FALSE)
   }
 
   if (!isTRUE(exclude_self)) {
@@ -945,7 +767,7 @@ gpu_nndescent_option <- function(backend, name, default = NULL) {
   default
 }
 
-gpu_nndescent_graph_degree <- function(n, k, backend = "metal") {
+gpu_nndescent_graph_degree <- function(n, k, backend = "cuda") {
   graph_degree <- gpu_nndescent_option(backend, "graph_degree", NULL)
   if (is.null(graph_degree)) {
     graph_degree <- if (!is.null(n) && n >= 50000L && k <= 30L) {
@@ -962,9 +784,9 @@ gpu_nndescent_graph_degree <- function(n, k, backend = "metal") {
   as.integer(max(k, min(256L, graph_degree)))
 }
 
-gpu_nndescent_params <- function(k, backend = "metal", n = NULL) {
+gpu_nndescent_params <- function(k, backend = "cuda", n = NULL) {
   graph_degree <- gpu_nndescent_graph_degree(n, k, backend = backend)
-  default_iters <- if (backend %in% c("metal", "cuda") && !is.null(n) && n >= 50000L) {
+  default_iters <- if (identical(backend, "cuda") && !is.null(n) && n >= 50000L) {
     3L
   } else {
     1L
@@ -1012,17 +834,13 @@ gpu_nndescent_params <- function(k, backend = "metal", n = NULL) {
   )
 }
 
-metal_nndescent_params <- function(k) {
-  gpu_nndescent_params(k, backend = "metal")
-}
-
 gpu_nndescent_self_knn <- function(data,
                                    k,
                                    backend,
                                    seed = 4L) {
   n <- nrow(data)
   k <- as.integer(k)
-  backend <- match.arg(as.character(backend), c("cuda", "metal"))
+  backend <- match.arg(as.character(backend), c("cuda"))
   if (length(k) != 1L || is.na(k) || !is.finite(k) || k < 1L || k >= n) {
     stop("`k` must be in [1, nrow(data) - 1].", call. = FALSE)
   }
@@ -1031,9 +849,6 @@ gpu_nndescent_self_knn <- function(data,
   }
   if (identical(backend, "cuda") && !isTRUE(cuda_available())) {
     stop("No CUDA GPU backend is available on this machine.", call. = FALSE)
-  }
-  if (identical(backend, "metal") && !isTRUE(metal_available())) {
-    stop("No Metal GPU backend is available on this machine.", call. = FALSE)
   }
   output_k <- k
   params <- gpu_nndescent_params(output_k, backend = backend, n = n)
@@ -1061,7 +876,7 @@ gpu_nndescent_self_knn <- function(data,
   }
 
   for (iter in seq_len(params$n_iters)) {
-    if (backend %in% c("metal", "cuda")) {
+    if (identical(backend, "cuda")) {
       # Native port of the mlx-vis NN-descent schedule: expand aggressively
       # while the graph is moving, then use only NEW-neighbour sources and
       # skip reverse candidates near convergence.
@@ -1078,6 +893,7 @@ gpu_nndescent_self_knn <- function(data,
       )
       active_only <- isTRUE(update_frac < 0.5)
       use_reverse <- isTRUE(update_frac >= 0.10)
+      query_rows <- NULL
       candidate_indices <- nndescent_candidate_matrix_mlx_cpp(
         indices,
         flags,
@@ -1087,6 +903,7 @@ gpu_nndescent_self_knn <- function(data,
         active_only = active_only
       )
     } else {
+      query_rows <- NULL
       candidate_indices <- nndescent_candidate_matrix_cpp(
         indices,
         as.integer(params$sources),
@@ -1105,26 +922,16 @@ gpu_nndescent_self_knn <- function(data,
       active_only = isTRUE(candidate_attr(candidate_indices, "active_only", FALSE))
     )
 
-    refined <- if (identical(backend, "cuda")) {
-      row_candidate_knn_cuda_cpp(
-        data,
-        candidate_indices,
-        as.integer(work_k)
-      )
-    } else {
-      row_candidate_knn_metal_cpp(
-        data,
-        candidate_indices,
-        as.integer(work_k)
-      )
-    }
+    refined <- row_candidate_knn_cuda_cpp(
+      data,
+      candidate_indices,
+      as.integer(work_k)
+    )
     new_indices <- refined$indices
     new_flags <- new_indices != indices
     changes[iter] <- mean(new_flags)
-    if (identical(backend, "metal")) {
-      flags <- new_flags
-      update_frac <- changes[iter]
-    }
+    flags <- new_flags
+    update_frac <- changes[iter]
     indices <- new_indices
     distances <- refined$distances
     used_iters <- iter
@@ -1138,15 +945,13 @@ gpu_nndescent_self_knn <- function(data,
   }
 
   out <- list(indices = indices, distances = distances)
-  if (identical(backend, "cuda")) {
-    attr(out, "cuda_kernel") <- "row_candidate_knn"
-  } else {
-    attr(out, "metal_kernel") <- "row_candidate_knn"
-  }
+  attr(out, "cuda_kernel") <- "row_candidate_knn"
   attr(out, "approximation") <- list(
     strategy = paste0("mlx_vis_adaptive_seeded_nndescent_native_", backend),
     backend = backend,
     seed_backend = paste0(backend, "_ivf"),
+    seed_bucket_cols = as.integer(attr(base, "approximation")$bucket_cols),
+    seed_query_cols = as.integer(attr(base, "approximation")$query_cols),
     output_graph_degree = as.integer(output_k),
     graph_degree = as.integer(work_k),
     n_iters = as.integer(used_iters),
@@ -1165,12 +970,6 @@ gpu_nndescent_self_knn <- function(data,
     seed = as.integer(seed)
   )
   out
-}
-
-metal_nndescent_self_knn <- function(data,
-                                     k,
-                                     seed = 4L) {
-  gpu_nndescent_self_knn(data, k = k, backend = "metal", seed = seed)
 }
 
 cuda_nndescent_self_knn <- function(data,
@@ -1256,6 +1055,272 @@ should_use_nndescent_self_knn <- function(backend,
   nonself_k >= 1L
 }
 
+cpu_nndescent_prefer_faiss <- function() {
+  isTRUE(getOption("fastEmbedR.cpu_nndescent_prefer_faiss", TRUE)) &&
+    isTRUE(faiss_available())
+}
+
+cpu_nndescent_faiss_index <- function() {
+  value <- tolower(as.character(getOption("fastEmbedR.cpu_nndescent_faiss_index", "hnsw"))[1L])
+  if (!value %in% c("hnsw", "ivf", "flat", "nsg", "nndescent")) {
+    warning(
+      "Option `fastEmbedR.cpu_nndescent_faiss_index` must be one of ",
+      "\"hnsw\", \"ivf\", \"flat\", \"nsg\", or \"nndescent\"; using \"hnsw\".",
+      call. = FALSE
+    )
+    value <- "hnsw"
+  }
+  value
+}
+
+faiss_self_knn <- function(data,
+                           k,
+                           backend = "faiss_ivf",
+                           exact = FALSE,
+                           seed = 4L,
+                           n_threads = NULL) {
+  n <- nrow(data)
+  k <- as.integer(k)
+  if (length(k) != 1L || is.na(k) || !is.finite(k) || k < 1L || k >= n) {
+    stop("`k` must be in [1, nrow(data) - 1].", call. = FALSE)
+  }
+  if (!isTRUE(faiss_available())) {
+    stop(
+      "The real FAISS C++ backend is not available in this build. ",
+      "Reinstall with `FASTEMBEDR_USE_FAISS=1` and `FAISS_HOME` pointing ",
+      "to a FAISS installation.",
+      call. = FALSE
+    )
+  }
+  n_threads <- normalize_nn_threads(n_threads)
+  if (isTRUE(exact) || identical(backend, "faiss_flat") ||
+      identical(backend, "cpu_nndescent_faiss_flat")) {
+    out <- nn_faiss_flat_cpp(
+      data,
+      data,
+      as.integer(k),
+      TRUE,
+      as.integer(n_threads)
+    )
+    attr(out, "approximation") <- list(
+      strategy = "faiss_IndexFlatL2_self",
+      backend = "faiss",
+      library = "faiss",
+      exact = TRUE,
+      seed = as.integer(seed)
+    )
+    return(out)
+  }
+  if (identical(backend, "faiss_hnsw") ||
+      identical(backend, "cpu_nndescent_faiss_hnsw")) {
+    params <- faiss_hnsw_params(k)
+    out <- nn_faiss_hnsw_cpp(
+      data,
+      data,
+      as.integer(k),
+      as.integer(params$m),
+      as.integer(params$ef_construction),
+      as.integer(params$ef_search),
+      TRUE,
+      as.integer(n_threads)
+    )
+    attr(out, "approximation") <- list(
+      strategy = "faiss_IndexHNSWFlat_self",
+      backend = backend,
+      library = "faiss",
+      exact = FALSE,
+      m = as.integer(params$m),
+      ef_construction = as.integer(params$ef_construction),
+      ef_search = as.integer(params$ef_search),
+      seed = as.integer(seed)
+    )
+    return(out)
+  }
+  if (identical(backend, "faiss_nsg") ||
+      identical(backend, "cpu_nndescent_faiss_nsg")) {
+    params <- faiss_nsg_params(k)
+    out <- nn_faiss_nsg_cpp(
+      data,
+      data,
+      as.integer(k),
+      as.integer(params$r),
+      as.integer(params$search_l),
+      as.integer(params$build_type),
+      TRUE,
+      as.integer(n_threads)
+    )
+    attr(out, "approximation") <- list(
+      strategy = "faiss_IndexNSGFlat_self",
+      backend = backend,
+      library = "faiss",
+      exact = FALSE,
+      r = as.integer(params$r),
+      search_l = as.integer(params$search_l),
+      build_type = as.integer(params$build_type),
+      seed = as.integer(seed)
+    )
+    return(out)
+  }
+  if (identical(backend, "faiss_nndescent") ||
+      identical(backend, "cpu_nndescent_faiss_nndescent")) {
+    params <- faiss_nndescent_params(k)
+    out <- nn_faiss_nndescent_cpp(
+      data,
+      data,
+      as.integer(k),
+      as.integer(params$graph_k),
+      as.integer(params$n_iter),
+      as.integer(params$search_l),
+      TRUE,
+      as.integer(n_threads)
+    )
+    attr(out, "approximation") <- list(
+      strategy = "faiss_IndexNNDescentFlat_self",
+      backend = backend,
+      library = "faiss",
+      exact = FALSE,
+      graph_k = as.integer(params$graph_k),
+      n_iter = as.integer(params$n_iter),
+      search_l = as.integer(params$search_l),
+      seed = as.integer(seed)
+    )
+    return(out)
+  }
+  params <- faiss_ivf_params(n, k)
+  out <- nn_faiss_ivf_cpp(
+    data,
+    data,
+    as.integer(k),
+    as.integer(params$nlist),
+    as.integer(params$nprobe),
+    TRUE,
+    as.integer(n_threads)
+  )
+  attr(out, "approximation") <- list(
+    strategy = "faiss_IndexIVFFlat_self",
+    backend = backend,
+    library = "faiss",
+    exact = FALSE,
+    nlist = as.integer(out$nlist),
+    nprobe = as.integer(out$nprobe),
+    seed = as.integer(seed)
+  )
+  out
+}
+
+rcpphnsw_params <- function(k) {
+  m <- getOption("fastEmbedR.hnsw_m", 16L)
+  ef_construction <- getOption("fastEmbedR.hnsw_ef_construction", 200L)
+  ef <- getOption("fastEmbedR.hnsw_ef", max(50L, 3L * as.integer(k)))
+  m <- suppressWarnings(as.integer(m))
+  ef_construction <- suppressWarnings(as.integer(ef_construction))
+  ef <- suppressWarnings(as.integer(ef))
+  if (length(m) != 1L || is.na(m) || !is.finite(m) || m < 2L) m <- 16L
+  if (length(ef_construction) != 1L || is.na(ef_construction) ||
+      !is.finite(ef_construction) || ef_construction < m) {
+    ef_construction <- max(200L, m)
+  }
+  if (length(ef) != 1L || is.na(ef) || !is.finite(ef) || ef < k) {
+    ef <- max(50L, 3L * as.integer(k))
+  }
+  list(
+    m = as.integer(m),
+    ef_construction = as.integer(ef_construction),
+    ef = as.integer(ef)
+  )
+}
+
+rcpphnsw_knn <- function(data,
+                         points,
+                         k,
+                         self_query,
+                         exclude_self,
+                         metric = "euclidean",
+                         n_threads = NULL) {
+  if (!requireNamespace("RcppHNSW", quietly = TRUE)) {
+    stop(
+      "The RcppHNSW fallback backend is not installed. ",
+      "Install it with `install.packages(\"RcppHNSW\")`, or use `backend = \"cpu\"`.",
+      call. = FALSE
+    )
+  }
+  metric <- normalize_nn_metric(metric)
+  if (identical(metric, "correlation")) {
+    data <- row_center_l2_normalize(data)
+    if (isTRUE(self_query)) {
+      points <- data
+    } else {
+      points <- row_center_l2_normalize(points)
+    }
+  }
+  hnsw_metric <- switch(
+    metric,
+    euclidean = "euclidean",
+    cosine = "cosine",
+    correlation = "cosine"
+  )
+  n_threads <- normalize_nn_threads(n_threads)
+  params <- rcpphnsw_params(k)
+
+  raw <- if (isTRUE(self_query)) {
+    query_k <- if (isTRUE(exclude_self)) k + 1L else k
+    RcppHNSW::hnsw_knn(
+      data,
+      k = as.integer(query_k),
+      distance = hnsw_metric,
+      M = as.integer(params$m),
+      ef_construction = as.integer(params$ef_construction),
+      ef = as.integer(max(params$ef, query_k)),
+      verbose = FALSE,
+      progress = "none",
+      n_threads = as.integer(n_threads),
+      byrow = TRUE,
+      random_seed = as.integer(fast_knn_approx_seed())
+    )
+  } else {
+    index <- RcppHNSW::hnsw_build(
+      data,
+      distance = hnsw_metric,
+      M = as.integer(params$m),
+      ef = as.integer(params$ef_construction),
+      verbose = FALSE,
+      progress = "none",
+      n_threads = as.integer(n_threads),
+      byrow = TRUE,
+      random_seed = as.integer(fast_knn_approx_seed())
+    )
+    RcppHNSW::hnsw_search(
+      points,
+      index,
+      k = as.integer(k),
+      ef = as.integer(max(params$ef, k)),
+      verbose = FALSE,
+      progress = "none",
+      n_threads = as.integer(n_threads),
+      byrow = TRUE
+    )
+  }
+
+  out <- list(indices = as.matrix(raw$idx), distances = as.matrix(raw$dist))
+  storage.mode(out$indices) <- "integer"
+  storage.mode(out$distances) <- "double"
+  if (isTRUE(self_query) && isTRUE(exclude_self)) {
+    out <- drop_self_knn_result(out, k)
+  }
+  attr(out, "approximation") <- list(
+    strategy = "RcppHNSW_hnswlib",
+    backend = "hnsw",
+    library = "RcppHNSW",
+    metric = metric,
+    exact = FALSE,
+    m = as.integer(params$m),
+    ef_construction = as.integer(params$ef_construction),
+    ef = as.integer(params$ef),
+    n_threads = as.integer(n_threads)
+  )
+  out
+}
+
 nndescent_pool_size <- function(n, k) {
   as.integer(min(n - 1L, max(k + 15L, min(160L, ceiling(2.5 * k)))))
 }
@@ -1280,6 +1345,17 @@ nndescent_self_knn <- function(data,
     if (length(n_threads) != 1L || is.na(n_threads) || !is.finite(n_threads)) {
       n_threads <- 1L
     }
+  }
+  if (cpu_nndescent_prefer_faiss()) {
+    faiss_index <- cpu_nndescent_faiss_index()
+    return(faiss_self_knn(
+      data,
+      k = k,
+      backend = paste0("cpu_nndescent_faiss_", faiss_index),
+      exact = identical(faiss_index, "flat"),
+      seed = seed,
+      n_threads = n_threads
+    ))
   }
   pool_size <- nndescent_pool_size(n, k)
   n_iters <- nndescent_iterations(n, k)
@@ -1487,6 +1563,63 @@ faiss_ivf_params <- function(n, k) {
   list(nlist = as.integer(nlist), nprobe = as.integer(nprobe))
 }
 
+faiss_option_int <- function(name, default, min_value = 1L, max_value = .Machine$integer.max) {
+  value <- getOption(paste0("fastEmbedR.faiss_", name), NULL)
+  value <- if (is.null(value)) default else suppressWarnings(as.integer(value))
+  if (length(value) != 1L || is.na(value) || !is.finite(value)) value <- default
+  as.integer(max(min_value, min(max_value, value)))
+}
+
+faiss_pq_default_m <- function(p) {
+  p <- as.integer(p)
+  candidates <- c(64L, 56L, 48L, 40L, 32L, 28L, 24L, 16L, 14L, 12L, 8L, 7L, 4L, 2L, 1L)
+  candidates <- candidates[candidates <= p & p %% candidates == 0L]
+  if (length(candidates) == 0L) return(1L)
+  as.integer(candidates[[1L]])
+}
+
+faiss_pq_params <- function(p) {
+  p <- as.integer(p)
+  m <- faiss_option_int("pq_m", faiss_pq_default_m(p), min_value = 1L, max_value = p)
+  while (m > 1L && p %% m != 0L) m <- m - 1L
+  nbits <- faiss_option_int("pq_nbits", 8L, min_value = 4L, max_value = 12L)
+  list(m = as.integer(m), nbits = as.integer(nbits))
+}
+
+faiss_hnsw_params <- function(k) {
+  k <- as.integer(k)
+  m <- faiss_option_int("hnsw_m", 32L, min_value = 2L, max_value = 256L)
+  ef_construction <- faiss_option_int(
+    "hnsw_ef_construction",
+    max(200L, 4L * m),
+    min_value = m,
+    max_value = 4096L
+  )
+  ef_search <- faiss_option_int(
+    "hnsw_ef_search",
+    max(100L, 2L * k),
+    min_value = k,
+    max_value = 4096L
+  )
+  list(m = as.integer(m), ef_construction = as.integer(ef_construction), ef_search = as.integer(ef_search))
+}
+
+faiss_nsg_params <- function(k) {
+  k <- as.integer(k)
+  r <- faiss_option_int("nsg_r", 32L, min_value = 2L, max_value = 512L)
+  search_l <- faiss_option_int("nsg_search_l", max(100L, 2L * k), min_value = k, max_value = 4096L)
+  build_type <- faiss_option_int("nsg_build_type", 1L, min_value = 0L, max_value = 1L)
+  list(r = as.integer(r), search_l = as.integer(search_l), build_type = as.integer(build_type))
+}
+
+faiss_nndescent_params <- function(k) {
+  k <- as.integer(k)
+  graph_k <- faiss_option_int("nndescent_graph_k", max(k, 64L), min_value = k, max_value = 1024L)
+  n_iter <- faiss_option_int("nndescent_iter", 10L, min_value = 1L, max_value = 100L)
+  search_l <- faiss_option_int("nndescent_search_l", max(k, graph_k), min_value = k, max_value = 4096L)
+  list(graph_k = as.integer(graph_k), n_iter = as.integer(n_iter), search_l = as.integer(search_l))
+}
+
 cuvs_option_int <- function(name, default, min_value = 1L, max_value = .Machine$integer.max) {
   value <- getOption(paste0("fastEmbedR.cuvs_", name), NULL)
   value <- if (is.null(value)) default else suppressWarnings(as.integer(value))
@@ -1652,12 +1785,11 @@ vptree_self_knn <- function(data,
 #' the common `nn(data, points, k)` use case. Explicit `backend = "cpu"`
 #' performs exact brute-force search in C++ and is mainly a reference path for
 #' small data or recall checks. `backend = "auto"` chooses a recorded fast path
-#' for large self-KNN searches: native CUDA/Metal NN-descent when available,
-#' then a native CPU approximate path. Use `backend = "cpu_approx"` to force the CPU
-#' approximate selector, or `backend = "cpu_ivf"`, `"cpu_nndescent"`,
-#' `"cpu_clustered"`, or `"cpu_vptree"` to choose a specific native multi-CPU
-#' strategy. Exact Euclidean search can also use native CUDA or Metal GPU
-#' backends when requested explicitly.
+#' for large self-KNN searches: CUDA cuVS NN-Descent when a CUDA backend is
+#' requested and cuVS is available, otherwise FAISS NN-Descent when FAISS is
+#' compiled in, otherwise the optional CRAN-friendly RcppHNSW backend when
+#' installed, otherwise exact CPU. Use `backend = "cpu_approx"` to force the
+#' non-CUDA part of that selector.
 #'
 #' @param data Numeric matrix of reference observations in rows.
 #' @param points Numeric matrix of query observations in rows. Defaults to
@@ -1667,74 +1799,100 @@ vptree_self_knn <- function(data,
 #'   is `data`.
 #' @param backend Execution backend. `"auto"` records the selected fast backend
 #'   in `attr(result, "backend")`. `"cpu"` always uses the exact C++ CPU path.
-#'   `"cpu_approx"` chooses the current native CPU approximation. `"cpu_ivf"` and
-#'   `"cpu_faiss_ivf"` use a package-native IVF-flat search; the latter records
-#'   the FAISS-style IVF-flat strategy but does not link to external FAISS.
+#'   `"cpu_approx"` chooses FAISS NN-Descent, RcppHNSW, or exact CPU depending
+#'   on what is available. `"hnsw"`/`"rcpphnsw"` uses the optional CRAN package
+#'   RcppHNSW.
 #'   `"faiss"` uses the real FAISS C++ `IndexFlatL2` backend when fastEmbedR was
-#'   built against FAISS, and `"faiss_ivf"` uses real FAISS `IndexIVFFlat`.
+#'   built against FAISS. `"faiss_ivf"`, `"faiss_ivfpq"`, `"faiss_hnsw"`,
+#'   `"faiss_nsg"`, and `"faiss_nndescent"` use the corresponding FAISS index
+#'   types when FAISS is available at compile time.
 #'   `"cuda_cuvs"` uses a RAPIDS-inspired cuVS policy: exact cuVS brute force
 #'   for small searches and cuVS NN-descent for large self-KNN. Use
 #'   `"cuda_cuvs_cagra"` to force cuVS CAGRA, `"cuda_cuvs_bruteforce"` for
 #'   exact cuVS brute-force search, and `"cuda_cuvs_nndescent"` for cuVS
-#'   NN-descent self-KNN.
-#'   `"cpu_annoy"` uses a package-native Annoy-style random-projection forest.
-#'   `"cpu_nndescent"`, `"cpu_clustered"`, and `"cpu_vptree"` force the native
-#'   NN-descent, legacy clustered-IVF, and VP-tree strategies for self-KNN searches.
-#'   `"gpu"` requests CUDA when available and otherwise Metal. `"cuda"` and
-#'   `"metal"` request exact GPU backends explicitly. `"metal_nndescent"`
-#'   requests seeded native Metal NN-descent refinement. `"cuda_nndescent"`
-#'   and `"cuda_approx"` are compatibility aliases for
+#'   NN-descent self-KNN. `"gpu"` is a CUDA-only convenience alias for KNN now.
+#'   For self-KNN, `"cuda"`/`"gpu"` first try cuVS NN-Descent, then FAISS
+#'   NN-Descent, then RcppHNSW. `"cuda_nndescent"` and `"cuda_approx"` are
+#'   compatibility aliases for
 #'   `"cuda_cuvs_nndescent"`; CUDA approximate KNN is routed through RAPIDS
 #'   cuVS NN-descent rather than the removed native CUDA NN-descent branch.
-#'   `"gpu_nndescent"`, `"gpu_approx"`, and `"metal_approx"` are convenience
-#'   aliases for the preferred native GPU NN-descent path. `"gpu_ivf"`,
-#'   `"cuda_ivf"`, `"metal_ivf"`, `"gpu_faiss"`, `"cuda_faiss"`, and
-#'   `"metal_faiss"` request native GPU IVF/FAISS-style IVF-flat searches and
-#'   fail clearly if the requested GPU backend is unavailable. `"metal_grid"`
-#'   requests the experimental FastGraph-style Metal grid-candidate search for
-#'   low-dimensional or PCA-reduced self-KNN.
+#'   `"cuda_ivf"` and `"cuda_faiss"` request the package's native CUDA
+#'   IVF/FAISS-style IVF-flat search and fail clearly if CUDA is unavailable.
+#' @param metric Distance metric. The intentionally small public set is
+#'   `"euclidean"`, `"cosine"`, and `"correlation"`. `"euclidean"` is the
+#'   validated high-performance default. `"cosine"` and `"correlation"` are
+#'   implemented for exact CPU KNN and RcppHNSW; with `backend = "auto"` they
+#'   select the exact CPU path. FAISS, CUDA, and cuVS backends fail clearly for
+#'   non-Euclidean metrics instead of returning Euclidean neighbours under a
+#'   different label.
 #' @param n_threads Number of CPU worker threads for CPU backends. GPU backends
 #'   ignore this argument.
 #' @return A list with integer matrix `indices` and numeric matrix `distances`.
-#'   Indices are 1-based.
+#'   Indices are 1-based. The resolved backend, metric, exact/approximate flag,
+#'   and self-query flag are stored as attributes.
+#' @examples
+#' x <- scale(as.matrix(iris[, 1:4]))
+#' knn_euclidean <- nn(x, k = 16, metric = "euclidean", backend = "cpu")
+#' knn_cosine <- nn(x, k = 16, metric = "cosine", backend = "cpu")
+#' knn_correlation <- nn(x, k = 16, metric = "correlation", backend = "cpu")
 #' @export
 nn <- function(data,
                points = data,
                k = NULL,
                backend = c(
-                 "auto", "cpu", "cpu_approx", "cpu_ivf", "cpu_faiss_ivf",
-                 "faiss", "cpu_faiss", "cpu_faiss_flat", "faiss_ivf", "cpu_faiss_index_ivf",
+                 "auto", "cpu", "cpu_approx", "hnsw", "rcpphnsw", "cpu_hnsw",
+                 "faiss", "cpu_faiss", "cpu_faiss_flat", "faiss_flat", "faiss_flat_l2",
+                 "faiss_flat_ip", "faiss_ivf", "faiss_ivf_flat", "cpu_faiss_index_ivf",
+                 "faiss_ivfpq", "faiss_hnsw", "faiss_nsg", "faiss_nndescent",
                  "cuvs", "gpu_cuvs", "cuda_cuvs", "cuda_cuvs_cagra",
                  "cuvs_bruteforce", "cuda_cuvs_bruteforce", "cuda_cuvs_exact",
                  "cuvs_nndescent", "cuda_cuvs_nndescent",
-	                 "cpu_annoy", "cpu_nndescent", "cpu_clustered", "cpu_vptree",
-	                 "gpu", "cuda", "metal", "gpu_approx", "cuda_approx", "metal_approx",
-	                 "gpu_nndescent", "cuda_nndescent", "metal_nndescent",
-	                 "gpu_ivf", "cuda_ivf", "metal_ivf", "gpu_faiss", "cuda_faiss", "metal_faiss",
-	                 "metal_grid"
-	               ),
+                 "gpu", "cuda", "cuda_approx", "cuda_nndescent",
+                 "cuda_ivf", "cuda_faiss"
+		               ),
+               metric = c("euclidean", "cosine", "correlation"),
                n_threads = NULL) {
   backend <- match.arg(backend)
-  nn_compute(data, points, k, backend, missing(points), exclude_self = FALSE, n_threads = n_threads)
+  metric <- match.arg(metric)
+  nn_compute(
+    data,
+    points,
+    k,
+    backend,
+    missing(points),
+    exclude_self = FALSE,
+    n_threads = n_threads,
+    metric = metric
+  )
 }
 
 nn_without_self <- function(data,
                             k,
                             backend = c(
-                              "auto", "cpu", "cpu_approx", "cpu_ivf", "cpu_faiss_ivf",
-                              "faiss", "cpu_faiss", "cpu_faiss_flat", "faiss_ivf", "cpu_faiss_index_ivf",
+                              "auto", "cpu", "cpu_approx", "hnsw", "rcpphnsw", "cpu_hnsw",
+                              "faiss", "cpu_faiss", "cpu_faiss_flat", "faiss_flat", "faiss_flat_l2",
+                              "faiss_flat_ip", "faiss_ivf", "faiss_ivf_flat", "cpu_faiss_index_ivf",
+                              "faiss_ivfpq", "faiss_hnsw", "faiss_nsg", "faiss_nndescent",
                               "cuvs", "gpu_cuvs", "cuda_cuvs", "cuda_cuvs_cagra",
                               "cuvs_bruteforce", "cuda_cuvs_bruteforce", "cuda_cuvs_exact",
                               "cuvs_nndescent", "cuda_cuvs_nndescent",
-	                              "cpu_annoy", "cpu_nndescent", "cpu_clustered", "cpu_vptree",
-	                              "gpu", "cuda", "metal", "gpu_approx", "cuda_approx", "metal_approx",
-	                              "gpu_nndescent", "cuda_nndescent", "metal_nndescent",
-	                              "gpu_ivf", "cuda_ivf", "metal_ivf", "gpu_faiss", "cuda_faiss", "metal_faiss",
-	                              "metal_grid"
+                              "gpu", "cuda", "cuda_approx", "cuda_nndescent",
+                              "cuda_ivf", "cuda_faiss"
 	                            ),
+                            metric = c("euclidean", "cosine", "correlation"),
                             n_threads = NULL) {
   backend <- match.arg(backend)
-  nn_compute(data, data, k, backend, TRUE, exclude_self = TRUE, n_threads = n_threads)
+  metric <- match.arg(metric)
+  nn_compute(
+    data,
+    data,
+    k,
+    backend,
+    TRUE,
+    exclude_self = TRUE,
+    n_threads = n_threads,
+    metric = metric
+  )
 }
 
 knn_recall <- function(approx, exact, k = NULL) {
@@ -1787,6 +1945,10 @@ print.fastEmbedR_nn <- function(x, ...) {
   cat("  queries: ", nrow(x$indices), "\n", sep = "")
   cat("  neighbors: ", ncol(x$indices), "\n", sep = "")
   cat("  backend: ", attr(x, "backend"), "\n", sep = "")
+  metric <- attr(x, "metric")
+  if (!is.null(metric) && !is.na(metric)) {
+    cat("  metric: ", metric, "\n", sep = "")
+  }
   if (!isTRUE(attr(x, "exact"))) {
     cat("  exact: false\n")
     recall <- attr(x, "recall")

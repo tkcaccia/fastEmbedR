@@ -24,6 +24,7 @@ they do not silently run on CPU while reporting a GPU backend.
 | `landmark_tsne()` | Embed landmarks, project/transform remaining points | CPU, Metal | openTSNE transform, landmark t-SNE workflows |
 | `landmark_umap()` | Embed landmarks, project/refine remaining points | CPU, Metal | UMAP transform/landmark workflow |
 | `evaluate_embedding()` | Embedding quality metrics | CPU | Trustworthiness, neighbour preservation, silhouette, label KNN accuracy |
+| `knn_graph()` | Native graph builder from KNN or embedding output | CPU | bluster/scran_graph_cluster SNN construction, igraph graph output |
 | `backend_info()` | Backend detection and reporting | CPU, Metal, CUDA, FAISS, cuVS | Explicit backend reporting, no silent fallback |
 | `metal_available()` | Metal availability probe | Metal | Apple Metal |
 | `cuda_available()` | CUDA availability probe | CUDA | CUDA runtime/build probes |
@@ -55,6 +56,17 @@ Native paths:
 - `faiss` and `faiss_ivf`: native C++ bridge to an external FAISS install.
 - `cuda_cuvs`, `cuda_cuvs_bruteforce`, `cuda_cuvs_cagra`, and
   `cuda_cuvs_nndescent`: native C++ bridge to external RAPIDS cuVS.
+
+Distance metrics:
+
+- `metric = "euclidean"` is the validated default and is used by all high-speed
+  CPU/GPU/FAISS/cuVS KNN paths.
+- `metric = "cosine"` is implemented in the exact C++ CPU path. It returns
+  cosine distance `1 - cos(x, y)`, treats two zero vectors as distance 0, and
+  treats a zero vector compared with a non-zero vector as distance 1.
+- Approximate, Metal, CUDA, FAISS, and cuVS cosine paths are intentionally not
+  enabled yet. They error clearly instead of silently returning Euclidean
+  neighbours with a cosine label.
 
 Inspiration and literature:
 
@@ -157,6 +169,35 @@ Inspiration:
 
 - Shared KNN graph benchmarking: compute neighbours once, reuse them for UMAP,
   t-SNE/openTSNE, landmarking, and quality checks.
+
+## `knn_graph()`
+
+`knn_graph()` converts either a precomputed `nn()` result or an embedding object
+returned by `opentsne()` / `umap()` into a plain `igraph` graph.
+
+Implementation:
+
+- If the input is an `nn()` result, no neighbour search is repeated. The graph
+  is built on the original data-space neighbours already stored in the object.
+- If the input is an embedding fit, neighbours are computed on the visible
+  two-dimensional layout and the graph is built in embedding space.
+- `weight = "auto"` uses full shared-nearest-neighbour Jaccard weights for
+  original-data KNN objects and distance weights for embedding-layout graphs.
+- The full SNN path builds an inverted neighbour index and counts sparse
+  shared-neighbour co-occurrences in C++, then creates an undirected `igraph`
+  object with numeric `weight` edge attributes.
+- `mutual = TRUE` keeps the stricter reciprocal direct-KNN interpretation for
+  users who want a smaller boundary-focused graph.
+
+Inspiration and provenance:
+
+- `bluster::makeSNNGraph()` and `neighborsToSNNGraph()` were used as the
+  behavioural reference for full SNN graph semantics: connect all pairs of
+  observations that share at least one neighbour and use Jaccard weighting.
+- `scran_graph_cluster::build_snn_graph()` informed the sparse
+  neighbour-incidence construction strategy.
+- The implementation in `src/graph.cpp` is native fastEmbedR C++ code. It does
+  not link to or call `bluster` at runtime.
 
 ## `opentsne_knn()`
 

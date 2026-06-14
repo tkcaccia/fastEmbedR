@@ -38,3 +38,71 @@ List faiss_ivf_knn_impl(NumericMatrix,
     "FAISS_HOME=/path/to/faiss."
   );
 }
+
+List faiss_flat_ip_knn_impl(NumericMatrix,
+                            NumericMatrix,
+                            int,
+                            bool,
+                            int) {
+  Rcpp::stop(
+    "FAISS IndexFlatIP backend is not available. Reinstall fastEmbedR with "
+    "FASTEMBEDR_USE_FAISS=1 and FAISS_HOME=/path/to/faiss."
+  );
+}
+
+List faiss_ivfpq_knn_impl(NumericMatrix,
+                          NumericMatrix,
+                          int,
+                          int,
+                          int,
+                          int,
+                          int,
+                          bool,
+                          int) {
+  Rcpp::stop(
+    "FAISS IndexIVFPQ backend is not available. Reinstall fastEmbedR with "
+    "FASTEMBEDR_USE_FAISS=1 and FAISS_HOME=/path/to/faiss."
+  );
+}
+
+List faiss_hnsw_knn_impl(NumericMatrix,
+                         NumericMatrix,
+                         int,
+                         int,
+                         int,
+                         int,
+                         bool,
+                         int) {
+  Rcpp::stop(
+    "FAISS IndexHNSWFlat backend is not available. Reinstall fastEmbedR with "
+    "FASTEMBEDR_USE_FAISS=1 and FAISS_HOME=/path/to/faiss."
+  );
+}
+
+List faiss_nsg_knn_impl(NumericMatrix,
+                        NumericMatrix,
+                        int,
+                        int,
+                        int,
+                        int,
+                        bool,
+                        int) {
+  Rcpp::stop(
+    "FAISS IndexNSGFlat backend is not available. Reinstall fastEmbedR with "
+    "FASTEMBEDR_USE_FAISS=1 and FAISS_HOME=/path/to/faiss."
+  );
+}
+
+List faiss_nndescent_knn_impl(NumericMatrix,
+                              NumericMatrix,
+                              int,
+                              int,
+                              int,
+                              int,
+                              bool,
+                              int) {
+  Rcpp::stop(
+    "FAISS IndexNNDescentFlat backend is not available. Reinstall fastEmbedR "
+    "with FASTEMBEDR_USE_FAISS=1 and FAISS_HOME=/path/to/faiss."
+  );
+}

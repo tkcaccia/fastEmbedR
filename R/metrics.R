@@ -34,16 +34,16 @@ resolve_metric_backend <- function(backend) {
   }
   if (identical(backend, "gpu")) {
     selected <- available_native_gpu_backend(need_embedding = TRUE)
-    if (!is.na(selected)) {
+    if (identical(selected, "cuda") && cuda_metric_available()) {
       return(list(backend = selected, reason = NA_character_))
+    }
+    if (identical(selected, "metal")) {
+      return(list(backend = "cpu", reason = "metal_knn_metric_backend_unavailable"))
     }
     return(list(backend = "cpu", reason = "gpu_metric_backend_unavailable"))
   }
   if (identical(backend, "metal")) {
-    if (metal_metric_available()) {
-      return(list(backend = "metal", reason = NA_character_))
-    }
-    return(list(backend = "cpu", reason = "metal_metric_backend_unavailable"))
+    return(list(backend = "cpu", reason = "metal_knn_metric_backend_unavailable"))
   }
   if (identical(backend, "cuda")) {
     if (cuda_metric_available()) {

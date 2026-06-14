@@ -25,11 +25,11 @@ Useful links:
 
 }
 \author{
-\strong{Maintainer}: Stefano User \email{stefano@example.com}
+\strong{Maintainer}: Stefano Caccia \email{tkcaccia@gmail.com}
 
 Authors:
 \itemize{
-  \item Stefano User \email{stefano@example.com}
+  \item Stefano Caccia \email{tkcaccia@gmail.com}
 }
 
 }

@@ -330,6 +330,53 @@ List format_uint32_result(const std::vector<uint32_t>& labels,
   );
 }
 
+List format_int64_result(const std::vector<int64_t>& labels,
+                         const std::vector<float>& distances,
+                         const int n_points,
+                         const int search_k,
+                         const int out_k,
+                         const bool self_query,
+                         const bool exclude_self,
+                         const std::string& index_type,
+                         const bool exact,
+                         const bool already_sqrt = false) {
+  IntegerMatrix indices(n_points, out_k);
+  NumericMatrix dists(n_points, out_k);
+  int* indices_ptr = indices.begin();
+  double* dists_ptr = dists.begin();
+
+  for (int i = 0; i < n_points; ++i) {
+    int written = 0;
+    for (int j = 0; j < search_k && written < out_k; ++j) {
+      const int64_t label = labels[static_cast<std::size_t>(i) * search_k + j];
+      if (label < 0) continue;
+      if (exclude_self && self_query && label == static_cast<int64_t>(i)) {
+        continue;
+      }
+      if (label > std::numeric_limits<int>::max()) {
+        Rcpp::stop("cuVS returned a neighbor index that does not fit in R integer");
+      }
+      indices_ptr[static_cast<std::size_t>(written) * n_points + i] =
+        static_cast<int>(label) + 1;
+      const float raw = distances[static_cast<std::size_t>(i) * search_k + j];
+      dists_ptr[static_cast<std::size_t>(written) * n_points + i] =
+        already_sqrt ? static_cast<double>(raw) :
+        std::sqrt(std::max(static_cast<double>(raw), 0.0));
+      ++written;
+    }
+    if (written < out_k) {
+      Rcpp::stop("cuVS returned fewer neighbors than requested");
+    }
+  }
+
+  return List::create(
+    Rcpp::Named("indices") = indices,
+    Rcpp::Named("distances") = dists,
+    Rcpp::Named("index_type") = index_type,
+    Rcpp::Named("exact") = exact
+  );
+}
+
 std::string json_escape(const std::string& text) {
   std::ostringstream out;
   for (char ch : text) {
@@ -417,7 +464,7 @@ List cuvs_bruteforce_knn_impl(NumericMatrix data,
 
   DeviceBuffer neighbors_d(
     res.get(),
-    static_cast<std::size_t>(n_points) * search_k * sizeof(uint32_t)
+    static_cast<std::size_t>(n_points) * search_k * sizeof(int64_t)
   );
   DeviceBuffer distances_d(
     res.get(),
@@ -434,7 +481,7 @@ List cuvs_bruteforce_knn_impl(NumericMatrix data,
     query_ptr, query_shape, 2, kDLCUDA, kDLFloat, 32
   );
   DLManagedTensor neighbors_tensor = make_tensor(
-    neighbors_d.get(), output_shape, 2, kDLCUDA, kDLUInt, 32
+    neighbors_d.get(), output_shape, 2, kDLCUDA, kDLInt, 64
   );
   DLManagedTensor distances_tensor = make_tensor(
     distances_d.get(), output_shape, 2, kDLCUDA, kDLFloat, 32
@@ -458,10 +505,10 @@ List cuvs_bruteforce_knn_impl(NumericMatrix data,
   );
   cuda_sync("cudaDeviceSynchronize");
 
-  std::vector<uint32_t> labels(static_cast<std::size_t>(n_points) * search_k);
+  std::vector<int64_t> labels(static_cast<std::size_t>(n_points) * search_k);
   std::vector<float> distances(static_cast<std::size_t>(n_points) * search_k);
   cuda_check(
-    cudaMemcpy(labels.data(), neighbors_d.get(), labels.size() * sizeof(uint32_t), cudaMemcpyDeviceToHost),
+    cudaMemcpy(labels.data(), neighbors_d.get(), labels.size() * sizeof(int64_t), cudaMemcpyDeviceToHost),
     "cudaMemcpy(neighbors)"
   );
   cuda_check(
@@ -469,7 +516,7 @@ List cuvs_bruteforce_knn_impl(NumericMatrix data,
     "cudaMemcpy(distances)"
   );
 
-  return format_uint32_result(
+  return format_int64_result(
     labels,
     distances,
     n_points,

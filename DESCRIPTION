@@ -3,11 +3,11 @@ Type: Package
 Title: Fast Native UMAP and openTSNE from Precomputed KNN Matrices
 Version: 0.1.0
 Authors@R: person(given = "Stefano",
-    family = "User",
+    family = "Caccia",
     role = c("aut", "cre"),
-    email = "stefano@example.com")
-Author: Stefano User [aut, cre]
-Maintainer: Stefano User <stefano@example.com>
+    email = "tkcaccia@gmail.com")
+Author: Stefano Caccia [aut, cre]
+Maintainer: Stefano Caccia <tkcaccia@gmail.com>
 Description: A compact UMAP and openTSNE-style implementation focused on fast
     embeddings from precomputed nearest-neighbor index and distance matrices.
     Nearest-neighbor search, preprocessing helpers, fixed-reference transform,
@@ -21,13 +21,17 @@ Encoding: UTF-8
 Imports:
     Rcpp
 Suggests:
+    igraph,
     jsonlite,
     knitr,
+    leidenbase,
     rmarkdown,
+    RcppHNSW,
     Rtsne,
     testthat
 LinkingTo:
     Rcpp
-SystemRequirements: C++17, Fortran, optional FAISS C++ library for backend = "faiss", optional RAPIDS cuVS library for backend = "cuda_cuvs", Metal framework on macOS for the optional Metal backend, CUDA toolkit for the optional CUDA backend
+SystemRequirements: C++17, Fortran, optional FAISS C++ library for backend = "faiss", optional RAPIDS cuVS library for backend = "cuda_cuvs", Metal framework on macOS for optional embedding backends, CUDA toolkit for the optional CUDA backend
 VignetteBuilder: knitr
 Config/roxygen2/version: 8.0.0
+Config/testthat/edition: 3

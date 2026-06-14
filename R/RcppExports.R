@@ -233,6 +233,10 @@ umap_auto_parameters_cpp <- function(distances, n_neighbors, backend) {
     .Call(`_fastEmbedR_umap_auto_parameters_cpp`, distances, n_neighbors, backend)
 }
 
+knn_graph_edges_cpp <- function(indices, distances, weight_type, prune, mutual) {
+    .Call(`_fastEmbedR_knn_graph_edges_cpp`, indices, distances, weight_type, prune, mutual)
+}
+
 nn_cpp <- function(data, points, k, method, square, sorted, p, parallel, cores, exclude_self) {
     .Call(`_fastEmbedR_nn_cpp`, data, points, k, method, square, sorted, p, parallel, cores, exclude_self)
 }
@@ -243,6 +247,10 @@ nndescent_candidate_matrix_cpp <- function(indices, n_sources, n_neighbors) {
 
 nndescent_candidate_matrix_mlx_cpp <- function(indices, flags, n_sources, n_neighbors, use_reverse, active_only) {
     .Call(`_fastEmbedR_nndescent_candidate_matrix_mlx_cpp`, indices, flags, n_sources, n_neighbors, use_reverse, active_only)
+}
+
+nndescent_candidate_matrix_mlx_subset_cpp <- function(indices, flags, n_sources, n_neighbors, use_reverse) {
+    .Call(`_fastEmbedR_nndescent_candidate_matrix_mlx_subset_cpp`, indices, flags, n_sources, n_neighbors, use_reverse)
 }
 
 landmark_candidate_knn_cpp <- function(data, projection_indices, k, bucket_cols, query_cols, parallel, cores) {
@@ -329,6 +337,26 @@ nn_faiss_ivf_cpp <- function(data, points, k, nlist, nprobe, exclude_self, n_thr
     .Call(`_fastEmbedR_nn_faiss_ivf_cpp`, data, points, k, nlist, nprobe, exclude_self, n_threads)
 }
 
+nn_faiss_flat_ip_cpp <- function(data, points, k, exclude_self, n_threads) {
+    .Call(`_fastEmbedR_nn_faiss_flat_ip_cpp`, data, points, k, exclude_self, n_threads)
+}
+
+nn_faiss_ivfpq_cpp <- function(data, points, k, nlist, nprobe, pq_m, pq_nbits, exclude_self, n_threads) {
+    .Call(`_fastEmbedR_nn_faiss_ivfpq_cpp`, data, points, k, nlist, nprobe, pq_m, pq_nbits, exclude_self, n_threads)
+}
+
+nn_faiss_hnsw_cpp <- function(data, points, k, m, ef_construction, ef_search, exclude_self, n_threads) {
+    .Call(`_fastEmbedR_nn_faiss_hnsw_cpp`, data, points, k, m, ef_construction, ef_search, exclude_self, n_threads)
+}
+
+nn_faiss_nsg_cpp <- function(data, points, k, r, search_l, build_type, exclude_self, n_threads) {
+    .Call(`_fastEmbedR_nn_faiss_nsg_cpp`, data, points, k, r, search_l, build_type, exclude_self, n_threads)
+}
+
+nn_faiss_nndescent_cpp <- function(data, points, k, graph_k, n_iter, search_l, exclude_self, n_threads) {
+    .Call(`_fastEmbedR_nn_faiss_nndescent_cpp`, data, points, k, graph_k, n_iter, search_l, exclude_self, n_threads)
+}
+
 metal_available_cpp <- function() {
     .Call(`_fastEmbedR_metal_available_cpp`)
 }
@@ -347,6 +375,22 @@ grid_knn_metal_cpp <- function(data, k, grid_dims, bins_per_dim, radius) {
 
 row_candidate_knn_metal_cpp <- function(data, candidate_indices, k) {
     .Call(`_fastEmbedR_row_candidate_knn_metal_cpp`, data, candidate_indices, k)
+}
+
+candidate_topk_l2_batched_metal_cpp <- function(data, candidate_indices, k) {
+    .Call(`_fastEmbedR_candidate_topk_l2_batched_metal_cpp`, data, candidate_indices, k)
+}
+
+metal_knn_data_handle_cpp <- function(data) {
+    .Call(`_fastEmbedR_metal_knn_data_handle_cpp`, data)
+}
+
+row_candidate_knn_metal_handle_cpp <- function(handle, candidate_indices, k, return_distances = TRUE) {
+    .Call(`_fastEmbedR_row_candidate_knn_metal_handle_cpp`, handle, candidate_indices, k, return_distances)
+}
+
+row_candidate_knn_metal_subset_handle_cpp <- function(handle, candidate_indices, query_rows, k, return_distances = TRUE) {
+    .Call(`_fastEmbedR_row_candidate_knn_metal_subset_handle_cpp`, handle, candidate_indices, query_rows, k, return_distances)
 }
 
 tsne_auto_parameters_cpp <- function(n, k, perplexity, perplexity_missing, backend, negative_gradient_method) {

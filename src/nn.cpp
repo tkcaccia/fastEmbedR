@@ -41,7 +41,9 @@ struct Neighbor {
 enum class DistanceKind {
   Euclidean,
   Manhattan,
-  Minkowski
+  Minkowski,
+  Cosine,
+  Correlation
 };
 
 bool neighbor_less(const Neighbor& a, const Neighbor& b) {
@@ -103,6 +105,8 @@ DistanceKind distance_kind_from_method(const std::string& method) {
   if (method == "euclidean") return DistanceKind::Euclidean;
   if (method == "manhattan") return DistanceKind::Manhattan;
   if (method == "minkowski") return DistanceKind::Minkowski;
+  if (method == "cosine") return DistanceKind::Cosine;
+  if (method == "correlation") return DistanceKind::Correlation;
   Rcpp::stop("unsupported method");
 }
 
@@ -148,6 +152,88 @@ double distance_value_layout(const double* data,
       }
     }
     return acc;
+  }
+  if constexpr (kind == DistanceKind::Cosine) {
+    double dot = 0.0;
+    double x_norm = 0.0;
+    double y_norm = 0.0;
+    if constexpr (row_major) {
+      const double* x = data + static_cast<std::size_t>(data_row) * n_features;
+      const double* y = points + static_cast<std::size_t>(point_row) * n_features;
+      for (int c = 0; c < n_features; ++c) {
+        dot += x[c] * y[c];
+        x_norm += x[c] * x[c];
+        y_norm += y[c] * y[c];
+      }
+    } else {
+      for (int c = 0; c < n_features; ++c) {
+        const double x = data[static_cast<std::size_t>(c) * n_data + data_row];
+        const double y = points[static_cast<std::size_t>(c) * n_points + point_row];
+        dot += x * y;
+        x_norm += x * x;
+        y_norm += y * y;
+      }
+    }
+    if (x_norm <= 0.0 && y_norm <= 0.0) return 0.0;
+    if (x_norm <= 0.0 || y_norm <= 0.0) return 1.0;
+    const double denom = std::sqrt(x_norm) * std::sqrt(y_norm);
+    double cosine = dot / denom;
+    if (cosine > 1.0) cosine = 1.0;
+    if (cosine < -1.0) cosine = -1.0;
+    return 1.0 - cosine;
+  }
+  if constexpr (kind == DistanceKind::Correlation) {
+    double x_mean = 0.0;
+    double y_mean = 0.0;
+    if constexpr (row_major) {
+      const double* x = data + static_cast<std::size_t>(data_row) * n_features;
+      const double* y = points + static_cast<std::size_t>(point_row) * n_features;
+      for (int c = 0; c < n_features; ++c) {
+        x_mean += x[c];
+        y_mean += y[c];
+      }
+      x_mean /= static_cast<double>(n_features);
+      y_mean /= static_cast<double>(n_features);
+      double dot = 0.0;
+      double x_norm = 0.0;
+      double y_norm = 0.0;
+      for (int c = 0; c < n_features; ++c) {
+        const double xc = x[c] - x_mean;
+        const double yc = y[c] - y_mean;
+        dot += xc * yc;
+        x_norm += xc * xc;
+        y_norm += yc * yc;
+      }
+      if (x_norm <= 0.0 && y_norm <= 0.0) return 0.0;
+      if (x_norm <= 0.0 || y_norm <= 0.0) return 1.0;
+      double corr = dot / (std::sqrt(x_norm) * std::sqrt(y_norm));
+      if (corr > 1.0) corr = 1.0;
+      if (corr < -1.0) corr = -1.0;
+      return 1.0 - corr;
+    } else {
+      for (int c = 0; c < n_features; ++c) {
+        x_mean += data[static_cast<std::size_t>(c) * n_data + data_row];
+        y_mean += points[static_cast<std::size_t>(c) * n_points + point_row];
+      }
+      x_mean /= static_cast<double>(n_features);
+      y_mean /= static_cast<double>(n_features);
+      double dot = 0.0;
+      double x_norm = 0.0;
+      double y_norm = 0.0;
+      for (int c = 0; c < n_features; ++c) {
+        const double xc = data[static_cast<std::size_t>(c) * n_data + data_row] - x_mean;
+        const double yc = points[static_cast<std::size_t>(c) * n_points + point_row] - y_mean;
+        dot += xc * yc;
+        x_norm += xc * xc;
+        y_norm += yc * yc;
+      }
+      if (x_norm <= 0.0 && y_norm <= 0.0) return 0.0;
+      if (x_norm <= 0.0 || y_norm <= 0.0) return 1.0;
+      double corr = dot / (std::sqrt(x_norm) * std::sqrt(y_norm));
+      if (corr > 1.0) corr = 1.0;
+      if (corr < -1.0) corr = -1.0;
+      return 1.0 - corr;
+    }
   }
 
   if constexpr (row_major) {
@@ -717,7 +803,8 @@ List nn_cpp(NumericMatrix data,
   }
   const int max_k = exclude_self ? n_data - 1 : n_data;
   if (k < 1 || k > max_k) Rcpp::stop("k must be in the available neighbor range");
-  if (method != "euclidean" && method != "manhattan" && method != "minkowski") {
+  if (method != "euclidean" && method != "manhattan" && method != "minkowski" &&
+      method != "cosine" && method != "correlation") {
     Rcpp::stop("unsupported method");
   }
   if (method == "minkowski" && (!std::isfinite(p) || p <= 0.0)) {
@@ -818,6 +905,30 @@ List nn_cpp(NumericMatrix data,
         );
       } else {
         write_knn_rows<DistanceKind::Manhattan, true>(
+          data_ptr, points_ptr, n_data, n_points, n_features, k, square, sorted,
+          p, use_fixed_topk, exclude_self, indices_ptr, distances_ptr, query_start, query_end
+        );
+      }
+    } else if (distance_kind == DistanceKind::Cosine) {
+      if (!use_row_major) {
+        write_knn_rows<DistanceKind::Cosine, false>(
+          data_ptr, points_ptr, n_data, n_points, n_features, k, square, sorted,
+          p, use_fixed_topk, exclude_self, indices_ptr, distances_ptr, query_start, query_end
+        );
+      } else {
+        write_knn_rows<DistanceKind::Cosine, true>(
+          data_ptr, points_ptr, n_data, n_points, n_features, k, square, sorted,
+          p, use_fixed_topk, exclude_self, indices_ptr, distances_ptr, query_start, query_end
+        );
+      }
+    } else if (distance_kind == DistanceKind::Correlation) {
+      if (!use_row_major) {
+        write_knn_rows<DistanceKind::Correlation, false>(
+          data_ptr, points_ptr, n_data, n_points, n_features, k, square, sorted,
+          p, use_fixed_topk, exclude_self, indices_ptr, distances_ptr, query_start, query_end
+        );
+      } else {
+        write_knn_rows<DistanceKind::Correlation, true>(
           data_ptr, points_ptr, n_data, n_points, n_features, k, square, sorted,
           p, use_fixed_topk, exclude_self, indices_ptr, distances_ptr, query_start, query_end
         );
@@ -1098,6 +1209,173 @@ IntegerMatrix nndescent_candidate_matrix_mlx_cpp(IntegerMatrix indices,
   out.attr("sources") = n_sources;
   out.attr("neighbors") = n_neighbors;
   return out;
+}
+
+// [[Rcpp::export]]
+List nndescent_candidate_matrix_mlx_subset_cpp(IntegerMatrix indices,
+                                               LogicalMatrix flags,
+                                               int n_sources,
+                                               int n_neighbors,
+                                               bool use_reverse) {
+  const int n = indices.nrow();
+  const int k = indices.ncol();
+  if (n < 1 || k < 1) Rcpp::stop("indices must be a non-empty matrix");
+  if (flags.nrow() != n || flags.ncol() != k) {
+    Rcpp::stop("flags must have the same dimensions as indices");
+  }
+  n_sources = std::max(1, std::min(n_sources, k));
+  n_neighbors = std::max(1, std::min(n_neighbors, k));
+
+  const int reverse_limit = use_reverse ? std::max(1, std::min(k, n_sources)) : 0;
+  std::vector<std::vector<int> > reverse_lists;
+  if (use_reverse) {
+    reverse_lists.resize(static_cast<std::size_t>(n));
+    for (int row = 0; row < n; ++row) {
+      for (int col = 0; col < k; ++col) {
+        const int neighbor = indices(row, col);
+        if (neighbor < 1 || neighbor > n || neighbor == row + 1) continue;
+        std::vector<int>& bucket = reverse_lists[static_cast<std::size_t>(neighbor - 1)];
+        if (static_cast<int>(bucket.size()) < reverse_limit) {
+          bucket.push_back(row + 1);
+        }
+      }
+    }
+  }
+
+  const auto row_has_new = [&](const int row) {
+    for (int col = 0; col < k; ++col) {
+      if (flags(row, col) == TRUE) return true;
+    }
+    return false;
+  };
+
+  const auto source_col_at = [&](const int row, const int source_pos) {
+    int seen_sources = 0;
+    for (int col = 0; col < k; ++col) {
+      if (flags(row, col) == TRUE) {
+        if (seen_sources == source_pos) return col;
+        ++seen_sources;
+      }
+    }
+    for (int col = 0; col < k; ++col) {
+      if (flags(row, col) != TRUE) {
+        if (seen_sources == source_pos) return col;
+        ++seen_sources;
+      }
+    }
+    return -1;
+  };
+
+  std::vector<int> active_rows;
+  active_rows.reserve(static_cast<std::size_t>(n));
+  for (int row = 0; row < n; ++row) {
+    if (row_has_new(row)) active_rows.push_back(row);
+  }
+
+  std::vector<int> seen(static_cast<std::size_t>(n) + 1, 0);
+  std::vector<int> unique_counts(active_rows.size(), 0);
+  int max_unique = 0;
+
+  for (std::size_t active_pos = 0; active_pos < active_rows.size(); ++active_pos) {
+    const int row = active_rows[active_pos];
+    const int stamp = row + 1;
+    int count = 0;
+    const auto add_candidate = [&](const int candidate) {
+      if (candidate < 1 || candidate > n || candidate == row + 1) return;
+      if (seen[static_cast<std::size_t>(candidate)] == stamp) return;
+      seen[static_cast<std::size_t>(candidate)] = stamp;
+      ++count;
+    };
+
+    for (int col = 0; col < k; ++col) add_candidate(indices(row, col));
+    for (int source_pos = 0; source_pos < n_sources; ++source_pos) {
+      const int source_col = source_col_at(row, source_pos);
+      if (source_col < 0) continue;
+      const int source = indices(row, source_col) - 1;
+      if (source < 0 || source >= n) continue;
+      for (int neighbor_col = 0; neighbor_col < n_neighbors; ++neighbor_col) {
+        add_candidate(indices(source, neighbor_col));
+      }
+    }
+
+    if (use_reverse) {
+      const std::vector<int>& rev = reverse_lists[static_cast<std::size_t>(row)];
+      for (const int source_one_based : rev) {
+        add_candidate(source_one_based);
+        const int source = source_one_based - 1;
+        for (int neighbor_col = 0; neighbor_col < n_neighbors; ++neighbor_col) {
+          add_candidate(indices(source, neighbor_col));
+        }
+      }
+    }
+
+    unique_counts[active_pos] = count;
+    if (count > max_unique) max_unique = count;
+  }
+
+  max_unique = std::max(k, max_unique);
+  IntegerMatrix out(static_cast<int>(active_rows.size()), max_unique);
+  std::fill(seen.begin(), seen.end(), 0);
+
+  for (std::size_t active_pos = 0; active_pos < active_rows.size(); ++active_pos) {
+    const int row = active_rows[active_pos];
+    const int stamp = row + 1;
+    int out_col = 0;
+    const auto add_candidate = [&](const int candidate) {
+      if (candidate < 1 || candidate > n || candidate == row + 1) return;
+      if (seen[static_cast<std::size_t>(candidate)] == stamp) return;
+      seen[static_cast<std::size_t>(candidate)] = stamp;
+      if (out_col < max_unique) {
+        out(static_cast<int>(active_pos), out_col) = candidate;
+        ++out_col;
+      }
+    };
+
+    for (int col = 0; col < k; ++col) add_candidate(indices(row, col));
+    for (int source_pos = 0; source_pos < n_sources; ++source_pos) {
+      const int source_col = source_col_at(row, source_pos);
+      if (source_col < 0) continue;
+      const int source = indices(row, source_col) - 1;
+      if (source < 0 || source >= n) continue;
+      for (int neighbor_col = 0; neighbor_col < n_neighbors; ++neighbor_col) {
+        add_candidate(indices(source, neighbor_col));
+      }
+    }
+
+    if (use_reverse) {
+      const std::vector<int>& rev = reverse_lists[static_cast<std::size_t>(row)];
+      for (const int source_one_based : rev) {
+        add_candidate(source_one_based);
+        const int source = source_one_based - 1;
+        for (int neighbor_col = 0; neighbor_col < n_neighbors; ++neighbor_col) {
+          add_candidate(indices(source, neighbor_col));
+        }
+      }
+    }
+  }
+
+  IntegerVector query_rows(static_cast<int>(active_rows.size()));
+  for (std::size_t i = 0; i < active_rows.size(); ++i) {
+    query_rows[static_cast<int>(i)] = active_rows[i] + 1;
+  }
+
+  double mean_unique = 0.0;
+  for (const int count : unique_counts) mean_unique += static_cast<double>(count);
+  if (!unique_counts.empty()) mean_unique /= static_cast<double>(unique_counts.size());
+  out.attr("mean_unique_candidates") = mean_unique;
+  out.attr("max_unique_candidates") = max_unique;
+  out.attr("raw_candidate_columns") =
+    k + n_sources * n_neighbors + reverse_limit * (1 + n_neighbors);
+  out.attr("active_rows") = static_cast<int>(active_rows.size());
+  out.attr("use_reverse") = use_reverse;
+  out.attr("active_only") = true;
+  out.attr("sources") = n_sources;
+  out.attr("neighbors") = n_neighbors;
+
+  return List::create(
+    Rcpp::Named("candidates") = out,
+    Rcpp::Named("query_rows") = query_rows
+  );
 }
 
 // [[Rcpp::export]]

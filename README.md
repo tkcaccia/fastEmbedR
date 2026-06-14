@@ -1,78 +1,47 @@
 # fastEmbedR
 
-`fastEmbedR` is a KNN-first R package for fast native UMAP and openTSNE-style
-embeddings. The public package is deliberately small: one nearest-neighbour
-API, one UMAP API, one openTSNE API, explicit CPU/Metal/CUDA backend reporting,
-and no silent CPU fallback when a GPU backend is requested.
+`fastEmbedR` is a KNN-first R package for dimensionality reduction. It provides
+native nearest-neighbour search, UMAP from precomputed neighbours, and a native
+openTSNE-style optimizer from precomputed neighbours.
 
-The package is designed for workflows where the nearest-neighbour graph is a
-real object: compute KNN once, reuse it for UMAP, openTSNE, landmarking,
-quality checks, and benchmarks.
+The intended workflow is:
 
-## Current MNIST 70k Snapshot
+1. compute nearest neighbours once with `nn()`;
+2. reuse the same KNN object for UMAP, openTSNE, graph clustering, or quality
+   checks;
+3. keep CPU/GPU backend reporting explicit.
 
-`fastEmbedR::opentsne_knn()` on MNIST 70k raw flattened images, using KNN input
-and PCA initialization:
+The public API is deliberately small and avoids silent CPU fallback when an
+explicit GPU backend is requested.
 
-![MNIST 70k openTSNE PCA embeddings](docs/assets/mnist70k-opentsne-pca-embeddings-cpu-metal-cuda.png)
+## Installation
 
-Nearest-neighbour time and embedding time are reported separately:
-
-![MNIST 70k openTSNE PCA timing](docs/assets/mnist70k-opentsne-pca-timing-stacked.png)
-
-| backend | machine | NN sec | embedding sec | total sec | trust | label KNN acc |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| CPU | Stefanos-MacBook-Pro.local | 61.642 | 3.896 | 65.538 | 0.324 | 0.958 |
-| Metal | Stefanos-MacBook-Pro.local | 40.904 | 3.250 | 44.154 | 0.312 | 0.966 |
-| CUDA | icgeb-bioinformatics-unit | 2.046 | 0.410 | 2.456 | 0.327 | 0.972 |
-
-More benchmark notes and the source CSV are in
-[docs/benchmarks.md](docs/benchmarks.md) and
-[docs/benchmark-gallery.md](docs/benchmark-gallery.md).
-
-## What Is Included
-
-| Function | Purpose |
-| --- | --- |
-| `nn()` | Native nearest-neighbour search, including CPU/Metal NN-descent and optional CUDA cuVS NN-descent. |
-| `umap_knn()` | UMAP from a supplied KNN graph. |
-| `umap()` | One-call KNN plus UMAP. |
-| `opentsne_knn()` | Native openTSNE-style t-SNE from a supplied KNN graph. |
-| `opentsne()` | One-call KNN plus openTSNE-style t-SNE. |
-| `embed_knn()` | KNN dispatcher; UMAP by default, openTSNE with `method = "opentsne"`. |
-| `landmark_umap()` | UMAP landmark workflow with projection/refinement. |
-| `landmark_tsne()` | openTSNE landmark workflow with fixed-reference transform. |
-| `transform_tsne()` | Place new/query points into an existing openTSNE-style map. |
-| `evaluate_embedding()` | Trustworthiness, neighbour preservation, label accuracy, and related diagnostics. |
-| `backend_info()` | CPU/CUDA/Metal/FAISS/cuVS detection without crashing or silent fallback. |
-
-Legacy classic `tsne()`, InfoTSNE, PaCMAP, TriMap, and LocalMAP experiments
-were removed from the public API. The active scope is KNN, UMAP,
-openTSNE-style t-SNE, GPU backends, and landmarking.
-
-## Backend Summary
-
-| Component | CPU | Metal | CUDA |
-| --- | --- | --- | --- |
-| KNN | native exact / native NN-descent | native Metal NN-descent | optional RAPIDS cuVS NN-descent |
-| UMAP | native C++ CSR graph + uwot-like SGD | native Metal `atomic_inplace` optimizer | native CUDA pure-atomic optimizer |
-| openTSNE | native C++ FFT-grid optimizer | native Metal FFT-grid optimizer | native CUDA FFT-grid optimizer using cuFFT |
-| Landmarking | native projection/transform | native Metal projection/refinement kernels where available | native CUDA projection/refinement kernels where built |
-
-See [docs/backend-capabilities.md](docs/backend-capabilities.md) for the full
-capability matrix and backend rules.
-
-## Quick Install
+For the development version:
 
 ```r
 install.packages("remotes")
 remotes::install_github("tkcaccia/fastEmbedR")
 ```
 
-Optional CUDA/cuVS and FAISS builds are documented in
-[docs/installation-backends.md](docs/installation-backends.md).
+The CRAN build does not vendor large optional GPU libraries. FAISS and RAPIDS
+cuVS support are enabled only when the package is built on a machine where the
+corresponding C++ libraries are available.
 
-## Minimal KNN-First Workflow
+## Main Functions
+
+| Function | Purpose |
+| --- | --- |
+| `nn()` | Nearest-neighbour search. Uses CPU exact/RcppHNSW by default; optional FAISS/cuVS paths are used only when built. |
+| `umap_knn()` | UMAP from a supplied KNN object. |
+| `umap()` | One-call KNN plus UMAP. |
+| `opentsne_knn()` | Native openTSNE-style t-SNE from a supplied KNN object. |
+| `opentsne()` | One-call KNN plus openTSNE-style t-SNE. |
+| `embed_knn()` | KNN dispatcher; UMAP by default, openTSNE with `method = "opentsne"`. |
+| `knn_graph()` | Convert `nn()`, `opentsne()`, or `umap()` output into an `igraph` graph. |
+| `evaluate_embedding()` | Trustworthiness, neighbour preservation, label accuracy, and related diagnostics. |
+| `backend_info()` | Report CPU, Metal, CUDA/cuVS, and FAISS availability. |
+
+## KNN-First Example
 
 ```r
 library(fastEmbedR)
@@ -81,7 +50,7 @@ set.seed(1)
 x <- scale(as.matrix(iris[, 1:4]))
 labels <- iris$Species
 
-knn <- nn(x, k = 31, n_threads = 4)
+knn <- nn(x, k = 15, backend = "auto", n_threads = 2)
 layout_umap <- umap_knn(knn, backend = "cpu", seed = 1)
 layout_tsne <- opentsne_knn(knn, init_data = x, backend = "cpu", seed = 1)
 
@@ -89,48 +58,102 @@ plot(layout_umap, pch = 21, bg = labels)
 plot(layout_tsne, pch = 21, bg = labels)
 ```
 
-Use a real GPU explicitly:
+## Graph Clustering
+
+`knn_graph()` returns an `igraph` graph. The object you pass decides the graph
+space:
+
+- `knn_graph(knn)` builds a graph on the original data neighbours from `nn()`.
+- `knn_graph(fit)` builds a graph on the visible `opentsne()` / `umap()`
+  embedding coordinates.
+
+The default `weight = "auto"` uses shared-nearest-neighbour Jaccard weights for
+original-data KNN graphs and distance weights for embedding-layout graphs.
+The SNN path builds the full graph between observations that share neighbours,
+using a sparse co-occurrence strategy inspired by `bluster::makeSNNGraph()`.
+When a graph needs to compute neighbours from a matrix or embedding layout,
+`backend = "auto"` chooses cuVS NN-descent when available, then FAISS
+NN-descent, then RcppHNSW, then exact CPU.
+`weight = "adaptive"` and `mutual = TRUE` are available when you want to test
+stricter local-density weighting or reciprocal-neighbour boundaries.
 
 ```r
-knn_metal <- nn(x, k = 31, backend = "metal")
-layout <- umap_knn(knn_metal, backend = "metal", seed = 1)
+if (requireNamespace("igraph", quietly = TRUE)) {
+  graph <- knn_graph(knn, k = 15)
+  clusters <- igraph::cluster_louvain(graph, weights = igraph::E(graph)$weight)
+  plot(layout_tsne, pch = 21, bg = igraph::membership(clusters))
+}
 ```
 
-If the requested GPU backend is unavailable, the call fails clearly. It does
-not run on CPU and label the result as GPU.
+Leiden clustering is available when the optional `leidenbase` package is
+installed:
 
-## Documentation Map
+```r
+if (requireNamespace("igraph", quietly = TRUE) &&
+    "cluster_leiden" %in% getNamespaceExports("igraph")) {
+  fit <- opentsne(x, labels = labels, n_neighbors = 30, seed = 1)
+  graph <- knn_graph(fit, k = 80)
+  clusters <- igraph::cluster_leiden(
+    graph,
+    objective_function = "modularity",
+    weights = igraph::E(graph)$weight,
+    resolution = 0.05
+  )
+}
+```
 
-| Topic | Page |
-| --- | --- |
-| Installation, optional FAISS/cuVS/CUDA setup, backend rules | [docs/installation-backends.md](docs/installation-backends.md) |
-| Basic use, KNN-first workflow, landmark workflow, public API | [docs/usage-api.md](docs/usage-api.md) |
-| Backend capability matrix | [docs/backend-capabilities.md](docs/backend-capabilities.md) |
-| Benchmark gallery with plots | [docs/benchmark-gallery.md](docs/benchmark-gallery.md) |
-| Extended benchmark suite for MNIST, Fashion-MNIST, Shuttle, Covertype, CIFAR, opt-SNE cytometry datasets, and optional local data | [docs/extended-benchmark-suite.md](docs/extended-benchmark-suite.md) |
-| Current MNIST benchmark commands and result snapshots | [docs/benchmarks.md](docs/benchmarks.md) |
-| Implementation and library inventory for openTSNE, UMAP, and KNN | [docs/implementation-inventory.md](docs/implementation-inventory.md) |
-| Function-by-function implementation details and literature | [docs/function-implementation-details.md](docs/function-implementation-details.md) |
-| Metal FFT development notes | [docs/metal-fft-roadmap.md](docs/metal-fft-roadmap.md) |
-| FFT library evaluation | [docs/fft-library-evaluation.md](docs/fft-library-evaluation.md) |
-| Full benchmark summary | [BENCHMARK_SUMMARY.md](BENCHMARK_SUMMARY.md) |
-| License implications | [LICENSE-IMPLICATIONS.md](LICENSE-IMPLICATIONS.md) |
-| Detailed provenance | [inst/NOTICE](inst/NOTICE) and [inst/ALGORITHMIC_REFERENCES.md](inst/ALGORITHMIC_REFERENCES.md) |
+## Distance Metrics
 
-## Design Rules
+`nn()` intentionally exposes a small set of common distances:
 
-- KNN is a first-class input. Compute it once and reuse it.
-- CPU, Metal, and CUDA results are labelled by the backend that actually ran.
-- Public UMAP/openTSNE functions do not call Python.
-- Slow or visually weak experimental branches are kept out of the public API.
-- Defaults are opinionated: PCA initialization for openTSNE, validated Metal
-  UMAP `atomic_inplace`, FFT-grid openTSNE, and reusable KNN graphs.
+| metric | supported backends | use when |
+| --- | --- | --- |
+| `euclidean` | CPU exact, RcppHNSW, optional FAISS/cuVS | Default for UMAP/openTSNE. |
+| `cosine` | CPU exact, RcppHNSW | Angular similarity and normalized features. |
+| `correlation` | CPU exact, RcppHNSW | Expression-profile comparisons. |
+
+Explicit FAISS/cuVS requests currently require Euclidean distance. Unsupported
+metric/backend combinations fail clearly rather than returning a mislabeled
+Euclidean result.
+
+## GPU Backends
+
+Metal and CUDA support is explicit:
+
+- Metal is used for selected native embedding/projection kernels on macOS.
+- CUDA/cuVS support is optional at build time.
+- If an explicit GPU backend is unavailable, the function errors instead of
+  silently running on CPU and reporting a GPU result.
+
+Use `backend_info()` to inspect what is available on the current machine.
+
+Strict optional builds can be requested with environment variables:
+
+```sh
+# FAISS CPU KNN
+FAISS_HOME=/path/to/faiss FASTEMBEDR_USE_FAISS=1 R CMD INSTALL .
+
+# CUDA kernels plus RAPIDS cuVS KNN
+CUDA_HOME=/path/to/cuda CUVS_HOME=/path/to/cuvs \
+FASTEMBEDR_USE_CUDA=1 FASTEMBEDR_USE_CUVS=1 R CMD INSTALL .
+
+# FAISS and CUDA/cuVS together
+FAISS_HOME=/path/to/faiss CUDA_HOME=/path/to/cuda CUVS_HOME=/path/to/cuvs \
+FASTEMBEDR_USE_FAISS=1 FASTEMBEDR_USE_CUDA=1 FASTEMBEDR_USE_CUVS=1 \
+R CMD INSTALL .
+```
+
+When these variables are set to `1`, installation fails clearly if the
+requested headers or libraries cannot be found.
+
+## Scope
+
+Classic `tsne()`, InfoTSNE, PaCMAP, TriMap, LocalMAP, and slow experimental
+branches are not part of the public API. The package focuses on reusable KNN,
+UMAP, openTSNE-style t-SNE, graph clustering, metrics, and landmark workflows.
 
 ## License And Provenance
 
-`fastEmbedR` is licensed as `GPL (>= 3)`. Implementation/library inventory,
-acknowledgements, and algorithmic references are maintained in
-[docs/implementation-inventory.md](docs/implementation-inventory.md),
-[docs/function-implementation-details.md](docs/function-implementation-details.md),
-[inst/NOTICE](inst/NOTICE), and
-[inst/ALGORITHMIC_REFERENCES.md](inst/ALGORITHMIC_REFERENCES.md).
+`fastEmbedR` is licensed as `GPL (>= 3)`. Implementation notes,
+acknowledgements, and algorithmic references are included in `inst/NOTICE` and
+`inst/ALGORITHMIC_REFERENCES.md`.

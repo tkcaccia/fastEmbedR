@@ -427,8 +427,8 @@ test_that("landmark_tsne keeps Metal projection and transform native when interm
 
   expect_s3_class(fit, "fastEmbedR_embedding")
   expect_equal(dim(fit$layout), c(nrow(x), 2L))
-  expect_equal(fit$parameters$projection_nn_backend, "metal")
-  expect_equal(fit$parameters$projection_strategy, "query_only_exact_metal_projection_knn")
+  expect_equal(fit$parameters$projection_nn_backend, "cpu")
+  expect_equal(fit$parameters$projection_strategy, "exact")
   expect_equal(fit$parameters$transform_optimizer, "opentsne_style_fixed_reference_transform_metal")
   expect_true(is.null(fit$landmarks$projection_knn))
 })

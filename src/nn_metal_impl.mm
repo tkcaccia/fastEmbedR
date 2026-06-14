@@ -10,6 +10,7 @@
 #include <vector>
 
 using Rcpp::IntegerMatrix;
+using Rcpp::IntegerVector;
 using Rcpp::List;
 using Rcpp::NumericMatrix;
 
@@ -58,6 +59,14 @@ struct RowCandidateKnnParams {
   std::uint32_t n_candidates;
 };
 
+struct RowCandidateSubsetKnnParams {
+  std::uint32_t n;
+  std::uint32_t n_queries;
+  std::uint32_t n_features;
+  std::uint32_t k;
+  std::uint32_t n_candidates;
+};
+
 struct MetalKnnState {
   id<MTLDevice> device;
   id<MTLComputePipelineState> pipeline;
@@ -66,10 +75,30 @@ struct MetalKnnState {
   id<MTLComputePipelineState> candidate_csr_pipeline;
   id<MTLComputePipelineState> grid_pipeline;
   id<MTLComputePipelineState> row_candidate_pipeline;
+  id<MTLComputePipelineState> row_candidate_subset_pipeline;
+  id<MTLComputePipelineState> row_candidate_topk_batched_pipeline;
   id<MTLCommandQueue> queue;
 };
 
+struct MetalRowMajorData {
+  id<MTLBuffer> buffer;
+  int n;
+  int n_features;
+
+  MetalRowMajorData(id<MTLBuffer> buffer_, int n_, int n_features_)
+    : buffer(buffer_), n(n_), n_features(n_features_) {}
+
+  ~MetalRowMajorData() {
+    if (buffer != nil) {
+      [buffer release];
+      buffer = nil;
+    }
+  }
+};
+
 constexpr int kMaxMetalK = 256;
+constexpr int kMaxMetalBatchedK = 64;
+constexpr int kMaxMetalBatchedThreads = 64;
 constexpr int kMaxGridDims = 5;
 constexpr int kMaxGridBins = 2000000;
 
@@ -79,6 +108,8 @@ const char* metal_kernel_source() {
 using namespace metal;
 
 #define MAX_K 256
+#define MAX_BATCH_K 64
+#define MAX_BATCH_THREADS 64
 
 struct KnnParams {
   uint n_data;
@@ -118,6 +149,14 @@ struct GridKnnParams {
 
 struct RowCandidateKnnParams {
   uint n;
+  uint n_features;
+  uint k;
+  uint n_candidates;
+};
+
+struct RowCandidateSubsetKnnParams {
+  uint n;
+  uint n_queries;
   uint n_features;
   uint k;
   uint n_candidates;
@@ -179,8 +218,21 @@ inline float self_distance_sq_row_major_raw(
   const uint a_offset = a * n_features;
   const uint b_offset = b * n_features;
   float dist = 0.0f;
-  for (uint c = 0; c < n_features; ++c) {
-    float diff = data[a_offset + c] - data[b_offset + c];
+  uint c = 0;
+  for (; c + 7 < n_features; c += 8) {
+    const float d0 = data[a_offset + c] - data[b_offset + c];
+    const float d1 = data[a_offset + c + 1] - data[b_offset + c + 1];
+    const float d2 = data[a_offset + c + 2] - data[b_offset + c + 2];
+    const float d3 = data[a_offset + c + 3] - data[b_offset + c + 3];
+    const float d4 = data[a_offset + c + 4] - data[b_offset + c + 4];
+    const float d5 = data[a_offset + c + 5] - data[b_offset + c + 5];
+    const float d6 = data[a_offset + c + 6] - data[b_offset + c + 6];
+    const float d7 = data[a_offset + c + 7] - data[b_offset + c + 7];
+    dist += d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3;
+    dist += d4 * d4 + d5 * d5 + d6 * d6 + d7 * d7;
+  }
+  for (; c < n_features; ++c) {
+    const float diff = data[a_offset + c] - data[b_offset + c];
     dist += diff * diff;
   }
   return dist;
@@ -487,6 +539,157 @@ kernel void row_candidate_knn_metal(
   }
 }
 
+kernel void row_candidate_knn_subset_metal(
+  device const float* data [[buffer(0)]],
+  device const int* candidate_indices [[buffer(1)]],
+  device const int* query_rows [[buffer(2)]],
+  device int* out_idx [[buffer(3)]],
+  device float* out_dist [[buffer(4)]],
+  constant RowCandidateSubsetKnnParams& params [[buffer(5)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= params.n_queries) return;
+
+  const int query_one_based = query_rows[gid];
+  if (query_one_based < 1 || query_one_based > int(params.n)) return;
+  const uint query = uint(query_one_based - 1);
+
+  float best_dist[MAX_K];
+  int best_idx[MAX_K];
+  for (uint j = 0; j < params.k; ++j) {
+    best_dist[j] = INFINITY;
+    best_idx[j] = INT_MAX;
+  }
+
+  for (uint c = 0; c < params.n_candidates; ++c) {
+    const int candidate = candidate_indices[c * params.n_queries + gid] - 1;
+    if (candidate < 0 || candidate >= int(params.n) || candidate == int(query)) {
+      continue;
+    }
+    if (best_contains_candidate_metal(candidate, best_idx, params.k)) {
+      continue;
+    }
+    insert_candidate_metal(
+      self_distance_sq_row_major_raw(data, params.n_features, query, uint(candidate)),
+      candidate,
+      best_dist,
+      best_idx,
+      params.k
+    );
+  }
+
+  if (best_idx[params.k - 1] == INT_MAX) {
+    for (uint candidate = 0; candidate < params.n && best_idx[params.k - 1] == INT_MAX; ++candidate) {
+      if (candidate == query) continue;
+      insert_unique_candidate_metal(
+        self_distance_sq_row_major_raw(data, params.n_features, query, candidate),
+        int(candidate),
+        best_dist,
+        best_idx,
+        params.k
+      );
+    }
+  }
+
+  for (uint j = 0; j < params.k; ++j) {
+    const uint offset = j * params.n_queries + gid;
+    out_idx[offset] = best_idx[j] + 1;
+    out_dist[offset] = sqrt(max(best_dist[j], 0.0f));
+  }
+}
+
+kernel void metal_candidate_topk_l2_batched(
+  device const float* data [[buffer(0)]],
+  device const int* candidate_indices [[buffer(1)]],
+  device int* out_idx [[buffer(2)]],
+  device float* out_dist [[buffer(3)]],
+  constant RowCandidateKnnParams& params [[buffer(4)]],
+  uint row [[threadgroup_position_in_grid]],
+  uint tid [[thread_position_in_threadgroup]],
+  uint tpg [[threads_per_threadgroup]]
+) {
+  if (row >= params.n || params.k > MAX_BATCH_K) return;
+
+  const uint k = params.k;
+  const uint threads = min(tpg, uint(MAX_BATCH_THREADS));
+  if (tid >= threads) return;
+
+  thread float local_dist[MAX_BATCH_K];
+  thread int local_idx[MAX_BATCH_K];
+  for (uint j = 0; j < k; ++j) {
+    local_dist[j] = INFINITY;
+    local_idx[j] = INT_MAX;
+  }
+
+  for (uint c = tid; c < params.n_candidates; c += threads) {
+    const int candidate = candidate_indices[c * params.n + row] - 1;
+    if (candidate < 0 || candidate >= int(params.n) || candidate == int(row)) {
+      continue;
+    }
+    if (best_contains_candidate_metal(candidate, local_idx, k)) {
+      continue;
+    }
+    insert_candidate_metal(
+      self_distance_sq_row_major_raw(data, params.n_features, row, uint(candidate)),
+      candidate,
+      local_dist,
+      local_idx,
+      k
+    );
+  }
+
+  threadgroup float shared_dist[MAX_BATCH_THREADS * MAX_BATCH_K];
+  threadgroup int shared_idx[MAX_BATCH_THREADS * MAX_BATCH_K];
+  const uint base = tid * k;
+  for (uint j = 0; j < k; ++j) {
+    shared_dist[base + j] = local_dist[j];
+    shared_idx[base + j] = local_idx[j];
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  if (tid == 0) {
+    for (uint out = 0; out < k; ++out) {
+      float best_d = INFINITY;
+      int best_i = INT_MAX;
+      uint best_pos = UINT_MAX;
+      const uint total = threads * k;
+      for (uint pos = 0; pos < total; ++pos) {
+        const int cand = shared_idx[pos];
+        if (cand == INT_MAX) continue;
+        bool duplicate = false;
+        for (uint prev = 0; prev < out; ++prev) {
+          if (out_idx[prev * params.n + row] == cand + 1) {
+            duplicate = true;
+            break;
+          }
+        }
+        if (duplicate) {
+          shared_dist[pos] = INFINITY;
+          shared_idx[pos] = INT_MAX;
+          continue;
+        }
+        const float d = shared_dist[pos];
+        if (d < best_d || (d == best_d && cand < best_i)) {
+          best_d = d;
+          best_i = cand;
+          best_pos = pos;
+        }
+      }
+
+      const uint offset = out * params.n + row;
+      if (best_i == INT_MAX) {
+        out_idx[offset] = 0;
+        out_dist[offset] = INFINITY;
+      } else {
+        out_idx[offset] = best_i + 1;
+        out_dist[offset] = sqrt(max(best_d, 0.0f));
+        shared_dist[best_pos] = INFINITY;
+        shared_idx[best_pos] = INT_MAX;
+      }
+    }
+  }
+}
+
 kernel void knn_exact_euclidean(
   device const float* data [[buffer(0)]],
   device const float* points [[buffer(1)]],
@@ -630,7 +833,7 @@ std::uint32_t pow_uint32(std::uint32_t base, std::uint32_t exp) {
 }
 
 MetalKnnState& metal_knn_state() {
-  static MetalKnnState state{nil, nil, nil, nil, nil, nil, nil, nil};
+  static MetalKnnState state{nil, nil, nil, nil, nil, nil, nil, nil, nil};
   if (state.device != nil &&
       state.pipeline != nil &&
       state.row_major_pipeline != nil &&
@@ -638,6 +841,7 @@ MetalKnnState& metal_knn_state() {
       state.candidate_csr_pipeline != nil &&
       state.grid_pipeline != nil &&
       state.row_candidate_pipeline != nil &&
+      state.row_candidate_topk_batched_pipeline != nil &&
       state.queue != nil) {
     return state;
   }
@@ -701,6 +905,22 @@ MetalKnnState& metal_knn_state() {
     Rcpp::stop("Failed to create Metal row-candidate KNN pipeline: %s", ns_error_message(error).c_str());
   }
   [row_candidate_function release];
+
+  id<MTLFunction> row_candidate_subset_function = [library newFunctionWithName:@"row_candidate_knn_subset_metal"];
+  if (row_candidate_subset_function == nil) Rcpp::stop("Failed to load Metal row-candidate subset KNN function.");
+  state.row_candidate_subset_pipeline = [state.device newComputePipelineStateWithFunction:row_candidate_subset_function error:&error];
+  if (state.row_candidate_subset_pipeline == nil) {
+    Rcpp::stop("Failed to create Metal row-candidate subset KNN pipeline: %s", ns_error_message(error).c_str());
+  }
+  [row_candidate_subset_function release];
+
+  id<MTLFunction> row_candidate_topk_function = [library newFunctionWithName:@"metal_candidate_topk_l2_batched"];
+  if (row_candidate_topk_function == nil) Rcpp::stop("Failed to load Metal batched row-candidate top-k function.");
+  state.row_candidate_topk_batched_pipeline = [state.device newComputePipelineStateWithFunction:row_candidate_topk_function error:&error];
+  if (state.row_candidate_topk_batched_pipeline == nil) {
+    Rcpp::stop("Failed to create Metal batched row-candidate top-k pipeline: %s", ns_error_message(error).c_str());
+  }
+  [row_candidate_topk_function release];
 
   [library release];
 
@@ -1048,9 +1268,251 @@ List metal_grid_knn_impl_internal(NumericMatrix data,
   }
 }
 
+List metal_row_candidate_knn_with_buffer_internal(id<MTLBuffer> data_buffer,
+                                                  int n,
+                                                  int n_features,
+                                                  IntegerMatrix candidate_indices,
+                                                  int k,
+                                                  bool reused_data_buffer,
+                                                  bool return_distances = true) {
+  const int n_candidates = candidate_indices.ncol();
+  if (n < 2) Rcpp::stop("data must have at least two rows");
+  if (candidate_indices.nrow() != n) {
+    Rcpp::stop("candidate_indices row count must match data");
+  }
+  if (n_candidates < 1) Rcpp::stop("candidate_indices must have at least one column");
+  if (k < 1 || k >= n) Rcpp::stop("k must be in [1, nrow(data) - 1]");
+  if (k > kMaxMetalK) Rcpp::stop("Metal backend currently supports k <= %d", kMaxMetalK);
+
+  @autoreleasepool {
+    MetalKnnState& state = metal_knn_state();
+    std::vector<std::int32_t> out_idx(static_cast<std::size_t>(n) * k);
+    RowCandidateKnnParams params{
+      static_cast<std::uint32_t>(n),
+      static_cast<std::uint32_t>(n_features),
+      static_cast<std::uint32_t>(k),
+      static_cast<std::uint32_t>(n_candidates)
+    };
+
+    id<MTLBuffer> candidates_buffer = [state.device newBufferWithBytes:candidate_indices.begin()
+                                                                length:static_cast<std::size_t>(n) * n_candidates * sizeof(std::int32_t)
+                                                               options:MTLResourceStorageModeShared];
+    id<MTLBuffer> idx_buffer = [state.device newBufferWithLength:out_idx.size() * sizeof(std::int32_t)
+                                                         options:MTLResourceStorageModeShared];
+    const std::size_t dist_count = static_cast<std::size_t>(n) * k;
+    id<MTLBuffer> dist_buffer = [state.device newBufferWithLength:dist_count * sizeof(float)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> params_buffer = [state.device newBufferWithBytes:&params
+                                                            length:sizeof(RowCandidateKnnParams)
+                                                           options:MTLResourceStorageModeShared];
+    if (data_buffer == nil || candidates_buffer == nil || idx_buffer == nil ||
+        dist_buffer == nil || params_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal row-candidate KNN buffers.");
+    }
+
+    id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    [encoder setComputePipelineState:state.row_candidate_pipeline];
+    [encoder setBuffer:data_buffer offset:0 atIndex:0];
+    [encoder setBuffer:candidates_buffer offset:0 atIndex:1];
+    [encoder setBuffer:idx_buffer offset:0 atIndex:2];
+    [encoder setBuffer:dist_buffer offset:0 atIndex:3];
+    [encoder setBuffer:params_buffer offset:0 atIndex:4];
+
+    const NSUInteger threads_per_group = std::min<NSUInteger>(
+      state.row_candidate_pipeline.maxTotalThreadsPerThreadgroup,
+      256
+    );
+    MTLSize grid_size = MTLSizeMake(static_cast<NSUInteger>(n), 1, 1);
+    MTLSize threadgroup_size = MTLSizeMake(threads_per_group, 1, 1);
+    [encoder dispatchThreads:grid_size threadsPerThreadgroup:threadgroup_size];
+    [encoder endEncoding];
+    [command_buffer commit];
+    [command_buffer waitUntilCompleted];
+    if (command_buffer.status == MTLCommandBufferStatusError) {
+      Rcpp::stop("Metal row-candidate KNN command failed: %s", ns_error_message(command_buffer.error).c_str());
+    }
+
+    std::memcpy(out_idx.data(), [idx_buffer contents], out_idx.size() * sizeof(std::int32_t));
+
+    IntegerMatrix indices(n, k);
+    for (int j = 0; j < k; ++j) {
+      for (int i = 0; i < n; ++i) {
+        const std::size_t offset = static_cast<std::size_t>(j) * n + i;
+        indices(i, j) = out_idx[offset];
+      }
+    }
+
+    List result;
+    if (return_distances) {
+      std::vector<float> out_dist(dist_count);
+      std::memcpy(out_dist.data(), [dist_buffer contents], out_dist.size() * sizeof(float));
+      NumericMatrix distances(n, k);
+      for (int j = 0; j < k; ++j) {
+        for (int i = 0; i < n; ++i) {
+          const std::size_t offset = static_cast<std::size_t>(j) * n + i;
+          distances(i, j) = static_cast<double>(out_dist[offset]);
+        }
+      }
+      result = List::create(
+        Rcpp::Named("indices") = indices,
+        Rcpp::Named("distances") = distances
+      );
+    } else {
+      result = List::create(Rcpp::Named("indices") = indices);
+    }
+    result.attr("metal_kernel") = "row_candidate_knn";
+    result.attr("candidate_columns") = n_candidates;
+    result.attr("metal_data_reused") = reused_data_buffer;
+    result.attr("distances_returned") = return_distances;
+    [candidates_buffer release];
+    [idx_buffer release];
+    [dist_buffer release];
+    [params_buffer release];
+    return result;
+  }
+}
+
 List metal_row_candidate_knn_impl_internal(NumericMatrix data,
                                            IntegerMatrix candidate_indices,
                                            int k) {
+  const int n = data.nrow();
+  const int n_features = data.ncol();
+  @autoreleasepool {
+    MetalKnnState& state = metal_knn_state();
+    std::vector<float> data_f = matrix_to_row_major_float(data);
+    id<MTLBuffer> data_buffer = [state.device newBufferWithBytes:data_f.data()
+                                                          length:data_f.size() * sizeof(float)
+                                                         options:MTLResourceStorageModeShared];
+    if (data_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal row-major data buffer.");
+    }
+    List out = metal_row_candidate_knn_with_buffer_internal(
+      data_buffer, n, n_features, candidate_indices, k, false
+    );
+    [data_buffer release];
+    return out;
+  }
+}
+
+List metal_row_candidate_knn_subset_with_buffer_internal(id<MTLBuffer> data_buffer,
+                                                         int n,
+                                                         int n_features,
+                                                         IntegerMatrix candidate_indices,
+                                                         IntegerVector query_rows,
+                                                         int k,
+                                                         bool reused_data_buffer,
+                                                         bool return_distances = true) {
+  const int n_queries = candidate_indices.nrow();
+  const int n_candidates = candidate_indices.ncol();
+  if (n < 2) Rcpp::stop("data must have at least two rows");
+  if (query_rows.size() != n_queries) {
+    Rcpp::stop("query_rows length must match candidate_indices row count");
+  }
+  if (n_candidates < 1) Rcpp::stop("candidate_indices must have at least one column");
+  if (k < 1 || k >= n) Rcpp::stop("k must be in [1, nrow(data) - 1]");
+  if (k > kMaxMetalK) Rcpp::stop("Metal backend currently supports k <= %d", kMaxMetalK);
+
+  @autoreleasepool {
+    MetalKnnState& state = metal_knn_state();
+    std::vector<std::int32_t> out_idx(static_cast<std::size_t>(n_queries) * k);
+    RowCandidateSubsetKnnParams params{
+      static_cast<std::uint32_t>(n),
+      static_cast<std::uint32_t>(n_queries),
+      static_cast<std::uint32_t>(n_features),
+      static_cast<std::uint32_t>(k),
+      static_cast<std::uint32_t>(n_candidates)
+    };
+
+    id<MTLBuffer> candidates_buffer = [state.device newBufferWithBytes:candidate_indices.begin()
+                                                                length:static_cast<std::size_t>(n_queries) * n_candidates * sizeof(std::int32_t)
+                                                               options:MTLResourceStorageModeShared];
+    id<MTLBuffer> rows_buffer = [state.device newBufferWithBytes:query_rows.begin()
+                                                          length:static_cast<std::size_t>(n_queries) * sizeof(std::int32_t)
+                                                         options:MTLResourceStorageModeShared];
+    id<MTLBuffer> idx_buffer = [state.device newBufferWithLength:out_idx.size() * sizeof(std::int32_t)
+                                                         options:MTLResourceStorageModeShared];
+    const std::size_t dist_count = static_cast<std::size_t>(n_queries) * k;
+    id<MTLBuffer> dist_buffer = [state.device newBufferWithLength:dist_count * sizeof(float)
+                                                          options:MTLResourceStorageModeShared];
+    id<MTLBuffer> params_buffer = [state.device newBufferWithBytes:&params
+                                                            length:sizeof(RowCandidateSubsetKnnParams)
+                                                           options:MTLResourceStorageModeShared];
+    if (data_buffer == nil || candidates_buffer == nil || rows_buffer == nil ||
+        idx_buffer == nil || dist_buffer == nil || params_buffer == nil) {
+      Rcpp::stop("Failed to allocate Metal row-candidate subset KNN buffers.");
+    }
+
+    id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    [encoder setComputePipelineState:state.row_candidate_subset_pipeline];
+    [encoder setBuffer:data_buffer offset:0 atIndex:0];
+    [encoder setBuffer:candidates_buffer offset:0 atIndex:1];
+    [encoder setBuffer:rows_buffer offset:0 atIndex:2];
+    [encoder setBuffer:idx_buffer offset:0 atIndex:3];
+    [encoder setBuffer:dist_buffer offset:0 atIndex:4];
+    [encoder setBuffer:params_buffer offset:0 atIndex:5];
+
+    const NSUInteger threads_per_group = std::min<NSUInteger>(
+      state.row_candidate_subset_pipeline.maxTotalThreadsPerThreadgroup,
+      256
+    );
+    MTLSize grid_size = MTLSizeMake(static_cast<NSUInteger>(n_queries), 1, 1);
+    MTLSize threadgroup_size = MTLSizeMake(threads_per_group, 1, 1);
+    [encoder dispatchThreads:grid_size threadsPerThreadgroup:threadgroup_size];
+    [encoder endEncoding];
+    [command_buffer commit];
+    [command_buffer waitUntilCompleted];
+    if (command_buffer.status == MTLCommandBufferStatusError) {
+      Rcpp::stop("Metal row-candidate subset KNN command failed: %s", ns_error_message(command_buffer.error).c_str());
+    }
+
+    std::memcpy(out_idx.data(), [idx_buffer contents], out_idx.size() * sizeof(std::int32_t));
+
+    IntegerMatrix indices(n_queries, k);
+    for (int j = 0; j < k; ++j) {
+      for (int i = 0; i < n_queries; ++i) {
+        const std::size_t offset = static_cast<std::size_t>(j) * n_queries + i;
+        indices(i, j) = out_idx[offset];
+      }
+    }
+
+    List result;
+    if (return_distances) {
+      std::vector<float> out_dist(dist_count);
+      std::memcpy(out_dist.data(), [dist_buffer contents], out_dist.size() * sizeof(float));
+      NumericMatrix distances(n_queries, k);
+      for (int j = 0; j < k; ++j) {
+        for (int i = 0; i < n_queries; ++i) {
+          const std::size_t offset = static_cast<std::size_t>(j) * n_queries + i;
+          distances(i, j) = static_cast<double>(out_dist[offset]);
+        }
+      }
+      result = List::create(
+        Rcpp::Named("indices") = indices,
+        Rcpp::Named("distances") = distances
+      );
+    } else {
+      result = List::create(Rcpp::Named("indices") = indices);
+    }
+    result.attr("metal_kernel") = "row_candidate_knn_subset";
+    result.attr("candidate_columns") = n_candidates;
+    result.attr("active_rows") = n_queries;
+    result.attr("metal_data_reused") = reused_data_buffer;
+    result.attr("distances_returned") = return_distances;
+
+    [candidates_buffer release];
+    [rows_buffer release];
+    [idx_buffer release];
+    [dist_buffer release];
+    [params_buffer release];
+    return result;
+  }
+}
+
+List metal_candidate_topk_l2_batched_impl_internal(NumericMatrix data,
+                                                   IntegerMatrix candidate_indices,
+                                                   int k) {
   const int n = data.nrow();
   const int n_features = data.ncol();
   const int n_candidates = candidate_indices.ncol();
@@ -1060,7 +1522,9 @@ List metal_row_candidate_knn_impl_internal(NumericMatrix data,
   }
   if (n_candidates < 1) Rcpp::stop("candidate_indices must have at least one column");
   if (k < 1 || k >= n) Rcpp::stop("k must be in [1, nrow(data) - 1]");
-  if (k > kMaxMetalK) Rcpp::stop("Metal backend currently supports k <= %d", kMaxMetalK);
+  if (k > kMaxMetalBatchedK) {
+    return metal_row_candidate_knn_impl_internal(data, candidate_indices, k);
+  }
 
   @autoreleasepool {
     MetalKnnState& state = metal_knn_state();
@@ -1095,12 +1559,12 @@ List metal_row_candidate_knn_impl_internal(NumericMatrix data,
                                                            options:MTLResourceStorageModeShared];
     if (data_buffer == nil || candidates_buffer == nil || idx_buffer == nil ||
         dist_buffer == nil || params_buffer == nil) {
-      Rcpp::stop("Failed to allocate Metal row-candidate KNN buffers.");
+      Rcpp::stop("Failed to allocate Metal batched row-candidate top-k buffers.");
     }
 
     id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
     id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
-    [encoder setComputePipelineState:state.row_candidate_pipeline];
+    [encoder setComputePipelineState:state.row_candidate_topk_batched_pipeline];
     [encoder setBuffer:data_buffer offset:0 atIndex:0];
     [encoder setBuffer:candidates_buffer offset:0 atIndex:1];
     [encoder setBuffer:idx_buffer offset:0 atIndex:2];
@@ -1108,21 +1572,42 @@ List metal_row_candidate_knn_impl_internal(NumericMatrix data,
     [encoder setBuffer:params_buffer offset:0 atIndex:4];
 
     const NSUInteger threads_per_group = std::min<NSUInteger>(
-      state.row_candidate_pipeline.maxTotalThreadsPerThreadgroup,
-      256
+      state.row_candidate_topk_batched_pipeline.maxTotalThreadsPerThreadgroup,
+      static_cast<NSUInteger>(kMaxMetalBatchedThreads)
     );
     MTLSize grid_size = MTLSizeMake(static_cast<NSUInteger>(n), 1, 1);
     MTLSize threadgroup_size = MTLSizeMake(threads_per_group, 1, 1);
-    [encoder dispatchThreads:grid_size threadsPerThreadgroup:threadgroup_size];
+    [encoder dispatchThreadgroups:grid_size threadsPerThreadgroup:threadgroup_size];
     [encoder endEncoding];
     [command_buffer commit];
     [command_buffer waitUntilCompleted];
     if (command_buffer.status == MTLCommandBufferStatusError) {
-      Rcpp::stop("Metal row-candidate KNN command failed: %s", ns_error_message(command_buffer.error).c_str());
+      Rcpp::stop("Metal batched row-candidate top-k command failed: %s", ns_error_message(command_buffer.error).c_str());
     }
 
     std::memcpy(out_idx.data(), [idx_buffer contents], out_idx.size() * sizeof(std::int32_t));
     std::memcpy(out_dist.data(), [dist_buffer contents], out_dist.size() * sizeof(float));
+
+    bool incomplete = false;
+    for (std::size_t pos = 0; pos < out_idx.size(); ++pos) {
+      if (out_idx[pos] < 1) {
+        incomplete = true;
+        break;
+      }
+    }
+
+    [data_buffer release];
+    [candidates_buffer release];
+    [idx_buffer release];
+    [dist_buffer release];
+    [params_buffer release];
+
+    if (incomplete) {
+      List fallback = metal_row_candidate_knn_impl_internal(data, candidate_indices, k);
+      fallback.attr("metal_kernel") = "row_candidate_knn";
+      fallback.attr("batched_topk_fallback") = true;
+      return fallback;
+    }
 
     IntegerMatrix indices(n, k);
     NumericMatrix distances(n, k);
@@ -1138,15 +1623,77 @@ List metal_row_candidate_knn_impl_internal(NumericMatrix data,
       Rcpp::Named("indices") = indices,
       Rcpp::Named("distances") = distances
     );
-    result.attr("metal_kernel") = "row_candidate_knn";
+    result.attr("metal_kernel") = "candidate_topk_l2_batched";
     result.attr("candidate_columns") = n_candidates;
-    [data_buffer release];
-    [candidates_buffer release];
-    [idx_buffer release];
-    [dist_buffer release];
-    [params_buffer release];
+    result.attr("threads_per_group") = static_cast<int>(threads_per_group);
     return result;
   }
+}
+
+SEXP metal_knn_data_handle_impl_internal(NumericMatrix data) {
+  const int n = data.nrow();
+  const int n_features = data.ncol();
+  if (n < 2) Rcpp::stop("data must have at least two rows");
+  if (n_features < 1) Rcpp::stop("data must have at least one column");
+
+  @autoreleasepool {
+    MetalKnnState& state = metal_knn_state();
+    std::vector<float> data_f = matrix_to_row_major_float(data);
+    id<MTLBuffer> data_buffer = [state.device newBufferWithBytes:data_f.data()
+                                                          length:data_f.size() * sizeof(float)
+                                                         options:MTLResourceStorageModeShared];
+    if (data_buffer == nil) {
+      Rcpp::stop("Failed to allocate persistent Metal row-major data buffer.");
+    }
+    Rcpp::XPtr<MetalRowMajorData> ptr(
+      new MetalRowMajorData(data_buffer, n, n_features),
+      true
+    );
+    ptr.attr("n") = n;
+    ptr.attr("p") = n_features;
+    ptr.attr("backend") = "metal";
+    return ptr;
+  }
+}
+
+List metal_row_candidate_knn_handle_impl_internal(SEXP handle,
+                                                  IntegerMatrix candidate_indices,
+                                                  int k,
+                                                  bool return_distances = true) {
+  Rcpp::XPtr<MetalRowMajorData> ptr(handle);
+  if (ptr.get() == nullptr || ptr->buffer == nil) {
+    Rcpp::stop("Invalid Metal KNN data handle.");
+  }
+  return metal_row_candidate_knn_with_buffer_internal(
+    ptr->buffer,
+    ptr->n,
+    ptr->n_features,
+    candidate_indices,
+    k,
+    true,
+    return_distances
+  );
+}
+
+List metal_row_candidate_knn_subset_handle_impl_internal(SEXP handle,
+                                                         IntegerMatrix candidate_indices,
+                                                         IntegerVector query_rows,
+                                                         int k,
+                                                         bool return_distances = true) {
+  Rcpp::XPtr<MetalRowMajorData> ptr(handle);
+  if (ptr.get() == nullptr || ptr->buffer == nil) {
+    Rcpp::stop("Invalid Metal KNN data handle.");
+  }
+  return metal_row_candidate_knn_subset_with_buffer_internal(
+    ptr->buffer,
+    ptr->n,
+    ptr->n_features,
+    candidate_indices,
+    query_rows,
+    k,
+    true,
+    return_distances
+  );
 }
 
 } // namespace
@@ -1180,6 +1727,35 @@ List metal_row_candidate_knn_impl(NumericMatrix data,
                                   IntegerMatrix candidate_indices,
                                   int k) {
   return metal_row_candidate_knn_impl_internal(data, candidate_indices, k);
+}
+
+List metal_candidate_topk_l2_batched_impl(NumericMatrix data,
+                                          IntegerMatrix candidate_indices,
+                                          int k) {
+  return metal_candidate_topk_l2_batched_impl_internal(data, candidate_indices, k);
+}
+
+SEXP metal_knn_data_handle_impl(NumericMatrix data) {
+  return metal_knn_data_handle_impl_internal(data);
+}
+
+List metal_row_candidate_knn_handle_impl(SEXP handle,
+                                         IntegerMatrix candidate_indices,
+                                         int k,
+                                         bool return_distances) {
+  return metal_row_candidate_knn_handle_impl_internal(
+    handle, candidate_indices, k, return_distances
+  );
+}
+
+List metal_row_candidate_knn_subset_handle_impl(SEXP handle,
+                                                IntegerMatrix candidate_indices,
+                                                IntegerVector query_rows,
+                                                int k,
+                                                bool return_distances) {
+  return metal_row_candidate_knn_subset_handle_impl_internal(
+    handle, candidate_indices, query_rows, k, return_distances
+  );
 }
 
 List metal_nn_impl(NumericMatrix data,

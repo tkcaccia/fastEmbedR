@@ -129,10 +129,15 @@ umap <- function(data,
 
   knn_time <- system.time({
     knn_result <- if (is.null(nn)) {
+      knn_backend <- if (identical(backend, "metal")) {
+        "cpu"
+      } else {
+        resolve_backend_request(backend, need_knn = TRUE)
+      }
       nn_without_self(
         x,
         k = as.integer(n_neighbors),
-        backend = resolve_backend_request(backend, need_knn = TRUE),
+        backend = knn_backend,
         n_threads = n_threads
       )
     } else {
@@ -304,11 +309,12 @@ landmark_umap <- function(data,
   if (is.null(transform_k)) transform_k <- min(n_landmarks, n_neighbors)
   transform_k <- transform_embedding_k(transform_k, n_landmarks)
   projection_time <- system.time({
+    projection_backend <- if (identical(backend, "metal")) "cpu" else backend
     projection_knn <- landmark_projection_knn(
       x_landmarks,
       x[non_landmarks, , drop = FALSE],
       k = transform_k,
-      backend = backend,
+      backend = projection_backend,
       seed = seed + 503L,
       n_threads = n_threads,
       landmark_layout = reference_fit$layout,

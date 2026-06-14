@@ -18,7 +18,7 @@
 backend_info <- function() {
   cuda_knn <- backend_flag(cuda_available)
   cuda_embedding <- backend_flag(embedding_cuda_available_cpp)
-  metal_knn <- backend_flag(metal_available)
+  metal_knn <- FALSE
   metal_embedding <- backend_flag(embedding_metal_available_cpp)
   faiss_knn <- backend_flag(faiss_available)
   cuvs_knn <- backend_flag(cuvs_available)

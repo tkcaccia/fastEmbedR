@@ -18,6 +18,13 @@ rule is simple: if a function is requested with `backend = "metal"` or
 | `landmark_tsne()` | native landmark embed plus transform | native Metal projection/transform kernels where available | native CUDA projection/transform kernels where built | Projection quality is tracked separately in benchmark plots. |
 | `evaluate_embedding()` | native/R quality metrics | CPU metrics after final layout transfer | CPU metrics after final layout transfer | Metrics are not labelled as GPU work. |
 
+## Distance Metrics
+
+| `nn()` metric | CPU | Metal | CUDA/cuVS | FAISS | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `euclidean` | exact and approximate | native Metal KNN | cuVS/CUDA KNN where built | optional FAISS L2 indexes | Validated default for UMAP/openTSNE. |
+| `cosine` | exact CPU | not yet enabled | not yet enabled | not yet enabled | `backend = "auto"` resolves to CPU; unsupported explicit backends error clearly. |
+
 ## Backend Labels
 
 Every benchmark row should record the backend requested and the backend used.
@@ -45,6 +52,12 @@ parallelize. Current CPU priorities are:
 
 Metal is implemented with Objective-C++ and Metal kernels. Public UMAP and
 openTSNE paths do not call Python, Torch, MLX, or `reticulate`.
+
+For KNN, `backend = "auto"` uses exact Metal on moderate self-KNN searches
+where local benchmarks show it is faster than the current Metal NN-descent
+pipeline. Metal NN-descent remains available explicitly with
+`backend = "metal_nndescent"` and is reserved by auto for larger searches where
+exact all-pairs KNN is too expensive.
 
 The validated UMAP Metal path is `atomic_inplace`; other slower or distorted
 Metal UMAP optimizer experiments were removed from the public API.

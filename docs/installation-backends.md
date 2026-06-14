@@ -14,9 +14,26 @@ Optional native KNN backends are linked only when available at build time.
 Explicit unavailable GPU, FAISS, or cuVS backends fail clearly rather than
 silently running on CPU.
 
+Automatic selectors do not require optional libraries. If FAISS, cuVS, or CUDA
+headers/libraries are absent during compilation, the package builds with stub
+objects and `nn(..., backend = "auto")` / `nn(..., backend = "cpu_approx")`
+choose the best available native alternative. With FAISS compiled in, the
+large-data CPU approximation prefers FAISS `IndexHNSWFlat`; without FAISS it
+falls back to package-native CPU approximations. With CUDA/cuVS compiled in,
+explicit CUDA KNN uses RAPIDS cuVS; without it, explicit CUDA/cuVS requests fail
+with an install message instead of being relabelled as CPU.
+
 ```sh
 FASTEMBEDR_USE_FAISS=1 FAISS_HOME=/path/to/faiss R CMD INSTALL .
 FASTEMBEDR_USE_CUDA=1 FASTEMBEDR_USE_CUVS=1 CUVS_HOME=/path/to/cuvs R CMD INSTALL .
+```
+
+For a local macOS FAISS build through conda-forge:
+
+```sh
+conda create -n fastembedr-faiss -c conda-forge faiss-cpu r-base r-rcpp
+conda activate fastembedr-faiss
+FASTEMBEDR_USE_FAISS=1 FAISS_HOME="$CONDA_PREFIX" R CMD INSTALL .
 ```
 
 ## Optional RAPIDS cuVS KNN
@@ -113,4 +130,3 @@ to CPU.
 
 Optional RAPIDS cuVS is used for CUDA KNN only. The package does not vendor or
 call RAPIDS cuML UMAP/openTSNE at runtime.
-

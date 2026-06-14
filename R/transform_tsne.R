@@ -516,27 +516,6 @@ landmark_projection_knn <- function(x_landmarks,
     }
   }
 
-  if (backend %in% c("metal", "gpu") &&
-      isTRUE(embedding_metal_available_cpp())) {
-    out <- tryCatch(
-      fastEmbedR::nn(
-        x_landmarks,
-        x_query,
-        k = k,
-        backend = "metal",
-        n_threads = n_threads
-      ),
-      error = function(e) NULL
-    )
-    if (!is.null(out)) {
-      attr(out, "approximation") <- list(
-        strategy = "query_only_exact_metal_projection_knn",
-        backend = attr(out, "backend") %||% "metal"
-      )
-      return(out)
-    }
-  }
-
   if (backend %in% c("cuda", "gpu") &&
       isTRUE(embedding_cuda_available_cpp())) {
     out <- tryCatch(
@@ -588,11 +567,12 @@ landmark_projection_knn <- function(x_landmarks,
     return(result)
   }
 
+  fallback_backend <- if (identical(backend, "metal")) "cpu" else backend
   fastEmbedR::nn(
     x_landmarks,
     x_query,
     k = k,
-    backend = backend,
+    backend = fallback_backend,
     n_threads = n_threads
   )
 }

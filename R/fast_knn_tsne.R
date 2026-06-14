@@ -332,6 +332,99 @@ make_opentsne_pca_init <- function(x, n_components, seed, backend = "cpu") {
   init
 }
 
+#' Compute or reuse a PCA initialization for openTSNE
+#'
+#' `opentsne_pca_init()` creates the small-scale PCA initialization used by
+#' [opentsne()] and [opentsne_knn()]. Supplying `cache_file` stores the result
+#' as an RDS file; later calls with the same path reuse the saved matrix instead
+#' of recomputing PCA. This is useful when comparing several KNN backends with
+#' exactly the same initialization.
+#'
+#' @param data Numeric matrix/data frame with observations in rows.
+#' @param n_components Output dimensionality, usually `2`.
+#' @param seed Random seed used by the randomized SVD PCA helper.
+#' @param backend Backend used for PCA when available: `"cpu"`, `"metal"`,
+#'   or `"cuda"`.
+#' @param cache_file Optional `.rds` file path. If it exists and
+#'   `force_recompute = FALSE`, the saved initialization is loaded and
+#'   validated.
+#' @param force_recompute If `TRUE`, ignore any existing cache and recompute.
+#' @return A numeric initialization matrix suitable for `Y_init`.
+#' @export
+opentsne_pca_init <- function(data,
+                              n_components = 2L,
+                              seed = 4L,
+                              backend = c("cpu", "metal", "cuda"),
+                              cache_file = NULL,
+                              force_recompute = FALSE) {
+  backend <- match.arg(backend)
+  n_components <- as.integer(n_components)
+  if (length(n_components) != 1L || is.na(n_components) || n_components < 1L) {
+    stop("`n_components` must be a positive integer.", call. = FALSE)
+  }
+  x <- as.matrix(data)
+  storage.mode(x) <- "double"
+  if (nrow(x) < 2L || ncol(x) < 1L) {
+    stop("`data` must have at least two rows and one column.", call. = FALSE)
+  }
+  if (any(!is.finite(x))) {
+    stop("`data` must contain only finite values.", call. = FALSE)
+  }
+  if (!is.null(cache_file)) {
+    cache_file <- path.expand(as.character(cache_file)[1L])
+    if (!isTRUE(force_recompute) && file.exists(cache_file)) {
+      init <- readRDS(cache_file)
+      init <- resolve_opentsne_y_init(
+        init,
+        n = nrow(x),
+        n_components = n_components
+      )
+      attr(init, "fastEmbedR_init_cache_file") <- cache_file
+      attr(init, "fastEmbedR_init_cache_hit") <- TRUE
+      return(init)
+    }
+  }
+  init <- make_opentsne_pca_init(
+    x,
+    n_components = n_components,
+    seed = seed,
+    backend = backend
+  )
+  if (!is.null(cache_file)) {
+    dir.create(dirname(cache_file), recursive = TRUE, showWarnings = FALSE)
+    saveRDS(init, cache_file, version = 2)
+    attr(init, "fastEmbedR_init_cache_file") <- cache_file
+    attr(init, "fastEmbedR_init_cache_hit") <- FALSE
+  }
+  init
+}
+
+resolve_opentsne_y_init <- function(Y_init, n, n_components) {
+  if (is.null(Y_init)) return(NULL)
+  if (is.character(Y_init) && length(Y_init) == 1L) {
+    path <- path.expand(Y_init)
+    if (!file.exists(path)) {
+      stop("`Y_init` file does not exist: ", path, call. = FALSE)
+    }
+    Y_init <- readRDS(path)
+    attr(Y_init, "fastEmbedR_init_cache_file") <- path
+    attr(Y_init, "fastEmbedR_init_cache_hit") <- TRUE
+  }
+  Y_init <- as.matrix(Y_init)
+  storage.mode(Y_init) <- "double"
+  if (nrow(Y_init) != n || ncol(Y_init) != n_components) {
+    stop(
+      "`Y_init` must have ", n, " rows and ", n_components,
+      " columns.",
+      call. = FALSE
+    )
+  }
+  if (any(!is.finite(Y_init))) {
+    stop("`Y_init` must contain only finite values.", call. = FALSE)
+  }
+  Y_init
+}
+
 make_opentsne_pca_init_from_data <- function(init_data,
                                              n,
                                              n_components,
@@ -446,6 +539,7 @@ fast_knn_opentsne_materialized <- function(indices,
   }
   n <- nrow(indices)
   k <- ncol(indices)
+  Y_init <- resolve_opentsne_y_init(Y_init, n, n_components)
   if (is.null(n_threads)) {
     n_threads <- default_tsne_threads()
   }
@@ -729,6 +823,7 @@ fast_knn_opentsne_core <- function(indices,
                                    auto_config = TRUE) {
   backend <- match.arg(backend)
   knn <- normalize_opentsne_knn_input(indices, distances)
+  Y_init <- resolve_opentsne_y_init(Y_init, knn$n, n_components)
   fast_knn_opentsne_materialized(
     knn$indices,
     knn$distances,
@@ -816,6 +911,7 @@ opentsne_knn <- function(indices,
   backend <- match.arg(backend)
   init <- match.arg(init)
   knn <- normalize_opentsne_knn_input(indices, distances, n_neighbors)
+  Y_init <- resolve_opentsne_y_init(Y_init, knn$n, n_components)
   if (is.null(Y_init) && identical(init, "pca") && !is.null(init_data)) {
     init_backend <- if (backend %in% c("metal", "cuda")) backend else "cpu"
     Y_init <- make_opentsne_pca_init_from_data(
@@ -984,6 +1080,7 @@ opentsne <- function(data,
     }
     knn_result <- normalize_opentsne_knn_input(data, NULL, n_neighbors)
     n <- knn_result$n
+    Y_init <- resolve_opentsne_y_init(Y_init, n, n_components)
     if (!is.null(labels) && length(labels) != n) {
       stop("`labels` must have one entry per KNN row.", call. = FALSE)
     }
@@ -1130,10 +1227,11 @@ opentsne <- function(data,
 
   knn_time <- system.time({
     if (is.null(nn)) {
+      knn_backend <- if (identical(backend, "metal")) "cpu" else backend
       raw_knn <- nn_without_self(
         x,
         k = n_neighbors,
-        backend = backend,
+        backend = knn_backend,
         n_threads = n_threads
       )
       knn_result <- normalize_supplied_knn(raw_knn, n, n_neighbors)
@@ -1145,6 +1243,7 @@ opentsne <- function(data,
     }
   })
 
+  Y_init <- resolve_opentsne_y_init(Y_init, n, n_components)
   init_info <- list(method = "user", backend = NA_character_)
   if (is.null(Y_init) && identical(init, "pca")) {
     init_backend <- if (optimizer_backend %in% c("metal", "cuda")) optimizer_backend else "cpu"

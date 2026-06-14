@@ -8,15 +8,14 @@ nn(
   data,
   points = data,
   k = NULL,
-  backend = c("auto", "cpu", "cpu_approx", "cpu_ivf", "cpu_faiss_ivf", "faiss",
-    "cpu_faiss", "cpu_faiss_flat", "faiss_ivf", "cpu_faiss_index_ivf", "cuvs",
-    "gpu_cuvs", "cuda_cuvs", "cuda_cuvs_cagra", "cuvs_bruteforce",
-    "cuda_cuvs_bruteforce", "cuda_cuvs_exact", "cuvs_nndescent", "cuda_cuvs_nndescent",
-    "cpu_annoy", "cpu_nndescent", "cpu_clustered", "cpu_vptree", "gpu", "cuda", "metal",
-    "gpu_approx", "cuda_approx", "metal_approx", "gpu_nndescent", "cuda_nndescent",
-    "metal_nndescent", "gpu_ivf", "cuda_ivf", "metal_ivf", 
-     "gpu_faiss",
-    "cuda_faiss", "metal_faiss", "metal_grid"),
+  backend = c("auto", "cpu", "cpu_approx", "hnsw", "rcpphnsw", "cpu_hnsw", "faiss",
+    "cpu_faiss", "cpu_faiss_flat", "faiss_flat", "faiss_flat_l2", "faiss_flat_ip",
+    "faiss_ivf", "faiss_ivf_flat", "cpu_faiss_index_ivf", "faiss_ivfpq", "faiss_hnsw",
+    "faiss_nsg", "faiss_nndescent", "cuvs", "gpu_cuvs", "cuda_cuvs", "cuda_cuvs_cagra",
+    "cuvs_bruteforce", "cuda_cuvs_bruteforce", "cuda_cuvs_exact", "cuvs_nndescent",
+    "cuda_cuvs_nndescent", "gpu", "cuda", "cuda_approx", "cuda_nndescent", "cuda_ivf",
+    "cuda_faiss"),
+  metric = c("euclidean", "cosine", "correlation"),
   n_threads = NULL
 )
 }
@@ -32,49 +31,56 @@ is `data`.}
 
 \item{backend}{Execution backend. `"auto"` records the selected fast backend
 in `attr(result, "backend")`. `"cpu"` always uses the exact C++ CPU path.
-`"cpu_approx"` chooses the current native CPU approximation. `"cpu_ivf"` and
-`"cpu_faiss_ivf"` use a package-native IVF-flat search; the latter records
-the FAISS-style IVF-flat strategy but does not link to external FAISS.
+`"cpu_approx"` chooses FAISS NN-Descent, RcppHNSW, or exact CPU depending
+on what is available. `"hnsw"`/`"rcpphnsw"` uses the optional CRAN package
+RcppHNSW.
 `"faiss"` uses the real FAISS C++ `IndexFlatL2` backend when fastEmbedR was
-built against FAISS, and `"faiss_ivf"` uses real FAISS `IndexIVFFlat`.
+built against FAISS. `"faiss_ivf"`, `"faiss_ivfpq"`, `"faiss_hnsw"`,
+`"faiss_nsg"`, and `"faiss_nndescent"` use the corresponding FAISS index
+types when FAISS is available at compile time.
 `"cuda_cuvs"` uses a RAPIDS-inspired cuVS policy: exact cuVS brute force
 for small searches and cuVS NN-descent for large self-KNN. Use
 `"cuda_cuvs_cagra"` to force cuVS CAGRA, `"cuda_cuvs_bruteforce"` for
 exact cuVS brute-force search, and `"cuda_cuvs_nndescent"` for cuVS
-NN-descent self-KNN.
-`"cpu_annoy"` uses a package-native Annoy-style random-projection forest.
-`"cpu_nndescent"`, `"cpu_clustered"`, and `"cpu_vptree"` force the native
-NN-descent, legacy clustered-IVF, and VP-tree strategies for self-KNN searches.
-`"gpu"` requests CUDA when available and otherwise Metal. `"cuda"` and
-`"metal"` request exact GPU backends explicitly. `"metal_nndescent"`
-requests seeded native Metal NN-descent refinement. `"cuda_nndescent"`
-and `"cuda_approx"` are compatibility aliases for
+NN-descent self-KNN. `"gpu"` is a CUDA-only convenience alias for KNN now.
+For self-KNN, `"cuda"`/`"gpu"` first try cuVS NN-Descent, then FAISS
+NN-Descent, then RcppHNSW. `"cuda_nndescent"` and `"cuda_approx"` are
+compatibility aliases for
 `"cuda_cuvs_nndescent"`; CUDA approximate KNN is routed through RAPIDS
 cuVS NN-descent rather than the removed native CUDA NN-descent branch.
-`"gpu_nndescent"`, `"gpu_approx"`, and `"metal_approx"` are convenience
-aliases for the preferred native GPU NN-descent path. `"gpu_ivf"`,
-`"cuda_ivf"`, `"metal_ivf"`, `"gpu_faiss"`, `"cuda_faiss"`, and
-`"metal_faiss"` request native GPU IVF/FAISS-style IVF-flat searches and
-fail clearly if the requested GPU backend is unavailable. `"metal_grid"`
-requests the experimental FastGraph-style Metal grid-candidate search for
-low-dimensional or PCA-reduced self-KNN.}
+`"cuda_ivf"` and `"cuda_faiss"` request the package's native CUDA
+IVF/FAISS-style IVF-flat search and fail clearly if CUDA is unavailable.}
+
+\item{metric}{Distance metric. The intentionally small public set is
+`"euclidean"`, `"cosine"`, and `"correlation"`. `"euclidean"` is the
+validated high-performance default. `"cosine"` and `"correlation"` are
+implemented for exact CPU KNN and RcppHNSW; with `backend = "auto"` they
+select the exact CPU path. FAISS, CUDA, and cuVS backends fail clearly for
+non-Euclidean metrics instead of returning Euclidean neighbours under a
+different label.}
 
 \item{n_threads}{Number of CPU worker threads for CPU backends. GPU backends
 ignore this argument.}
 }
 \value{
 A list with integer matrix `indices` and numeric matrix `distances`.
-  Indices are 1-based.
+  Indices are 1-based. The resolved backend, metric, exact/approximate flag,
+  and self-query flag are stored as attributes.
 }
 \description{
 `nn()` provides a package-native nearest-neighbor entry point compatible with
 the common `nn(data, points, k)` use case. Explicit `backend = "cpu"`
 performs exact brute-force search in C++ and is mainly a reference path for
 small data or recall checks. `backend = "auto"` chooses a recorded fast path
-for large self-KNN searches: native CUDA/Metal NN-descent when available,
-then a native CPU approximate path. Use `backend = "cpu_approx"` to force the CPU
-approximate selector, or `backend = "cpu_ivf"`, `"cpu_nndescent"`,
-`"cpu_clustered"`, or `"cpu_vptree"` to choose a specific native multi-CPU
-strategy. Exact Euclidean search can also use native CUDA or Metal GPU
-backends when requested explicitly.
+for large self-KNN searches: CUDA cuVS NN-Descent when a CUDA backend is
+requested and cuVS is available, otherwise FAISS NN-Descent when FAISS is
+compiled in, otherwise the optional CRAN-friendly RcppHNSW backend when
+installed, otherwise exact CPU. Use `backend = "cpu_approx"` to force the
+non-CUDA part of that selector.
+}
+\examples{
+x <- scale(as.matrix(iris[, 1:4]))
+knn_euclidean <- nn(x, k = 16, metric = "euclidean", backend = "cpu")
+knn_cosine <- nn(x, k = 16, metric = "cosine", backend = "cpu")
+knn_correlation <- nn(x, k = 16, metric = "correlation", backend = "cpu")
 }

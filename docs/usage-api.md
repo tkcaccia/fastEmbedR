@@ -25,6 +25,70 @@ layout_tsne <- opentsne_knn(knn, init_data = x, seed = 1)
 This keeps nearest-neighbour time separate from embedding time and makes
 benchmarks easier to interpret.
 
+## Graphs For Clustering
+
+`knn_graph()` dispatches by object type. Pass the KNN result when you want the
+graph in the original data space:
+
+```r
+knn <- nn(x, k = 50, backend = "auto", n_threads = 4)
+g_original <- knn_graph(knn)
+```
+
+Pass an embedding fit when you want the graph on the visible UMAP/openTSNE
+coordinates:
+
+```r
+fit <- opentsne(x, labels = labels, n_neighbors = 50, seed = 1)
+g_embedding <- knn_graph(fit, k = 80)
+clusters <- igraph::cluster_leiden(
+  g_embedding,
+  objective_function = "modularity",
+  weights = igraph::E(g_embedding)$weight,
+  resolution = 0.05
+)
+```
+
+`knn_graph()` returns a plain `igraph` object. Use your preferred clustering
+function on that graph.
+
+For original-data KNN graphs, `weight = "auto"` uses `weight = "snn"`, which
+builds a full shared-nearest-neighbour Jaccard graph. This connects all pairs
+that share at least one neighbour, following the same standard SNN semantics
+used by `bluster::makeSNNGraph()`, but implemented in fastEmbedR's C++ graph
+builder so a precomputed `nn()` result can be reused directly.
+
+For embedding-layout graphs, `weight = "auto"` uses distance weights. You can
+also test `weight = "adaptive"` for local-density-scaled Gaussian weights and
+`mutual = TRUE` to keep only reciprocal neighbour edges.
+
+When `knn_graph()` has to compute neighbours itself, `backend = "auto"` uses
+the fastest available graph-KNN backend in this order: CUDA cuVS NN-descent,
+FAISS NN-descent, RcppHNSW, then exact CPU. If you pass an `nn()` result,
+neighbour search is not repeated.
+
+## Distance Metrics In `nn()`
+
+The default distance is Euclidean:
+
+```r
+knn <- nn(x, k = 50, metric = "euclidean", backend = "auto", n_threads = 4)
+```
+
+Cosine distance is available through exact CPU KNN:
+
+```r
+knn_cosine <- nn(x, k = 50, metric = "cosine", backend = "cpu", n_threads = 4)
+layout <- umap_knn(knn_cosine, seed = 1)
+```
+
+Current metric support is deliberately explicit:
+
+| metric | supported backends | notes |
+| --- | --- | --- |
+| `euclidean` | CPU exact/approximate, Metal, CUDA/cuVS, FAISS | Recommended default for large UMAP/openTSNE benchmarks. |
+| `cosine` | CPU exact | `backend = "auto"` resolves to CPU. Approximate/GPU/FAISS/cuVS cosine requests error until those paths are validated. |
+
 ## Basic KNN-First UMAP
 
 ```r
@@ -160,5 +224,6 @@ defaults.
 | `transform_tsne()` | Fixed-reference openTSNE-style transform for query points. |
 | `landmark_tsne()` | Embed landmarks, then transform remaining rows. |
 | `landmark_umap()` | Embed landmarks with UMAP, then project/refine remaining rows. |
+| `knn_graph()` | Convert `nn()`, `opentsne()`, or `umap()` output into an SNN/distance/binary `igraph` graph. |
 | `evaluate_embedding()` | Embedding quality metrics. |
 | `backend_info()` | CPU/CUDA/Metal/FAISS/cuVS detection without silent fallback. |
