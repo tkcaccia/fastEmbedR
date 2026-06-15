@@ -166,23 +166,43 @@ load_or_compute_knn <- function(dataset_name, x) {
     }
   }
   if (!available_pkg("fastEmbedR")) stop("fastEmbedR is required to compute KNN.", call. = FALSE)
-  backend <- if (isTRUE(tryCatch(fastEmbedR::cuvs_available() && fastEmbedR::cuda_available(), error = function(e) FALSE))) {
-    "cuda_cuvs_nndescent"
+  knn_backends <- if (isTRUE(tryCatch(fastEmbedR::cuvs_available() && fastEmbedR::cuda_available(), error = function(e) FALSE))) {
+    c("cuda_cuvs_nndescent", "cuda_cuvs_bruteforce", "cuda_exact", "faiss_hnsw", "rcpphnsw")
   } else {
-    preferred_cpu_knn_backend()
+    c(preferred_cpu_knn_backend(), "rcpphnsw")
   }
+  knn_backends <- unique(knn_backends)
+  nn_cuvs_nndescent <- NULL
+  last_error <- NULL
+  used_backend <- NA_character_
   t <- system.time({
-    nn_cuvs_nndescent <- fastEmbedR::nn(
-      x,
-      k = k,
-      backend = backend,
-      n_threads = n_threads,
-      metric = "euclidean"
-    )
+    for (candidate_backend in knn_backends) {
+      attempt <- tryCatch(
+        fastEmbedR::nn(
+          x,
+          k = k,
+          backend = candidate_backend,
+          n_threads = n_threads,
+          metric = "euclidean"
+        ),
+        error = function(e) {
+          last_error <<- paste(candidate_backend, conditionMessage(e), sep = ": ")
+          NULL
+        }
+      )
+      if (!is.null(attempt)) {
+        nn_cuvs_nndescent <- attempt
+        used_backend <- candidate_backend
+        break
+      }
+    }
   })[["elapsed"]]
+  if (is.null(nn_cuvs_nndescent)) {
+    stop("Could not compute fallback KNN for BENCHMARK #3. Last error: ", last_error, call. = FALSE)
+  }
   save(nn_cuvs_nndescent, file = local_cache, compress = "gzip")
   sx <- standardize_knn(nn_cuvs_nndescent)
-  list(knn = drop_self_if_first(sx$indices, sx$distances, k), source = paste0("computed_benchmark3_", backend), knn_sec = as.numeric(t))
+  list(knn = drop_self_if_first(sx$indices, sx$distances, k), source = paste0("computed_benchmark3_", used_backend), knn_sec = as.numeric(t))
 }
 
 load_pca_init <- function(dataset_name, n) {
@@ -365,7 +385,7 @@ method_specs <- function() {
       package = "uwot",
       backend = "cpu",
       uses_precomputed_nn = TRUE,
-      init_policy = "precomputed_fastPLS_pca2_if_available",
+      init_policy = "uwot_spectral",
       runner = function(ctx) {
         uwot::umap(
           X = ctx$x,
@@ -373,7 +393,7 @@ method_specs <- function() {
           n_components = 2L,
           metric = "euclidean",
           nn_method = list(idx = ctx$knn$indices, dist = ctx$knn$distances),
-          init = ctx$Y_init %||% "spectral",
+          init = "spectral",
           min_dist = 0.1,
           fast_sgd = TRUE,
           n_threads = n_threads,
@@ -389,7 +409,7 @@ method_specs <- function() {
       package = "uwot",
       backend = "cpu",
       uses_precomputed_nn = TRUE,
-      init_policy = "precomputed_fastPLS_pca2_if_available",
+      init_policy = "uwot_spectral",
       runner = function(ctx) {
         uwot::umap(
           X = ctx$x,
@@ -397,7 +417,7 @@ method_specs <- function() {
           n_components = 2L,
           metric = "euclidean",
           nn_method = list(idx = ctx$knn$indices, dist = ctx$knn$distances),
-          init = ctx$Y_init %||% "spectral",
+          init = "spectral",
           min_dist = 0.1,
           fast_sgd = FALSE,
           n_threads = n_threads,
@@ -413,13 +433,14 @@ method_specs <- function() {
       package = "umap",
       backend = "cpu",
       uses_precomputed_nn = TRUE,
-      init_policy = "umap_package_default",
+      init_policy = "umap_package_spectral",
       runner = function(ctx) {
         uknn <- umap::umap.knn(ctx$knn$indices, ctx$knn$distances)
         cfg <- umap::umap.defaults
         cfg$knn <- uknn
         cfg$n_neighbors <- k
         cfg$min_dist <- 0.1
+        cfg$init <- "spectral"
         cfg$random_state <- seed
         set.seed(seed)
         umap::umap(ctx$x, knn = uknn, config = cfg)$layout
@@ -576,7 +597,7 @@ write_methods_file <- function(out_dir) {
     "",
     "Nearest-neighbour input: all methods use the same saved cuVS NN-descent KNN matrix from BENCHMARK #1 when present. If the required KNN cache is absent, the script computes it once with `fastEmbedR::nn()`, preferring `backend = \"cuda_cuvs_nndescent\"` when CUDA/cuVS is available.",
     "",
-    "Initialization: a precomputed two-component fastPLS PCA initialization is loaded and recorded for each dataset. `uwot::umap()` receives this PCA matrix as `init` when available. The `umap` package uses its own default initialization. `fastEmbedR::umap_knn()` currently uses its internal KNN spectral initialization, including native CUDA fused spectral initialization on the CUDA path.",
+    "Initialization: spectral initialization is used wherever the implementation exposes it. `fastEmbedR::umap_knn()` uses its internal KNN spectral initialization, including native CUDA fused spectral initialization on the CUDA path. `uwot::umap()` is called with `init = \"spectral\"`. The `umap` package is called with `config$init = \"spectral\"`. Precomputed fastPLS PCA initialization files are loaded only to record availability in the result table and are not used for this spectral-initialization benchmark.",
     "",
     "Compared implementations:",
     "",
