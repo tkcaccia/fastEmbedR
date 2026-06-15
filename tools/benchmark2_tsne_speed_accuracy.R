@@ -176,18 +176,42 @@ load_or_compute_knn <- function(dataset_name, x) {
     }
   }
   if (!available_pkg("fastEmbedR")) stop("fastEmbedR is required to compute KNN.", call. = FALSE)
+  knn_backends <- c("cuda_cuvs_nndescent", "cuda_cuvs_bruteforce", "cuda_exact", "faiss_hnsw", "rcpphnsw")
+  nn_cuvs_nndescent <- NULL
+  last_error <- NULL
+  used_backend <- NA_character_
   t <- system.time({
-    nn_cuvs_nndescent <- fastEmbedR::nn(
-      x,
-      k = k,
-      backend = "cuda_cuvs_nndescent",
-      n_threads = n_threads,
-      metric = "euclidean"
-    )
+    for (candidate_backend in knn_backends) {
+      attempt <- tryCatch(
+        fastEmbedR::nn(
+          x,
+          k = k,
+          backend = candidate_backend,
+          n_threads = n_threads,
+          metric = "euclidean"
+        ),
+        error = function(e) {
+          last_error <<- paste(candidate_backend, conditionMessage(e), sep = ": ")
+          NULL
+        }
+      )
+      if (!is.null(attempt)) {
+        nn_cuvs_nndescent <- attempt
+        used_backend <- candidate_backend
+        break
+      }
+    }
   })[["elapsed"]]
+  if (is.null(nn_cuvs_nndescent)) {
+    stop("Could not compute fallback KNN for BENCHMARK #2. Last error: ", last_error, call. = FALSE)
+  }
   save(nn_cuvs_nndescent, file = local_cache, compress = "gzip")
   sx <- standardize_knn(nn_cuvs_nndescent)
-  list(knn = drop_self_if_first(sx$indices, sx$distances, k), source = "computed_benchmark2_cuda_cuvs_nndescent", knn_sec = as.numeric(t))
+  list(
+    knn = drop_self_if_first(sx$indices, sx$distances, k),
+    source = paste0("computed_benchmark2_", used_backend),
+    knn_sec = as.numeric(t)
+  )
 }
 
 load_pca_init <- function(dataset_name, n) {
