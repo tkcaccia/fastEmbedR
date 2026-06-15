@@ -8,13 +8,16 @@ nn(
   data,
   points = data,
   k = NULL,
-  backend = c("auto", "cpu", "cpu_approx", "hnsw", "rcpphnsw", "cpu_hnsw", "faiss",
-    "cpu_faiss", "cpu_faiss_flat", "faiss_flat", "faiss_flat_l2", "faiss_flat_ip",
-    "faiss_ivf", "faiss_ivf_flat", "cpu_faiss_index_ivf", "faiss_ivfpq", "faiss_hnsw",
-    "faiss_nsg", "faiss_nndescent", "cuvs", "gpu_cuvs", "cuda_cuvs", "cuda_cuvs_cagra",
-    "cuvs_bruteforce", "cuda_cuvs_bruteforce", "cuda_cuvs_exact", "cuvs_nndescent",
-    "cuda_cuvs_nndescent", "gpu", "cuda", "cuda_approx", "cuda_nndescent", "cuda_ivf",
-    "cuda_faiss"),
+  backend = c("auto", "cpu", "cpu_approx", "cpu_grid", "grid", "cpu_grid2d", "grid2d",
+    "cpu_grid3d", "grid3d", "vptree", "cpu_vptree", "hnsw", "rcpphnsw", "cpu_hnsw",
+    "faiss", "cpu_faiss", "cpu_faiss_flat", "faiss_flat", "faiss_flat_l2",
+    "faiss_flat_ip", "faiss_ivf", "faiss_ivf_flat", "cpu_faiss_index_ivf", "faiss_ivfpq",
+    "faiss_hnsw", "faiss_nsg", "faiss_nndescent", "cuvs", "gpu_cuvs", "cuda_cuvs",
+    "cuda_cuvs_cagra", "cuvs_bruteforce", "cuda_cuvs_bruteforce", "cuda_cuvs_exact",
+    "cuvs_nndescent", "cuda_cuvs_nndescent",
+     "cuda_grid", "cuda_grid_auto",
+    "gpu_grid", "cuda_grid2d", "cuda_grid3d", "gpu", "cuda", "cuda_approx",
+    "cuda_nndescent", "cuda_ivf", "cuda_faiss"),
   metric = c("euclidean", "cosine", "correlation"),
   n_threads = NULL
 )
@@ -32,8 +35,15 @@ is `data`.}
 \item{backend}{Execution backend. `"auto"` records the selected fast backend
 in `attr(result, "backend")`. `"cpu"` always uses the exact C++ CPU path.
 `"cpu_approx"` chooses FAISS NN-Descent, RcppHNSW, or exact CPU depending
-on what is available. `"hnsw"`/`"rcpphnsw"` uses the optional CRAN package
-RcppHNSW.
+on what is available; for large 2D Euclidean self-KNN it chooses
+`"cpu_grid2d"` and for large 3D Euclidean self-KNN it chooses
+`"cpu_grid"`. Explicit `"cpu_grid2d"`/`"cpu_grid3d"` force the exact
+grid implementation, while `"cpu_vptree"` forces the exact VP-tree for
+Euclidean self-KNN or reference/query KNN.
+`"cuda_grid_auto"`/`"cuda_grid"` chooses the native CUDA exact 2D or 3D
+grid implementation for Euclidean self-KNN only; it does not silently
+fall back to CPU.
+`"hnsw"`/`"rcpphnsw"` uses the optional CRAN package RcppHNSW.
 `"faiss"` uses the real FAISS C++ `IndexFlatL2` backend when fastEmbedR was
 built against FAISS. `"faiss_ivf"`, `"faiss_ivfpq"`, `"faiss_hnsw"`,
 `"faiss_nsg"`, and `"faiss_nndescent"` use the corresponding FAISS index
@@ -76,7 +86,14 @@ for large self-KNN searches: CUDA cuVS NN-Descent when a CUDA backend is
 requested and cuVS is available, otherwise FAISS NN-Descent when FAISS is
 compiled in, otherwise the optional CRAN-friendly RcppHNSW backend when
 installed, otherwise exact CPU. Use `backend = "cpu_approx"` to force the
-non-CUDA part of that selector.
+non-CUDA part of that selector. `backend = "cpu_grid"` is a native exact
+two- or three-dimensional Euclidean self-KNN spatial selector: it uses a
+fast grid for uniform-like clouds and a VP-tree for thin or imbalanced
+clouds. `backend = "vptree"`/`"cpu_vptree"` builds an exact VP-tree on
+`data` and supports both self-KNN and `nn(data, points, k)` query searches.
+`backend = "cuda_grid_auto"`/`"cuda_grid"` is the CUDA equivalent for exact
+two- or three-dimensional Euclidean self-KNN: it chooses the native 2D or 3D
+CUDA grid kernel and errors clearly when CUDA is unavailable.
 }
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))

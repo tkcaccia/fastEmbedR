@@ -168,6 +168,103 @@ test_that("CPU nn row-major distance layout matches column-major fallback", {
   expect_equal(row_major$distances, column_major$distances, tolerance = 1e-12)
 })
 
+test_that("2D grid self KNN matches exact CPU neighbors", {
+  set.seed(1212)
+  x <- matrix(runif(6000L), ncol = 2L)
+  k <- 16L
+
+  exact <- nn(x, k = k, backend = "cpu", n_threads = 2L)
+  grid <- nn(x, k = k, backend = "cpu_grid2d", n_threads = 2L)
+
+  expect_equal(attr(grid, "backend"), "cpu_grid2d")
+  expect_true(isTRUE(attr(grid, "exact")))
+  expect_equal(attr(grid, "spatial_index")$strategy, "native_exact_uniform_grid_2d")
+  expect_equal(grid$indices, exact$indices)
+  expect_equal(grid$distances, exact$distances, tolerance = 1e-12)
+})
+
+test_that("3D grid self KNN matches exact CPU neighbors", {
+  set.seed(1213)
+  x <- matrix(runif(7200L), ncol = 3L)
+  k <- 14L
+
+  exact <- nn(x, k = k, backend = "cpu", n_threads = 2L)
+  grid <- nn(x, k = k, backend = "cpu_grid", n_threads = 2L)
+
+  expect_equal(attr(grid, "backend"), "cpu_grid3d")
+  expect_true(isTRUE(attr(grid, "exact")))
+  expect_equal(attr(grid, "spatial_index")$strategy, "native_exact_uniform_grid_3d")
+  expect_equal(grid$indices, exact$indices)
+  expect_equal(grid$distances, exact$distances, tolerance = 1e-12)
+})
+
+test_that("VP-tree self KNN matches exact CPU neighbors", {
+  set.seed(12131)
+  x <- matrix(runif(1800L), nrow = 300L)
+  k <- 9L
+
+  exact <- nn(x, k = k, backend = "cpu", n_threads = 2L)
+  tree <- nn(x, k = k, backend = "vptree", n_threads = 2L)
+
+  expect_equal(attr(tree, "backend"), "cpu_vptree")
+  expect_true(isTRUE(attr(tree, "exact")))
+  expect_equal(attr(tree, "spatial_index")$strategy, "native_exact_vptree")
+  expect_equal(tree$indices, exact$indices)
+  expect_equal(tree$distances, exact$distances, tolerance = 5e-6)
+})
+
+test_that("VP-tree query KNN matches exact CPU neighbors", {
+  set.seed(12132)
+  data <- matrix(runif(1600L), nrow = 320L)
+  points <- matrix(runif(350L), nrow = 70L)
+  k <- 11L
+
+  exact <- nn(data, points, k = k, backend = "cpu", n_threads = 2L)
+  tree <- nn(data, points, k = k, backend = "cpu_vptree", n_threads = 2L)
+
+  expect_equal(attr(tree, "backend"), "cpu_vptree")
+  expect_true(isTRUE(attr(tree, "exact")))
+  expect_equal(attr(tree, "spatial_index")$strategy, "native_exact_vptree")
+  expect_equal(tree$indices, exact$indices)
+  expect_equal(tree$distances, exact$distances, tolerance = 5e-6)
+})
+
+test_that("generic CPU spatial KNN falls back to VP-tree for thin data", {
+  set.seed(1214)
+  x <- cbind(runif(3000L), rnorm(3000L, sd = 1e-5), rnorm(3000L, sd = 1e-5))
+  k <- 12L
+
+  exact <- fastEmbedR:::nn_without_self(x, k = k, backend = "cpu", n_threads = 2L)
+  spatial <- fastEmbedR:::nn_without_self(x, k = k, backend = "cpu_grid", n_threads = 2L)
+
+  expect_equal(attr(spatial, "backend"), "cpu_vptree")
+  expect_equal(attr(spatial, "spatial_index")$strategy, "native_exact_vptree")
+  recall <- mean(vapply(seq_len(nrow(x)), function(i) {
+    length(intersect(spatial$indices[i, ], exact$indices[i, ])) / k
+  }, numeric(1)))
+  expect_gt(recall, 0.999)
+  spatial_dist <- t(apply(spatial$distances, 1L, sort))
+  exact_dist <- t(apply(exact$distances, 1L, sort))
+  expect_equal(spatial_dist, exact_dist, tolerance = 5e-5)
+})
+
+test_that("generic CPU spatial KNN keeps duplicate-heavy data on grid", {
+  set.seed(1215)
+  base <- matrix(runif(20L), ncol = 2L)
+  x <- base[sample.int(nrow(base), 3000L, replace = TRUE), , drop = FALSE]
+  k <- 12L
+
+  exact <- fastEmbedR:::nn_without_self(x, k = k, backend = "cpu", n_threads = 2L)
+  spatial <- fastEmbedR:::nn_without_self(x, k = k, backend = "cpu_grid", n_threads = 2L)
+
+  expect_equal(attr(spatial, "backend"), "cpu_grid2d")
+  expect_equal(attr(spatial, "spatial_index")$strategy, "native_exact_uniform_grid_2d")
+  expect_match(attr(spatial, "spatial_index")$reason, "duplicate_heavy_sample")
+  spatial_dist <- t(apply(spatial$distances, 1L, sort))
+  exact_dist <- t(apply(exact$distances, 1L, sort))
+  expect_equal(spatial_dist, exact_dist, tolerance = 1e-12)
+})
+
 test_that("clustered self KNN reports approximation and preserves useful neighbors", {
   set.seed(122)
   n_per <- 80L
@@ -294,7 +391,6 @@ test_that("removed CPU approximation backends are not public nn choices", {
   expect_error(nn(x, k = 5L, backend = "cpu_nndescent"), "should be one of")
   expect_error(nn(x, k = 5L, backend = "cpu_ivf"), "should be one of")
   expect_error(nn(x, k = 5L, backend = "cpu_annoy"), "should be one of")
-  expect_error(nn(x, k = 5L, backend = "cpu_vptree"), "should be one of")
 })
 
 test_that("CPU approximate selector chooses FAISS NN-Descent, RcppHNSW, or exact CPU", {
@@ -550,6 +646,16 @@ test_that("Metal KNN backend is not part of the cleaned nn API", {
   expect_error(nn(x, x, k = 2, backend = "metal_ivf"), "should be one of")
 })
 
+test_that("CUDA grid auto does not silently fall back to CPU", {
+  skip_if(cuda_available())
+
+  x <- matrix(runif(40L), ncol = 2L)
+  expect_error(
+    nn(x, k = 4L, backend = "cuda_grid_auto"),
+    "No CUDA GPU backend is available"
+  )
+})
+
 test_that("RcppHNSW backend is available when the suggested package is installed", {
   skip_if_not_installed("RcppHNSW")
 
@@ -574,6 +680,20 @@ test_that("CUDA nn backend matches CPU euclidean results", {
   gpu <- nn(data, points, k = 6, backend = "cuda")
 
   expect_equal(attr(gpu, "backend"), "cuda")
+  expect_equal(gpu$indices, cpu$indices)
+  expect_equal(gpu$distances, cpu$distances, tolerance = 1e-5)
+})
+
+test_that("CUDA grid auto matches exact CPU grid results", {
+  skip_if_not(cuda_available())
+
+  set.seed(151)
+  x <- matrix(runif(3000L), ncol = 3L)
+  cpu <- nn(x, k = 8L, backend = "cpu_grid", n_threads = 2L)
+  gpu <- nn(x, k = 8L, backend = "cuda_grid_auto")
+
+  expect_equal(attr(gpu, "backend"), "cuda_grid3d")
+  expect_true(isTRUE(attr(gpu, "exact")))
   expect_equal(gpu$indices, cpu$indices)
   expect_equal(gpu$distances, cpu$distances, tolerance = 1e-5)
 })

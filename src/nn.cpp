@@ -585,6 +585,391 @@ struct VpNode {
   int right = -1;
 };
 
+bool insert_heap_top_double(const int candidate,
+                            const double distance,
+                            const int capacity,
+                            std::vector<Neighbor>& top);
+
+struct Grid2DIndex {
+  int bins_x = 1;
+  int bins_y = 1;
+  double min_x = 0.0;
+  double min_y = 0.0;
+  double cell_w = 1.0;
+  double cell_h = 1.0;
+  std::vector<int> offsets;
+  std::vector<int> rows;
+};
+
+struct Grid3DIndex {
+  int bins_x = 1;
+  int bins_y = 1;
+  int bins_z = 1;
+  double min_x = 0.0;
+  double min_y = 0.0;
+  double min_z = 0.0;
+  double cell_w = 1.0;
+  double cell_h = 1.0;
+  double cell_d = 1.0;
+  std::vector<int> offsets;
+  std::vector<int> rows;
+};
+
+double grid2d_lower_bound_outside_square(const double x,
+                                         const double y,
+                                         const Grid2DIndex& grid,
+                                         const int x0,
+                                         const int x1,
+                                         const int y0,
+                                         const int y1) {
+  double best = std::numeric_limits<double>::infinity();
+  if (x0 > 0) {
+    const double border = grid.min_x + static_cast<double>(x0) * grid.cell_w;
+    const double dx = std::max(0.0, x - border);
+    best = std::min(best, dx * dx);
+  }
+  if (x1 + 1 < grid.bins_x) {
+    const double border = grid.min_x + static_cast<double>(x1 + 1) * grid.cell_w;
+    const double dx = std::max(0.0, border - x);
+    best = std::min(best, dx * dx);
+  }
+  if (y0 > 0) {
+    const double border = grid.min_y + static_cast<double>(y0) * grid.cell_h;
+    const double dy = std::max(0.0, y - border);
+    best = std::min(best, dy * dy);
+  }
+  if (y1 + 1 < grid.bins_y) {
+    const double border = grid.min_y + static_cast<double>(y1 + 1) * grid.cell_h;
+    const double dy = std::max(0.0, border - y);
+    best = std::min(best, dy * dy);
+  }
+  return best;
+}
+
+inline int grid2d_cell_id(const int ix, const int iy, const int bins_x) {
+  return iy * bins_x + ix;
+}
+
+inline int grid3d_cell_id(const int ix,
+                          const int iy,
+                          const int iz,
+                          const int bins_x,
+                          const int bins_y) {
+  return (iz * bins_y + iy) * bins_x + ix;
+}
+
+inline int grid2d_coord(const double value,
+                        const double min_value,
+                        const double cell_size,
+                        const int bins) {
+  int out = static_cast<int>((value - min_value) / cell_size);
+  if (out < 0) out = 0;
+  if (out >= bins) out = bins - 1;
+  return out;
+}
+
+Grid2DIndex build_grid2d_index(const std::vector<double>& x,
+                               const std::vector<double>& y,
+                               const int bins_per_dim) {
+  const int n = static_cast<int>(x.size());
+  Grid2DIndex grid;
+  grid.bins_x = std::max(1, bins_per_dim);
+  grid.bins_y = std::max(1, bins_per_dim);
+  auto mmx = std::minmax_element(x.begin(), x.end());
+  auto mmy = std::minmax_element(y.begin(), y.end());
+  grid.min_x = *mmx.first;
+  grid.min_y = *mmy.first;
+  const double max_x = *mmx.second;
+  const double max_y = *mmy.second;
+  const double span_x = std::max(max_x - grid.min_x, std::numeric_limits<double>::epsilon());
+  const double span_y = std::max(max_y - grid.min_y, std::numeric_limits<double>::epsilon());
+  grid.cell_w = std::nextafter(span_x, std::numeric_limits<double>::infinity()) /
+    static_cast<double>(grid.bins_x);
+  grid.cell_h = std::nextafter(span_y, std::numeric_limits<double>::infinity()) /
+    static_cast<double>(grid.bins_y);
+
+  const int n_cells = grid.bins_x * grid.bins_y;
+  grid.offsets.assign(static_cast<std::size_t>(n_cells + 1), 0);
+  std::vector<int> cell_ids(static_cast<std::size_t>(n));
+  for (int i = 0; i < n; ++i) {
+    const int ix = grid2d_coord(x[static_cast<std::size_t>(i)], grid.min_x, grid.cell_w, grid.bins_x);
+    const int iy = grid2d_coord(y[static_cast<std::size_t>(i)], grid.min_y, grid.cell_h, grid.bins_y);
+    const int cell = grid2d_cell_id(ix, iy, grid.bins_x);
+    cell_ids[static_cast<std::size_t>(i)] = cell;
+    ++grid.offsets[static_cast<std::size_t>(cell + 1)];
+  }
+  for (int c = 1; c <= n_cells; ++c) {
+    grid.offsets[static_cast<std::size_t>(c)] += grid.offsets[static_cast<std::size_t>(c - 1)];
+  }
+  grid.rows.assign(static_cast<std::size_t>(n), 0);
+  std::vector<int> cursor = grid.offsets;
+  for (int i = 0; i < n; ++i) {
+    const int cell = cell_ids[static_cast<std::size_t>(i)];
+    grid.rows[static_cast<std::size_t>(cursor[static_cast<std::size_t>(cell)]++)] = i;
+  }
+  return grid;
+}
+
+Grid3DIndex build_grid3d_index(const std::vector<double>& x,
+                               const std::vector<double>& y,
+                               const std::vector<double>& z,
+                               const int bins_per_dim) {
+  const int n = static_cast<int>(x.size());
+  Grid3DIndex grid;
+  grid.bins_x = std::max(1, bins_per_dim);
+  grid.bins_y = std::max(1, bins_per_dim);
+  grid.bins_z = std::max(1, bins_per_dim);
+  auto mmx = std::minmax_element(x.begin(), x.end());
+  auto mmy = std::minmax_element(y.begin(), y.end());
+  auto mmz = std::minmax_element(z.begin(), z.end());
+  grid.min_x = *mmx.first;
+  grid.min_y = *mmy.first;
+  grid.min_z = *mmz.first;
+  const double max_x = *mmx.second;
+  const double max_y = *mmy.second;
+  const double max_z = *mmz.second;
+  const double span_x = std::max(max_x - grid.min_x, std::numeric_limits<double>::epsilon());
+  const double span_y = std::max(max_y - grid.min_y, std::numeric_limits<double>::epsilon());
+  const double span_z = std::max(max_z - grid.min_z, std::numeric_limits<double>::epsilon());
+  grid.cell_w = std::nextafter(span_x, std::numeric_limits<double>::infinity()) /
+    static_cast<double>(grid.bins_x);
+  grid.cell_h = std::nextafter(span_y, std::numeric_limits<double>::infinity()) /
+    static_cast<double>(grid.bins_y);
+  grid.cell_d = std::nextafter(span_z, std::numeric_limits<double>::infinity()) /
+    static_cast<double>(grid.bins_z);
+
+  const int n_cells = grid.bins_x * grid.bins_y * grid.bins_z;
+  grid.offsets.assign(static_cast<std::size_t>(n_cells + 1), 0);
+  std::vector<int> cell_ids(static_cast<std::size_t>(n));
+  for (int i = 0; i < n; ++i) {
+    const int ix = grid2d_coord(x[static_cast<std::size_t>(i)], grid.min_x, grid.cell_w, grid.bins_x);
+    const int iy = grid2d_coord(y[static_cast<std::size_t>(i)], grid.min_y, grid.cell_h, grid.bins_y);
+    const int iz = grid2d_coord(z[static_cast<std::size_t>(i)], grid.min_z, grid.cell_d, grid.bins_z);
+    const int cell = grid3d_cell_id(ix, iy, iz, grid.bins_x, grid.bins_y);
+    cell_ids[static_cast<std::size_t>(i)] = cell;
+    ++grid.offsets[static_cast<std::size_t>(cell + 1)];
+  }
+  for (int c = 1; c <= n_cells; ++c) {
+    grid.offsets[static_cast<std::size_t>(c)] += grid.offsets[static_cast<std::size_t>(c - 1)];
+  }
+  grid.rows.assign(static_cast<std::size_t>(n), 0);
+  std::vector<int> cursor = grid.offsets;
+  for (int i = 0; i < n; ++i) {
+    const int cell = cell_ids[static_cast<std::size_t>(i)];
+    grid.rows[static_cast<std::size_t>(cursor[static_cast<std::size_t>(cell)]++)] = i;
+  }
+  return grid;
+}
+
+void add_grid2d_cell_candidates(const std::vector<double>& x,
+                                const std::vector<double>& y,
+                                const Grid2DIndex& grid,
+                                const int query,
+                                const int ix,
+                                const int iy,
+                                const int k,
+                                std::vector<Neighbor>& top) {
+  if (ix < 0 || iy < 0 || ix >= grid.bins_x || iy >= grid.bins_y) return;
+  const int cell = grid2d_cell_id(ix, iy, grid.bins_x);
+  const int start = grid.offsets[static_cast<std::size_t>(cell)];
+  const int end = grid.offsets[static_cast<std::size_t>(cell + 1)];
+  const double qx = x[static_cast<std::size_t>(query)];
+  const double qy = y[static_cast<std::size_t>(query)];
+  for (int pos = start; pos < end; ++pos) {
+    const int candidate = grid.rows[static_cast<std::size_t>(pos)];
+    if (candidate == query) continue;
+    const double dx = qx - x[static_cast<std::size_t>(candidate)];
+    const double dy = qy - y[static_cast<std::size_t>(candidate)];
+    insert_heap_top_double(candidate, dx * dx + dy * dy, k, top);
+  }
+}
+
+double grid3d_lower_bound_outside_cube(const double x,
+                                       const double y,
+                                       const double z,
+                                       const Grid3DIndex& grid,
+                                       const int x0,
+                                       const int x1,
+                                       const int y0,
+                                       const int y1,
+                                       const int z0,
+                                       const int z1) {
+  double best = std::numeric_limits<double>::infinity();
+  if (x0 > 0) {
+    const double border = grid.min_x + static_cast<double>(x0) * grid.cell_w;
+    const double dx = std::max(0.0, x - border);
+    best = std::min(best, dx * dx);
+  }
+  if (x1 + 1 < grid.bins_x) {
+    const double border = grid.min_x + static_cast<double>(x1 + 1) * grid.cell_w;
+    const double dx = std::max(0.0, border - x);
+    best = std::min(best, dx * dx);
+  }
+  if (y0 > 0) {
+    const double border = grid.min_y + static_cast<double>(y0) * grid.cell_h;
+    const double dy = std::max(0.0, y - border);
+    best = std::min(best, dy * dy);
+  }
+  if (y1 + 1 < grid.bins_y) {
+    const double border = grid.min_y + static_cast<double>(y1 + 1) * grid.cell_h;
+    const double dy = std::max(0.0, border - y);
+    best = std::min(best, dy * dy);
+  }
+  if (z0 > 0) {
+    const double border = grid.min_z + static_cast<double>(z0) * grid.cell_d;
+    const double dz = std::max(0.0, z - border);
+    best = std::min(best, dz * dz);
+  }
+  if (z1 + 1 < grid.bins_z) {
+    const double border = grid.min_z + static_cast<double>(z1 + 1) * grid.cell_d;
+    const double dz = std::max(0.0, border - z);
+    best = std::min(best, dz * dz);
+  }
+  return best;
+}
+
+void add_grid3d_cell_candidates(const std::vector<double>& x,
+                                const std::vector<double>& y,
+                                const std::vector<double>& z,
+                                const Grid3DIndex& grid,
+                                const int query,
+                                const int ix,
+                                const int iy,
+                                const int iz,
+                                const int k,
+                                std::vector<Neighbor>& top) {
+  if (ix < 0 || iy < 0 || iz < 0 ||
+      ix >= grid.bins_x || iy >= grid.bins_y || iz >= grid.bins_z) {
+    return;
+  }
+  const int cell = grid3d_cell_id(ix, iy, iz, grid.bins_x, grid.bins_y);
+  const int start = grid.offsets[static_cast<std::size_t>(cell)];
+  const int end = grid.offsets[static_cast<std::size_t>(cell + 1)];
+  const double qx = x[static_cast<std::size_t>(query)];
+  const double qy = y[static_cast<std::size_t>(query)];
+  const double qz = z[static_cast<std::size_t>(query)];
+  for (int pos = start; pos < end; ++pos) {
+    const int candidate = grid.rows[static_cast<std::size_t>(pos)];
+    if (candidate == query) continue;
+    const double dx = qx - x[static_cast<std::size_t>(candidate)];
+    const double dy = qy - y[static_cast<std::size_t>(candidate)];
+    const double dz = qz - z[static_cast<std::size_t>(candidate)];
+    insert_heap_top_double(candidate, dx * dx + dy * dy + dz * dz, k, top);
+  }
+}
+
+void search_grid2d_exact(const std::vector<double>& x,
+                         const std::vector<double>& y,
+                         const Grid2DIndex& grid,
+                         const int query,
+                         const int k,
+                         std::vector<Neighbor>& top) {
+  top.clear();
+  const double qx = x[static_cast<std::size_t>(query)];
+  const double qy = y[static_cast<std::size_t>(query)];
+  const int cx = grid2d_coord(qx, grid.min_x, grid.cell_w, grid.bins_x);
+  const int cy = grid2d_coord(qy, grid.min_y, grid.cell_h, grid.bins_y);
+  const int max_radius = std::max(grid.bins_x, grid.bins_y);
+
+  for (int radius = 0; radius <= max_radius; ++radius) {
+    const int raw_x0 = cx - radius;
+    const int raw_x1 = cx + radius;
+    const int raw_y0 = cy - radius;
+    const int raw_y1 = cy + radius;
+    const int x0 = std::max(0, raw_x0);
+    const int x1 = std::min(grid.bins_x - 1, raw_x1);
+    const int y0 = std::max(0, raw_y0);
+    const int y1 = std::min(grid.bins_y - 1, raw_y1);
+
+    if (radius == 0) {
+      add_grid2d_cell_candidates(x, y, grid, query, cx, cy, k, top);
+    } else {
+      for (int ix = raw_x0; ix <= raw_x1; ++ix) {
+        if (ix < 0 || ix >= grid.bins_x) continue;
+        if (raw_y0 >= 0 && raw_y0 < grid.bins_y) {
+          add_grid2d_cell_candidates(x, y, grid, query, ix, raw_y0, k, top);
+        }
+        if (raw_y1 != raw_y0 && raw_y1 >= 0 && raw_y1 < grid.bins_y) {
+          add_grid2d_cell_candidates(x, y, grid, query, ix, raw_y1, k, top);
+        }
+      }
+      for (int iy = raw_y0 + 1; iy <= raw_y1 - 1; ++iy) {
+        if (iy < 0 || iy >= grid.bins_y) continue;
+        if (raw_x0 >= 0 && raw_x0 < grid.bins_x) {
+          add_grid2d_cell_candidates(x, y, grid, query, raw_x0, iy, k, top);
+        }
+        if (raw_x1 != raw_x0 && raw_x1 >= 0 && raw_x1 < grid.bins_x) {
+          add_grid2d_cell_candidates(x, y, grid, query, raw_x1, iy, k, top);
+        }
+      }
+    }
+
+    if (static_cast<int>(top.size()) == k) {
+      const double kth = top.front().distance;
+      const double lower = grid2d_lower_bound_outside_square(qx, qy, grid, x0, x1, y0, y1);
+      if (lower > kth) break;
+    }
+  }
+}
+
+void search_grid3d_exact(const std::vector<double>& x,
+                         const std::vector<double>& y,
+                         const std::vector<double>& z,
+                         const Grid3DIndex& grid,
+                         const int query,
+                         const int k,
+                         std::vector<Neighbor>& top) {
+  top.clear();
+  const double qx = x[static_cast<std::size_t>(query)];
+  const double qy = y[static_cast<std::size_t>(query)];
+  const double qz = z[static_cast<std::size_t>(query)];
+  const int cx = grid2d_coord(qx, grid.min_x, grid.cell_w, grid.bins_x);
+  const int cy = grid2d_coord(qy, grid.min_y, grid.cell_h, grid.bins_y);
+  const int cz = grid2d_coord(qz, grid.min_z, grid.cell_d, grid.bins_z);
+  const int max_radius = std::max(grid.bins_x, std::max(grid.bins_y, grid.bins_z));
+
+  for (int radius = 0; radius <= max_radius; ++radius) {
+    const int raw_x0 = cx - radius;
+    const int raw_x1 = cx + radius;
+    const int raw_y0 = cy - radius;
+    const int raw_y1 = cy + radius;
+    const int raw_z0 = cz - radius;
+    const int raw_z1 = cz + radius;
+    const int x0 = std::max(0, raw_x0);
+    const int x1 = std::min(grid.bins_x - 1, raw_x1);
+    const int y0 = std::max(0, raw_y0);
+    const int y1 = std::min(grid.bins_y - 1, raw_y1);
+    const int z0 = std::max(0, raw_z0);
+    const int z1 = std::min(grid.bins_z - 1, raw_z1);
+
+    if (radius == 0) {
+      add_grid3d_cell_candidates(x, y, z, grid, query, cx, cy, cz, k, top);
+    } else {
+      for (int iz = raw_z0; iz <= raw_z1; ++iz) {
+        if (iz < 0 || iz >= grid.bins_z) continue;
+        for (int iy = raw_y0; iy <= raw_y1; ++iy) {
+          if (iy < 0 || iy >= grid.bins_y) continue;
+          for (int ix = raw_x0; ix <= raw_x1; ++ix) {
+            if (ix < 0 || ix >= grid.bins_x) continue;
+            if (ix != raw_x0 && ix != raw_x1 &&
+                iy != raw_y0 && iy != raw_y1 &&
+                iz != raw_z0 && iz != raw_z1) {
+              continue;
+            }
+            add_grid3d_cell_candidates(x, y, z, grid, query, ix, iy, iz, k, top);
+          }
+        }
+      }
+    }
+
+    if (static_cast<int>(top.size()) == k) {
+      const double kth = top.front().distance;
+      const double lower = grid3d_lower_bound_outside_cube(qx, qy, qz, grid, x0, x1, y0, y1, z0, z1);
+      if (lower > kth) break;
+    }
+  }
+}
+
 void build_annoy_leaves_recursive(const float* data,
                                   const int n_features,
                                   const int leaf_size,
@@ -690,6 +1075,19 @@ float euclidean_row_major_float(const float* data,
   ));
 }
 
+float euclidean_query_to_row_major_float(const float* data,
+                                         const float* query,
+                                         const int row,
+                                         const int n_features) {
+  const float* x = data + static_cast<std::size_t>(row) * n_features;
+  float acc = 0.0f;
+  for (int c = 0; c < n_features; ++c) {
+    const float diff = query[c] - x[c];
+    acc += diff * diff;
+  }
+  return std::sqrt(std::max(acc, 0.0f));
+}
+
 int build_vptree_recursive(const float* data,
                            const int n_features,
                            std::vector<int>& items,
@@ -777,6 +1175,41 @@ void search_vptree(const float* data,
       : std::numeric_limits<double>::infinity();
     if (dist - tau_after <= node.threshold) {
       search_vptree(data, n_features, nodes, node.left, query, k, top);
+    }
+  }
+}
+
+void search_vptree_query(const float* data,
+                         const int n_features,
+                         const std::vector<VpNode>& nodes,
+                         const int node_id,
+                         const float* query,
+                         const int k,
+                         std::vector<Neighbor>& top) {
+  if (node_id < 0) return;
+  const VpNode& node = nodes[static_cast<std::size_t>(node_id)];
+  const double dist = static_cast<double>(
+    euclidean_query_to_row_major_float(data, query, node.index, n_features)
+  );
+  insert_heap_top_double(node.index, dist, k, top);
+
+  if (node.left < 0 && node.right < 0) return;
+
+  if (dist < node.threshold) {
+    search_vptree_query(data, n_features, nodes, node.left, query, k, top);
+    const double tau_after = static_cast<int>(top.size()) == k
+      ? top.front().distance
+      : std::numeric_limits<double>::infinity();
+    if (dist + tau_after >= node.threshold) {
+      search_vptree_query(data, n_features, nodes, node.right, query, k, top);
+    }
+  } else {
+    search_vptree_query(data, n_features, nodes, node.right, query, k, top);
+    const double tau_after = static_cast<int>(top.size()) == k
+      ? top.front().distance
+      : std::numeric_limits<double>::infinity();
+    if (dist - tau_after <= node.threshold) {
+      search_vptree_query(data, n_features, nodes, node.left, query, k, top);
     }
   }
 }
@@ -2390,5 +2823,239 @@ List vptree_self_knn_cpp(NumericMatrix data,
     Rcpp::Named("indices") = indices,
     Rcpp::Named("distances") = distances,
     Rcpp::Named("nodes") = static_cast<int>(nodes.size())
+  );
+}
+
+// [[Rcpp::export]]
+List vptree_query_knn_cpp(NumericMatrix data,
+                          NumericMatrix points,
+                          int k,
+                          bool parallel,
+                          int cores) {
+  const int n = data.nrow();
+  const int n_points = points.nrow();
+  const int n_features = data.ncol();
+  if (points.ncol() != n_features) {
+    Rcpp::stop("data and points must have the same number of columns");
+  }
+  if (n < 1) Rcpp::stop("data must have at least one row");
+  if (n_points < 1) Rcpp::stop("points must have at least one row");
+  if (k < 1 || k > n) Rcpp::stop("k must be in [1, nrow(data)]");
+
+  std::vector<float> data_row_major;
+  std::vector<float> point_row_major;
+  copy_row_major_float(data.begin(), data_row_major, n, n_features);
+  copy_row_major_float(points.begin(), point_row_major, n_points, n_features);
+  const float* x = data_row_major.data();
+  const float* qx = point_row_major.data();
+
+  std::vector<int> items(static_cast<std::size_t>(n));
+  std::iota(items.begin(), items.end(), 0);
+  std::vector<VpNode> nodes;
+  nodes.reserve(static_cast<std::size_t>(n));
+  const int root = build_vptree_recursive(x, n_features, items, nodes);
+
+  IntegerMatrix indices(n_points, k);
+  NumericMatrix distances(n_points, k);
+  int* indices_ptr = indices.begin();
+  double* distances_ptr = distances.begin();
+  const int n_threads = requested_threads(parallel, cores, n_points);
+
+  auto query_rows = [&](const int row_start, const int row_end) {
+    std::vector<Neighbor> top;
+    top.reserve(static_cast<std::size_t>(k));
+    for (int q = row_start; q < row_end; ++q) {
+      top.clear();
+      const float* query = qx + static_cast<std::size_t>(q) * n_features;
+      search_vptree_query(x, n_features, nodes, root, query, k, top);
+      if (static_cast<int>(top.size()) < k) {
+        for (int candidate = 0; candidate < n; ++candidate) {
+          const double dist = static_cast<double>(
+            euclidean_query_to_row_major_float(x, query, candidate, n_features)
+          );
+          insert_heap_top_double(candidate, dist, k, top);
+        }
+      }
+      write_heap_top_double(top, indices_ptr, distances_ptr, q, n_points, k);
+    }
+  };
+
+  if (n_threads == 1) {
+    query_rows(0, n_points);
+  } else {
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(n_threads));
+    for (int t = 0; t < n_threads; ++t) {
+      const int start = (n_points * t) / n_threads;
+      const int end = (n_points * (t + 1)) / n_threads;
+      workers.emplace_back(query_rows, start, end);
+    }
+    for (auto& worker : workers) worker.join();
+  }
+
+  return List::create(
+    Rcpp::Named("indices") = indices,
+    Rcpp::Named("distances") = distances,
+    Rcpp::Named("nodes") = static_cast<int>(nodes.size())
+  );
+}
+
+// [[Rcpp::export]]
+List grid2d_self_knn_cpp(NumericMatrix data,
+                         int k,
+                         bool parallel,
+                         int cores,
+                         int bins_per_dim) {
+  const int n = data.nrow();
+  const int n_features = data.ncol();
+  if (n_features != 2) Rcpp::stop("grid2d_self_knn_cpp requires exactly two columns");
+  if (n < 2) Rcpp::stop("data must have at least two rows");
+  if (k < 1 || k >= n) Rcpp::stop("k must be in [1, nrow(data) - 1]");
+  if (bins_per_dim < 1) Rcpp::stop("bins_per_dim must be positive");
+
+  std::vector<double> x(static_cast<std::size_t>(n));
+  std::vector<double> y(static_cast<std::size_t>(n));
+  const double* col0 = data.begin();
+  const double* col1 = data.begin() + static_cast<std::size_t>(n);
+  for (int i = 0; i < n; ++i) {
+    x[static_cast<std::size_t>(i)] = col0[i];
+    y[static_cast<std::size_t>(i)] = col1[i];
+  }
+
+  Grid2DIndex grid = build_grid2d_index(x, y, bins_per_dim);
+  IntegerMatrix indices(n, k);
+  NumericMatrix distances(n, k);
+  int* indices_ptr = indices.begin();
+  double* distances_ptr = distances.begin();
+  const int n_threads = requested_threads(parallel, cores, n);
+
+  auto query_rows = [&](const int row_start, const int row_end) {
+    std::vector<Neighbor> top;
+    top.reserve(static_cast<std::size_t>(k));
+    for (int q = row_start; q < row_end; ++q) {
+      search_grid2d_exact(x, y, grid, q, k, top);
+      if (static_cast<int>(top.size()) < k) {
+        for (int candidate = 0; candidate < n; ++candidate) {
+          if (candidate == q) continue;
+          const double dx = x[static_cast<std::size_t>(q)] - x[static_cast<std::size_t>(candidate)];
+          const double dy = y[static_cast<std::size_t>(q)] - y[static_cast<std::size_t>(candidate)];
+          insert_heap_top_double(candidate, dx * dx + dy * dy, k, top);
+        }
+      }
+      if (static_cast<int>(top.size()) == k) {
+        std::sort_heap(top.begin(), top.end(), neighbor_less);
+      } else {
+        std::sort(top.begin(), top.end(), neighbor_less);
+      }
+      for (int j = 0; j < k; ++j) {
+        indices_ptr[static_cast<std::size_t>(j) * n + q] =
+          top[static_cast<std::size_t>(j)].index + 1;
+        distances_ptr[static_cast<std::size_t>(j) * n + q] =
+          std::sqrt(std::max(top[static_cast<std::size_t>(j)].distance, 0.0));
+      }
+    }
+  };
+
+  if (n_threads == 1) {
+    query_rows(0, n);
+  } else {
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(n_threads));
+    for (int t = 0; t < n_threads; ++t) {
+      const int start = (n * t) / n_threads;
+      const int end = (n * (t + 1)) / n_threads;
+      workers.emplace_back(query_rows, start, end);
+    }
+    for (auto& worker : workers) worker.join();
+  }
+
+  return List::create(
+    Rcpp::Named("indices") = indices,
+    Rcpp::Named("distances") = distances,
+    Rcpp::Named("bins_per_dim") = bins_per_dim,
+    Rcpp::Named("n_cells") = grid.bins_x * grid.bins_y,
+    Rcpp::Named("n_threads") = n_threads
+  );
+}
+
+// [[Rcpp::export]]
+List grid3d_self_knn_cpp(NumericMatrix data,
+                         int k,
+                         bool parallel,
+                         int cores,
+                         int bins_per_dim) {
+  const int n = data.nrow();
+  const int n_features = data.ncol();
+  if (n_features != 3) Rcpp::stop("grid3d_self_knn_cpp requires exactly three columns");
+  if (n < 2) Rcpp::stop("data must have at least two rows");
+  if (k < 1 || k >= n) Rcpp::stop("k must be in [1, nrow(data) - 1]");
+  if (bins_per_dim < 1) Rcpp::stop("bins_per_dim must be positive");
+
+  std::vector<double> x(static_cast<std::size_t>(n));
+  std::vector<double> y(static_cast<std::size_t>(n));
+  std::vector<double> z(static_cast<std::size_t>(n));
+  const double* col0 = data.begin();
+  const double* col1 = data.begin() + static_cast<std::size_t>(n);
+  const double* col2 = data.begin() + static_cast<std::size_t>(2) * n;
+  for (int i = 0; i < n; ++i) {
+    x[static_cast<std::size_t>(i)] = col0[i];
+    y[static_cast<std::size_t>(i)] = col1[i];
+    z[static_cast<std::size_t>(i)] = col2[i];
+  }
+
+  Grid3DIndex grid = build_grid3d_index(x, y, z, bins_per_dim);
+  IntegerMatrix indices(n, k);
+  NumericMatrix distances(n, k);
+  int* indices_ptr = indices.begin();
+  double* distances_ptr = distances.begin();
+  const int n_threads = requested_threads(parallel, cores, n);
+
+  auto query_rows = [&](const int row_start, const int row_end) {
+    std::vector<Neighbor> top;
+    top.reserve(static_cast<std::size_t>(k));
+    for (int q = row_start; q < row_end; ++q) {
+      search_grid3d_exact(x, y, z, grid, q, k, top);
+      if (static_cast<int>(top.size()) < k) {
+        for (int candidate = 0; candidate < n; ++candidate) {
+          if (candidate == q) continue;
+          const double dx = x[static_cast<std::size_t>(q)] - x[static_cast<std::size_t>(candidate)];
+          const double dy = y[static_cast<std::size_t>(q)] - y[static_cast<std::size_t>(candidate)];
+          const double dz = z[static_cast<std::size_t>(q)] - z[static_cast<std::size_t>(candidate)];
+          insert_heap_top_double(candidate, dx * dx + dy * dy + dz * dz, k, top);
+        }
+      }
+      if (static_cast<int>(top.size()) == k) {
+        std::sort_heap(top.begin(), top.end(), neighbor_less);
+      } else {
+        std::sort(top.begin(), top.end(), neighbor_less);
+      }
+      for (int j = 0; j < k; ++j) {
+        indices_ptr[static_cast<std::size_t>(j) * n + q] =
+          top[static_cast<std::size_t>(j)].index + 1;
+        distances_ptr[static_cast<std::size_t>(j) * n + q] =
+          std::sqrt(std::max(top[static_cast<std::size_t>(j)].distance, 0.0));
+      }
+    }
+  };
+
+  if (n_threads == 1) {
+    query_rows(0, n);
+  } else {
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(n_threads));
+    for (int t = 0; t < n_threads; ++t) {
+      const int start = (n * t) / n_threads;
+      const int end = (n * (t + 1)) / n_threads;
+      workers.emplace_back(query_rows, start, end);
+    }
+    for (auto& worker : workers) worker.join();
+  }
+
+  return List::create(
+    Rcpp::Named("indices") = indices,
+    Rcpp::Named("distances") = distances,
+    Rcpp::Named("bins_per_dim") = bins_per_dim,
+    Rcpp::Named("n_cells") = grid.bins_x * grid.bins_y * grid.bins_z,
+    Rcpp::Named("n_threads") = n_threads
   );
 }

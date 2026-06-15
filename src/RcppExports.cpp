@@ -1290,6 +1290,51 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// vptree_query_knn_cpp
+List vptree_query_knn_cpp(NumericMatrix data, NumericMatrix points, int k, bool parallel, int cores);
+RcppExport SEXP _fastEmbedR_vptree_query_knn_cpp(SEXP dataSEXP, SEXP pointsSEXP, SEXP kSEXP, SEXP parallelSEXP, SEXP coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type points(pointsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< bool >::type parallel(parallelSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(vptree_query_knn_cpp(data, points, k, parallel, cores));
+    return rcpp_result_gen;
+END_RCPP
+}
+// grid2d_self_knn_cpp
+List grid2d_self_knn_cpp(NumericMatrix data, int k, bool parallel, int cores, int bins_per_dim);
+RcppExport SEXP _fastEmbedR_grid2d_self_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP parallelSEXP, SEXP coresSEXP, SEXP bins_per_dimSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< bool >::type parallel(parallelSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    Rcpp::traits::input_parameter< int >::type bins_per_dim(bins_per_dimSEXP);
+    rcpp_result_gen = Rcpp::wrap(grid2d_self_knn_cpp(data, k, parallel, cores, bins_per_dim));
+    return rcpp_result_gen;
+END_RCPP
+}
+// grid3d_self_knn_cpp
+List grid3d_self_knn_cpp(NumericMatrix data, int k, bool parallel, int cores, int bins_per_dim);
+RcppExport SEXP _fastEmbedR_grid3d_self_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP parallelSEXP, SEXP coresSEXP, SEXP bins_per_dimSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< bool >::type parallel(parallelSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    Rcpp::traits::input_parameter< int >::type bins_per_dim(bins_per_dimSEXP);
+    rcpp_result_gen = Rcpp::wrap(grid3d_self_knn_cpp(data, k, parallel, cores, bins_per_dim));
+    return rcpp_result_gen;
+END_RCPP
+}
 // cuda_available_cpp
 bool cuda_available_cpp();
 RcppExport SEXP _fastEmbedR_cuda_available_cpp() {
@@ -1349,6 +1394,19 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< IntegerMatrix >::type candidate_indices(candidate_indicesSEXP);
     Rcpp::traits::input_parameter< int >::type k(kSEXP);
     rcpp_result_gen = Rcpp::wrap(row_candidate_knn_cuda_cpp(data, candidate_indices, k));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cuda_grid_self_knn_cpp
+List cuda_grid_self_knn_cpp(NumericMatrix data, int k, int bins_per_dim);
+RcppExport SEXP _fastEmbedR_cuda_grid_self_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP bins_per_dimSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type bins_per_dim(bins_per_dimSEXP);
+    rcpp_result_gen = Rcpp::wrap(cuda_grid_self_knn_cpp(data, k, bins_per_dim));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1861,11 +1919,15 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_ivf_self_knn_cpp", (DL_FUNC) &_fastEmbedR_ivf_self_knn_cpp, 7},
     {"_fastEmbedR_annoy_self_knn_cpp", (DL_FUNC) &_fastEmbedR_annoy_self_knn_cpp, 8},
     {"_fastEmbedR_vptree_self_knn_cpp", (DL_FUNC) &_fastEmbedR_vptree_self_knn_cpp, 4},
+    {"_fastEmbedR_vptree_query_knn_cpp", (DL_FUNC) &_fastEmbedR_vptree_query_knn_cpp, 5},
+    {"_fastEmbedR_grid2d_self_knn_cpp", (DL_FUNC) &_fastEmbedR_grid2d_self_knn_cpp, 5},
+    {"_fastEmbedR_grid3d_self_knn_cpp", (DL_FUNC) &_fastEmbedR_grid3d_self_knn_cpp, 5},
     {"_fastEmbedR_cuda_available_cpp", (DL_FUNC) &_fastEmbedR_cuda_available_cpp, 0},
     {"_fastEmbedR_cuda_device_info_json_cpp", (DL_FUNC) &_fastEmbedR_cuda_device_info_json_cpp, 0},
     {"_fastEmbedR_nn_cuda_cpp", (DL_FUNC) &_fastEmbedR_nn_cuda_cpp, 4},
     {"_fastEmbedR_landmark_candidate_knn_cuda_cpp", (DL_FUNC) &_fastEmbedR_landmark_candidate_knn_cuda_cpp, 5},
     {"_fastEmbedR_row_candidate_knn_cuda_cpp", (DL_FUNC) &_fastEmbedR_row_candidate_knn_cuda_cpp, 3},
+    {"_fastEmbedR_cuda_grid_self_knn_cpp", (DL_FUNC) &_fastEmbedR_cuda_grid_self_knn_cpp, 3},
     {"_fastEmbedR_cuvs_available_cpp", (DL_FUNC) &_fastEmbedR_cuvs_available_cpp, 0},
     {"_fastEmbedR_cuvs_info_json_cpp", (DL_FUNC) &_fastEmbedR_cuvs_info_json_cpp, 0},
     {"_fastEmbedR_nn_cuvs_bruteforce_cpp", (DL_FUNC) &_fastEmbedR_nn_cuvs_bruteforce_cpp, 4},

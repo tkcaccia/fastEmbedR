@@ -1,6 +1,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <climits>
 #include <cstddef>
 #include <cmath>
@@ -22,6 +23,19 @@ struct KnnParams {
   int n_features;
   int k;
   int square;
+};
+
+struct CudaGridParams {
+  int n;
+  int n_features;
+  int k;
+  int bins;
+  float min_x;
+  float min_y;
+  float min_z;
+  float cell_x;
+  float cell_y;
+  float cell_z;
 };
 
 thread_local std::string last_error;
@@ -135,6 +149,235 @@ __device__ void insert_unique_candidate(float dist,
                                         int k) {
   if (contains_candidate(idx, best_idx, k)) return;
   insert_candidate(dist, idx, best_dist, best_idx, k);
+}
+
+__device__ int grid_coord_device(float value, float min_value, float cell_size, int bins) {
+  int out = static_cast<int>((value - min_value) / cell_size);
+  if (out < 0) out = 0;
+  if (out >= bins) out = bins - 1;
+  return out;
+}
+
+__device__ int grid2d_cell_device(int ix, int iy, int bins) {
+  return iy * bins + ix;
+}
+
+__device__ int grid3d_cell_device(int ix, int iy, int iz, int bins) {
+  return (iz * bins + iy) * bins + ix;
+}
+
+__device__ float grid2d_lower_outside_device(float x,
+                                             float y,
+                                             const CudaGridParams params,
+                                             int x0,
+                                             int x1,
+                                             int y0,
+                                             int y1) {
+  float best = kCudaLargeDistance;
+  if (x0 > 0) {
+    const float border = params.min_x + static_cast<float>(x0) * params.cell_x;
+    const float dx = fmaxf(0.0f, x - border);
+    best = fminf(best, dx * dx);
+  }
+  if (x1 + 1 < params.bins) {
+    const float border = params.min_x + static_cast<float>(x1 + 1) * params.cell_x;
+    const float dx = fmaxf(0.0f, border - x);
+    best = fminf(best, dx * dx);
+  }
+  if (y0 > 0) {
+    const float border = params.min_y + static_cast<float>(y0) * params.cell_y;
+    const float dy = fmaxf(0.0f, y - border);
+    best = fminf(best, dy * dy);
+  }
+  if (y1 + 1 < params.bins) {
+    const float border = params.min_y + static_cast<float>(y1 + 1) * params.cell_y;
+    const float dy = fmaxf(0.0f, border - y);
+    best = fminf(best, dy * dy);
+  }
+  return best;
+}
+
+__device__ float grid3d_lower_outside_device(float x,
+                                             float y,
+                                             float z,
+                                             const CudaGridParams params,
+                                             int x0,
+                                             int x1,
+                                             int y0,
+                                             int y1,
+                                             int z0,
+                                             int z1) {
+  float best = grid2d_lower_outside_device(x, y, params, x0, x1, y0, y1);
+  if (z0 > 0) {
+    const float border = params.min_z + static_cast<float>(z0) * params.cell_z;
+    const float dz = fmaxf(0.0f, z - border);
+    best = fminf(best, dz * dz);
+  }
+  if (z1 + 1 < params.bins) {
+    const float border = params.min_z + static_cast<float>(z1 + 1) * params.cell_z;
+    const float dz = fmaxf(0.0f, border - z);
+    best = fminf(best, dz * dz);
+  }
+  return best;
+}
+
+__device__ void add_grid2d_cell_device(const float* data,
+                                       const int* offsets,
+                                       const int* rows,
+                                       const CudaGridParams params,
+                                       int query,
+                                       int ix,
+                                       int iy,
+                                       float* best_dist,
+                                       int* best_idx) {
+  if (ix < 0 || iy < 0 || ix >= params.bins || iy >= params.bins) return;
+  const int cell = grid2d_cell_device(ix, iy, params.bins);
+  const int start = offsets[cell];
+  const int end = offsets[cell + 1];
+  const float qx = data[query];
+  const float qy = data[static_cast<std::size_t>(params.n) + query];
+  for (int pos = start; pos < end; ++pos) {
+    const int candidate = rows[pos];
+    if (candidate == query) continue;
+    const float dx = qx - data[candidate];
+    const float dy = qy - data[static_cast<std::size_t>(params.n) + candidate];
+    insert_candidate(dx * dx + dy * dy, candidate, best_dist, best_idx, params.k);
+  }
+}
+
+__device__ void add_grid3d_cell_device(const float* data,
+                                       const int* offsets,
+                                       const int* rows,
+                                       const CudaGridParams params,
+                                       int query,
+                                       int ix,
+                                       int iy,
+                                       int iz,
+                                       float* best_dist,
+                                       int* best_idx) {
+  if (ix < 0 || iy < 0 || iz < 0 ||
+      ix >= params.bins || iy >= params.bins || iz >= params.bins) return;
+  const int cell = grid3d_cell_device(ix, iy, iz, params.bins);
+  const int start = offsets[cell];
+  const int end = offsets[cell + 1];
+  const float qx = data[query];
+  const float qy = data[static_cast<std::size_t>(params.n) + query];
+  const float qz = data[static_cast<std::size_t>(2) * params.n + query];
+  for (int pos = start; pos < end; ++pos) {
+    const int candidate = rows[pos];
+    if (candidate == query) continue;
+    const float dx = qx - data[candidate];
+    const float dy = qy - data[static_cast<std::size_t>(params.n) + candidate];
+    const float dz = qz - data[static_cast<std::size_t>(2) * params.n + candidate];
+    insert_candidate(dx * dx + dy * dy + dz * dz, candidate, best_dist, best_idx, params.k);
+  }
+}
+
+__global__ void grid_self_knn_kernel(const float* data,
+                                     const int* offsets,
+                                     const int* rows,
+                                     int* out_idx,
+                                     float* out_dist,
+                                     CudaGridParams params) {
+  const int q = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (q >= params.n) return;
+
+  float best_dist[kMaxCudaK];
+  int best_idx[kMaxCudaK];
+  for (int j = 0; j < params.k; ++j) {
+    best_dist[j] = kCudaLargeDistance;
+    best_idx[j] = INT_MAX;
+  }
+
+  const float qx = data[q];
+  const float qy = data[static_cast<std::size_t>(params.n) + q];
+  const int cx = grid_coord_device(qx, params.min_x, params.cell_x, params.bins);
+  const int cy = grid_coord_device(qy, params.min_y, params.cell_y, params.bins);
+
+  if (params.n_features == 2) {
+    for (int radius = 0; radius <= params.bins; ++radius) {
+      const int raw_x0 = cx - radius;
+      const int raw_x1 = cx + radius;
+      const int raw_y0 = cy - radius;
+      const int raw_y1 = cy + radius;
+      const int x0 = raw_x0 < 0 ? 0 : raw_x0;
+      const int x1 = raw_x1 >= params.bins ? params.bins - 1 : raw_x1;
+      const int y0 = raw_y0 < 0 ? 0 : raw_y0;
+      const int y1 = raw_y1 >= params.bins ? params.bins - 1 : raw_y1;
+      if (radius == 0) {
+        add_grid2d_cell_device(data, offsets, rows, params, q, cx, cy, best_dist, best_idx);
+      } else {
+        for (int ix = raw_x0; ix <= raw_x1; ++ix) {
+          if (ix < 0 || ix >= params.bins) continue;
+          if (raw_y0 >= 0 && raw_y0 < params.bins) {
+            add_grid2d_cell_device(data, offsets, rows, params, q, ix, raw_y0, best_dist, best_idx);
+          }
+          if (raw_y1 != raw_y0 && raw_y1 >= 0 && raw_y1 < params.bins) {
+            add_grid2d_cell_device(data, offsets, rows, params, q, ix, raw_y1, best_dist, best_idx);
+          }
+        }
+        for (int iy = raw_y0 + 1; iy <= raw_y1 - 1; ++iy) {
+          if (iy < 0 || iy >= params.bins) continue;
+          if (raw_x0 >= 0 && raw_x0 < params.bins) {
+            add_grid2d_cell_device(data, offsets, rows, params, q, raw_x0, iy, best_dist, best_idx);
+          }
+          if (raw_x1 != raw_x0 && raw_x1 >= 0 && raw_x1 < params.bins) {
+            add_grid2d_cell_device(data, offsets, rows, params, q, raw_x1, iy, best_dist, best_idx);
+          }
+        }
+      }
+      if (best_idx[params.k - 1] != INT_MAX) {
+        const float lower = grid2d_lower_outside_device(qx, qy, params, x0, x1, y0, y1);
+        if (lower > best_dist[params.k - 1]) break;
+      }
+    }
+  } else {
+    const float qz = data[static_cast<std::size_t>(2) * params.n + q];
+    const int cz = grid_coord_device(qz, params.min_z, params.cell_z, params.bins);
+    for (int radius = 0; radius <= params.bins; ++radius) {
+      const int raw_x0 = cx - radius;
+      const int raw_x1 = cx + radius;
+      const int raw_y0 = cy - radius;
+      const int raw_y1 = cy + radius;
+      const int raw_z0 = cz - radius;
+      const int raw_z1 = cz + radius;
+      const int x0 = raw_x0 < 0 ? 0 : raw_x0;
+      const int x1 = raw_x1 >= params.bins ? params.bins - 1 : raw_x1;
+      const int y0 = raw_y0 < 0 ? 0 : raw_y0;
+      const int y1 = raw_y1 >= params.bins ? params.bins - 1 : raw_y1;
+      const int z0 = raw_z0 < 0 ? 0 : raw_z0;
+      const int z1 = raw_z1 >= params.bins ? params.bins - 1 : raw_z1;
+      if (radius == 0) {
+        add_grid3d_cell_device(data, offsets, rows, params, q, cx, cy, cz, best_dist, best_idx);
+      } else {
+        for (int iz = raw_z0; iz <= raw_z1; ++iz) {
+          if (iz < 0 || iz >= params.bins) continue;
+          for (int iy = raw_y0; iy <= raw_y1; ++iy) {
+            if (iy < 0 || iy >= params.bins) continue;
+            for (int ix = raw_x0; ix <= raw_x1; ++ix) {
+              if (ix < 0 || ix >= params.bins) continue;
+              if (ix != raw_x0 && ix != raw_x1 &&
+                  iy != raw_y0 && iy != raw_y1 &&
+                  iz != raw_z0 && iz != raw_z1) {
+                continue;
+              }
+              add_grid3d_cell_device(data, offsets, rows, params, q, ix, iy, iz, best_dist, best_idx);
+            }
+          }
+        }
+      }
+      if (best_idx[params.k - 1] != INT_MAX) {
+        const float lower = grid3d_lower_outside_device(qx, qy, qz, params, x0, x1, y0, y1, z0, z1);
+        if (lower > best_dist[params.k - 1]) break;
+      }
+    }
+  }
+
+  for (int j = 0; j < params.k; ++j) {
+    const std::size_t offset = static_cast<std::size_t>(j) * params.n + q;
+    out_idx[offset] = best_idx[j] + 1;
+    out_dist[offset] = sqrtf(best_dist[j]);
+  }
 }
 
 __global__ void knn_serial_query_kernel(const float* data,
@@ -553,6 +796,98 @@ int copy_batch_results_to_host(const int* d_indices,
   return 0;
 }
 
+struct HostCudaGrid {
+  int bins = 1;
+  int n_features = 2;
+  int n_cells = 1;
+  float min_x = 0.0f;
+  float min_y = 0.0f;
+  float min_z = 0.0f;
+  float cell_x = 1.0f;
+  float cell_y = 1.0f;
+  float cell_z = 1.0f;
+  std::vector<int> offsets;
+  std::vector<int> rows;
+};
+
+int host_grid_coord(float value, float min_value, float cell_size, int bins) {
+  int out = static_cast<int>((value - min_value) / cell_size);
+  if (out < 0) out = 0;
+  if (out >= bins) out = bins - 1;
+  return out;
+}
+
+int host_grid_cell(int ix, int iy, int iz, int bins, int n_features) {
+  return n_features == 3 ? (iz * bins + iy) * bins + ix : iy * bins + ix;
+}
+
+HostCudaGrid build_host_cuda_grid(const double* data,
+                                  int n,
+                                  int n_features,
+                                  int bins) {
+  HostCudaGrid grid;
+  grid.bins = bins;
+  grid.n_features = n_features;
+  grid.n_cells = n_features == 3 ? bins * bins * bins : bins * bins;
+
+  float min_x = static_cast<float>(data[0]);
+  float max_x = min_x;
+  float min_y = static_cast<float>(data[static_cast<std::size_t>(n)]);
+  float max_y = min_y;
+  float min_z = 0.0f;
+  float max_z = 0.0f;
+  if (n_features == 3) {
+    min_z = static_cast<float>(data[static_cast<std::size_t>(2) * n]);
+    max_z = min_z;
+  }
+  for (int i = 1; i < n; ++i) {
+    const float x = static_cast<float>(data[i]);
+    const float y = static_cast<float>(data[static_cast<std::size_t>(n) + i]);
+    min_x = std::min(min_x, x);
+    max_x = std::max(max_x, x);
+    min_y = std::min(min_y, y);
+    max_y = std::max(max_y, y);
+    if (n_features == 3) {
+      const float z = static_cast<float>(data[static_cast<std::size_t>(2) * n + i]);
+      min_z = std::min(min_z, z);
+      max_z = std::max(max_z, z);
+    }
+  }
+  grid.min_x = min_x;
+  grid.min_y = min_y;
+  grid.min_z = min_z;
+  grid.cell_x = nextafterf(std::max(max_x - min_x, FLT_EPSILON), kCudaLargeDistance) /
+    static_cast<float>(bins);
+  grid.cell_y = nextafterf(std::max(max_y - min_y, FLT_EPSILON), kCudaLargeDistance) /
+    static_cast<float>(bins);
+  grid.cell_z = n_features == 3 ?
+    nextafterf(std::max(max_z - min_z, FLT_EPSILON), kCudaLargeDistance) / static_cast<float>(bins) :
+    1.0f;
+
+  grid.offsets.assign(static_cast<std::size_t>(grid.n_cells + 1), 0);
+  std::vector<int> cell_ids(static_cast<std::size_t>(n));
+  for (int i = 0; i < n; ++i) {
+    const int ix = host_grid_coord(static_cast<float>(data[i]), grid.min_x, grid.cell_x, bins);
+    const int iy = host_grid_coord(static_cast<float>(data[static_cast<std::size_t>(n) + i]), grid.min_y, grid.cell_y, bins);
+    const int iz = n_features == 3 ?
+      host_grid_coord(static_cast<float>(data[static_cast<std::size_t>(2) * n + i]), grid.min_z, grid.cell_z, bins) :
+      0;
+    const int cell = host_grid_cell(ix, iy, iz, bins, n_features);
+    cell_ids[static_cast<std::size_t>(i)] = cell;
+    ++grid.offsets[static_cast<std::size_t>(cell + 1)];
+  }
+  for (int c = 1; c <= grid.n_cells; ++c) {
+    grid.offsets[static_cast<std::size_t>(c)] += grid.offsets[static_cast<std::size_t>(c - 1)];
+  }
+  grid.rows.assign(static_cast<std::size_t>(n), 0);
+  std::vector<int> cursor = grid.offsets;
+  for (int i = 0; i < n; ++i) {
+    const int cell = cell_ids[static_cast<std::size_t>(i)];
+    grid.rows[static_cast<std::size_t>(cursor[static_cast<std::size_t>(cell)]++)] = i;
+  }
+  return grid;
+}
+
 } // namespace
 
 extern "C" bool fastembedr_cuda_available() {
@@ -766,6 +1101,134 @@ extern "C" int fastembedr_cuda_knn(const double* data,
       cleanup();
       return 1;
     }
+  }
+
+  cleanup();
+  return 0;
+}
+
+extern "C" int fastembedr_cuda_grid_self_knn(const double* data,
+                                             int n,
+                                             int n_features,
+                                             int k,
+                                             int bins_per_dim,
+                                             int* out_indices,
+                                             double* out_distances,
+                                             int* out_n_cells) {
+  last_error.clear();
+  if (data == nullptr || out_indices == nullptr || out_distances == nullptr) {
+    set_error("null host pointer");
+    return 1;
+  }
+  if (n < 2 || (n_features != 2 && n_features != 3) ||
+      k < 1 || k >= n || k > kMaxCudaK || bins_per_dim < 1) {
+    set_error("invalid CUDA grid KNN dimensions");
+    return 1;
+  }
+  const long long n_cells_ll = n_features == 3 ?
+    static_cast<long long>(bins_per_dim) * bins_per_dim * bins_per_dim :
+    static_cast<long long>(bins_per_dim) * bins_per_dim;
+  if (n_cells_ll > static_cast<long long>(INT_MAX - 1)) {
+    set_error("CUDA grid KNN requested too many grid cells");
+    return 1;
+  }
+
+  HostCudaGrid grid = build_host_cuda_grid(data, n, n_features, bins_per_dim);
+  if (out_n_cells != nullptr) *out_n_cells = grid.n_cells;
+
+  float* d_data = nullptr;
+  int* d_offsets = nullptr;
+  int* d_rows = nullptr;
+  int* d_indices = nullptr;
+  float* d_distances = nullptr;
+  const std::size_t data_size = static_cast<std::size_t>(n) * n_features;
+  const std::size_t out_size = static_cast<std::size_t>(n) * k;
+  const std::size_t data_bytes = data_size * sizeof(float);
+  const std::size_t offsets_bytes = static_cast<std::size_t>(grid.n_cells + 1) * sizeof(int);
+  const std::size_t rows_bytes = static_cast<std::size_t>(n) * sizeof(int);
+  const std::size_t out_i_bytes = out_size * sizeof(int);
+  const std::size_t out_d_bytes = out_size * sizeof(float);
+  const std::size_t required_bytes = data_bytes + offsets_bytes + rows_bytes + out_i_bytes + out_d_bytes;
+
+  auto cleanup = [&]() {
+    if (d_data != nullptr) cudaFree(d_data);
+    if (d_offsets != nullptr) cudaFree(d_offsets);
+    if (d_rows != nullptr) cudaFree(d_rows);
+    if (d_indices != nullptr) cudaFree(d_indices);
+    if (d_distances != nullptr) cudaFree(d_distances);
+  };
+
+  if (check_memory_available(required_bytes, "CUDA grid KNN allocation preflight")) return 1;
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_data), data_bytes), "cudaMalloc(grid data)")) {
+    cleanup();
+    return 1;
+  }
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_offsets), offsets_bytes), "cudaMalloc(grid offsets)")) {
+    cleanup();
+    return 1;
+  }
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_rows), rows_bytes), "cudaMalloc(grid rows)")) {
+    cleanup();
+    return 1;
+  }
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_indices), out_i_bytes), "cudaMalloc(grid indices)")) {
+    cleanup();
+    return 1;
+  }
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_distances), out_d_bytes), "cudaMalloc(grid distances)")) {
+    cleanup();
+    return 1;
+  }
+  if (copy_double_to_float_device(data, d_data, data_size, "cudaMemcpy(grid data H2D)")) {
+    cleanup();
+    return 1;
+  }
+  if (check_cuda(cudaMemcpy(d_offsets, grid.offsets.data(), offsets_bytes, cudaMemcpyHostToDevice), "cudaMemcpy(grid offsets H2D)")) {
+    cleanup();
+    return 1;
+  }
+  if (check_cuda(cudaMemcpy(d_rows, grid.rows.data(), rows_bytes, cudaMemcpyHostToDevice), "cudaMemcpy(grid rows H2D)")) {
+    cleanup();
+    return 1;
+  }
+
+  const CudaGridParams params{
+    n,
+    n_features,
+    k,
+    bins_per_dim,
+    grid.min_x,
+    grid.min_y,
+    grid.min_z,
+    grid.cell_x,
+    grid.cell_y,
+    grid.cell_z
+  };
+  const int threads = 128;
+  const int blocks = (n + threads - 1) / threads;
+  grid_self_knn_kernel<<<blocks, threads>>>(d_data, d_offsets, d_rows, d_indices, d_distances, params);
+  if (check_cuda(cudaGetLastError(), "grid_self_knn_kernel launch")) {
+    cleanup();
+    return 1;
+  }
+  if (check_cuda(cudaDeviceSynchronize(), "grid_self_knn_kernel synchronize")) {
+    cleanup();
+    return 1;
+  }
+
+  std::vector<int> host_indices(out_size);
+  std::vector<float> host_distances(out_size);
+  if (check_cuda(cudaMemcpy(host_indices.data(), d_indices, out_i_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy(grid indices D2H)")) {
+    cleanup();
+    return 1;
+  }
+  if (check_cuda(cudaMemcpy(host_distances.data(), d_distances, out_d_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy(grid distances D2H)")) {
+    cleanup();
+    return 1;
+  }
+  for (std::size_t i = 0; i < out_size; ++i) {
+    out_indices[i] = host_indices[i];
+    out_distances[i] = static_cast<double>(host_distances[i]);
   }
 
   cleanup();

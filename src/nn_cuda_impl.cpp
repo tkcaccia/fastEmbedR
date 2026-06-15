@@ -37,6 +37,14 @@ int fastembedr_cuda_row_candidate_knn(const double* data,
                                       int k,
                                       int* out_indices,
                                       double* out_distances);
+int fastembedr_cuda_grid_self_knn(const double* data,
+                                  int n,
+                                  int n_features,
+                                  int k,
+                                  int bins_per_dim,
+                                  int* out_indices,
+                                  double* out_distances,
+                                  int* out_n_cells);
 }
 
 namespace {
@@ -179,5 +187,46 @@ List cuda_row_candidate_knn_impl(NumericMatrix data,
   );
   result.attr("cuda_kernel") = "row_candidate_knn";
   result.attr("candidate_columns") = n_candidates;
+  return result;
+}
+
+List cuda_grid_self_knn_impl(NumericMatrix data,
+                             int k,
+                             int bins_per_dim) {
+  const int n = data.nrow();
+  const int n_features = data.ncol();
+  if (n_features != 2 && n_features != 3) {
+    Rcpp::stop("CUDA grid KNN requires a two- or three-column matrix");
+  }
+  if (n < 2) Rcpp::stop("data must have at least two rows");
+  if (k < 1 || k >= n) Rcpp::stop("k must be in [1, nrow(data) - 1]");
+  if (k > kMaxCudaK) Rcpp::stop("CUDA backend currently supports k <= %d", kMaxCudaK);
+  if (bins_per_dim < 1) Rcpp::stop("bins_per_dim must be positive");
+  if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
+
+  IntegerMatrix indices(n, k);
+  NumericMatrix distances(n, k);
+  int n_cells = 0;
+  const int status = fastembedr_cuda_grid_self_knn(
+    data.begin(),
+    n,
+    n_features,
+    k,
+    bins_per_dim,
+    indices.begin(),
+    distances.begin(),
+    &n_cells
+  );
+  if (status != 0) {
+    Rcpp::stop("CUDA grid KNN failed: %s", cuda_error_message());
+  }
+
+  List result = List::create(
+    Rcpp::Named("indices") = indices,
+    Rcpp::Named("distances") = distances,
+    Rcpp::Named("bins_per_dim") = bins_per_dim,
+    Rcpp::Named("n_cells") = n_cells
+  );
+  result.attr("cuda_kernel") = n_features == 3 ? "grid3d_self_knn" : "grid2d_self_knn";
   return result;
 }

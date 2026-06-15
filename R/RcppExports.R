@@ -309,6 +309,18 @@ vptree_self_knn_cpp <- function(data, k, parallel, cores) {
     .Call(`_fastEmbedR_vptree_self_knn_cpp`, data, k, parallel, cores)
 }
 
+vptree_query_knn_cpp <- function(data, points, k, parallel, cores) {
+    .Call(`_fastEmbedR_vptree_query_knn_cpp`, data, points, k, parallel, cores)
+}
+
+grid2d_self_knn_cpp <- function(data, k, parallel, cores, bins_per_dim) {
+    .Call(`_fastEmbedR_grid2d_self_knn_cpp`, data, k, parallel, cores, bins_per_dim)
+}
+
+grid3d_self_knn_cpp <- function(data, k, parallel, cores, bins_per_dim) {
+    .Call(`_fastEmbedR_grid3d_self_knn_cpp`, data, k, parallel, cores, bins_per_dim)
+}
+
 cuda_available_cpp <- function() {
     .Call(`_fastEmbedR_cuda_available_cpp`)
 }
@@ -327,6 +339,10 @@ landmark_candidate_knn_cuda_cpp <- function(data, projection_indices, k, bucket_
 
 row_candidate_knn_cuda_cpp <- function(data, candidate_indices, k) {
     .Call(`_fastEmbedR_row_candidate_knn_cuda_cpp`, data, candidate_indices, k)
+}
+
+cuda_grid_self_knn_cpp <- function(data, k, bins_per_dim) {
+    .Call(`_fastEmbedR_cuda_grid_self_knn_cpp`, data, k, bins_per_dim)
 }
 
 cuvs_available_cpp <- function() {

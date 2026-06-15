@@ -89,6 +89,16 @@ nn_compute <- function(data,
   } else if (backend %in% c("cuda", "gpu") && isTRUE(self_query)) {
     backend <- select_self_approx_backend(prefer_cuda = TRUE)
   } else if (identical(backend, "auto") &&
+             should_use_grid2d_self_knn(
+               self_query = self_query,
+               n = nrow(data),
+               p = ncol(data),
+               k = k,
+               exclude_self = isTRUE(exclude_self),
+               metric = metric
+             )) {
+    backend <- "cpu_grid"
+  } else if (identical(backend, "auto") &&
              should_use_auto_cpu_approx_self_knn(
                self_query = self_query,
                n = nrow(data),
@@ -447,6 +457,86 @@ nn_compute <- function(data,
     return(result)
   }
 
+  if (backend %in% c("vptree", "cpu_vptree")) {
+    if (!identical(metric, "euclidean")) {
+      stop("`backend = \"cpu_vptree\"` supports only Euclidean distances.", call. = FALSE)
+    }
+    if (isTRUE(self_query)) {
+      out <- vptree_self_knn(data, k = if (isTRUE(exclude_self)) k else k - 1L, n_threads = n_threads)
+      if (!isTRUE(exclude_self)) {
+        out$indices <- cbind(seq_len(nrow(data)), out$indices)
+        out$distances <- cbind(rep(0, nrow(data)), out$distances)
+      }
+    } else {
+      out <- vptree_query_knn(data, points, k = k, n_threads = n_threads)
+    }
+    result <- finish_nn_result(out, "cpu_vptree", k, self_query, exact = TRUE, metric = metric)
+    attr(result, "spatial_index") <- list(
+      strategy = "native_exact_vptree",
+      backend = "cpu_vptree",
+      exact = TRUE,
+      nodes = as.integer(out$nodes),
+      n_threads = as.integer(normalize_nn_threads(n_threads))
+    )
+    return(result)
+  }
+
+  if (backend %in% c("cuda_grid", "cuda_grid_auto", "gpu_grid",
+                     "cuda_grid2d", "cuda_grid3d")) {
+    if (!isTRUE(self_query)) {
+      stop("`backend = \"cuda_grid_auto\"` is only available for self-KNN searches.", call. = FALSE)
+    }
+    if (!identical(metric, "euclidean")) {
+      stop("`backend = \"cuda_grid_auto\"` supports only Euclidean distances.", call. = FALSE)
+    }
+    if (!ncol(data) %in% c(2L, 3L)) {
+      stop("`backend = \"cuda_grid_auto\"` supports only two- or three-column matrices.", call. = FALSE)
+    }
+    if (!isTRUE(cuda_available())) {
+      stop("No CUDA GPU backend is available on this machine.", call. = FALSE)
+    }
+    nonself_k <- if (isTRUE(exclude_self)) k else k - 1L
+    bins <- grid_bins_per_dim(nrow(data), nonself_k, ncol(data))
+    out <- cuda_grid_self_knn_cpp(
+      data,
+      as.integer(nonself_k),
+      as.integer(bins)
+    )
+    if (!isTRUE(exclude_self)) {
+      out$indices <- cbind(seq_len(nrow(data)), out$indices)
+      out$distances <- cbind(rep(0, nrow(data)), out$distances)
+    }
+    resolved <- if (ncol(data) == 3L) "cuda_grid3d" else "cuda_grid2d"
+    result <- finish_nn_result(out, resolved, k, self_query, exact = TRUE, metric = metric)
+    attr(result, "spatial_index") <- list(
+      strategy = if (ncol(data) == 3L) "native_cuda_exact_uniform_grid_3d" else "native_cuda_exact_uniform_grid_2d",
+      backend = resolved,
+      exact = TRUE,
+      bins_per_dim = as.integer(out$bins_per_dim),
+      n_cells = as.integer(out$n_cells)
+    )
+    return(result)
+  }
+
+  if (backend %in% c("grid", "cpu_grid", "grid2d", "cpu_grid2d", "grid3d", "cpu_grid3d")) {
+    if (!isTRUE(self_query)) {
+      stop("`backend = \"cpu_grid\"` is only available for self-KNN searches.", call. = FALSE)
+    }
+    if (!identical(metric, "euclidean")) {
+      stop("`backend = \"cpu_grid\"` supports only Euclidean distances.", call. = FALSE)
+    }
+    out <- grid_self_knn(
+      data,
+      k = k,
+      backend = backend,
+      exclude_self = isTRUE(exclude_self),
+      n_threads = n_threads
+    )
+    result <- finish_nn_result(out, attr(out, "spatial_index")$backend, k, self_query, exact = TRUE, metric = metric)
+    attr(result, "spatial_index") <- attr(out, "spatial_index")
+    return(result)
+  }
+
   selected_gpu <- NA_character_
   if (backend == "cuda") {
     selected_gpu <- "cuda"
@@ -521,6 +611,16 @@ should_use_auto_cpu_approx_self_knn <- function(self_query,
 }
 
 select_cpu_approx_backend <- function(n, p, k) {
+  if (should_use_grid2d_self_knn(
+    self_query = TRUE,
+    n = n,
+    p = p,
+    k = k,
+    exclude_self = FALSE,
+    metric = "euclidean"
+  )) {
+    return("cpu_grid")
+  }
   select_self_approx_backend(prefer_cuda = FALSE)
 }
 
@@ -551,6 +651,127 @@ normalize_nn_threads <- function(n_threads) {
 normalize_nn_metric <- function(metric) {
   metric <- tolower(as.character(metric))
   match.arg(metric, c("euclidean", "cosine", "correlation"))
+}
+
+should_use_grid2d_self_knn <- function(self_query,
+                                       n,
+                                       p,
+                                       k,
+                                       exclude_self,
+                                       metric) {
+  if (!isTRUE(self_query)) return(FALSE)
+  if (!identical(metric, "euclidean")) return(FALSE)
+  if (!as.integer(p) %in% c(2L, 3L)) return(FALSE)
+  if (as.integer(n) < 10000L) return(FALSE)
+  nonself_k <- if (isTRUE(exclude_self)) as.integer(k) else as.integer(k) - 1L
+  is.finite(nonself_k) && !is.na(nonself_k) && nonself_k >= 1L
+}
+
+grid_bins_per_dim <- function(n, k, p) {
+  p <- as.integer(p)
+  value <- getOption(sprintf("fastEmbedR.grid%dd_bins_per_dim", p), NULL)
+  if (is.null(value)) value <- getOption("fastEmbedR.grid_bins_per_dim", NULL)
+  if (!is.null(value)) {
+    value <- suppressWarnings(as.integer(value))
+    if (length(value) == 1L && is.finite(value) && !is.na(value) && value > 0L) {
+      return(as.integer(value))
+    }
+  }
+  target_occupancy <- getOption(sprintf("fastEmbedR.grid%dd_target_occupancy", p), NULL)
+  if (is.null(target_occupancy)) target_occupancy <- getOption("fastEmbedR.grid_target_occupancy", NULL)
+  if (is.null(target_occupancy)) {
+    target_occupancy <- if (identical(p, 3L)) {
+      max(1.5, min(8, as.numeric(k) / 25))
+    } else {
+      max(4, min(16, as.numeric(k) / 10))
+    }
+  }
+  target_occupancy <- suppressWarnings(as.numeric(target_occupancy))
+  if (length(target_occupancy) != 1L || !is.finite(target_occupancy) ||
+      is.na(target_occupancy) || target_occupancy <= 0) {
+    target_occupancy <- if (identical(p, 3L)) {
+      max(1.5, min(8, as.numeric(k) / 25))
+    } else {
+      max(4, min(16, as.numeric(k) / 10))
+    }
+  }
+  bins <- if (identical(p, 3L)) {
+    as.integer(ceiling((as.numeric(n) / target_occupancy)^(1 / 3)))
+  } else {
+    as.integer(ceiling(sqrt(as.numeric(n) / target_occupancy)))
+  }
+  as.integer(max(4L, min(4096L, bins)))
+}
+
+grid2d_bins_per_dim <- function(n, k) grid_bins_per_dim(n, k, 2L)
+grid3d_bins_per_dim <- function(n, k) grid_bins_per_dim(n, k, 3L)
+
+select_cpu_spatial_backend <- function(data,
+                                       k,
+                                       exclude_self = TRUE) {
+  p <- ncol(data)
+  if (!(p %in% c(2L, 3L))) {
+    return("cpu_vptree")
+  }
+  if (!isTRUE(getOption("fastEmbedR.cpu_spatial_auto", TRUE))) {
+    return(if (p == 3L) "cpu_grid3d" else "cpu_grid2d")
+  }
+  n <- nrow(data)
+  sample_n <- min(n, as.integer(getOption("fastEmbedR.cpu_spatial_sample", 4096L)))
+  if (sample_n < 512L) {
+    return(if (p == 3L) "cpu_grid3d" else "cpu_grid2d")
+  }
+  rows <- unique(as.integer(round(seq.int(1L, n, length.out = sample_n))))
+  xs <- data[rows, , drop = FALSE]
+  sds <- apply(xs, 2L, stats::sd)
+  finite_sds <- is.finite(sds) & sds > 0
+  if (sum(finite_sds) < p) {
+    out <- "cpu_vptree"
+    attr(out, "reason") <- "degenerate_or_duplicate_dimension"
+    return(out)
+  }
+  anisotropy <- min(sds[finite_sds]) / max(sds[finite_sds])
+  anisotropy_threshold <- as.numeric(getOption("fastEmbedR.cpu_spatial_anisotropy_threshold", 0.02))
+  if (!is.finite(anisotropy_threshold) || anisotropy_threshold <= 0) anisotropy_threshold <- 0.02
+  if (is.finite(anisotropy) && anisotropy < anisotropy_threshold) {
+    out <- "cpu_vptree"
+    attr(out, "reason") <- sprintf("anisotropic_sample_sd_ratio_%.4g", anisotropy)
+    return(out)
+  }
+
+  unique_sample <- nrow(unique(round(xs, digits = 12L)))
+  duplicate_ratio <- unique_sample / sample_n
+  duplicate_threshold <- as.numeric(getOption("fastEmbedR.cpu_spatial_duplicate_threshold", 0.05))
+  if (!is.finite(duplicate_threshold) || duplicate_threshold <= 0) duplicate_threshold <- 0.05
+  if (is.finite(duplicate_ratio) && duplicate_ratio <= duplicate_threshold) {
+    out <- if (p == 3L) "cpu_grid3d" else "cpu_grid2d"
+    attr(out, "reason") <- sprintf("duplicate_heavy_sample_unique_ratio_%.4g", duplicate_ratio)
+    return(out)
+  }
+
+  sample_bins <- as.integer(getOption("fastEmbedR.cpu_spatial_sample_bins", if (p == 3L) 16L else 32L))
+  if (!is.finite(sample_bins) || is.na(sample_bins) || sample_bins < 4L) sample_bins <- if (p == 3L) 16L else 32L
+  mins <- apply(xs, 2L, min)
+  spans <- apply(xs, 2L, function(z) max(z) - min(z))
+  spans[!is.finite(spans) | spans <= 0] <- 1
+  coords <- lapply(seq_len(p), function(j) {
+    coord <- floor((xs[, j] - mins[[j]]) / spans[[j]] * sample_bins)
+    coord <- pmin(sample_bins - 1L, pmax(0L, as.integer(coord)))
+    coord
+  })
+  cell <- coords[[1L]] + sample_bins * coords[[2L]]
+  if (p == 3L) cell <- cell + sample_bins * sample_bins * coords[[3L]]
+  counts <- tabulate(cell + 1L, nbins = sample_bins^p)
+  mean_count <- sample_n / length(counts)
+  imbalance <- max(counts) / max(mean_count, 1e-12)
+  imbalance_threshold <- as.numeric(getOption("fastEmbedR.cpu_spatial_imbalance_threshold", 20))
+  if (!is.finite(imbalance_threshold) || imbalance_threshold <= 0) imbalance_threshold <- 20
+  if (is.finite(imbalance) && imbalance > imbalance_threshold) {
+    out <- "cpu_vptree"
+    attr(out, "reason") <- sprintf("sample_grid_imbalance_%.3g", imbalance)
+    return(out)
+  }
+  if (p == 3L) "cpu_grid3d" else "cpu_grid2d"
 }
 
 row_center_l2_normalize <- function(x) {
@@ -1779,6 +2000,141 @@ vptree_self_knn <- function(data,
   )
 }
 
+vptree_query_knn <- function(data,
+                             points,
+                             k,
+                             n_threads = NULL) {
+  n <- nrow(data)
+  k <- as.integer(k)
+  if (length(k) != 1L || is.na(k) || !is.finite(k) || k < 1L || k > n) {
+    stop("`k` must be in [1, nrow(data)].", call. = FALSE)
+  }
+  n_threads <- normalize_nn_threads(n_threads)
+  vptree_query_knn_cpp(
+    data,
+    points,
+    as.integer(k),
+    TRUE,
+    as.integer(max(1L, min(8L, n_threads)))
+  )
+}
+
+grid2d_self_knn <- function(data,
+                            k,
+                            exclude_self = TRUE,
+                            n_threads = NULL) {
+  n <- nrow(data)
+  p <- ncol(data)
+  if (p != 2L) {
+    stop("`backend = \"cpu_grid2d\"` requires a two-column matrix.", call. = FALSE)
+  }
+  k <- as.integer(k)
+  nonself_k <- if (isTRUE(exclude_self)) k else k - 1L
+  if (length(nonself_k) != 1L || is.na(nonself_k) || !is.finite(nonself_k) ||
+      nonself_k < 1L || nonself_k >= n) {
+    stop("`k` must leave at least one non-self neighbour.", call. = FALSE)
+  }
+  n_threads <- normalize_nn_threads(n_threads)
+  bins <- grid2d_bins_per_dim(n, nonself_k)
+  out <- grid2d_self_knn_cpp(
+    data,
+    as.integer(nonself_k),
+    TRUE,
+    as.integer(n_threads),
+    as.integer(bins)
+  )
+  if (!isTRUE(exclude_self)) {
+    out$indices <- cbind(seq_len(n), out$indices)
+    out$distances <- cbind(rep(0, n), out$distances)
+  }
+  attr(out, "spatial_index") <- list(
+    strategy = "native_exact_uniform_grid_2d",
+    backend = "cpu_grid2d",
+    exact = TRUE,
+    bins_per_dim = as.integer(out$bins_per_dim),
+    n_cells = as.integer(out$n_cells),
+    n_threads = as.integer(out$n_threads)
+  )
+  out
+}
+
+grid3d_self_knn <- function(data,
+                            k,
+                            exclude_self = TRUE,
+                            n_threads = NULL) {
+  n <- nrow(data)
+  p <- ncol(data)
+  if (p != 3L) {
+    stop("`backend = \"cpu_grid3d\"` requires a three-column matrix.", call. = FALSE)
+  }
+  k <- as.integer(k)
+  nonself_k <- if (isTRUE(exclude_self)) k else k - 1L
+  if (length(nonself_k) != 1L || is.na(nonself_k) || !is.finite(nonself_k) ||
+      nonself_k < 1L || nonself_k >= n) {
+    stop("`k` must leave at least one non-self neighbour.", call. = FALSE)
+  }
+  n_threads <- normalize_nn_threads(n_threads)
+  bins <- grid3d_bins_per_dim(n, nonself_k)
+  out <- grid3d_self_knn_cpp(
+    data,
+    as.integer(nonself_k),
+    TRUE,
+    as.integer(n_threads),
+    as.integer(bins)
+  )
+  if (!isTRUE(exclude_self)) {
+    out$indices <- cbind(seq_len(n), out$indices)
+    out$distances <- cbind(rep(0, n), out$distances)
+  }
+  attr(out, "spatial_index") <- list(
+    strategy = "native_exact_uniform_grid_3d",
+    backend = "cpu_grid3d",
+    exact = TRUE,
+    bins_per_dim = as.integer(out$bins_per_dim),
+    n_cells = as.integer(out$n_cells),
+    n_threads = as.integer(out$n_threads)
+  )
+  out
+}
+
+grid_self_knn <- function(data,
+                          k,
+                          backend = "cpu_grid",
+                          exclude_self = TRUE,
+                          n_threads = NULL) {
+  p <- ncol(data)
+  if (backend %in% c("grid", "cpu_grid")) {
+    backend <- select_cpu_spatial_backend(data, k = k, exclude_self = exclude_self)
+  }
+  reason <- attr(backend, "reason", exact = TRUE)
+  if (backend %in% c("vptree", "cpu_vptree")) {
+    out <- vptree_self_knn(data, k = if (isTRUE(exclude_self)) k else k - 1L, n_threads = n_threads)
+    if (!isTRUE(exclude_self)) {
+      out$indices <- cbind(seq_len(nrow(data)), out$indices)
+      out$distances <- cbind(rep(0, nrow(data)), out$distances)
+    }
+    attr(out, "spatial_index") <- list(
+      strategy = "native_exact_vptree",
+      backend = "cpu_vptree",
+      exact = TRUE,
+      reason = if (is.null(reason)) "explicit" else reason,
+      n_threads = as.integer(normalize_nn_threads(n_threads))
+    )
+    return(out)
+  }
+  if (backend %in% c("grid3d", "cpu_grid3d") || identical(p, 3L)) {
+    out <- grid3d_self_knn(data, k, exclude_self = exclude_self, n_threads = n_threads)
+    if (!is.null(reason)) attr(out, "spatial_index")$reason <- reason
+    return(out)
+  }
+  if (backend %in% c("grid2d", "cpu_grid2d", "grid", "cpu_grid") || identical(p, 2L)) {
+    out <- grid2d_self_knn(data, k, exclude_self = exclude_self, n_threads = n_threads)
+    if (!is.null(reason)) attr(out, "spatial_index")$reason <- reason
+    return(out)
+  }
+  stop("`backend = \"cpu_grid\"` supports only two- or three-column matrices.", call. = FALSE)
+}
+
 #' Nearest neighbors from row-wise matrices
 #'
 #' `nn()` provides a package-native nearest-neighbor entry point compatible with
@@ -1789,7 +2145,14 @@ vptree_self_knn <- function(data,
 #' requested and cuVS is available, otherwise FAISS NN-Descent when FAISS is
 #' compiled in, otherwise the optional CRAN-friendly RcppHNSW backend when
 #' installed, otherwise exact CPU. Use `backend = "cpu_approx"` to force the
-#' non-CUDA part of that selector.
+#' non-CUDA part of that selector. `backend = "cpu_grid"` is a native exact
+#' two- or three-dimensional Euclidean self-KNN spatial selector: it uses a
+#' fast grid for uniform-like clouds and a VP-tree for thin or imbalanced
+#' clouds. `backend = "vptree"`/`"cpu_vptree"` builds an exact VP-tree on
+#' `data` and supports both self-KNN and `nn(data, points, k)` query searches.
+#' `backend = "cuda_grid_auto"`/`"cuda_grid"` is the CUDA equivalent for exact
+#' two- or three-dimensional Euclidean self-KNN: it chooses the native 2D or 3D
+#' CUDA grid kernel and errors clearly when CUDA is unavailable.
 #'
 #' @param data Numeric matrix of reference observations in rows.
 #' @param points Numeric matrix of query observations in rows. Defaults to
@@ -1800,8 +2163,15 @@ vptree_self_knn <- function(data,
 #' @param backend Execution backend. `"auto"` records the selected fast backend
 #'   in `attr(result, "backend")`. `"cpu"` always uses the exact C++ CPU path.
 #'   `"cpu_approx"` chooses FAISS NN-Descent, RcppHNSW, or exact CPU depending
-#'   on what is available. `"hnsw"`/`"rcpphnsw"` uses the optional CRAN package
-#'   RcppHNSW.
+#'   on what is available; for large 2D Euclidean self-KNN it chooses
+#'   `"cpu_grid2d"` and for large 3D Euclidean self-KNN it chooses
+#'   `"cpu_grid"`. Explicit `"cpu_grid2d"`/`"cpu_grid3d"` force the exact
+#'   grid implementation, while `"cpu_vptree"` forces the exact VP-tree for
+#'   Euclidean self-KNN or reference/query KNN.
+#'   `"cuda_grid_auto"`/`"cuda_grid"` chooses the native CUDA exact 2D or 3D
+#'   grid implementation for Euclidean self-KNN only; it does not silently
+#'   fall back to CPU.
+#'   `"hnsw"`/`"rcpphnsw"` uses the optional CRAN package RcppHNSW.
 #'   `"faiss"` uses the real FAISS C++ `IndexFlatL2` backend when fastEmbedR was
 #'   built against FAISS. `"faiss_ivf"`, `"faiss_ivfpq"`, `"faiss_hnsw"`,
 #'   `"faiss_nsg"`, and `"faiss_nndescent"` use the corresponding FAISS index
@@ -1840,13 +2210,17 @@ nn <- function(data,
                points = data,
                k = NULL,
                backend = c(
-                 "auto", "cpu", "cpu_approx", "hnsw", "rcpphnsw", "cpu_hnsw",
+                 "auto", "cpu", "cpu_approx", "cpu_grid", "grid",
+                 "cpu_grid2d", "grid2d", "cpu_grid3d", "grid3d",
+                 "vptree", "cpu_vptree", "hnsw", "rcpphnsw", "cpu_hnsw",
                  "faiss", "cpu_faiss", "cpu_faiss_flat", "faiss_flat", "faiss_flat_l2",
                  "faiss_flat_ip", "faiss_ivf", "faiss_ivf_flat", "cpu_faiss_index_ivf",
                  "faiss_ivfpq", "faiss_hnsw", "faiss_nsg", "faiss_nndescent",
                  "cuvs", "gpu_cuvs", "cuda_cuvs", "cuda_cuvs_cagra",
                  "cuvs_bruteforce", "cuda_cuvs_bruteforce", "cuda_cuvs_exact",
                  "cuvs_nndescent", "cuda_cuvs_nndescent",
+                 "cuda_grid", "cuda_grid_auto", "gpu_grid",
+                 "cuda_grid2d", "cuda_grid3d",
                  "gpu", "cuda", "cuda_approx", "cuda_nndescent",
                  "cuda_ivf", "cuda_faiss"
 		               ),
@@ -1869,16 +2243,20 @@ nn <- function(data,
 nn_without_self <- function(data,
                             k,
                             backend = c(
-                              "auto", "cpu", "cpu_approx", "hnsw", "rcpphnsw", "cpu_hnsw",
+                              "auto", "cpu", "cpu_approx", "cpu_grid", "grid",
+                              "cpu_grid2d", "grid2d", "cpu_grid3d", "grid3d",
+                              "vptree", "cpu_vptree", "hnsw", "rcpphnsw", "cpu_hnsw",
                               "faiss", "cpu_faiss", "cpu_faiss_flat", "faiss_flat", "faiss_flat_l2",
                               "faiss_flat_ip", "faiss_ivf", "faiss_ivf_flat", "cpu_faiss_index_ivf",
                               "faiss_ivfpq", "faiss_hnsw", "faiss_nsg", "faiss_nndescent",
                               "cuvs", "gpu_cuvs", "cuda_cuvs", "cuda_cuvs_cagra",
                               "cuvs_bruteforce", "cuda_cuvs_bruteforce", "cuda_cuvs_exact",
                               "cuvs_nndescent", "cuda_cuvs_nndescent",
+                              "cuda_grid", "cuda_grid_auto", "gpu_grid",
+                              "cuda_grid2d", "cuda_grid3d",
                               "gpu", "cuda", "cuda_approx", "cuda_nndescent",
                               "cuda_ivf", "cuda_faiss"
-	                            ),
+                            ),
                             metric = c("euclidean", "cosine", "correlation"),
                             n_threads = NULL) {
   backend <- match.arg(backend)

@@ -20,6 +20,9 @@ List cuda_landmark_candidate_knn_impl(NumericMatrix data,
 List cuda_row_candidate_knn_impl(NumericMatrix data,
                                  IntegerMatrix candidate_indices,
                                  int k);
+List cuda_grid_self_knn_impl(NumericMatrix data,
+                             int k,
+                             int bins_per_dim);
 
 // [[Rcpp::export]]
 bool cuda_available_cpp() {
@@ -55,4 +58,11 @@ List row_candidate_knn_cuda_cpp(NumericMatrix data,
                                 IntegerMatrix candidate_indices,
                                 int k) {
   return cuda_row_candidate_knn_impl(data, candidate_indices, k);
+}
+
+// [[Rcpp::export]]
+List cuda_grid_self_knn_cpp(NumericMatrix data,
+                            int k,
+                            int bins_per_dim) {
+  return cuda_grid_self_knn_impl(data, k, bins_per_dim);
 }
