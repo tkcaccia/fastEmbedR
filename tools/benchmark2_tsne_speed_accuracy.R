@@ -356,24 +356,66 @@ run_with_timing <- function(expr, n) {
   )
 }
 
+with_tsne_fft_grid <- function(grid, expr) {
+  old <- Sys.getenv("FASTEMBEDR_TSNE_FFT_GRID", unset = NA_character_)
+  if (is.null(grid) || is.na(grid)) {
+    Sys.unsetenv("FASTEMBEDR_TSNE_FFT_GRID")
+  } else {
+    Sys.setenv(FASTEMBEDR_TSNE_FFT_GRID = as.character(as.integer(grid)))
+  }
+  on.exit({
+    if (is.na(old)) {
+      Sys.unsetenv("FASTEMBEDR_TSNE_FFT_GRID")
+    } else {
+      Sys.setenv(FASTEMBEDR_TSNE_FFT_GRID = old)
+    }
+  }, add = TRUE)
+  force(expr)
+}
+
 method_specs <- function() {
   specs <- list(
     list(
-      method = "fastEmbedR_opentsne_cpu",
+      method = "fastEmbedR_opentsne_cpu_grid256",
       package = "fastEmbedR",
       backend = "cpu",
       uses_precomputed_nn = TRUE,
       uses_pca_init = TRUE,
       runner = function(ctx) {
-        fastEmbedR::opentsne_knn(
-          ctx$knn$indices,
-          ctx$knn$distances,
-          perplexity = ctx$perplexity,
-          Y_init = ctx$Y_init,
-          backend = "cpu",
-          n_threads = n_threads,
-          seed = seed,
-          verbose = FALSE
+        with_tsne_fft_grid(
+          256L,
+          fastEmbedR::opentsne_knn(
+            ctx$knn$indices,
+            ctx$knn$distances,
+            perplexity = ctx$perplexity,
+            Y_init = ctx$Y_init,
+            backend = "cpu",
+            n_threads = n_threads,
+            seed = seed,
+            verbose = FALSE
+          )
+        )
+      }
+    ),
+    list(
+      method = "fastEmbedR_opentsne_cpu_grid512",
+      package = "fastEmbedR",
+      backend = "cpu",
+      uses_precomputed_nn = TRUE,
+      uses_pca_init = TRUE,
+      runner = function(ctx) {
+        with_tsne_fft_grid(
+          512L,
+          fastEmbedR::opentsne_knn(
+            ctx$knn$indices,
+            ctx$knn$distances,
+            perplexity = ctx$perplexity,
+            Y_init = ctx$Y_init,
+            backend = "cpu",
+            n_threads = n_threads,
+            seed = seed,
+            verbose = FALSE
+          )
         )
       }
     ),
@@ -384,15 +426,18 @@ method_specs <- function() {
       uses_precomputed_nn = TRUE,
       uses_pca_init = TRUE,
       runner = function(ctx) {
-        fastEmbedR::opentsne_knn(
-          ctx$knn$indices,
-          ctx$knn$distances,
-          perplexity = ctx$perplexity,
-          Y_init = ctx$Y_init,
-          backend = "cuda",
-          n_threads = n_threads,
-          seed = seed,
-          verbose = FALSE
+        with_tsne_fft_grid(
+          512L,
+          fastEmbedR::opentsne_knn(
+            ctx$knn$indices,
+            ctx$knn$distances,
+            perplexity = ctx$perplexity,
+            Y_init = ctx$Y_init,
+            backend = "cuda",
+            n_threads = n_threads,
+            seed = seed,
+            verbose = FALSE
+          )
         )
       }
     ),
@@ -645,8 +690,9 @@ write_methods_file <- function(out_dir) {
     "",
     "Compared implementations:",
     "",
-    "- `fastEmbedR_opentsne_cpu`: native fastEmbedR openTSNE-style optimizer from precomputed KNN, CPU backend, four CPU threads.",
-    "- `fastEmbedR_opentsne_cuda`: native fastEmbedR openTSNE-style optimizer from precomputed KNN, CUDA backend.",
+    "- `fastEmbedR_opentsne_cpu_grid256`: native fastEmbedR openTSNE-style optimizer from precomputed KNN, CPU backend, four CPU threads, FFT grid forced to 256.",
+    "- `fastEmbedR_opentsne_cpu_grid512`: native fastEmbedR openTSNE-style optimizer from precomputed KNN, CPU backend, four CPU threads, FFT grid forced to 512.",
+    "- `fastEmbedR_opentsne_cuda`: native fastEmbedR openTSNE-style optimizer from precomputed KNN, CUDA backend, FFT grid forced to 512.",
     "- `Rtsne_neighbors`: `Rtsne::Rtsne_neighbors()` from the same precomputed KNN and PCA initialization.",
     "- `tsne_package`: `tsne::tsne()` as a raw-data R baseline with PCA initialization where supported by the function.",
     "- `KlugerLab_FItSNE`: FIt-SNE through an installed `fftRtsne`/`Spectre` wrapper and `fast_tsne` executable when available. If the wrapper or executable is missing, the row is marked unavailable/failed rather than replaced by another method.",

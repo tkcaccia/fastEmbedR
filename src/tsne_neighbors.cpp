@@ -192,7 +192,7 @@ int tsne_repulsion_block_size(const int n) {
 }
 
 int tsne_fft_grid_size(const int n) {
-  const int fallback = n >= 50000 ? 128 : (n >= 10000 ? 96 : 64);
+  const int fallback = n >= 50000 ? 256 : (n >= 10000 ? 128 : 64);
   const int requested = env_positive_int("FASTEMBEDR_TSNE_FFT_GRID", fallback);
   int grid = 32;
   while (grid < requested && grid < 512) grid <<= 1;
