@@ -17,6 +17,7 @@ umap(
   preserve_sample = NULL,
   preserve_k = NULL,
   keep_knn = FALSE,
+  graph_mode = c("binary", "fuzzy"),
   verbose = FALSE
 )
 }
@@ -54,6 +55,9 @@ internally at four threads for the restored stable UMAP path.}
 \item{preserve_k}{Number of neighbours used for local-structure scoring.}
 
 \item{keep_knn}{If \code{TRUE}, retain KNN matrices in the returned object.}
+
+\item{graph_mode}{Graph weighting mode. \code{"binary"} uses unit-weight graph
+edges. \code{"fuzzy"} uses standard UMAP fuzzy graph weights.}
 
 \item{verbose}{Print progress.}
 }

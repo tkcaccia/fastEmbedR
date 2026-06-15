@@ -19,7 +19,7 @@ test_that("Metal public paths stay native and do not depend on Python bridges", 
 })
 
 test_that("GPU UMAP exposes one CUDA fused entry shape", {
-  expect_length(formals(fastEmbedR:::knn_umap_cuda_fused_cpp), 8L)
+  expect_length(formals(fastEmbedR:::knn_umap_cuda_fused_cpp), 10L)
 })
 
 test_that("Metal openTSNE FFT-grid exposes opt-in per-stage timing", {

@@ -27,8 +27,24 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix indices,
                                        int negative_sample_rate,
                                        double learning_rate,
                                        double min_dist,
+                                       double repulsion_strength,
                                        int spectral_n_iter,
-                                       int seed);
+                                       int seed,
+                                       int optimizer_mode);
+List umap_cuda_graph_dump_impl(IntegerMatrix indices,
+                               NumericMatrix distances);
+NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector heads,
+                                          IntegerVector tails,
+                                          NumericVector weights,
+                                          NumericVector epochs_per_sample,
+                                          NumericMatrix init,
+                                          int n_epochs,
+                                          int negative_sample_rate,
+                                          double learning_rate,
+                                          double min_dist,
+                                          double repulsion_strength,
+                                          int seed,
+                                          int optimizer_mode);
 NumericMatrix knn_tsne_exact_cuda_impl(IntegerMatrix indices,
                                        NumericMatrix distances,
                                        NumericMatrix init,
@@ -126,8 +142,10 @@ NumericMatrix knn_umap_cuda_fused_cpp(IntegerMatrix indices,
                                       int negative_sample_rate,
                                       double learning_rate,
                                       double min_dist,
+                                      double repulsion_strength,
                                       int spectral_n_iter,
-                                      int seed) {
+                                      int seed,
+                                      int optimizer_mode) {
   return knn_umap_cuda_fused_impl(
     indices,
     distances,
@@ -135,8 +153,36 @@ NumericMatrix knn_umap_cuda_fused_cpp(IntegerMatrix indices,
     negative_sample_rate,
     learning_rate,
     min_dist,
+    repulsion_strength,
     spectral_n_iter,
-    seed
+    seed,
+    optimizer_mode
+  );
+}
+
+// [[Rcpp::export]]
+List umap_cuda_graph_dump_cpp(IntegerMatrix indices,
+                              NumericMatrix distances) {
+  return umap_cuda_graph_dump_impl(indices, distances);
+}
+
+// [[Rcpp::export]]
+NumericMatrix umap_cuda_optimize_coo_cpp(IntegerVector heads,
+                                         IntegerVector tails,
+                                         NumericVector weights,
+                                         NumericVector epochs_per_sample,
+                                         NumericMatrix init,
+                                         int n_epochs,
+                                         int negative_sample_rate,
+                                         double learning_rate,
+                                         double min_dist,
+                                         double repulsion_strength,
+                                         int seed,
+                                         int optimizer_mode) {
+  return umap_cuda_optimize_coo_impl(
+    heads, tails, weights, epochs_per_sample, init, n_epochs,
+    negative_sample_rate, learning_rate, min_dist, repulsion_strength,
+    seed, optimizer_mode
   );
 }
 

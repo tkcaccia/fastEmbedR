@@ -96,13 +96,42 @@ int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
                                            int k,
                                            int n_epochs,
                                            int negative_sample_rate,
-                                           float learning_rate,
-                                           float a,
-                                           float b,
+                               float learning_rate,
+                               float a,
+                               float b,
+                               float repulsion_strength,
                                            int spectral_n_iter,
                                            unsigned int seed,
                                            int index_offset,
+                                           int optimizer_mode,
                                            float* out);
+int fastembedr_cuda_umap_graph_dump_from_knn(const int* indices,
+                                             const double* distances,
+                                             int n,
+                                             int k,
+                                             int index_offset,
+                                             int* out_heads,
+                                             int* out_tails,
+                                             float* out_weights,
+                                             float* out_epochs_per_sample,
+                                             int* out_width,
+                                             int* out_capacity);
+int fastembedr_cuda_umap_optimize_coo(const int* heads,
+                                      const int* tails,
+                                      const float* weights,
+                                      const float* epochs_per_sample,
+                                      const float* init,
+                                      int n,
+                                      int n_edges_capacity,
+                                      int n_epochs,
+                                      int negative_sample_rate,
+                                      float learning_rate,
+                                      float a,
+                                      float b,
+                                      float repulsion_strength,
+                                      unsigned int seed,
+                                      int optimizer_mode,
+                                      float* out);
 int fastembedr_cuda_standardize_matrix(const double* values,
                                        int n,
                                        int p,
@@ -977,9 +1006,6 @@ NumericMatrix knn_embed_cuda_impl(IntegerMatrix indices,
 
   const int n = indices.nrow();
   const int objective_code = objective_id(objective);
-  if (objective_code == kObjectiveUmap) {
-    Rcpp::stop("CUDA UMAP is available only through the fused pure-atomic UMAP path.");
-  }
   std::vector<float> init_float = init_to_float_2d(init);
   std::vector<float> out(init_float.size());
   const auto ab = find_ab_params(1.0, min_dist);
@@ -1046,8 +1072,10 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix indices,
                                        int negative_sample_rate,
                                        double learning_rate,
                                        double min_dist,
+                                       double repulsion_strength,
                                        int spectral_n_iter,
-                                       int seed) {
+                                       int seed,
+                                       int optimizer_mode) {
   if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
     Rcpp::stop("indices and distances must have the same dimensions");
   }
@@ -1058,6 +1086,7 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix indices,
   if (negative_sample_rate < 0) Rcpp::stop("negative_sample_rate must be non-negative");
   if (learning_rate <= 0.0) Rcpp::stop("learning_rate must be positive");
   if (min_dist < 0.0) Rcpp::stop("min_dist must be non-negative");
+  if (repulsion_strength <= 0.0) Rcpp::stop("repulsion_strength must be positive");
   if (spectral_n_iter < 1) Rcpp::stop("spectral_n_iter must be positive");
   if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
 
@@ -1074,9 +1103,11 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix indices,
     static_cast<float>(learning_rate),
     static_cast<float>(ab.first),
     static_cast<float>(ab.second),
+      static_cast<float>(repulsion_strength),
       spectral_n_iter,
       static_cast<unsigned int>(seed),
       knn_index_offset(indices),
+      optimizer_mode,
       out.data()
   );
   if (status != 0) {
@@ -1151,6 +1182,131 @@ NumericMatrix knn_tsne_exact_cuda_impl(IntegerMatrix indices,
     Rcpp::stop("CUDA exact t-SNE failed: %s", cuda_embedding_error_message());
   }
 
+  NumericMatrix result(n, 2);
+  for (int i = 0; i < n; ++i) {
+    result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);
+    result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
+  }
+  return result;
+}
+
+List umap_cuda_graph_dump_impl(IntegerMatrix indices,
+                               NumericMatrix distances) {
+  if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
+    Rcpp::stop("indices and distances must have the same dimensions");
+  }
+  if (indices.ncol() > kMaxCudaNeighbors) {
+    Rcpp::stop("CUDA graph dump currently supports at most %d neighbors.", kMaxCudaNeighbors);
+  }
+  if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
+
+  const int n = indices.nrow();
+  const int k = indices.ncol();
+  const int width = std::min(kMaxCudaNeighbors, std::max(k, 2 * k));
+  const int capacity = n * width;
+  std::vector<int> heads(static_cast<std::size_t>(capacity), -1);
+  std::vector<int> tails(static_cast<std::size_t>(capacity), -1);
+  std::vector<float> weights(static_cast<std::size_t>(capacity), 0.0f);
+  std::vector<float> epochs(static_cast<std::size_t>(capacity), 0.0f);
+  int reported_width = 0;
+  int reported_capacity = 0;
+  const int status = fastembedr_cuda_umap_graph_dump_from_knn(
+    indices.begin(),
+    distances.begin(),
+    n,
+    k,
+    knn_index_offset(indices),
+    heads.data(),
+    tails.data(),
+    weights.data(),
+    epochs.data(),
+    &reported_width,
+    &reported_capacity
+  );
+  if (status != 0) {
+    Rcpp::stop("CUDA UMAP graph dump failed: %s", cuda_embedding_error_message());
+  }
+  if (reported_capacity < 0 || reported_capacity > capacity) {
+    Rcpp::stop("CUDA UMAP graph dump returned an invalid capacity");
+  }
+
+  IntegerVector r_heads(reported_capacity);
+  IntegerVector r_tails(reported_capacity);
+  NumericVector r_weights(reported_capacity);
+  NumericVector r_epochs(reported_capacity);
+  for (int i = 0; i < reported_capacity; ++i) {
+    r_heads[i] = heads[static_cast<std::size_t>(i)];
+    r_tails[i] = tails[static_cast<std::size_t>(i)];
+    r_weights[i] = static_cast<double>(weights[static_cast<std::size_t>(i)]);
+    r_epochs[i] = static_cast<double>(epochs[static_cast<std::size_t>(i)]);
+  }
+  return List::create(
+    Rcpp::Named("heads") = r_heads,
+    Rcpp::Named("tails") = r_tails,
+    Rcpp::Named("weights") = r_weights,
+    Rcpp::Named("epochs_per_sample") = r_epochs,
+    Rcpp::Named("width") = reported_width,
+    Rcpp::Named("capacity") = reported_capacity
+  );
+}
+
+NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector heads,
+                                          IntegerVector tails,
+                                          NumericVector weights,
+                                          NumericVector epochs_per_sample,
+                                          NumericMatrix init,
+                                          int n_epochs,
+                                          int negative_sample_rate,
+                                          double learning_rate,
+                                          double min_dist,
+                                          double repulsion_strength,
+                                          int seed,
+                                          int optimizer_mode) {
+  if (heads.size() != tails.size() ||
+      heads.size() != weights.size() ||
+      heads.size() != epochs_per_sample.size()) {
+    Rcpp::stop("COO heads, tails, weights, and epochs_per_sample must have the same length");
+  }
+  if (init.ncol() != 2) Rcpp::stop("CUDA COO UMAP optimizer requires a two-dimensional initialization");
+  if (n_epochs < 1) Rcpp::stop("n_epochs must be positive");
+  if (negative_sample_rate < 0) Rcpp::stop("negative_sample_rate must be non-negative");
+  if (learning_rate <= 0.0) Rcpp::stop("learning_rate must be positive");
+  if (min_dist < 0.0) Rcpp::stop("min_dist must be non-negative");
+  if (repulsion_strength <= 0.0) Rcpp::stop("repulsion_strength must be positive");
+  if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
+
+  const int n = init.nrow();
+  const int n_edges = heads.size();
+  std::vector<float> w(static_cast<std::size_t>(n_edges));
+  std::vector<float> eps(static_cast<std::size_t>(n_edges));
+  for (int i = 0; i < n_edges; ++i) {
+    w[static_cast<std::size_t>(i)] = static_cast<float>(weights[i]);
+    eps[static_cast<std::size_t>(i)] = static_cast<float>(epochs_per_sample[i]);
+  }
+  std::vector<float> init_float = init_to_float_2d(init);
+  std::vector<float> out(init_float.size());
+  const auto ab = find_ab_params(1.0, min_dist);
+  const int status = fastembedr_cuda_umap_optimize_coo(
+    heads.begin(),
+    tails.begin(),
+    w.data(),
+    eps.data(),
+    init_float.data(),
+    n,
+    n_edges,
+    n_epochs,
+    negative_sample_rate,
+    static_cast<float>(learning_rate),
+    static_cast<float>(ab.first),
+    static_cast<float>(ab.second),
+    static_cast<float>(repulsion_strength),
+    static_cast<unsigned int>(seed),
+    optimizer_mode,
+    out.data()
+  );
+  if (status != 0) {
+    Rcpp::stop("CUDA COO UMAP optimizer failed: %s", cuda_embedding_error_message());
+  }
   NumericMatrix result(n, 2);
   for (int i = 0; i < n; ++i) {
     result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);

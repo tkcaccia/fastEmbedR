@@ -99,6 +99,7 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector,
                                        double,
                                        double,
                                        double,
+                                       double,
                                        int) {
   Rcpp::stop("Metal CSR embedding backend is only available on macOS with Metal support.");
 }

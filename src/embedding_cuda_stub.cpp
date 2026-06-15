@@ -36,9 +36,31 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix,
                                        int,
                                        double,
                                        double,
+                                       double,
+                                       int,
                                        int,
                                        int) {
   Rcpp::stop("CUDA fused UMAP is available only when the package is built with CUDA support.");
+}
+
+List umap_cuda_graph_dump_impl(IntegerMatrix,
+                               NumericMatrix) {
+  Rcpp::stop("CUDA UMAP graph dump is available only when the package is built with CUDA support.");
+}
+
+NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector,
+                                          IntegerVector,
+                                          NumericVector,
+                                          NumericVector,
+                                          NumericMatrix,
+                                          int,
+                                          int,
+                                          double,
+                                          double,
+                                          double,
+                                          int,
+                                          int) {
+  Rcpp::stop("CUDA COO UMAP optimizer is available only when the package is built with CUDA support.");
 }
 
 NumericMatrix knn_tsne_exact_cuda_impl(IntegerMatrix,

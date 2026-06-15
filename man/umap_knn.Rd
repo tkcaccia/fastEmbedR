@@ -9,7 +9,8 @@ umap_knn(
   seed = 42L,
   verbose = FALSE,
   backend = c("auto", "cpu", "gpu", "metal", "cuda"),
-  n_threads = NULL
+  n_threads = NULL,
+  graph_mode = c("binary", "fuzzy")
 )
 }
 \arguments{
@@ -30,6 +31,10 @@ backend; the package does not label CPU work as GPU.}
 
 \item{n_threads}{Number of CPU worker threads for CPU UMAP, capped internally
 at four threads for the restored stable path.}
+
+\item{graph_mode}{Graph weighting mode. \code{"binary"} uses unit-weight graph
+edges. \code{"fuzzy"} uses standard UMAP fuzzy graph weights.}
+
 }
 \value{
 A numeric embedding matrix with resolved settings in

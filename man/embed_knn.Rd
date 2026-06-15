@@ -38,9 +38,9 @@ GPU backend and errors if CUDA or Metal is unavailable.}
 \item{n_threads}{Number of CPU worker threads used by the CPU optimizer.
 Native GPU optimizers ignore this argument.}
 
-\item{...}{Additional openTSNE-specific parameters such as `perplexity`,
-iteration controls, `Y_init`, learning-rate controls, exaggeration
-controls.}
+\item{...}{Additional method-specific parameters. For openTSNE this includes
+`perplexity`, iteration controls, `Y_init`, learning-rate controls, and
+exaggeration controls.}
 }
 \value{
 A numeric embedding matrix with resolved settings stored in

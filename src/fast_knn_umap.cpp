@@ -1,5 +1,6 @@
 #include <Rcpp.h>
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cmath>
 #include <cstdint>
@@ -358,6 +359,16 @@ std::uint32_t mix_seed(std::uint32_t x) {
   return x;
 }
 
+float deterministic_unit(const int seed,
+                         const int row,
+                         const int col) {
+  std::uint32_t x = static_cast<std::uint32_t>(seed);
+  x ^= static_cast<std::uint32_t>((row + 1) * 0x9e3779b9u);
+  x ^= static_cast<std::uint32_t>((col + 1) * 0x85ebca6bu);
+  const std::uint32_t bits = mix_seed(x);
+  return static_cast<float>(bits & 0x00ffffffu) / 8388607.5f - 1.0f;
+}
+
 int deterministic_vertex(const int n,
                          const int seed,
                          const int epoch,
@@ -368,6 +379,73 @@ int deterministic_vertex(const int n,
   x ^= static_cast<std::uint32_t>((edge + 1u) * 0x85ebca6bu);
   x ^= static_cast<std::uint32_t>((sample + 1) * 0xc2b2ae35u);
   return static_cast<int>(mix_seed(x) % static_cast<std::uint32_t>(n));
+}
+
+int deterministic_vertex_cuda_style(const int n,
+                                    const int seed,
+                                    const int epoch,
+                                    const int head,
+                                    const std::size_t edge,
+                                    const int sample) {
+  std::uint32_t x = static_cast<std::uint32_t>(seed);
+  x ^= static_cast<std::uint32_t>(epoch * 0x9e3779b9u);
+  x ^= static_cast<std::uint32_t>((head + 1) * 0x85ebca6bu);
+  x ^= static_cast<std::uint32_t>((edge + 1u) * 0xc2b2ae35u);
+  x ^= static_cast<std::uint32_t>((sample + 1) * 0x27d4eb2du);
+  return static_cast<int>(mix_seed(x) % static_cast<std::uint32_t>(n));
+}
+
+int positive_samples_this_epoch_uwot_cpu(const float period,
+                                         const int epoch) {
+  if (period <= 0.0f || !std::isfinite(period) || epoch == 0) return 0;
+  const float now = static_cast<float>(epoch);
+  const float previous = static_cast<float>(epoch - 1);
+  const int current_sample = static_cast<int>(std::floor(now / period));
+  const int previous_sample = static_cast<int>(std::floor(previous / period));
+  const int samples = current_sample - previous_sample;
+  return samples > 0 ? samples : 0;
+}
+
+int negative_samples_this_epoch_uwot_cpu(const float period,
+                                         const int negative_sample_rate,
+                                         const int epoch) {
+  if (negative_sample_rate <= 0 ||
+      period <= 0.0f ||
+      !std::isfinite(period) ||
+      epoch == 0) {
+    return 0;
+  }
+  const float now = static_cast<float>(epoch);
+  const float previous = static_cast<float>(epoch - 1);
+  const int current_sample = static_cast<int>(std::floor(now / period));
+  const int previous_sample = static_cast<int>(std::floor(previous / period));
+  if (current_sample <= previous_sample) return 0;
+
+  const float negative_period = period / static_cast<float>(negative_sample_rate);
+  if (negative_period <= 0.0f || !std::isfinite(negative_period)) return 0;
+  const int current_total = static_cast<int>(
+    std::floor((now - negative_period) / negative_period)
+  );
+  int previous_total = 0;
+  if (current_sample > 1) {
+    const float previous_active_epoch =
+      std::ceil(static_cast<float>(current_sample - 1) * period);
+    previous_total = static_cast<int>(
+      std::floor((previous_active_epoch - negative_period) / negative_period)
+    );
+  }
+  const int samples = current_total - previous_total;
+  return samples > 0 ? samples : 0;
+}
+
+void atomic_add_float(std::atomic<float>& target, const float value) {
+  float old_value = target.load(std::memory_order_relaxed);
+  while (!target.compare_exchange_weak(
+    old_value,
+    old_value + value,
+    std::memory_order_relaxed,
+    std::memory_order_relaxed
+  )) {}
 }
 
 // Three-component combined Tausworthe "taus88" generator used by uwot's
@@ -2161,6 +2239,139 @@ NumericMatrix initialize_layout_csr(const int n,
   return embedding;
 }
 
+void normalize_cuda_like_init(std::vector<float>& values,
+                              const int n,
+                              const int n_threads) {
+  const int threads = effective_cpu_threads(n_threads, n);
+  std::vector<double> partial(static_cast<std::size_t>(threads) * 5u, 0.0);
+  parallel_for_chunks(n, threads, [&](const int begin, const int end, const int tid) {
+    double sx = 0.0;
+    double sy = 0.0;
+    double sx2 = 0.0;
+    double sxy = 0.0;
+    double sy2 = 0.0;
+    for (int row = begin; row < end; ++row) {
+      const std::size_t base = static_cast<std::size_t>(row) * 2u;
+      const double x = values[base];
+      const double y = values[base + 1u];
+      sx += x;
+      sy += y;
+      sx2 += x * x;
+      sxy += x * y;
+      sy2 += y * y;
+    }
+    const std::size_t out = static_cast<std::size_t>(tid) * 5u;
+    partial[out] = sx;
+    partial[out + 1u] = sy;
+    partial[out + 2u] = sx2;
+    partial[out + 3u] = sxy;
+    partial[out + 4u] = sy2;
+  });
+
+  double sx = 0.0;
+  double sy = 0.0;
+  double sx2 = 0.0;
+  double sxy = 0.0;
+  double sy2 = 0.0;
+  for (int tid = 0; tid < threads; ++tid) {
+    const std::size_t base = static_cast<std::size_t>(tid) * 5u;
+    sx += partial[base];
+    sy += partial[base + 1u];
+    sx2 += partial[base + 2u];
+    sxy += partial[base + 3u];
+    sy2 += partial[base + 4u];
+  }
+
+  const double dn = static_cast<double>(n);
+  const double mean_x = sx / dn;
+  const double mean_y = sy / dn;
+  const double x_center_ss = std::max(sx2 - sx * sx / dn, 1.0e-24);
+  const double y_center_ss = std::max(sy2 - sy * sy / dn, 1.0e-24);
+  const double xy_center = sxy - sx * sy / dn;
+  const double norm_x = std::sqrt(x_center_ss);
+  const double inv_norm_x = 1.0 / norm_x;
+  const double proj_y_on_x = xy_center / norm_x;
+  const double y_resid_ss = std::max(y_center_ss - proj_y_on_x * proj_y_on_x, 1.0e-24);
+  const double inv_norm_y = 1.0 / std::sqrt(y_resid_ss);
+
+  parallel_for_chunks(n, threads, [&](const int begin, const int end, const int) {
+    for (int row = begin; row < end; ++row) {
+      const std::size_t base = static_cast<std::size_t>(row) * 2u;
+      const double x = (static_cast<double>(values[base]) - mean_x) * inv_norm_x;
+      const double y_centered = static_cast<double>(values[base + 1u]) - mean_y;
+      const double y = (y_centered - proj_y_on_x * x) * inv_norm_y;
+      values[base] = static_cast<float>(x);
+      values[base + 1u] = static_cast<float>(y);
+    }
+  });
+}
+
+template <typename OffsetVec, typename NeighborVec, typename WeightVec>
+NumericMatrix initialize_layout_csr_cuda_diffusion(const int n,
+                                                  const OffsetVec& offsets,
+                                                  const NeighborVec& neighbors,
+                                                  const WeightVec& weights,
+                                                  const int index_offset,
+                                                  const int spectral_n_iter,
+                                                  const int n_threads,
+                                                  const int seed) {
+  if (n < 1) Rcpp::stop("CSR graph must have at least one row");
+  if (spectral_n_iter < 1) Rcpp::stop("spectral_n_iter must be positive");
+
+  std::vector<float> current(static_cast<std::size_t>(n) * 2u);
+  std::vector<float> next(static_cast<std::size_t>(n) * 2u);
+  parallel_for_chunks(n, n_threads, [&](const int begin, const int end, const int) {
+    for (int row = begin; row < end; ++row) {
+      const std::size_t base = static_cast<std::size_t>(row) * 2u;
+      current[base] = deterministic_unit(seed, row, 0);
+      current[base + 1u] = deterministic_unit(seed, row, 1);
+    }
+  });
+  normalize_cuda_like_init(current, n, n_threads);
+
+  for (int iter = 0; iter < spectral_n_iter; ++iter) {
+    parallel_for_chunks(n, n_threads, [&](const int begin_row, const int end_row, const int) {
+      for (int row = begin_row; row < end_row; ++row) {
+        float sx = 0.0f;
+        float sy = 0.0f;
+        float sw = 0.0f;
+        const int begin = offsets[row];
+        const int end = offsets[row + 1];
+        for (int pos = begin; pos < end; ++pos) {
+          const int nb = neighbors[pos] - index_offset;
+          const float w = static_cast<float>(weights[pos]);
+          if (nb < 0 || nb >= n || nb == row || w <= 0.0f || !std::isfinite(w)) continue;
+          const std::size_t nb_base = static_cast<std::size_t>(nb) * 2u;
+          sx += w * current[nb_base];
+          sy += w * current[nb_base + 1u];
+          sw += w;
+        }
+        const std::size_t base = static_cast<std::size_t>(row) * 2u;
+        if (sw <= 0.0f) {
+          next[base] = current[base];
+          next[base + 1u] = current[base + 1u];
+        } else {
+          next[base] = sx / sw;
+          next[base + 1u] = sy / sw;
+        }
+      }
+    });
+    normalize_cuda_like_init(next, n, n_threads);
+    current.swap(next);
+  }
+
+  NumericMatrix embedding(n, 2);
+  double* out = embedding.begin();
+  parallel_for_chunks(n, n_threads, [&](const int begin, const int end, const int) {
+    for (int row = begin; row < end; ++row) {
+      const std::size_t src = static_cast<std::size_t>(row) * 2u;
+      out[static_cast<std::size_t>(row)] = current[src];
+      out[static_cast<std::size_t>(n) + static_cast<std::size_t>(row)] = current[src + 1u];
+    }
+  });
+  return embedding;
+}
+
 void add_delta_2d(std::vector<float>& delta,
                   const int n,
                   const int i,
@@ -3470,6 +3681,207 @@ Rcpp::List umap_graph_csr_cpp(IntegerMatrix indices,
 }
 
 // [[Rcpp::export]]
+Rcpp::List umap_graph_csr_cuda_like_cpp(IntegerMatrix indices,
+                                        NumericMatrix distances,
+                                        int col_start,
+                                        int n_cols,
+                                        int edge_budget,
+                                        int n_threads) {
+  if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
+    Rcpp::stop("indices and distances must have the same dimensions");
+  }
+  if (col_start < 0 || n_cols < 1 || col_start + n_cols > indices.ncol()) {
+    Rcpp::stop("invalid KNN column range");
+  }
+  if (edge_budget < 1) Rcpp::stop("edge_budget must be positive");
+  if (n_threads < 1) Rcpp::stop("n_threads must be positive");
+
+  const int n = indices.nrow();
+  const int k = n_cols;
+  const int kept_k = std::min(k, std::max(1, edge_budget));
+  const int width = std::min(256, std::max(kept_k, 2 * kept_k));
+  int min_idx = std::numeric_limits<int>::max();
+  int max_idx = std::numeric_limits<int>::min();
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < kept_k; ++j) {
+      const int idx = indices(i, j + col_start);
+      min_idx = std::min(min_idx, idx);
+      max_idx = std::max(max_idx, idx);
+    }
+  }
+  const int index_offset = (min_idx >= 1 && max_idx <= n) ? 1 : 0;
+
+  std::vector<float> distance_values = copy_distances_float(distances, n_threads, col_start, k);
+  const FloatDistanceView distance_view{distance_values.data(), n, k, k};
+  std::vector<int> direct_neighbors(static_cast<std::size_t>(n) * static_cast<std::size_t>(kept_k), -1);
+  std::vector<float> direct_weights(static_cast<std::size_t>(n) * static_cast<std::size_t>(kept_k), 0.0f);
+
+  const float target = std::log2(static_cast<float>(kept_k < 2 ? 2 : kept_k));
+  parallel_for_chunks(n, n_threads, [&](const int begin_row, const int end_row, const int) {
+    for (int row = begin_row; row < end_row; ++row) {
+      float rho = std::numeric_limits<float>::infinity();
+      for (int j = 0; j < kept_k; ++j) {
+        const float d = distance_view(row, j);
+        if (std::isfinite(d) && d > 0.0f && d < rho) rho = d;
+      }
+      if (!std::isfinite(rho)) rho = 0.0f;
+
+      float lo = 0.0f;
+      float hi = std::numeric_limits<float>::infinity();
+      float sigma = 1.0f;
+      for (int iter = 0; iter < 48; ++iter) {
+        float psum = 0.0f;
+        for (int j = 0; j < kept_k; ++j) {
+          const float raw = distance_view(row, j);
+          if (!std::isfinite(raw)) continue;
+          const float d = raw - rho;
+          psum += d <= 0.0f ? 1.0f : std::exp(-d / sigma);
+        }
+        if (std::fabs(psum - target) < 1.0e-5f) break;
+        if (psum > target) {
+          hi = sigma;
+          sigma = 0.5f * (lo + hi);
+        } else {
+          lo = sigma;
+          sigma = std::isinf(hi) ? sigma * 2.0f : 0.5f * (lo + hi);
+        }
+      }
+      sigma = std::max(sigma, 1.0e-6f);
+
+      for (int j = 0; j < kept_k; ++j) {
+        const std::size_t pos = static_cast<std::size_t>(row) * static_cast<std::size_t>(kept_k) +
+                                static_cast<std::size_t>(j);
+        const int nb = indices(row, j + col_start) - index_offset;
+        const float d = distance_view(row, j);
+        if (nb < 0 || nb >= n || nb == row || !std::isfinite(d)) {
+          direct_neighbors[pos] = -1;
+          direct_weights[pos] = 0.0f;
+        } else {
+          direct_neighbors[pos] = nb;
+          direct_weights[pos] = d <= rho ? 1.0f : std::exp(-(d - rho) / sigma);
+        }
+      }
+    }
+  });
+
+  auto direct_contains_local = [&](const int row, const int target_row) {
+    for (int j = 0; j < kept_k; ++j) {
+      const std::size_t pos = static_cast<std::size_t>(row) * static_cast<std::size_t>(kept_k) +
+                              static_cast<std::size_t>(j);
+      if (direct_neighbors[pos] == target_row) return true;
+    }
+    return false;
+  };
+  auto reverse_weight_local = [&](const int row, const int target_row) {
+    for (int j = 0; j < kept_k; ++j) {
+      const std::size_t pos = static_cast<std::size_t>(row) * static_cast<std::size_t>(kept_k) +
+                              static_cast<std::size_t>(j);
+      if (direct_neighbors[pos] == target_row) return direct_weights[pos];
+    }
+    return 0.0f;
+  };
+
+  std::vector<int> row_counts(static_cast<std::size_t>(n), 0);
+  std::vector<int> union_neighbors(static_cast<std::size_t>(n) * static_cast<std::size_t>(width), -1);
+  std::vector<float> union_weights(static_cast<std::size_t>(n) * static_cast<std::size_t>(width), 0.0f);
+
+  for (int row = 0; row < n; ++row) {
+    for (int j = 0; j < kept_k; ++j) {
+      const std::size_t direct_pos = static_cast<std::size_t>(row) * static_cast<std::size_t>(kept_k) +
+                                     static_cast<std::size_t>(j);
+      const int nb = direct_neighbors[direct_pos];
+      const float forward = direct_weights[direct_pos];
+      if (nb < 0 || nb >= n || nb == row || forward <= 0.0f) continue;
+      const float reverse = reverse_weight_local(nb, row);
+      const float w = forward + reverse - forward * reverse;
+      const int pos = row_counts[static_cast<std::size_t>(row)]++;
+      if (pos < width) {
+        const std::size_t out = static_cast<std::size_t>(row) * static_cast<std::size_t>(width) +
+                                static_cast<std::size_t>(pos);
+        union_neighbors[out] = nb;
+        union_weights[out] = w;
+      }
+    }
+  }
+
+  for (int row = 0; row < n; ++row) {
+    for (int j = 0; j < kept_k; ++j) {
+      const std::size_t direct_pos = static_cast<std::size_t>(row) * static_cast<std::size_t>(kept_k) +
+                                     static_cast<std::size_t>(j);
+      const int nb = direct_neighbors[direct_pos];
+      const float w = direct_weights[direct_pos];
+      if (nb < 0 || nb >= n || nb == row || w <= 0.0f) continue;
+      if (direct_contains_local(nb, row)) continue;
+      const int pos = row_counts[static_cast<std::size_t>(nb)]++;
+      if (pos < width) {
+        const std::size_t out = static_cast<std::size_t>(nb) * static_cast<std::size_t>(width) +
+                                static_cast<std::size_t>(pos);
+        union_neighbors[out] = row;
+        union_weights[out] = w;
+      }
+    }
+  }
+
+  CsrGraphNative graph;
+  graph.offsets.resize(static_cast<std::size_t>(n) + 1u, 0);
+  int truncated_edges = 0;
+  for (int row = 0; row < n; ++row) {
+    int count = 0;
+    const int stored = std::min(row_counts[static_cast<std::size_t>(row)], width);
+    truncated_edges += std::max(0, row_counts[static_cast<std::size_t>(row)] - width);
+    for (int j = 0; j < stored; ++j) {
+      const std::size_t pos = static_cast<std::size_t>(row) * static_cast<std::size_t>(width) +
+                              static_cast<std::size_t>(j);
+      const int nb = union_neighbors[pos];
+      const float w = union_weights[pos];
+      if (nb >= 0 && nb < n && nb != row && std::isfinite(w) && w > 1.0e-6f) ++count;
+    }
+    graph.offsets[static_cast<std::size_t>(row + 1)] =
+      graph.offsets[static_cast<std::size_t>(row)] + count;
+  }
+
+  graph.neighbors.resize(static_cast<std::size_t>(graph.offsets[static_cast<std::size_t>(n)]));
+  graph.weights.resize(graph.neighbors.size());
+  for (int row = 0; row < n; ++row) {
+    std::vector<std::pair<int, float>> row_edges;
+    const int stored = std::min(row_counts[static_cast<std::size_t>(row)], width);
+    row_edges.reserve(static_cast<std::size_t>(stored));
+    for (int j = 0; j < stored; ++j) {
+      const std::size_t pos = static_cast<std::size_t>(row) * static_cast<std::size_t>(width) +
+                              static_cast<std::size_t>(j);
+      const int nb = union_neighbors[pos];
+      const float w = union_weights[pos];
+      if (nb >= 0 && nb < n && nb != row && std::isfinite(w) && w > 1.0e-6f) {
+        row_edges.push_back({nb, w});
+      }
+    }
+    std::sort(row_edges.begin(), row_edges.end(),
+              [](const std::pair<int, float>& a, const std::pair<int, float>& b) {
+                return a.first < b.first;
+              });
+    int out_pos = graph.offsets[static_cast<std::size_t>(row)];
+    for (const auto& edge : row_edges) {
+      graph.neighbors[static_cast<std::size_t>(out_pos)] = edge.first;
+      graph.weights[static_cast<std::size_t>(out_pos)] = edge.second;
+      ++out_pos;
+    }
+  }
+  attach_csr_epoch_schedule(graph);
+
+  return Rcpp::List::create(
+    Rcpp::Named("offsets") = Rcpp::wrap(graph.offsets),
+    Rcpp::Named("neighbors") = Rcpp::wrap(graph.neighbors),
+    Rcpp::Named("weights") = Rcpp::wrap(graph.weights),
+    Rcpp::Named("epochs_per_sample") = Rcpp::wrap(graph.epochs_per_sample),
+    Rcpp::Named("max_weight") = graph.max_weight,
+    Rcpp::Named("n") = n,
+    Rcpp::Named("nnz") = static_cast<int>(graph.neighbors.size()),
+    Rcpp::Named("cuda_like_width") = width,
+    Rcpp::Named("truncated_edges") = truncated_edges
+  );
+}
+
+// [[Rcpp::export]]
 NumericMatrix fast_knn_umap_range_cpp(IntegerMatrix indices,
                                       NumericMatrix distances,
                                       int col_start,
@@ -3531,6 +3943,368 @@ NumericMatrix fast_knn_umap_cpp(IntegerMatrix indices,
     negative_sample_rate, learning_rate, repulsion_strength, spectral_n_iter,
     n_threads, init_scale, seed, verbose
   );
+}
+
+// [[Rcpp::export]]
+NumericMatrix umap_cuda_diffusion_init_csr_cpp(IntegerVector offsets,
+                                               IntegerVector neighbors,
+                                               NumericVector weights,
+                                               int spectral_n_iter,
+                                               int n_threads,
+                                               int seed) {
+  if (offsets.size() < 2) Rcpp::stop("CSR offsets must have length at least two");
+  if (neighbors.size() != weights.size()) {
+    Rcpp::stop("CSR neighbors and weights must have the same length");
+  }
+  if (spectral_n_iter < 1) Rcpp::stop("spectral_n_iter must be positive");
+  if (n_threads < 1) Rcpp::stop("n_threads must be positive");
+
+  const int n = offsets.size() - 1;
+  const int index_offset = validate_csr_inputs(offsets, neighbors, weights);
+  return initialize_layout_csr_cuda_diffusion(
+    n, offsets, neighbors, weights, index_offset, spectral_n_iter, n_threads, seed
+  );
+}
+
+// [[Rcpp::export]]
+NumericMatrix fast_knn_umap_csr_init_cpp(IntegerVector offsets,
+                                         IntegerVector neighbors,
+                                         NumericVector weights,
+                                         NumericMatrix init_embedding,
+                                         int n_epochs,
+                                         double min_dist,
+                                         int negative_sample_rate,
+                                         double learning_rate,
+                                         double repulsion_strength,
+                                         int n_threads,
+                                         int seed,
+                                         bool verbose) {
+  if (offsets.size() < 2) Rcpp::stop("CSR offsets must have length at least two");
+  if (neighbors.size() != weights.size()) {
+    Rcpp::stop("CSR neighbors and weights must have the same length");
+  }
+  if (init_embedding.ncol() < 1) Rcpp::stop("init_embedding must have at least one column");
+  if (n_epochs < 0) Rcpp::stop("n_epochs must be non-negative");
+  if (min_dist < 0.0) Rcpp::stop("min_dist must be non-negative");
+  if (negative_sample_rate < 0) Rcpp::stop("negative_sample_rate must be non-negative");
+  if (learning_rate <= 0.0) Rcpp::stop("learning_rate must be positive");
+  if (repulsion_strength <= 0.0) Rcpp::stop("repulsion_strength must be positive");
+  if (n_threads < 1) Rcpp::stop("n_threads must be positive");
+
+  const int n = offsets.size() - 1;
+  if (init_embedding.nrow() != n) {
+    Rcpp::stop("init_embedding row count must match CSR graph");
+  }
+  const int index_offset = validate_csr_inputs(offsets, neighbors, weights);
+  return optimize_layout_csr(
+    n, init_embedding.ncol(), offsets, neighbors, weights, index_offset, n_epochs, min_dist,
+    negative_sample_rate, learning_rate, repulsion_strength, 1,
+    n_threads, R_NaReal, seed, verbose, init_embedding, true
+  );
+}
+
+// [[Rcpp::export]]
+NumericMatrix fast_knn_umap_csr_atomic_cpp(IntegerVector offsets,
+                                           IntegerVector neighbors,
+                                           NumericVector weights,
+                                           NumericMatrix init_embedding,
+                                           int n_epochs,
+                                           double min_dist,
+                                           int negative_sample_rate,
+                                           double learning_rate,
+                                           double repulsion_strength,
+                                           int n_threads,
+                                           int seed,
+                                           bool verbose) {
+  if (offsets.size() < 2) Rcpp::stop("CSR offsets must have length at least two");
+  if (neighbors.size() != weights.size()) {
+    Rcpp::stop("CSR neighbors and weights must have the same length");
+  }
+  if (init_embedding.ncol() != 2) {
+    Rcpp::stop("CPU atomic UMAP currently requires a two-dimensional initialization");
+  }
+  if (n_epochs < 1) Rcpp::stop("n_epochs must be positive");
+  if (min_dist < 0.0) Rcpp::stop("min_dist must be non-negative");
+  if (negative_sample_rate < 0) Rcpp::stop("negative_sample_rate must be non-negative");
+  if (learning_rate <= 0.0) Rcpp::stop("learning_rate must be positive");
+  if (repulsion_strength <= 0.0) Rcpp::stop("repulsion_strength must be positive");
+  if (n_threads < 1) Rcpp::stop("n_threads must be positive");
+
+  const int n = offsets.size() - 1;
+  if (init_embedding.nrow() != n) {
+    Rcpp::stop("init_embedding row count must match CSR graph");
+  }
+  const int index_offset = validate_csr_inputs(offsets, neighbors, weights);
+
+  std::vector<int> heads;
+  std::vector<int> tails;
+  std::vector<float> edge_weights;
+  heads.reserve(static_cast<std::size_t>(neighbors.size()));
+  tails.reserve(static_cast<std::size_t>(neighbors.size()));
+  edge_weights.reserve(static_cast<std::size_t>(neighbors.size()));
+  float max_weight = 0.0f;
+  for (int row = 0; row < n; ++row) {
+    const int begin = offsets[row];
+    const int end = offsets[row + 1];
+    for (int pos = begin; pos < end; ++pos) {
+      const int nb = neighbors[pos] - index_offset;
+      const float w = static_cast<float>(weights[pos]);
+      if (nb < 0 || nb >= n || nb == row || !std::isfinite(w) || w <= 0.0f) continue;
+      heads.push_back(row);
+      tails.push_back(nb);
+      edge_weights.push_back(w);
+      max_weight = std::max(max_weight, w);
+    }
+  }
+  const int n_edges = static_cast<int>(heads.size());
+  if (n_edges == 0 || max_weight <= 0.0f) {
+    Rcpp::stop("The CSR graph has no usable UMAP edges");
+  }
+
+  std::vector<float> periods(static_cast<std::size_t>(n_edges));
+  for (int i = 0; i < n_edges; ++i) {
+    periods[static_cast<std::size_t>(i)] =
+      max_weight / std::max(edge_weights[static_cast<std::size_t>(i)], 1.0e-6f);
+  }
+
+  const auto ab = find_ab_params(1.0, min_dist);
+  const float af = static_cast<float>(ab.first);
+  const float bf = static_cast<float>(ab.second);
+  const float learning_rate_f = static_cast<float>(learning_rate);
+  const float eps = 1.1920928955078125e-7f;
+
+  std::vector<std::atomic<float>> layout(static_cast<std::size_t>(n) * 2u);
+  for (int i = 0; i < n; ++i) {
+    layout[static_cast<std::size_t>(i) * 2u].store(
+      static_cast<float>(init_embedding(i, 0)), std::memory_order_relaxed
+    );
+    layout[static_cast<std::size_t>(i) * 2u + 1u].store(
+      static_cast<float>(init_embedding(i, 1)), std::memory_order_relaxed
+    );
+  }
+
+  const int threads = effective_cpu_threads(n_threads, n_edges);
+  for (int epoch = 0; epoch < n_epochs; ++epoch) {
+    const float alpha = learning_rate_f *
+      (1.0f - static_cast<float>(epoch) / std::max(1.0f, static_cast<float>(n_epochs)));
+    parallel_for_chunks(n_edges, threads, [&](const int begin_edge, const int end_edge, const int) {
+      for (int gid = begin_edge; gid < end_edge; ++gid) {
+        const int head = heads[static_cast<std::size_t>(gid)];
+        const int tail = tails[static_cast<std::size_t>(gid)];
+        const float period = periods[static_cast<std::size_t>(gid)];
+        const int positive_samples = positive_samples_this_epoch_uwot_cpu(period, epoch);
+        if (positive_samples <= 0) continue;
+
+        for (int sample = 0; sample < positive_samples; ++sample) {
+          const std::size_t head_base = static_cast<std::size_t>(head) * 2u;
+          const std::size_t tail_base = static_cast<std::size_t>(tail) * 2u;
+          const float head_x = layout[head_base].load(std::memory_order_relaxed);
+          const float head_y = layout[head_base + 1u].load(std::memory_order_relaxed);
+          const float tail_x = layout[tail_base].load(std::memory_order_relaxed);
+          const float tail_y = layout[tail_base + 1u].load(std::memory_order_relaxed);
+          const float dx = head_x - tail_x;
+          const float dy = head_y - tail_y;
+          const float d2 = std::max(eps, dx * dx + dy * dy);
+          const float d2b = std::pow(d2, bf);
+          const float coeff = -2.0f * af * bf * (d2b / d2) / (af * d2b + 1.0f);
+          const float gx = clip4f(coeff * dx) * alpha;
+          const float gy = clip4f(coeff * dy) * alpha;
+          atomic_add_float(layout[head_base], gx);
+          atomic_add_float(layout[head_base + 1u], gy);
+          atomic_add_float(layout[tail_base], -gx);
+          atomic_add_float(layout[tail_base + 1u], -gy);
+        }
+
+        const int neg_samples =
+          negative_samples_this_epoch_uwot_cpu(period, negative_sample_rate, epoch);
+        for (int s = 0; s < neg_samples; ++s) {
+          const int neg = deterministic_vertex_cuda_style(
+            n, seed, epoch, head, static_cast<std::size_t>(gid), s
+          );
+          if (neg == head || neg == tail) continue;
+          const std::size_t head_base = static_cast<std::size_t>(head) * 2u;
+          const std::size_t neg_base = static_cast<std::size_t>(neg) * 2u;
+          const float head_x = layout[head_base].load(std::memory_order_relaxed);
+          const float head_y = layout[head_base + 1u].load(std::memory_order_relaxed);
+          const float neg_x = layout[neg_base].load(std::memory_order_relaxed);
+          const float neg_y = layout[neg_base + 1u].load(std::memory_order_relaxed);
+          const float dx = head_x - neg_x;
+          const float dy = head_y - neg_y;
+          const float d2 = std::max(eps, dx * dx + dy * dy);
+          const float d2b = std::pow(d2, bf);
+          const float rcoeff = static_cast<float>(repulsion_strength) * 2.0f * bf /
+            ((0.001f + d2) * (af * d2b + 1.0f));
+          atomic_add_float(layout[head_base], clip4f(rcoeff * dx) * alpha);
+          atomic_add_float(layout[head_base + 1u], clip4f(rcoeff * dy) * alpha);
+        }
+      }
+    });
+
+    if (verbose && (epoch == 0 || epoch == n_epochs - 1 || (epoch + 1) % 50 == 0)) {
+      Rcpp::Rcout << "epoch " << (epoch + 1) << "/" << n_epochs << "\n";
+    }
+  }
+
+  NumericMatrix out(n, 2);
+  for (int i = 0; i < n; ++i) {
+    const std::size_t base = static_cast<std::size_t>(i) * 2u;
+    out(i, 0) = static_cast<double>(layout[base].load(std::memory_order_relaxed));
+    out(i, 1) = static_cast<double>(layout[base + 1u].load(std::memory_order_relaxed));
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericMatrix fast_knn_umap_coo_replay_cpp(IntegerVector heads,
+                                           IntegerVector tails,
+                                           NumericVector weights,
+                                           NumericVector epochs_per_sample,
+                                           NumericMatrix init_embedding,
+                                           int n_epochs,
+                                           double min_dist,
+                                           int negative_sample_rate,
+                                           double learning_rate,
+                                           double repulsion_strength,
+                                           int n_threads,
+                                           int seed,
+                                           bool sanitize_each_epoch,
+                                           bool verbose) {
+  if (heads.size() != tails.size() ||
+      heads.size() != weights.size() ||
+      heads.size() != epochs_per_sample.size()) {
+    Rcpp::stop("COO heads, tails, weights, and epochs_per_sample must have the same length");
+  }
+  if (init_embedding.ncol() != 2) {
+    Rcpp::stop("COO replay currently requires a two-dimensional initialization");
+  }
+  if (n_epochs < 1) Rcpp::stop("n_epochs must be positive");
+  if (min_dist < 0.0) Rcpp::stop("min_dist must be non-negative");
+  if (negative_sample_rate < 0) Rcpp::stop("negative_sample_rate must be non-negative");
+  if (learning_rate <= 0.0) Rcpp::stop("learning_rate must be positive");
+  if (repulsion_strength <= 0.0) Rcpp::stop("repulsion_strength must be positive");
+  if (n_threads < 1) Rcpp::stop("n_threads must be positive");
+
+  const int n = init_embedding.nrow();
+  const int capacity = heads.size();
+  if (n < 2) Rcpp::stop("init_embedding must have at least two rows");
+  if (capacity < 1) Rcpp::stop("COO graph is empty");
+
+  const auto ab = find_ab_params(1.0, min_dist);
+  const float af = static_cast<float>(ab.first);
+  const float bf = static_cast<float>(ab.second);
+  const float learning_rate_f = static_cast<float>(learning_rate);
+  const float repulsion_strength_f = static_cast<float>(repulsion_strength);
+  const float eps = 1.1920928955078125e-7f;
+  const float max_abs_coord = 16.0f;
+
+  std::vector<int> h(static_cast<std::size_t>(capacity));
+  std::vector<int> t(static_cast<std::size_t>(capacity));
+  std::vector<float> w(static_cast<std::size_t>(capacity));
+  std::vector<float> period(static_cast<std::size_t>(capacity));
+  for (int i = 0; i < capacity; ++i) {
+    h[static_cast<std::size_t>(i)] = heads[i];
+    t[static_cast<std::size_t>(i)] = tails[i];
+    w[static_cast<std::size_t>(i)] = static_cast<float>(weights[i]);
+    period[static_cast<std::size_t>(i)] = static_cast<float>(epochs_per_sample[i]);
+  }
+
+  std::vector<std::atomic<float>> layout(static_cast<std::size_t>(n) * 2u);
+  for (int i = 0; i < n; ++i) {
+    layout[static_cast<std::size_t>(i) * 2u].store(
+      static_cast<float>(init_embedding(i, 0)), std::memory_order_relaxed
+    );
+    layout[static_cast<std::size_t>(i) * 2u + 1u].store(
+      static_cast<float>(init_embedding(i, 1)), std::memory_order_relaxed
+    );
+  }
+
+  const int threads = effective_cpu_threads(n_threads, capacity);
+  for (int epoch = 0; epoch < n_epochs; ++epoch) {
+    const float alpha = learning_rate_f *
+      (1.0f - static_cast<float>(epoch) / std::max(1.0f, static_cast<float>(n_epochs)));
+    parallel_for_chunks(capacity, threads, [&](const int begin_edge, const int end_edge, const int) {
+      for (int gid = begin_edge; gid < end_edge; ++gid) {
+        const int head = h[static_cast<std::size_t>(gid)];
+        const int tail = t[static_cast<std::size_t>(gid)];
+        if (head < 0 || head >= n || tail < 0 || tail >= n || head == tail) continue;
+
+        const float per = period[static_cast<std::size_t>(gid)];
+        const int positive_samples = positive_samples_this_epoch_uwot_cpu(per, epoch);
+        if (positive_samples <= 0) continue;
+
+        for (int sample = 0; sample < positive_samples; ++sample) {
+          const std::size_t head_base = static_cast<std::size_t>(head) * 2u;
+          const std::size_t tail_base = static_cast<std::size_t>(tail) * 2u;
+          const float head_x = layout[head_base].load(std::memory_order_relaxed);
+          const float head_y = layout[head_base + 1u].load(std::memory_order_relaxed);
+          const float tail_x = layout[tail_base].load(std::memory_order_relaxed);
+          const float tail_y = layout[tail_base + 1u].load(std::memory_order_relaxed);
+          const float dx = head_x - tail_x;
+          const float dy = head_y - tail_y;
+          const float d2 = std::max(eps, dx * dx + dy * dy);
+          const float d2b = std::pow(d2, bf);
+          const float coeff = -2.0f * af * bf * (d2b / d2) / (af * d2b + 1.0f);
+          const float gx = clip4f(coeff * dx) * alpha;
+          const float gy = clip4f(coeff * dy) * alpha;
+          atomic_add_float(layout[head_base], gx);
+          atomic_add_float(layout[head_base + 1u], gy);
+          atomic_add_float(layout[tail_base], -gx);
+          atomic_add_float(layout[tail_base + 1u], -gy);
+        }
+
+        const int neg_samples =
+          negative_samples_this_epoch_uwot_cpu(per, negative_sample_rate, epoch);
+        for (int s = 0; s < neg_samples; ++s) {
+          const int neg = deterministic_vertex_cuda_style(
+            n, seed, epoch, head, static_cast<std::size_t>(gid), s
+          );
+          if (neg == head || neg == tail) continue;
+          const std::size_t head_base = static_cast<std::size_t>(head) * 2u;
+          const std::size_t neg_base = static_cast<std::size_t>(neg) * 2u;
+          const float head_x = layout[head_base].load(std::memory_order_relaxed);
+          const float head_y = layout[head_base + 1u].load(std::memory_order_relaxed);
+          const float neg_x = layout[neg_base].load(std::memory_order_relaxed);
+          const float neg_y = layout[neg_base + 1u].load(std::memory_order_relaxed);
+          const float dx = head_x - neg_x;
+          const float dy = head_y - neg_y;
+          const float d2 = std::max(eps, dx * dx + dy * dy);
+          const float d2b = std::pow(d2, bf);
+          const float rcoeff = repulsion_strength_f * 2.0f * bf /
+            ((0.001f + d2) * (af * d2b + 1.0f));
+          atomic_add_float(layout[head_base], clip4f(rcoeff * dx) * alpha);
+          atomic_add_float(layout[head_base + 1u], clip4f(rcoeff * dy) * alpha);
+        }
+      }
+    });
+
+    if (sanitize_each_epoch) {
+      parallel_for_chunks(n, threads, [&](const int begin_row, const int end_row, const int) {
+        for (int row = begin_row; row < end_row; ++row) {
+          const std::size_t base = static_cast<std::size_t>(row) * 2u;
+          float x = layout[base].load(std::memory_order_relaxed);
+          float y = layout[base + 1u].load(std::memory_order_relaxed);
+          if (!std::isfinite(x)) x = 0.0f;
+          if (!std::isfinite(y)) y = 0.0f;
+          x = std::min(max_abs_coord, std::max(-max_abs_coord, x));
+          y = std::min(max_abs_coord, std::max(-max_abs_coord, y));
+          layout[base].store(x, std::memory_order_relaxed);
+          layout[base + 1u].store(y, std::memory_order_relaxed);
+        }
+      });
+    }
+
+    if (verbose && (epoch == 0 || epoch == n_epochs - 1 || (epoch + 1) % 50 == 0)) {
+      Rcpp::Rcout << "epoch " << (epoch + 1) << "/" << n_epochs << "\n";
+    }
+  }
+
+  NumericMatrix out(n, 2);
+  for (int i = 0; i < n; ++i) {
+    const std::size_t base = static_cast<std::size_t>(i) * 2u;
+    out(i, 0) = static_cast<double>(layout[base].load(std::memory_order_relaxed));
+    out(i, 1) = static_cast<double>(layout[base + 1u].load(std::memory_order_relaxed));
+  }
+  return out;
 }
 
 // [[Rcpp::export]]

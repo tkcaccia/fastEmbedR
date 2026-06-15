@@ -31,6 +31,7 @@ struct EmbedParams {
   float a;
   float b;
   float max_weight;
+  float repulsion_strength;
 };
 
 struct KnnPrepParams {
@@ -199,12 +200,12 @@ __device__ float repulsive_coeff(float d2, const EmbedParams p) {
   if (d2 <= 0.0f) return 0.0f;
   if (p.objective == 0) {
     const float d2b = powf(d2, p.b);
-    return 2.0f * p.b / ((0.001f + d2) * (p.a * d2b + 1.0f));
+    return p.repulsion_strength * 2.0f * p.b / ((0.001f + d2) * (p.a * d2b + 1.0f));
   }
-  if (p.objective == 1) return 2.0f / ((1.0f + d2) * (1.0f + d2));
-  if (p.objective == 2) return 0.4f / (1.0f + d2);
-  if (p.objective == 4) return 0.8125f / ((0.15f + d2) * (1.0f + d2));
-  return 2.0f / (1.0f + d2);
+  if (p.objective == 1) return p.repulsion_strength * 2.0f / ((1.0f + d2) * (1.0f + d2));
+  if (p.objective == 2) return p.repulsion_strength * 0.4f / (1.0f + d2);
+  if (p.objective == 4) return p.repulsion_strength * 0.8125f / ((0.15f + d2) * (1.0f + d2));
+  return p.repulsion_strength * 2.0f / (1.0f + d2);
 }
 
 __device__ int positive_samples_this_epoch(float weight, const EmbedParams p, unsigned int epoch) {
@@ -2233,6 +2234,94 @@ __global__ void embed_epoch_coo_atomic_kernel(float* layout,
   }
 }
 
+__global__ void embed_epoch_coo_delta_kernel(const float* layout,
+                                             float* delta,
+                                             const int* heads,
+                                             const int* tails,
+                                             const float* weights,
+                                             const float* epochs_per_sample,
+                                             EmbedParams p,
+                                             unsigned int epoch,
+                                             int n_edges_capacity) {
+  const int gid = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (gid >= n_edges_capacity) return;
+
+  const int head = heads[gid];
+  const int tail = tails[gid];
+  if (head < 0 || head >= p.n || tail < 0 || tail >= p.n || head == tail) return;
+
+  const float period = epochs_per_sample[gid];
+  const int positive_samples = positive_samples_this_epoch_uwot(period, epoch);
+  if (positive_samples <= 0) return;
+
+  const float alpha = p.learning_rate *
+    (1.0f - static_cast<float>(epoch) / fmaxf(1.0f, static_cast<float>(p.n_epochs)));
+  const float eps = 1.1920928955078125e-7f;
+
+  for (int sample = 0; sample < positive_samples; ++sample) {
+    const std::size_t head_base = static_cast<std::size_t>(head) * 2u;
+    const std::size_t tail_base = static_cast<std::size_t>(tail) * 2u;
+    const float head_x = layout[head_base];
+    const float head_y = layout[head_base + 1u];
+    const float tail_x = layout[tail_base];
+    const float tail_y = layout[tail_base + 1u];
+    const float dx = head_x - tail_x;
+    const float dy = head_y - tail_y;
+    const float d2 = fmaxf(eps, dx * dx + dy * dy);
+    const float w = weights[gid];
+    const float coeff = attractive_coeff(d2, w, p);
+    const float gx = clip4(coeff * dx) * alpha;
+    const float gy = clip4(coeff * dy) * alpha;
+    atomicAdd(delta + head_base, gx);
+    atomicAdd(delta + head_base + 1u, gy);
+    atomicAdd(delta + tail_base, -gx);
+    atomicAdd(delta + tail_base + 1u, -gy);
+  }
+
+  const int neg_samples = negative_samples_this_epoch_uwot(period, p, epoch);
+  for (int s = 0; s < neg_samples; ++s) {
+    const unsigned int neg = deterministic_vertex(
+      static_cast<unsigned int>(p.n),
+      p.seed,
+      epoch,
+      static_cast<unsigned int>(head),
+      static_cast<unsigned int>(gid),
+      static_cast<unsigned int>(s)
+    );
+    if (static_cast<int>(neg) == head || static_cast<int>(neg) == tail) continue;
+
+    const std::size_t head_base = static_cast<std::size_t>(head) * 2u;
+    const std::size_t neg_base = static_cast<std::size_t>(neg) * 2u;
+    const float head_x = layout[head_base];
+    const float head_y = layout[head_base + 1u];
+    const float neg_x = layout[neg_base];
+    const float neg_y = layout[neg_base + 1u];
+    const float ndx = head_x - neg_x;
+    const float ndy = head_y - neg_y;
+    const float nd2 = fmaxf(eps, ndx * ndx + ndy * ndy);
+    const float rcoeff = repulsive_coeff(nd2, p);
+    atomicAdd(delta + head_base, clip4(rcoeff * ndx) * alpha);
+    atomicAdd(delta + head_base + 1u, clip4(rcoeff * ndy) * alpha);
+  }
+}
+
+__global__ void apply_delta_sanitize_layout_kernel(float* layout,
+                                                   const float* delta,
+                                                   int n,
+                                                   float max_abs_coord) {
+  const int row = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (row >= n) return;
+  const std::size_t base = static_cast<std::size_t>(row) * 2u;
+  float x = layout[base] + delta[base];
+  float y = layout[base + 1u] + delta[base + 1u];
+  if (!isfinite(x)) x = 0.0f;
+  if (!isfinite(y)) y = 0.0f;
+  x = fminf(max_abs_coord, fmaxf(-max_abs_coord, x));
+  y = fminf(max_abs_coord, fmaxf(-max_abs_coord, y));
+  layout[base] = x;
+  layout[base + 1u] = y;
+}
+
 __global__ void umap_sanitize_layout_kernel(float* layout,
                                             int n,
                                             float max_abs_coord) {
@@ -3053,6 +3142,7 @@ extern "C" int fastembedr_cuda_spectral_init_from_knn(const int* indices,
   int* d_counts = nullptr;
   float* d_current = nullptr;
   float* d_next = nullptr;
+  float* d_delta = nullptr;
   double* d_partial = nullptr;
   double* d_stats = nullptr;
 
@@ -3064,6 +3154,7 @@ extern "C" int fastembedr_cuda_spectral_init_from_knn(const int* indices,
     if (d_counts != nullptr) cudaFree(d_counts);
     if (d_current != nullptr) cudaFree(d_current);
     if (d_next != nullptr) cudaFree(d_next);
+    if (d_delta != nullptr) cudaFree(d_delta);
     if (d_partial != nullptr) cudaFree(d_partial);
     if (d_stats != nullptr) cudaFree(d_stats);
   };
@@ -3157,6 +3248,164 @@ extern "C" int fastembedr_cuda_spectral_init_from_knn(const int* indices,
   return 0;
 }
 
+extern "C" int fastembedr_cuda_umap_graph_dump_from_knn(const int* indices,
+                                                        const double* distances,
+                                                        int n,
+                                                        int k,
+                                                        int index_offset,
+                                                        int* out_heads,
+                                                        int* out_tails,
+                                                        float* out_weights,
+                                                        float* out_epochs_per_sample,
+                                                        int* out_width,
+                                                        int* out_capacity) {
+  embedding_last_error.clear();
+  if (indices == nullptr || distances == nullptr || out_heads == nullptr ||
+      out_tails == nullptr || out_weights == nullptr ||
+      out_epochs_per_sample == nullptr || out_width == nullptr ||
+      out_capacity == nullptr) {
+    set_embedding_error("null host pointer");
+    return 1;
+  }
+  if (n < 2 || k < 1 || k > 256) {
+    set_embedding_error("invalid CUDA UMAP graph dump dimensions");
+    return 1;
+  }
+
+  const int objective = 0;
+  const int width = std::min(256, std::max(k, 2 * k));
+  const std::size_t input_items = static_cast<std::size_t>(n) * k;
+  const std::size_t graph_items = static_cast<std::size_t>(n) * width;
+  const int threads = 256;
+  const int blocks = (n + threads - 1) / threads;
+  const std::size_t required_bytes =
+    input_items * (sizeof(int) + sizeof(double)) +
+    graph_items * (2u * sizeof(int) + 4u * sizeof(float)) +
+    2u * (static_cast<std::size_t>(n) + 1u) * sizeof(int);
+
+  int* d_indices = nullptr;
+  double* d_distances = nullptr;
+  int* d_neighbors = nullptr;
+  float* d_weights = nullptr;
+  int* d_counts = nullptr;
+  int* d_offsets = nullptr;
+  int* d_scan_tmp = nullptr;
+  int* d_coo_heads = nullptr;
+  int* d_coo_tails = nullptr;
+  float* d_coo_weights = nullptr;
+  float* d_coo_epochs_per_sample = nullptr;
+
+  auto cleanup = [&]() {
+    if (d_indices != nullptr) cudaFree(d_indices);
+    if (d_distances != nullptr) cudaFree(d_distances);
+    if (d_neighbors != nullptr) cudaFree(d_neighbors);
+    if (d_weights != nullptr) cudaFree(d_weights);
+    if (d_counts != nullptr) cudaFree(d_counts);
+    if (d_offsets != nullptr) cudaFree(d_offsets);
+    if (d_scan_tmp != nullptr) cudaFree(d_scan_tmp);
+    if (d_coo_heads != nullptr) cudaFree(d_coo_heads);
+    if (d_coo_tails != nullptr) cudaFree(d_coo_tails);
+    if (d_coo_weights != nullptr) cudaFree(d_coo_weights);
+    if (d_coo_epochs_per_sample != nullptr) cudaFree(d_coo_epochs_per_sample);
+  };
+
+  if (check_embedding_memory_available(required_bytes, "CUDA UMAP graph dump allocation preflight")) return 1;
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_indices), input_items * sizeof(int)), "cudaMalloc(umap dump indices)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_distances), input_items * sizeof(double)), "cudaMalloc(umap dump distances)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_neighbors), graph_items * sizeof(int)), "cudaMalloc(umap dump neighbors)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_weights), graph_items * sizeof(float)), "cudaMalloc(umap dump weights)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_counts), static_cast<std::size_t>(n) * sizeof(int)), "cudaMalloc(umap dump row counts)")) {
+    cleanup();
+    return 1;
+  }
+  if (check_cuda(cudaMemcpy(d_indices, indices, input_items * sizeof(int), cudaMemcpyHostToDevice), "cudaMemcpy(umap dump indices H2D)") ||
+      check_cuda(cudaMemcpy(d_distances, distances, input_items * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy(umap dump distances H2D)")) {
+    cleanup();
+    return 1;
+  }
+
+  if (prepare_device_knn_graph(
+        d_indices, d_distances, d_neighbors, d_weights, d_counts,
+        n, k, width, index_offset, objective)) {
+    cleanup();
+    return 1;
+  }
+  cudaFree(d_indices);
+  cudaFree(d_distances);
+  d_indices = nullptr;
+  d_distances = nullptr;
+
+  count_valid_graph_entries_kernel<<<blocks, threads>>>(d_neighbors, d_weights, d_counts, n, width);
+  if (check_cuda(cudaGetLastError(), "count_valid_graph_entries_kernel(umap dump) launch")) {
+    cleanup();
+    return 1;
+  }
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_offsets), static_cast<std::size_t>(n + 1) * sizeof(int)), "cudaMalloc(umap dump csr offsets)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_scan_tmp), static_cast<std::size_t>(n + 1) * sizeof(int)), "cudaMalloc(umap dump csr scan tmp)")) {
+    cleanup();
+    return 1;
+  }
+  init_csr_offsets_from_counts_kernel<<<blocks, threads>>>(d_counts, d_offsets, n);
+  if (check_cuda(cudaGetLastError(), "init_csr_offsets_from_counts_kernel(umap dump) launch")) {
+    cleanup();
+    return 1;
+  }
+  const int scan_length = n + 1;
+  const int scan_blocks = (scan_length + threads - 1) / threads;
+  int* scan_in = d_offsets;
+  int* scan_out = d_scan_tmp;
+  for (int stride = 1; stride < scan_length; stride <<= 1) {
+    scan_offsets_step_kernel<<<scan_blocks, threads>>>(scan_in, scan_out, scan_length, stride);
+    if (check_cuda(cudaGetLastError(), "scan_offsets_step_kernel(umap dump) launch")) {
+      cleanup();
+      return 1;
+    }
+    std::swap(scan_in, scan_out);
+  }
+  if (scan_in != d_offsets &&
+      check_cuda(cudaMemcpy(d_offsets, scan_in, static_cast<std::size_t>(scan_length) * sizeof(int), cudaMemcpyDeviceToDevice), "cudaMemcpy(umap dump scanned offsets D2D)")) {
+    cleanup();
+    return 1;
+  }
+
+  const float graph_max_weight = 1.0f;
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_coo_heads), graph_items * sizeof(int)), "cudaMalloc(umap dump coo heads)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_coo_tails), graph_items * sizeof(int)), "cudaMalloc(umap dump coo tails)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_coo_weights), graph_items * sizeof(float)), "cudaMalloc(umap dump coo weights)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_coo_epochs_per_sample), graph_items * sizeof(float)), "cudaMalloc(umap dump coo epochs_per_sample)")) {
+    cleanup();
+    return 1;
+  }
+  if (check_cuda(cudaMemset(d_coo_heads, 0xff, graph_items * sizeof(int)), "cudaMemset(umap dump coo heads)") ||
+      check_cuda(cudaMemset(d_coo_tails, 0xff, graph_items * sizeof(int)), "cudaMemset(umap dump coo tails)") ||
+      check_cuda(cudaMemset(d_coo_weights, 0, graph_items * sizeof(float)), "cudaMemset(umap dump coo weights)") ||
+      check_cuda(cudaMemset(d_coo_epochs_per_sample, 0, graph_items * sizeof(float)), "cudaMemset(umap dump coo epochs)")) {
+    cleanup();
+    return 1;
+  }
+  pack_coo_graph_kernel<<<blocks, threads>>>(
+    d_neighbors, d_weights, d_offsets, d_coo_heads, d_coo_tails, d_coo_weights,
+    d_coo_epochs_per_sample, graph_max_weight, n, width
+  );
+  if (check_cuda(cudaGetLastError(), "pack_coo_graph_kernel(umap dump) launch")) {
+    cleanup();
+    return 1;
+  }
+  if (check_cuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize(umap dump)") ||
+      check_cuda(cudaMemcpy(out_heads, d_coo_heads, graph_items * sizeof(int), cudaMemcpyDeviceToHost), "cudaMemcpy(umap dump heads D2H)") ||
+      check_cuda(cudaMemcpy(out_tails, d_coo_tails, graph_items * sizeof(int), cudaMemcpyDeviceToHost), "cudaMemcpy(umap dump tails D2H)") ||
+      check_cuda(cudaMemcpy(out_weights, d_coo_weights, graph_items * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy(umap dump weights D2H)") ||
+      check_cuda(cudaMemcpy(out_epochs_per_sample, d_coo_epochs_per_sample, graph_items * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy(umap dump epochs D2H)")) {
+    cleanup();
+    return 1;
+  }
+
+  *out_width = width;
+  *out_capacity = static_cast<int>(graph_items);
+  cleanup();
+  return 0;
+}
+
 extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
                                                        const double* distances,
                                                        int n,
@@ -3166,9 +3415,11 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
                                                        float learning_rate,
                                                        float a,
                                                        float b,
+                                                       float repulsion_strength,
                                                        int spectral_n_iter,
                                                        unsigned int seed,
                                                        int index_offset,
+                                                       int optimizer_mode,
                                                        float* out) {
   embedding_last_error.clear();
   if (indices == nullptr || distances == nullptr || out == nullptr) {
@@ -3193,7 +3444,7 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
     input_items * (sizeof(int) + sizeof(double)) +
     graph_items * (2u * sizeof(int) + 4u * sizeof(float)) +
     2u * (static_cast<std::size_t>(n) + 1u) * sizeof(int) +
-    2u * embed_bytes +
+    (optimizer_mode == 1 ? 3u : 2u) * embed_bytes +
     static_cast<std::size_t>(n) * sizeof(int) +
     static_cast<std::size_t>(stat_blocks) * 5u * sizeof(double) +
     5u * sizeof(double);
@@ -3211,6 +3462,7 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
   float* d_coo_epochs_per_sample = nullptr;
   float* d_current = nullptr;
   float* d_next = nullptr;
+  float* d_delta = nullptr;
   double* d_partial = nullptr;
   double* d_stats = nullptr;
 
@@ -3228,6 +3480,7 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
     if (d_coo_epochs_per_sample != nullptr) cudaFree(d_coo_epochs_per_sample);
     if (d_current != nullptr) cudaFree(d_current);
     if (d_next != nullptr) cudaFree(d_next);
+    if (d_delta != nullptr) cudaFree(d_delta);
     if (d_partial != nullptr) cudaFree(d_partial);
     if (d_stats != nullptr) cudaFree(d_stats);
   };
@@ -3242,6 +3495,11 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
       check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_next), embed_bytes), "cudaMalloc(fused umap next)") ||
       check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_partial), static_cast<std::size_t>(stat_blocks) * 5u * sizeof(double)), "cudaMalloc(fused umap partial)") ||
       check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_stats), 5u * sizeof(double)), "cudaMalloc(fused umap stats)")) {
+    cleanup();
+    return 1;
+  }
+  if (optimizer_mode == 1 &&
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_delta), embed_bytes), "cudaMalloc(fused umap delta)")) {
     cleanup();
     return 1;
   }
@@ -3319,7 +3577,7 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
 
   const float graph_max_weight = 1.0f;
   const EmbedParams params{
-    n, width, n_epochs, negative_sample_rate, objective, seed, learning_rate, a, b, graph_max_weight
+    n, width, n_epochs, negative_sample_rate, objective, seed, learning_rate, a, b, graph_max_weight, repulsion_strength
   };
   if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_coo_heads), graph_items * sizeof(int)), "cudaMalloc(fused umap coo heads)") ||
       check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_coo_tails), graph_items * sizeof(int)), "cudaMalloc(fused umap coo tails)") ||
@@ -3356,19 +3614,40 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
     (static_cast<int>(graph_items) + threads - 1) / threads;
   const float max_abs_coord = 16.0f;
   for (int epoch = 0; epoch < n_epochs; ++epoch) {
-    embed_epoch_coo_atomic_kernel<<<edge_blocks, threads>>>(
-      d_current, d_coo_heads, d_coo_tails, d_coo_weights,
-      d_coo_epochs_per_sample, params, static_cast<unsigned int>(epoch),
-      static_cast<int>(graph_items)
-    );
-    if (check_cuda(cudaGetLastError(), "embed_epoch_coo_atomic_kernel(fused umap) launch")) {
-      cleanup();
-      return 1;
-    }
-    umap_sanitize_layout_kernel<<<blocks, threads>>>(d_current, n, max_abs_coord);
-    if (check_cuda(cudaGetLastError(), "umap_sanitize_layout_kernel(fused umap) launch")) {
-      cleanup();
-      return 1;
+    if (optimizer_mode == 1) {
+      if (check_cuda(cudaMemset(d_delta, 0, embed_bytes), "cudaMemset(fused umap delta)")) {
+        cleanup();
+        return 1;
+      }
+      embed_epoch_coo_delta_kernel<<<edge_blocks, threads>>>(
+        d_current, d_delta, d_coo_heads, d_coo_tails, d_coo_weights,
+        d_coo_epochs_per_sample, params, static_cast<unsigned int>(epoch),
+        static_cast<int>(graph_items)
+      );
+      if (check_cuda(cudaGetLastError(), "embed_epoch_coo_delta_kernel(fused umap) launch")) {
+        cleanup();
+        return 1;
+      }
+      apply_delta_sanitize_layout_kernel<<<blocks, threads>>>(d_current, d_delta, n, max_abs_coord);
+      if (check_cuda(cudaGetLastError(), "apply_delta_sanitize_layout_kernel(fused umap) launch")) {
+        cleanup();
+        return 1;
+      }
+    } else {
+      embed_epoch_coo_atomic_kernel<<<edge_blocks, threads>>>(
+        d_current, d_coo_heads, d_coo_tails, d_coo_weights,
+        d_coo_epochs_per_sample, params, static_cast<unsigned int>(epoch),
+        static_cast<int>(graph_items)
+      );
+      if (check_cuda(cudaGetLastError(), "embed_epoch_coo_atomic_kernel(fused umap) launch")) {
+        cleanup();
+        return 1;
+      }
+      umap_sanitize_layout_kernel<<<blocks, threads>>>(d_current, n, max_abs_coord);
+      if (check_cuda(cudaGetLastError(), "umap_sanitize_layout_kernel(fused umap) launch")) {
+        cleanup();
+        return 1;
+      }
     }
   }
 
@@ -3378,6 +3657,133 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
     return 1;
   }
 
+  cleanup();
+  return 0;
+}
+
+extern "C" int fastembedr_cuda_umap_optimize_coo(const int* heads,
+                                                  const int* tails,
+                                                  const float* weights,
+                                                  const float* epochs_per_sample,
+                                                  const float* init,
+                                                  int n,
+                                                  int n_edges_capacity,
+                                                  int n_epochs,
+                                                  int negative_sample_rate,
+                                                  float learning_rate,
+                                                  float a,
+                                                  float b,
+                                                  float repulsion_strength,
+                                                  unsigned int seed,
+                                                  int optimizer_mode,
+                                                  float* out) {
+  embedding_last_error.clear();
+  if (heads == nullptr || tails == nullptr || weights == nullptr ||
+      epochs_per_sample == nullptr || init == nullptr || out == nullptr) {
+    set_embedding_error("null host pointer");
+    return 1;
+  }
+  if (n < 2 || n_edges_capacity < 1 || n_epochs < 1 ||
+      negative_sample_rate < 0 || learning_rate <= 0.0f ||
+      repulsion_strength <= 0.0f) {
+    set_embedding_error("invalid CUDA COO UMAP optimization parameters");
+    return 1;
+  }
+
+  const std::size_t edge_items = static_cast<std::size_t>(n_edges_capacity);
+  const std::size_t embed_bytes = static_cast<std::size_t>(n) * 2u * sizeof(float);
+  const std::size_t required_bytes =
+    edge_items * (2u * sizeof(int) + 2u * sizeof(float)) +
+    (optimizer_mode == 1 ? 2u : 1u) * embed_bytes;
+
+  int* d_heads = nullptr;
+  int* d_tails = nullptr;
+  float* d_weights = nullptr;
+  float* d_epochs = nullptr;
+  float* d_layout = nullptr;
+  float* d_delta = nullptr;
+  auto cleanup = [&]() {
+    if (d_heads != nullptr) cudaFree(d_heads);
+    if (d_tails != nullptr) cudaFree(d_tails);
+    if (d_weights != nullptr) cudaFree(d_weights);
+    if (d_epochs != nullptr) cudaFree(d_epochs);
+    if (d_layout != nullptr) cudaFree(d_layout);
+    if (d_delta != nullptr) cudaFree(d_delta);
+  };
+
+  if (check_embedding_memory_available(required_bytes, "CUDA COO UMAP optimizer allocation preflight")) return 1;
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_heads), edge_items * sizeof(int)), "cudaMalloc(coo umap heads)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_tails), edge_items * sizeof(int)), "cudaMalloc(coo umap tails)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_weights), edge_items * sizeof(float)), "cudaMalloc(coo umap weights)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_epochs), edge_items * sizeof(float)), "cudaMalloc(coo umap epochs)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_layout), embed_bytes), "cudaMalloc(coo umap layout)")) {
+    cleanup();
+    return 1;
+  }
+  if (optimizer_mode == 1 &&
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_delta), embed_bytes), "cudaMalloc(coo umap delta)")) {
+    cleanup();
+    return 1;
+  }
+  if (check_cuda(cudaMemcpy(d_heads, heads, edge_items * sizeof(int), cudaMemcpyHostToDevice), "cudaMemcpy(coo umap heads H2D)") ||
+      check_cuda(cudaMemcpy(d_tails, tails, edge_items * sizeof(int), cudaMemcpyHostToDevice), "cudaMemcpy(coo umap tails H2D)") ||
+      check_cuda(cudaMemcpy(d_weights, weights, edge_items * sizeof(float), cudaMemcpyHostToDevice), "cudaMemcpy(coo umap weights H2D)") ||
+      check_cuda(cudaMemcpy(d_epochs, epochs_per_sample, edge_items * sizeof(float), cudaMemcpyHostToDevice), "cudaMemcpy(coo umap epochs H2D)") ||
+      check_cuda(cudaMemcpy(d_layout, init, embed_bytes, cudaMemcpyHostToDevice), "cudaMemcpy(coo umap init H2D)")) {
+    cleanup();
+    return 1;
+  }
+
+  const int threads = 256;
+  const int row_blocks = (n + threads - 1) / threads;
+  const int edge_blocks = (n_edges_capacity + threads - 1) / threads;
+  const float graph_max_weight = 1.0f;
+  const float max_abs_coord = 16.0f;
+  const EmbedParams params{
+    n, 0, n_epochs, negative_sample_rate, 0, seed, learning_rate, a, b,
+    graph_max_weight, repulsion_strength
+  };
+  for (int epoch = 0; epoch < n_epochs; ++epoch) {
+    if (optimizer_mode == 1) {
+      if (check_cuda(cudaMemset(d_delta, 0, embed_bytes), "cudaMemset(coo umap delta)")) {
+        cleanup();
+        return 1;
+      }
+      embed_epoch_coo_delta_kernel<<<edge_blocks, threads>>>(
+        d_layout, d_delta, d_heads, d_tails, d_weights, d_epochs,
+        params, static_cast<unsigned int>(epoch), n_edges_capacity
+      );
+      if (check_cuda(cudaGetLastError(), "embed_epoch_coo_delta_kernel(coo umap) launch")) {
+        cleanup();
+        return 1;
+      }
+      apply_delta_sanitize_layout_kernel<<<row_blocks, threads>>>(d_layout, d_delta, n, max_abs_coord);
+      if (check_cuda(cudaGetLastError(), "apply_delta_sanitize_layout_kernel(coo umap) launch")) {
+        cleanup();
+        return 1;
+      }
+    } else {
+      embed_epoch_coo_atomic_kernel<<<edge_blocks, threads>>>(
+        d_layout, d_heads, d_tails, d_weights, d_epochs,
+        params, static_cast<unsigned int>(epoch), n_edges_capacity
+      );
+      if (check_cuda(cudaGetLastError(), "embed_epoch_coo_atomic_kernel(coo umap) launch")) {
+        cleanup();
+        return 1;
+      }
+      umap_sanitize_layout_kernel<<<row_blocks, threads>>>(d_layout, n, max_abs_coord);
+      if (check_cuda(cudaGetLastError(), "umap_sanitize_layout_kernel(coo umap) launch")) {
+        cleanup();
+        return 1;
+      }
+    }
+  }
+
+  if (check_cuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize(coo umap)") ||
+      check_cuda(cudaMemcpy(out, d_layout, embed_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy(coo umap D2H)")) {
+    cleanup();
+    return 1;
+  }
   cleanup();
   return 0;
 }
@@ -3996,7 +4402,7 @@ extern "C" int fastembedr_cuda_embed(const int* neighbors,
   }
 
   const EmbedParams params{
-    n, k, n_epochs, negative_sample_rate, objective, seed, learning_rate, a, b, max_weight
+    n, k, n_epochs, negative_sample_rate, objective, seed, learning_rate, a, b, max_weight, 1.0f
   };
   const int threads = 256;
   const int blocks = (n + threads - 1) / threads;
@@ -4053,18 +4459,14 @@ extern "C" int fastembedr_cuda_embed_from_knn(const int* indices,
     set_embedding_error("invalid KNN embedding dimensions or parameters");
     return 1;
   }
-  if (objective == 0) {
-    set_embedding_error("CUDA UMAP is available only through the fused pure atomic path");
-    return 1;
-  }
-
-  const int width = k;
+  const int width = objective == 0 ? std::min(256, std::max(k, 2 * k)) : k;
   const std::size_t input_items = static_cast<std::size_t>(n) * k;
   const std::size_t graph_items = static_cast<std::size_t>(n) * width;
   const std::size_t embed_bytes = static_cast<std::size_t>(n) * 2u * sizeof(float);
   const std::size_t required_bytes =
     input_items * (sizeof(int) + sizeof(double)) +
     graph_items * (sizeof(int) + sizeof(float)) +
+    (objective == 0 ? static_cast<std::size_t>(n) * sizeof(int) : 0u) +
     2u * embed_bytes;
 
   int* d_indices = nullptr;
@@ -4100,6 +4502,11 @@ extern "C" int fastembedr_cuda_embed_from_knn(const int* indices,
     return 1;
   }
   if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_weights), graph_items * sizeof(float)), "cudaMalloc(knn weights)")) {
+    cleanup();
+    return 1;
+  }
+  if (objective == 0 &&
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_counts), static_cast<std::size_t>(n) * sizeof(int)), "cudaMalloc(knn row counts)")) {
     cleanup();
     return 1;
   }
@@ -4142,7 +4549,7 @@ extern "C" int fastembedr_cuda_embed_from_knn(const int* indices,
 
   const float graph_max_weight = 1.0f;
   const EmbedParams params{
-    n, width, n_epochs, negative_sample_rate, objective, seed, learning_rate, a, b, graph_max_weight
+    n, width, n_epochs, negative_sample_rate, objective, seed, learning_rate, a, b, graph_max_weight, 1.0f
   };
   const int blocks = (n + threads - 1) / threads;
   for (int epoch = 0; epoch < n_epochs; ++epoch) {

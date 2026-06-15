@@ -36,6 +36,7 @@ struct EmbedParams {
   float a;
   float b;
   float max_weight;
+  float repulsion_strength;
 };
 
 struct RefinePrepareParams {
@@ -944,6 +945,7 @@ struct EmbedParams {
   float a;
   float b;
   float max_weight;
+  float repulsion_strength;
 };
 
 struct RefinePrepareParams {
@@ -1066,12 +1068,12 @@ float repulsive_coeff(float d2, constant EmbedParams& p) {
   if (d2 <= 0.0f) return 0.0f;
   if (p.objective == 0u) {
     float d2b = pow(d2, p.b);
-    return 2.0f * p.b / ((0.001f + d2) * (p.a * d2b + 1.0f));
+    return p.repulsion_strength * 2.0f * p.b / ((0.001f + d2) * (p.a * d2b + 1.0f));
   }
-  if (p.objective == 1u) return 2.0f / ((1.0f + d2) * (1.0f + d2));
-  if (p.objective == 2u) return 0.2f * 2.0f / (1.0f + d2);
-  if (p.objective == 4u) return 0.8125f / ((0.15f + d2) * (1.0f + d2));
-  return 2.0f / (1.0f + d2);
+  if (p.objective == 1u) return p.repulsion_strength * 2.0f / ((1.0f + d2) * (1.0f + d2));
+  if (p.objective == 2u) return p.repulsion_strength * 0.2f * 2.0f / (1.0f + d2);
+  if (p.objective == 4u) return p.repulsion_strength * 0.8125f / ((0.15f + d2) * (1.0f + d2));
+  return p.repulsion_strength * 2.0f / (1.0f + d2);
 }
 
 int positive_samples_this_epoch(float weight, constant EmbedParams& p, uint epoch) {
@@ -6548,6 +6550,7 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
                                        double learning_rate,
                                        double min_dist,
                                        double max_weight_input,
+                                       double repulsion_strength,
                                        int seed) {
   const int n = init.nrow();
   if (n < 1 || init.ncol() != 2) {
@@ -6557,6 +6560,7 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
   if (negative_sample_rate < 0) Rcpp::stop("negative_sample_rate must be non-negative");
   if (learning_rate <= 0.0) Rcpp::stop("learning_rate must be positive");
   if (min_dist < 0.0) Rcpp::stop("min_dist must be non-negative");
+  if (repulsion_strength <= 0.0) Rcpp::stop("repulsion_strength must be positive");
 
   @autoreleasepool {
     MetalEmbeddingState& state = metal_embedding_state();
@@ -6597,7 +6601,8 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
       static_cast<float>(learning_rate),
       static_cast<float>(ab.first),
       static_cast<float>(ab.second),
-      max_weight
+      max_weight,
+      static_cast<float>(repulsion_strength)
     };
 
     std::vector<std::int32_t> fixed_layout(current.size());
@@ -7243,7 +7248,8 @@ NumericMatrix knn_umap_refine_rows_metal_impl(IntegerMatrix indices,
       static_cast<float>(learning_rate),
       static_cast<float>(ab.first),
       static_cast<float>(ab.second),
-      1.0f
+      1.0f,
+      static_cast<float>(repulsion_strength)
     };
     RefinePrepareParams prepare_params{
       static_cast<std::uint32_t>(n),
@@ -7423,7 +7429,8 @@ NumericMatrix knn_embed_metal_impl(IntegerMatrix indices,
       static_cast<float>(learning_rate),
       static_cast<float>(ab.first),
       static_cast<float>(ab.second),
-      max_weight
+      max_weight,
+      1.0f
     };
 
     id<MTLBuffer> current_buffer = [state.device newBufferWithBytes:current.data()

@@ -347,16 +347,18 @@ run_with_timing <- function(expr, n) {
 method_specs <- function() {
   list(
     list(
-      method = "fastEmbedR_umap_cpu",
+      method = "fastEmbedR_umap_cpu_binary",
       package = "fastEmbedR",
       backend = "cpu",
       uses_precomputed_nn = TRUE,
-      init_policy = "internal_spectral_from_knn",
+      graph_mode = "binary",
+      init_policy = "internal_spectral_from_knn_binary_graph",
       runner = function(ctx) {
         fastEmbedR::umap_knn(
           ctx$knn$indices,
           ctx$knn$distances,
           backend = "cpu",
+          graph_mode = "binary",
           n_threads = n_threads,
           seed = seed,
           verbose = FALSE
@@ -364,16 +366,94 @@ method_specs <- function() {
       }
     ),
     list(
-      method = "fastEmbedR_umap_cuda",
+      method = "fastEmbedR_umap_cpu_fuzzy",
+      package = "fastEmbedR",
+      backend = "cpu",
+      uses_precomputed_nn = TRUE,
+      graph_mode = "fuzzy",
+      init_policy = "internal_spectral_from_knn_fuzzy_graph",
+      runner = function(ctx) {
+        fastEmbedR::umap_knn(
+          ctx$knn$indices,
+          ctx$knn$distances,
+          backend = "cpu",
+          graph_mode = "fuzzy",
+          n_threads = n_threads,
+          seed = seed,
+          verbose = FALSE
+        )
+      }
+    ),
+    list(
+      method = "fastEmbedR_umap_metal_binary",
+      package = "fastEmbedR",
+      backend = "metal",
+      uses_precomputed_nn = TRUE,
+      graph_mode = "binary",
+      init_policy = "internal_spectral_from_knn_binary_graph",
+      runner = function(ctx) {
+        fastEmbedR::umap_knn(
+          ctx$knn$indices,
+          ctx$knn$distances,
+          backend = "metal",
+          graph_mode = "binary",
+          n_threads = n_threads,
+          seed = seed,
+          verbose = FALSE
+        )
+      }
+    ),
+    list(
+      method = "fastEmbedR_umap_metal_fuzzy",
+      package = "fastEmbedR",
+      backend = "metal",
+      uses_precomputed_nn = TRUE,
+      graph_mode = "fuzzy",
+      init_policy = "internal_spectral_from_knn_fuzzy_graph",
+      runner = function(ctx) {
+        fastEmbedR::umap_knn(
+          ctx$knn$indices,
+          ctx$knn$distances,
+          backend = "metal",
+          graph_mode = "fuzzy",
+          n_threads = n_threads,
+          seed = seed,
+          verbose = FALSE
+        )
+      }
+    ),
+    list(
+      method = "fastEmbedR_umap_cuda_binary",
       package = "fastEmbedR",
       backend = "cuda",
       uses_precomputed_nn = TRUE,
-      init_policy = "native_cuda_fused_spectral_from_knn",
+      graph_mode = "binary",
+      init_policy = "native_cuda_fused_spectral_from_knn_binary_graph",
       runner = function(ctx) {
         fastEmbedR::umap_knn(
           ctx$knn$indices,
           ctx$knn$distances,
           backend = "cuda",
+          graph_mode = "binary",
+          n_threads = n_threads,
+          seed = seed,
+          verbose = FALSE
+        )
+      }
+    ),
+    list(
+      method = "fastEmbedR_umap_cuda_fuzzy",
+      package = "fastEmbedR",
+      backend = "cuda",
+      uses_precomputed_nn = TRUE,
+      graph_mode = "fuzzy",
+      init_policy = "internal_spectral_from_knn_fuzzy_graph_cuda_optimizer",
+      runner = function(ctx) {
+        fastEmbedR::umap_knn(
+          ctx$knn$indices,
+          ctx$knn$distances,
+          backend = "cuda",
+          graph_mode = "fuzzy",
           n_threads = n_threads,
           seed = seed,
           verbose = FALSE
@@ -385,19 +465,18 @@ method_specs <- function() {
       package = "uwot",
       backend = "cpu",
       uses_precomputed_nn = TRUE,
-      init_policy = "uwot_spectral",
+      graph_mode = "fuzzy",
+      init_policy = "uwot_internal_spectral",
       runner = function(ctx) {
         uwot::umap(
-          X = ctx$x,
+          ctx$x,
           n_neighbors = k,
-          n_components = 2L,
-          metric = "euclidean",
-          nn_method = list(idx = ctx$knn$indices, dist = ctx$knn$distances),
-          init = "spectral",
-          min_dist = 0.1,
-          fast_sgd = TRUE,
+          nn_method = ctx$knn,
           n_threads = n_threads,
           n_sgd_threads = n_threads,
+          fast_sgd = TRUE,
+          init = "spectral",
+          min_dist = 0.1,
           ret_model = FALSE,
           verbose = FALSE,
           seed = seed
@@ -409,19 +488,18 @@ method_specs <- function() {
       package = "uwot",
       backend = "cpu",
       uses_precomputed_nn = TRUE,
-      init_policy = "uwot_spectral",
+      graph_mode = "fuzzy",
+      init_policy = "uwot_internal_spectral",
       runner = function(ctx) {
         uwot::umap(
-          X = ctx$x,
+          ctx$x,
           n_neighbors = k,
-          n_components = 2L,
-          metric = "euclidean",
-          nn_method = list(idx = ctx$knn$indices, dist = ctx$knn$distances),
+          nn_method = ctx$knn,
+          n_threads = n_threads,
+          n_sgd_threads = 0,
+          fast_sgd = FALSE,
           init = "spectral",
           min_dist = 0.1,
-          fast_sgd = FALSE,
-          n_threads = n_threads,
-          n_sgd_threads = 0L,
           ret_model = FALSE,
           verbose = FALSE,
           seed = seed
@@ -433,22 +511,20 @@ method_specs <- function() {
       package = "umap",
       backend = "cpu",
       uses_precomputed_nn = TRUE,
-      init_policy = "umap_package_spectral",
+      graph_mode = "fuzzy",
+      init_policy = "umap_package_internal_spectral",
       runner = function(ctx) {
         uknn <- umap::umap.knn(ctx$knn$indices, ctx$knn$distances)
         cfg <- umap::umap.defaults
         cfg$knn <- uknn
         cfg$n_neighbors <- k
-        cfg$min_dist <- 0.1
         cfg$init <- "spectral"
-        cfg$random_state <- seed
-        set.seed(seed)
+        cfg$min_dist <- 0.1
         umap::umap(ctx$x, knn = uknn, config = cfg)$layout
       }
     )
   )
 }
-
 result_template <- function(dataset_name, method, package, backend, status, error_message = NA_character_) {
   data.frame(
     dataset = dataset_name,
@@ -462,6 +538,7 @@ result_template <- function(dataset_name, method, package, backend, status, erro
     p = NA_integer_,
     seed = seed,
     k = k,
+    graph_mode = NA_character_,
     uses_precomputed_nn = NA,
     pca_init_available = NA,
     init_policy = NA_character_,
@@ -513,6 +590,7 @@ run_one <- function(dataset_name, method_name, row_out) {
   row$n <- n
   row$p <- p
   row$uses_precomputed_nn <- isTRUE(spec$uses_precomputed_nn)
+  row$graph_mode <- spec$graph_mode %||% NA_character_
   row$pca_init_available <- !is.null(Y_init)
   row$init_policy <- spec$init_policy
   row$knn_source <- knn_info$source
@@ -522,6 +600,7 @@ run_one <- function(dataset_name, method_name, row_out) {
     seed = seed,
     n_threads = n_threads,
     min_dist = 0.1,
+    graph_mode = spec$graph_mode %||% NA_character_,
     precomputed_knn = TRUE,
     pca_init_available = !is.null(Y_init),
     init_policy = spec$init_policy
@@ -539,7 +618,13 @@ run_one <- function(dataset_name, method_name, row_out) {
       layout = layout,
       labels = labels,
       metrics = metrics,
-      parameters = list(k = k, seed = seed, n_threads = n_threads, init_policy = spec$init_policy)
+      parameters = list(
+        k = k,
+        seed = seed,
+        n_threads = n_threads,
+        graph_mode = spec$graph_mode %||% NA_character_,
+        init_policy = spec$init_policy
+      )
     )
     save(layout_result, file = layout_file, compress = "gzip")
     plot_layout(layout, labels, plot_file, paste(dataset_name, spec$method))
@@ -573,17 +658,20 @@ make_barplots <- function(results, out_dir) {
   png(file.path(out_dir, "benchmark3_runtime_barplot.png"), width = 2200, height = 1500, res = 180)
   par(mar = c(10, 5, 4, 1), bg = "white")
   labels <- paste(ok$dataset, ok$method, sep = "\n")
-  cols <- ifelse(grepl("cuda", ok$backend_requested, ignore.case = TRUE), "#D55E00", "#0072B2")
+  cols <- ifelse(
+    grepl("cuda", ok$backend_requested, ignore.case = TRUE), "#D55E00",
+    ifelse(grepl("metal", ok$backend_requested, ignore.case = TRUE), "#009E73", "#0072B2")
+  )
   barplot(ok$embedding_sec, names.arg = labels, las = 2, cex.names = 0.55, col = cols,
           ylab = "Embedding seconds", main = "BENCHMARK #3 UMAP embedding runtime")
-  legend("topright", legend = c("CPU", "CUDA"), fill = c("#0072B2", "#D55E00"), bty = "n")
+  legend("topright", legend = c("CPU", "Metal", "CUDA"), fill = c("#0072B2", "#009E73", "#D55E00"), bty = "n")
   dev.off()
 
   png(file.path(out_dir, "benchmark3_trust_barplot.png"), width = 2200, height = 1500, res = 180)
   par(mar = c(10, 5, 4, 1), bg = "white")
   barplot(ok$trustworthiness, names.arg = labels, las = 2, cex.names = 0.55, col = cols,
           ylab = "Trustworthiness", main = "BENCHMARK #3 UMAP embedding quality")
-  legend("topright", legend = c("CPU", "CUDA"), fill = c("#0072B2", "#D55E00"), bty = "n")
+  legend("topright", legend = c("CPU", "Metal", "CUDA"), fill = c("#0072B2", "#009E73", "#D55E00"), bty = "n")
   dev.off()
 }
 
@@ -591,7 +679,7 @@ write_methods_file <- function(out_dir) {
   txt <- c(
     "# BENCHMARK #3 Material and Methods",
     "",
-    "This benchmark compares UMAP implementations across the curated fastEmbedR datasets saved under `/mnt/sata_ssd/fastEmbedR_Data` on the chiamaka GPU workstation.",
+    "This benchmark compares UMAP implementations across the curated fastEmbedR datasets. On macOS it includes CPU and native Metal rows; on the chiamaka GPU workstation it includes CPU and native CUDA rows.",
     "",
     "Datasets are loaded from `dataset_manifest.csv`. Labels are used only for post-hoc quality metrics and plots, not for fitting.",
     "",
@@ -601,13 +689,14 @@ write_methods_file <- function(out_dir) {
     "",
     "Compared implementations:",
     "",
-    "- `fastEmbedR_umap_cpu`: native fastEmbedR UMAP from precomputed KNN, CPU backend, four CPU threads.",
-    "- `fastEmbedR_umap_cuda`: native fastEmbedR UMAP from precomputed KNN, CUDA backend.",
+    "- `fastEmbedR_umap_cpu_binary` and `fastEmbedR_umap_cpu_fuzzy`: native fastEmbedR UMAP from precomputed KNN, CPU backend, four CPU threads.",
+    "- `fastEmbedR_umap_metal_binary` and `fastEmbedR_umap_metal_fuzzy`: native fastEmbedR UMAP from precomputed KNN, Metal backend when available.",
+    "- `fastEmbedR_umap_cuda_binary` and `fastEmbedR_umap_cuda_fuzzy`: native fastEmbedR UMAP from precomputed KNN, CUDA backend when available.",
     "- `uwot_umap_fast_sgd`: `uwot::umap()` with shared precomputed KNN and `fast_sgd = TRUE`.",
     "- `uwot_umap_default`: `uwot::umap()` with shared precomputed KNN and `fast_sgd = FALSE`.",
     "- `umap_package`: `umap::umap()` with `umap::umap.knn()` built from the shared precomputed KNN.",
     "",
-    sprintf("Default settings: k = %d non-self neighbours, min_dist = 0.1, seed = %d, CPU threads = %d.", k, seed, n_threads),
+    sprintf("Default settings: k = %d non-self neighbours, min_dist = 0.1, seed = %d, CPU threads = %d. fastEmbedR UMAP is evaluated with graph_mode = \"binary\" and graph_mode = \"fuzzy\".", k, seed, n_threads),
     "",
     sprintf("Each method-dataset worker is executed with a %d second timeout. Failed, unavailable, or timed-out rows are retained in the result table.", timeout_sec),
     "",

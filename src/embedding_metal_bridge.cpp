@@ -66,6 +66,7 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
                                        double learning_rate,
                                        double min_dist,
                                        double max_weight,
+                                       double repulsion_strength,
                                        int seed);
 NumericMatrix knn_umap_refine_rows_metal_impl(IntegerMatrix indices,
                                               NumericMatrix distances,
@@ -269,10 +270,12 @@ NumericMatrix knn_embed_metal_csr_cpp(IntegerVector offsets,
                                       double learning_rate,
                                       double min_dist,
                                       double max_weight,
+                                      double repulsion_strength,
                                       int seed) {
   return knn_embed_metal_csr_impl(
     offsets, neighbors, weights, init, n_epochs,
-    negative_sample_rate, learning_rate, min_dist, max_weight, seed
+    negative_sample_rate, learning_rate, min_dist, max_weight,
+    repulsion_strength, seed
   );
 }
 

@@ -22,6 +22,8 @@
 #' @param preserve_sample Optional sample size for local structure scoring.
 #' @param preserve_k Number of neighbours used for local structure scoring.
 #' @param keep_knn Keep KNN matrices in the returned object.
+#' @param graph_mode Graph weighting mode. `"binary"` uses unit-weight graph
+#'   edges. `"fuzzy"` uses standard UMAP fuzzy graph weights.
 #' @param verbose Print progress.
 #' @return A `fastEmbedR_embedding` object.
 #' @examples
@@ -43,8 +45,10 @@ umap <- function(data,
                  preserve_sample = NULL,
                  preserve_k = NULL,
                  keep_knn = FALSE,
+                 graph_mode = c("binary", "fuzzy"),
                  verbose = FALSE) {
   backend <- match.arg(backend)
+  graph_mode <- match.arg(graph_mode)
   n_components <- validate_n_components(n_components)
   keep_knn <- isTRUE(keep_knn)
 
@@ -59,7 +63,8 @@ umap <- function(data,
         seed = seed,
         verbose = verbose,
         backend = backend,
-        n_threads = n_threads
+        n_threads = n_threads,
+        graph_mode = graph_mode
       )
     })
     cfg <- attr(layout, "fastEmbedR_config")
@@ -156,7 +161,8 @@ umap <- function(data,
       seed = seed,
       verbose = verbose,
       backend = embedding_backend,
-      n_threads = n_threads
+      n_threads = n_threads,
+      graph_mode = graph_mode
     )
   })
   cfg <- attr(layout, "fastEmbedR_config")
@@ -190,6 +196,7 @@ umap <- function(data,
       standardize = isTRUE(standardize),
       pca_dims = prepared$preprocess$pca_dims,
       preprocess = prepared$preprocess,
+      graph_mode = graph_mode,
       nn_backend = if (is.null(attr(knn_result, "backend"))) "supplied" else attr(knn_result, "backend")
     )
   )

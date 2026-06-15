@@ -97,7 +97,6 @@ Implementation:
   buffers, and runs UMAP SGD.
 - Preserves uwot-like UMAP mathematics: smooth KNN distances, fuzzy graph
   union, `epochs_per_sample`, negative sampling, and learning-rate decay.
-
 Backend details:
 
 - CPU: native C++ CSR fuzzy graph and fast-SGD-style optimizer.

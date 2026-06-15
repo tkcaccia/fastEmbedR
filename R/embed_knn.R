@@ -14,7 +14,7 @@
 #' @param n_threads Number of CPU worker threads used by the CPU optimizer.
 #'   Native GPU optimizers ignore this argument.
 #' @param ... Additional openTSNE-specific parameters such as `perplexity`,
-#'   iteration controls, `Y_init`, learning-rate controls, exaggeration
+#'   iteration controls, `Y_init`, learning-rate controls, and exaggeration
 #'   controls.
 #' @return A numeric embedding matrix with resolved settings stored in
 #'   `attr(layout, "fastEmbedR_config")`.
@@ -40,7 +40,8 @@ embed_knn <- function(indices,
       seed = seed,
       verbose = verbose,
       backend = backend,
-      n_threads = n_threads
+      n_threads = n_threads,
+      ...
     ))
   }
 
