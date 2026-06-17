@@ -42,7 +42,7 @@ opentsne(
 }
 \arguments{
 \item{data}{Numeric matrix/data frame with observations in rows, or a KNN
-object returned by [nn()].}
+object returned by [faissR::nn()].}
 
 \item{labels}{Optional labels used only for scoring and plotting metadata.}
 

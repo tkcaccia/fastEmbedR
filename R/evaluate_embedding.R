@@ -207,7 +207,7 @@ get_or_compute_evaluation_reference <- function(x_high,
     cached$cache_hit <- TRUE
     return(normalize_evaluation_reference(cached, n, max_k))
   }
-  raw <- fastEmbedR::nn(
+  raw <- faissR::nn(
     x_high,
     x_high,
     k = max_k + 1L,
@@ -360,7 +360,8 @@ local_density_radius_metrics <- function(high_distances,
 #'   metrics. The default `NULL` preserves the historical k = 15 behavior when
 #'   possible.
 #' @param reference_nn Optional precomputed high-dimensional nearest-neighbor
-#'   list. It may include a self-neighbor column, like \code{nn(x, x, k + 1)}.
+#'   list. It may include a self-neighbor column, like
+#'   \code{faissR::nn(x, x, k + 1)}.
 #' @param sample_size_for_global_metrics Maximum deterministic subsample size
 #'   for all-pairs global distance metrics.
 #' @param sample_size_for_local_metrics Maximum deterministic subsample size for
@@ -459,7 +460,7 @@ evaluate_embedding <- function(x_high,
     normalize_evaluation_reference(reference_nn, nrow(x_high), max_k)
   }
   embed_nn <- tryCatch(
-    fastEmbedR::nn(
+    faissR::nn(
       embedding,
       embedding,
       max_k + 1L,
@@ -472,7 +473,7 @@ evaluate_embedding <- function(x_high,
         conditionMessage(e)
       )
       metric_backend <<- "cpu"
-      fastEmbedR::nn(
+      faissR::nn(
         embedding,
         embedding,
         max_k + 1L,

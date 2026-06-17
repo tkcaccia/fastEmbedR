@@ -2,25 +2,15 @@
 % Please edit documentation in R/backend_info.R
 \name{backend_info}
 \alias{backend_info}
-\title{Summarize native backend availability}
+\title{Summarize fastEmbedR backend availability}
 \usage{
 backend_info()
 }
 \value{
-A data frame with one row per native backend and columns describing
-  KNN availability, embedding availability, device/runtime hints, and a short
-  note. The function never intentionally falls back from a requested GPU
-  backend to CPU; this table is informational only.
+A data frame with one row per backend.
 }
 \description{
-`backend_info()` reports which native package backends can currently run.
-It is a lightweight availability summary for users who want to check GPU
-support before requesting `backend = "cuda"`, `"metal"`, or `"gpu"`.
-}
-\details{
-The function does not load or depend on external GPU packages such as
-`cuda.ml`; it only reports the native backends compiled into `fastEmbedR`
-and visible on the current machine. CUDA builds report CUDA runtime device
-details when available; non-CUDA builds report the unavailable state and may
-include `nvidia-smi` device hints if that command is present.
+`backend_info()` reports embedding backend availability in `fastEmbedR` and
+nearest-neighbour backend availability supplied by the companion `faissR`
+package. Explicit GPU requests never silently fall back to CPU.
 }

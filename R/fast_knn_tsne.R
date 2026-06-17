@@ -855,14 +855,15 @@ fast_knn_opentsne_core <- function(indices,
 #' Run native openTSNE-style t-SNE from precomputed KNN
 #'
 #' `opentsne_knn()` is the direct KNN-input entry point for the native
-#' openTSNE-style optimizer. It accepts either an object returned by [nn()] or
+#' openTSNE-style optimizer. It accepts either an object returned by
+#' [faissR::nn()] or
 #' separate KNN index and distance matrices. No neighbour search, scaling, or
 #' PCA is done inside this function.
 #'
-#' @param indices A KNN object returned by [nn()], or an integer KNN index
+#' @param indices A KNN object returned by [faissR::nn()], or an integer KNN index
 #'   matrix.
 #' @param distances Numeric KNN distance matrix matching `indices`. Leave
-#'   `NULL` when `indices` is an [nn()] result.
+#'   `NULL` when `indices` is a [faissR::nn()] result.
 #' @param n_neighbors Optional number of non-self neighbor columns to use from
 #'   the supplied KNN graph. This lets you compute a wide KNN once and reuse
 #'   its first columns for comparable tests.
@@ -877,7 +878,7 @@ fast_knn_opentsne_core <- function(indices,
 #'   `attr(layout, "fastEmbedR_config")`.
 #' @examples
 #' x <- scale(as.matrix(iris[, 1:4]))
-#' knn <- nn(x, k = 31)
+#' knn <- faissR::nn(x, k = 31)
 #' layout <- opentsne_knn(knn, init_data = x, perplexity = 10,
 #'   early_exaggeration_iter = 100, n_iter = 250)
 #' if (all(is.finite(layout))) {
@@ -962,7 +963,7 @@ opentsne_knn <- function(indices,
 #' requested backend is unavailable.
 #'
 #' @param data Numeric matrix/data frame with observations in rows, or a KNN
-#'   object returned by [nn()].
+#'   object returned by [faissR::nn()].
 #' @param labels Optional labels used only for scoring and plotting metadata.
 #' @param n_neighbors Number of non-self neighbors. If `NULL`, the package uses
 #'   `3 * perplexity`, matching the usual t-SNE neighbour convention.

@@ -35,7 +35,7 @@ transform_tsne(
 `fastEmbedR_embedding` object.}
 
 \item{knn}{Optional query-to-reference KNN list with `indices` and
-`distances`, usually returned by `nn(reference_data, new_data, k)`.}
+`distances`, usually returned by `faissR::nn(reference_data, new_data, k)`.}
 
 \item{reference_data}{Reference observations in the same preprocessing space
 used to fit `reference_layout`. Required only when `knn` is `NULL`.}

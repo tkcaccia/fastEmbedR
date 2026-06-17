@@ -17,12 +17,12 @@ embed_knn(
 )
 }
 \arguments{
-\item{indices}{A KNN object returned by `nn()`, or an integer KNN index
+\item{indices}{A KNN object returned by [faissR::nn()], or an integer KNN index
 matrix. If a self-neighbor first column is present it is removed
 automatically.}
 
 \item{distances}{Numeric KNN distance matrix matching `indices`. Leave as
-`NULL` when `indices` is an `nn()` result.}
+`NULL` when `indices` is a [faissR::nn()] result.}
 
 \item{method}{Embedding method: `"opentsne"` or `"umap"`.}
 
@@ -38,9 +38,9 @@ GPU backend and errors if CUDA or Metal is unavailable.}
 \item{n_threads}{Number of CPU worker threads used by the CPU optimizer.
 Native GPU optimizers ignore this argument.}
 
-\item{...}{Additional method-specific parameters. For openTSNE this includes
-`perplexity`, iteration controls, `Y_init`, learning-rate controls, and
-exaggeration controls.}
+\item{...}{Additional openTSNE-specific parameters such as `perplexity`,
+iteration controls, `Y_init`, learning-rate controls, and exaggeration
+controls.}
 }
 \value{
 A numeric embedding matrix with resolved settings stored in

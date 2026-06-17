@@ -985,7 +985,7 @@ auto_umap_pilot_label_scores <- function(layout,
     keep <- seq_len(nrow(layout))
   }
   embed_nn <- tryCatch(
-    fastEmbedR::nn(layout, layout, k + 1L, backend = "cpu"),
+    faissR::nn(layout, layout, k + 1L, backend = "cpu"),
     error = function(e) NULL
   )
   if (is.null(embed_nn)) {

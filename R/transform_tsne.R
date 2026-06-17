@@ -9,7 +9,7 @@
 #' @param reference_layout Numeric reference embedding matrix, or a
 #'   `fastEmbedR_embedding` object.
 #' @param knn Optional query-to-reference KNN list with `indices` and
-#'   `distances`, usually returned by `nn(reference_data, new_data, k)`.
+#'   `distances`, usually returned by `faissR::nn(reference_data, new_data, k)`.
 #' @param reference_data Reference observations in the same preprocessing space
 #'   used to fit `reference_layout`. Required only when `knn` is `NULL`.
 #' @param new_data Query observations in the same preprocessing space as
@@ -114,7 +114,7 @@ transform_tsne <- function(reference_layout,
       k <- min(nrow(reference_data), max(25L, ceiling(3 * perplexity)))
     }
     k <- transform_embedding_k(k, nrow(reference_data))
-    raw_knn <- fastEmbedR::nn(
+    raw_knn <- faissR::nn(
       reference_data,
       new_data,
       k = k,
@@ -519,7 +519,7 @@ landmark_projection_knn <- function(x_landmarks,
   if (backend %in% c("cuda", "gpu") &&
       isTRUE(embedding_cuda_available_cpp())) {
     out <- tryCatch(
-      fastEmbedR::nn(
+      faissR::nn(
         x_landmarks,
         x_query,
         k = k,
@@ -544,31 +544,34 @@ landmark_projection_knn <- function(x_landmarks,
     n_features = ncol(x_landmarks),
     k = k
   )) {
-    params <- landmark_projection_approx_params(nrow(x_landmarks), k)
-    out <- landmark_projection_knn_approx_cpp(
+    projection_backend <- if (isTRUE(faissR::cuda_available()) && isTRUE(faissR::cuvs_available())) {
+      "cuda_cuvs_cagra"
+    } else if (isTRUE(faissR::cuda_available()) && isTRUE(faissR::faiss_available())) {
+      "faiss_gpu_ivf_flat"
+    } else if (isTRUE(faissR::faiss_available())) {
+      "faiss_hnsw"
+    } else {
+      stop("Landmark projection KNN requires FAISS/cuVS through faissR.", call. = FALSE)
+    }
+    result <- faissR::nn(
       x_landmarks,
       x_query,
-      as.integer(k),
-      as.integer(params$n_projections),
-      as.integer(params$window),
-      as.integer(seed),
-      TRUE,
-      as.integer(max(1L, min(8L, n_threads)))
+      k = k,
+      backend = projection_backend,
+      n_threads = n_threads
     )
-    result <- finish_nn_result(out, "cpu_projection_approx", k, FALSE, exact = FALSE)
-    attr(result, "approximation") <- list(
-      strategy = "random_projection_landmark_query_knn",
-      backend = "cpu_projection_approx",
-      n_projections = as.integer(out$n_projections),
-      window = as.integer(out$window),
-      seed = as.integer(seed),
-      n_threads = as.integer(max(1L, min(8L, n_threads)))
-    )
+    approximation <- attr(result, "approximation", exact = TRUE)
+    if (is.null(approximation)) approximation <- list()
+    approximation$strategy <- "faissR_landmark_query_knn"
+    approximation$requested_by <- "fastEmbedR::landmark_projection_knn"
+    approximation$seed <- as.integer(seed)
+    approximation$n_threads <- as.integer(max(1L, min(8L, normalize_nn_threads(n_threads))))
+    attr(result, "approximation") <- approximation
     return(result)
   }
 
   fallback_backend <- if (identical(backend, "metal")) "cpu" else backend
-  fastEmbedR::nn(
+  faissR::nn(
     x_landmarks,
     x_query,
     k = k,

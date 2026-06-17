@@ -105,8 +105,8 @@ knn_embed_metal_cpp <- function(indices, distances, init, objective, n_epochs, n
     .Call(`_fastEmbedR_knn_embed_metal_cpp`, indices, distances, init, objective, n_epochs, negative_sample_rate, learning_rate, min_dist, seed)
 }
 
-knn_embed_metal_csr_cpp <- function(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, repulsion_strength, seed) {
-    .Call(`_fastEmbedR_knn_embed_metal_csr_cpp`, offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, repulsion_strength, seed)
+knn_embed_metal_csr_cpp <- function(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, repulsion_strength, seed, sampler_mode = 0L) {
+    .Call(`_fastEmbedR_knn_embed_metal_csr_cpp`, offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, repulsion_strength, seed, sampler_mode)
 }
 
 knn_umap_refine_rows_metal_cpp <- function(indices, distances, row_ids, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, seed) {
@@ -213,6 +213,10 @@ umap_graph_csr_cuda_like_cpp <- function(indices, distances, col_start, n_cols, 
     .Call(`_fastEmbedR_umap_graph_csr_cuda_like_cpp`, indices, distances, col_start, n_cols, edge_budget, n_threads)
 }
 
+umap_graph_csr_binary_union_cpp <- function(indices, col_start, n_cols, n_threads) {
+    .Call(`_fastEmbedR_umap_graph_csr_binary_union_cpp`, indices, col_start, n_cols, n_threads)
+}
+
 fast_knn_umap_range_cpp <- function(indices, distances, col_start, n_cols, n_components, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, spectral_n_iter, n_threads, init_scale, seed, verbose) {
     .Call(`_fastEmbedR_fast_knn_umap_range_cpp`, indices, distances, col_start, n_cols, n_components, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, spectral_n_iter, n_threads, init_scale, seed, verbose)
 }
@@ -231,6 +235,10 @@ fast_knn_umap_csr_init_cpp <- function(offsets, neighbors, weights, init_embeddi
 
 fast_knn_umap_csr_atomic_cpp <- function(offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, verbose) {
     .Call(`_fastEmbedR_fast_knn_umap_csr_atomic_cpp`, offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, verbose)
+}
+
+fast_knn_umap_csr_clean_atomic_cpp <- function(offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, decay_mode, verbose) {
+    .Call(`_fastEmbedR_fast_knn_umap_csr_clean_atomic_cpp`, offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, decay_mode, verbose)
 }
 
 fast_knn_umap_coo_replay_cpp <- function(heads, tails, weights, epochs_per_sample, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, sanitize_each_epoch, verbose) {
@@ -259,182 +267,6 @@ fast_knn_umap_csr_cpp <- function(offsets, neighbors, weights, n_components, n_e
 
 umap_auto_parameters_cpp <- function(distances, n_neighbors, backend) {
     .Call(`_fastEmbedR_umap_auto_parameters_cpp`, distances, n_neighbors, backend)
-}
-
-knn_graph_edges_cpp <- function(indices, distances, weight_type, prune, mutual) {
-    .Call(`_fastEmbedR_knn_graph_edges_cpp`, indices, distances, weight_type, prune, mutual)
-}
-
-nn_cpp <- function(data, points, k, method, square, sorted, p, parallel, cores, exclude_self) {
-    .Call(`_fastEmbedR_nn_cpp`, data, points, k, method, square, sorted, p, parallel, cores, exclude_self)
-}
-
-nndescent_candidate_matrix_cpp <- function(indices, n_sources, n_neighbors) {
-    .Call(`_fastEmbedR_nndescent_candidate_matrix_cpp`, indices, n_sources, n_neighbors)
-}
-
-nndescent_candidate_matrix_mlx_cpp <- function(indices, flags, n_sources, n_neighbors, use_reverse, active_only) {
-    .Call(`_fastEmbedR_nndescent_candidate_matrix_mlx_cpp`, indices, flags, n_sources, n_neighbors, use_reverse, active_only)
-}
-
-nndescent_candidate_matrix_mlx_subset_cpp <- function(indices, flags, n_sources, n_neighbors, use_reverse) {
-    .Call(`_fastEmbedR_nndescent_candidate_matrix_mlx_subset_cpp`, indices, flags, n_sources, n_neighbors, use_reverse)
-}
-
-landmark_candidate_knn_cpp <- function(data, projection_indices, k, bucket_cols, query_cols, parallel, cores) {
-    .Call(`_fastEmbedR_landmark_candidate_knn_cpp`, data, projection_indices, k, bucket_cols, query_cols, parallel, cores)
-}
-
-landmark_candidate_knn_subset_cpp <- function(data, projection_indices, query_rows, k, bucket_cols, query_cols, parallel, cores) {
-    .Call(`_fastEmbedR_landmark_candidate_knn_subset_cpp`, data, projection_indices, query_rows, k, bucket_cols, query_cols, parallel, cores)
-}
-
-landmark_projection_knn_approx_cpp <- function(landmarks, queries, k, n_projections, window, seed, parallel, cores) {
-    .Call(`_fastEmbedR_landmark_projection_knn_approx_cpp`, landmarks, queries, k, n_projections, window, seed, parallel, cores)
-}
-
-nndescent_self_knn_cpp <- function(data, k, pool_size, n_iters, max_candidates, n_random_projections, seed, parallel, cores) {
-    .Call(`_fastEmbedR_nndescent_self_knn_cpp`, data, k, pool_size, n_iters, max_candidates, n_random_projections, seed, parallel, cores)
-}
-
-ivf_self_knn_cpp <- function(data, k, nlist, nprobe, seed, parallel, cores) {
-    .Call(`_fastEmbedR_ivf_self_knn_cpp`, data, k, nlist, nprobe, seed, parallel, cores)
-}
-
-annoy_self_knn_cpp <- function(data, k, n_trees, leaf_size, search_k, seed, parallel, cores) {
-    .Call(`_fastEmbedR_annoy_self_knn_cpp`, data, k, n_trees, leaf_size, search_k, seed, parallel, cores)
-}
-
-vptree_self_knn_cpp <- function(data, k, parallel, cores) {
-    .Call(`_fastEmbedR_vptree_self_knn_cpp`, data, k, parallel, cores)
-}
-
-vptree_query_knn_cpp <- function(data, points, k, parallel, cores) {
-    .Call(`_fastEmbedR_vptree_query_knn_cpp`, data, points, k, parallel, cores)
-}
-
-grid2d_self_knn_cpp <- function(data, k, parallel, cores, bins_per_dim) {
-    .Call(`_fastEmbedR_grid2d_self_knn_cpp`, data, k, parallel, cores, bins_per_dim)
-}
-
-grid3d_self_knn_cpp <- function(data, k, parallel, cores, bins_per_dim) {
-    .Call(`_fastEmbedR_grid3d_self_knn_cpp`, data, k, parallel, cores, bins_per_dim)
-}
-
-cuda_available_cpp <- function() {
-    .Call(`_fastEmbedR_cuda_available_cpp`)
-}
-
-cuda_device_info_json_cpp <- function() {
-    .Call(`_fastEmbedR_cuda_device_info_json_cpp`)
-}
-
-nn_cuda_cpp <- function(data, points, k, square) {
-    .Call(`_fastEmbedR_nn_cuda_cpp`, data, points, k, square)
-}
-
-landmark_candidate_knn_cuda_cpp <- function(data, projection_indices, k, bucket_cols, query_cols) {
-    .Call(`_fastEmbedR_landmark_candidate_knn_cuda_cpp`, data, projection_indices, k, bucket_cols, query_cols)
-}
-
-row_candidate_knn_cuda_cpp <- function(data, candidate_indices, k) {
-    .Call(`_fastEmbedR_row_candidate_knn_cuda_cpp`, data, candidate_indices, k)
-}
-
-cuda_grid_self_knn_cpp <- function(data, k, bins_per_dim) {
-    .Call(`_fastEmbedR_cuda_grid_self_knn_cpp`, data, k, bins_per_dim)
-}
-
-cuvs_available_cpp <- function() {
-    .Call(`_fastEmbedR_cuvs_available_cpp`)
-}
-
-cuvs_info_json_cpp <- function() {
-    .Call(`_fastEmbedR_cuvs_info_json_cpp`)
-}
-
-nn_cuvs_bruteforce_cpp <- function(data, points, k, exclude_self) {
-    .Call(`_fastEmbedR_nn_cuvs_bruteforce_cpp`, data, points, k, exclude_self)
-}
-
-nn_cuvs_cagra_cpp <- function(data, points, k, exclude_self, graph_degree, intermediate_graph_degree, search_width, itopk_size) {
-    .Call(`_fastEmbedR_nn_cuvs_cagra_cpp`, data, points, k, exclude_self, graph_degree, intermediate_graph_degree, search_width, itopk_size)
-}
-
-nn_cuvs_nndescent_self_cpp <- function(data, k, graph_degree, intermediate_graph_degree, max_iterations) {
-    .Call(`_fastEmbedR_nn_cuvs_nndescent_self_cpp`, data, k, graph_degree, intermediate_graph_degree, max_iterations)
-}
-
-faiss_available_cpp <- function() {
-    .Call(`_fastEmbedR_faiss_available_cpp`)
-}
-
-faiss_info_json_cpp <- function() {
-    .Call(`_fastEmbedR_faiss_info_json_cpp`)
-}
-
-nn_faiss_flat_cpp <- function(data, points, k, exclude_self, n_threads) {
-    .Call(`_fastEmbedR_nn_faiss_flat_cpp`, data, points, k, exclude_self, n_threads)
-}
-
-nn_faiss_ivf_cpp <- function(data, points, k, nlist, nprobe, exclude_self, n_threads) {
-    .Call(`_fastEmbedR_nn_faiss_ivf_cpp`, data, points, k, nlist, nprobe, exclude_self, n_threads)
-}
-
-nn_faiss_flat_ip_cpp <- function(data, points, k, exclude_self, n_threads) {
-    .Call(`_fastEmbedR_nn_faiss_flat_ip_cpp`, data, points, k, exclude_self, n_threads)
-}
-
-nn_faiss_ivfpq_cpp <- function(data, points, k, nlist, nprobe, pq_m, pq_nbits, exclude_self, n_threads) {
-    .Call(`_fastEmbedR_nn_faiss_ivfpq_cpp`, data, points, k, nlist, nprobe, pq_m, pq_nbits, exclude_self, n_threads)
-}
-
-nn_faiss_hnsw_cpp <- function(data, points, k, m, ef_construction, ef_search, exclude_self, n_threads) {
-    .Call(`_fastEmbedR_nn_faiss_hnsw_cpp`, data, points, k, m, ef_construction, ef_search, exclude_self, n_threads)
-}
-
-nn_faiss_nsg_cpp <- function(data, points, k, r, search_l, build_type, exclude_self, n_threads) {
-    .Call(`_fastEmbedR_nn_faiss_nsg_cpp`, data, points, k, r, search_l, build_type, exclude_self, n_threads)
-}
-
-nn_faiss_nndescent_cpp <- function(data, points, k, graph_k, n_iter, search_l, exclude_self, n_threads) {
-    .Call(`_fastEmbedR_nn_faiss_nndescent_cpp`, data, points, k, graph_k, n_iter, search_l, exclude_self, n_threads)
-}
-
-metal_available_cpp <- function() {
-    .Call(`_fastEmbedR_metal_available_cpp`)
-}
-
-nn_metal_cpp <- function(data, points, k, square) {
-    .Call(`_fastEmbedR_nn_metal_cpp`, data, points, k, square)
-}
-
-landmark_candidate_knn_metal_cpp <- function(data, projection_indices, k, bucket_cols, query_cols) {
-    .Call(`_fastEmbedR_landmark_candidate_knn_metal_cpp`, data, projection_indices, k, bucket_cols, query_cols)
-}
-
-grid_knn_metal_cpp <- function(data, k, grid_dims, bins_per_dim, radius) {
-    .Call(`_fastEmbedR_grid_knn_metal_cpp`, data, k, grid_dims, bins_per_dim, radius)
-}
-
-row_candidate_knn_metal_cpp <- function(data, candidate_indices, k) {
-    .Call(`_fastEmbedR_row_candidate_knn_metal_cpp`, data, candidate_indices, k)
-}
-
-candidate_topk_l2_batched_metal_cpp <- function(data, candidate_indices, k) {
-    .Call(`_fastEmbedR_candidate_topk_l2_batched_metal_cpp`, data, candidate_indices, k)
-}
-
-metal_knn_data_handle_cpp <- function(data) {
-    .Call(`_fastEmbedR_metal_knn_data_handle_cpp`, data)
-}
-
-row_candidate_knn_metal_handle_cpp <- function(handle, candidate_indices, k, return_distances = TRUE) {
-    .Call(`_fastEmbedR_row_candidate_knn_metal_handle_cpp`, handle, candidate_indices, k, return_distances)
-}
-
-row_candidate_knn_metal_subset_handle_cpp <- function(handle, candidate_indices, query_rows, k, return_distances = TRUE) {
-    .Call(`_fastEmbedR_row_candidate_knn_metal_subset_handle_cpp`, handle, candidate_indices, query_rows, k, return_distances)
 }
 
 tsne_auto_parameters_cpp <- function(n, k, perplexity, perplexity_missing, backend, negative_gradient_method) {

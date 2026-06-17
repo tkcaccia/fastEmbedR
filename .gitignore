@@ -23,6 +23,7 @@ venv/
 data/
 cache/
 results/
+backups/
 
 # Local IDE/editor files
 .vscode/

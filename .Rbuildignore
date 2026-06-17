@@ -13,6 +13,8 @@
 ^\.\.Rcheck/
 ^fastEmbedR[.]Rcheck$
 ^fastEmbedR[.]Rcheck/
+^[A-Za-z0-9_.-]+[.]Rcheck$
+^[A-Za-z0-9_.-]+[.]Rcheck/
 ^fastEmbedR_[0-9.]+[.]tar[.]gz$
 ^Rplots[.]pdf$
 ^cache$

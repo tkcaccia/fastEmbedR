@@ -1,0 +1,268 @@
+---
+title: "Algorithmic design and acknowledgements"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Algorithmic design and acknowledgements}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+`fastEmbedR` is built around a KNN-first design. Nearest-neighbour search is
+handled by the companion `faissR` package; `fastEmbedR` consumes those
+neighbours to run UMAP and openTSNE-style t-SNE embeddings.
+
+This vignette explains what is implemented, what was removed, and which papers
+or software projects inspired the current code.
+
+## Package Boundaries
+
+The current project is split into two packages.
+
+| Package | Main responsibility |
+| --- | --- |
+| `faissR` | FAISS/cuVS nearest neighbours, candidate KNN, KNN graphs, KNN prediction, and k-means. |
+| `fastEmbedR` | UMAP, openTSNE-style t-SNE, landmark transforms, quality metrics, and backend reporting. |
+
+`fastEmbedR::nn()` and `fastEmbedR::knn_graph()` are convenience wrappers
+around `faissR`. They are kept so that users can run a complete workflow from
+one namespace, but the KNN implementation belongs to `faissR`.
+
+```{r, eval = FALSE}
+library(fastEmbedR)
+
+knn <- nn(x, k = 50, backend = "auto", n_threads = 4)
+y_umap <- umap_knn(knn, backend = "cpu", seed = 1)
+y_tsne <- opentsne_knn(knn, init_data = x, backend = "cpu", seed = 1)
+```
+
+The practical advantage is that KNN time and embedding time are separated.
+This is important for fair comparisons with `uwot`, `Rtsne`, FIt-SNE, and GPU
+implementations.
+
+## UMAP
+
+### CPU UMAP
+
+The CPU UMAP path is native C++ and operates directly from a supplied KNN
+object. The implementation keeps the standard UMAP structure:
+
+1. estimate smooth KNN bandwidths;
+2. compute local connectivity offsets;
+3. build fuzzy graph weights;
+4. symmetrize the graph;
+5. precompute `epochs_per_sample`;
+6. optimize the two-dimensional layout with UMAP's attractive and repulsive
+   stochastic objective.
+
+The main improvements are engineering improvements, not changes to the
+mathematics:
+
+- compact graph buffers;
+- CSR/COO-style graph storage;
+- no dense graph intermediates;
+- fewer avoidable copies between R and C++;
+- `float` internal weights where safe;
+- parallel row-wise work where deterministic enough;
+- uwot-like fast-SGD scheduling and learning-rate decay.
+
+### `graph_mode`
+
+UMAP has two graph modes:
+
+```{r, eval = FALSE}
+y_binary <- umap_knn(knn, graph_mode = "binary")
+y_fuzzy <- umap_knn(knn, graph_mode = "fuzzy")
+```
+
+`graph_mode = "fuzzy"` uses the standard UMAP fuzzy graph. `graph_mode =
+"binary"` uses binary neighbour edges and can increase visible separation on
+some datasets. It is not hidden as an internal trick: benchmark output records
+which graph mode was used.
+
+### Metal UMAP
+
+The Metal UMAP backend is implemented in Objective-C++/Metal. It does not call
+Python, Torch, MLX, or `reticulate`.
+
+The public Metal optimizer is the visually validated `atomic_inplace` path.
+Earlier scheduled, deterministic, and hybrid experiments were removed from the
+public API because they made the package harder to reason about and produced
+less reliable plots.
+
+```{r, eval = FALSE}
+y_metal <- umap_knn(knn, backend = "metal", seed = 1)
+```
+
+If Metal is not available, this request fails clearly. It is not silently run
+on CPU and reported as Metal.
+
+### CUDA UMAP
+
+The CUDA UMAP backend uses native CUDA kernels when `fastEmbedR` is built with
+CUDA support. The cleaned public path is the pure atomic CUDA optimizer. Older
+CUDA hybrid and deterministic variants were removed.
+
+CUDA KNN is not implemented in `fastEmbedR`; it comes from `faissR`, preferably
+through RAPIDS cuVS or FAISS GPU indexes.
+
+```{r, eval = FALSE}
+knn_cuda <- nn(x, k = 50, backend = "cuda", n_threads = 4)
+y_cuda <- umap_knn(knn_cuda, backend = "cuda", seed = 1)
+```
+
+## openTSNE-Style t-SNE
+
+`opentsne_knn()` implements an openTSNE-style t-SNE optimizer from precomputed
+KNN matrices.
+
+The high-level steps are:
+
+1. convert neighbour distances to perplexity affinities;
+2. symmetrize sparse probabilities;
+3. initialize the layout, usually with PCA;
+4. run early exaggeration;
+5. run the normal optimization phase;
+6. return the layout plus timing/backend metadata.
+
+```{r, eval = FALSE}
+y_tsne <- opentsne_knn(
+  knn,
+  init_data = x,
+  perplexity = 15,
+  backend = "cpu",
+  seed = 1
+)
+```
+
+### PCA Initialization
+
+PCA initialization is the default when original data or a saved initialization
+is available. For t-SNE this initialization is centered and scaled to the small
+scale expected by t-SNE:
+
+```{r, eval = FALSE}
+Y_init <- opentsne_pca_init(x)
+y_tsne <- opentsne_knn(knn, Y_init = Y_init, perplexity = 15)
+```
+
+In MNIST 70k tests, PCA initialization reduced cluster splitting without
+changing the objective.
+
+### CPU FFT-Grid Path
+
+The CPU openTSNE large-data path uses a FIt-SNE-style grid approximation for
+the repulsive force. The attractive force remains sparse and KNN-based. The
+old Barnes-Hut path was removed from the public package surface because the
+FFT-grid path was the useful large-data standard in the benchmarks.
+
+### Metal openTSNE
+
+The Metal openTSNE backend is package-native Objective-C++/Metal:
+
+- grid scatter kernels;
+- native Metal FFT-grid convolution;
+- grid gather kernels;
+- sparse attractive force kernels;
+- gain, momentum, update, and centering kernels.
+
+MPSGraph FFT was tested as a diagnostic alternative. It remains diagnostic-only
+because it did not provide enough improvement over the package-native FFT path.
+
+```{r, eval = FALSE}
+y_tsne_metal <- opentsne_knn(
+  knn,
+  Y_init = Y_init,
+  perplexity = 15,
+  backend = "metal",
+  seed = 1
+)
+```
+
+### CUDA openTSNE
+
+The CUDA openTSNE backend uses native CUDA kernels and cuFFT when the package
+is built with CUDA support:
+
+- device-side grid scatter/gather;
+- cuFFT convolution;
+- sparse attractive forces;
+- optimizer updates on device.
+
+The CUDA path is designed to match the same openTSNE/FIt-SNE formulation used
+by the CPU and Metal paths.
+
+## Landmarking
+
+Landmarking is an explicit approximation. It is useful for very large data or
+interactive workflows, but it should be labelled as landmarking in benchmarks.
+
+```{r, eval = FALSE}
+fit_landmark <- landmark_tsne(
+  x,
+  landmarks = 0.5,
+  n_neighbors = 50,
+  perplexity = 15,
+  seed = 1
+)
+```
+
+The package separates:
+
+- embedding time for landmarks;
+- projection or transform time for non-landmark points;
+- quality metrics for the final full layout.
+
+## Autotuning
+
+The default API asks for few parameters, but the code records what it chose.
+
+openTSNE uses opt-SNE-style rules:
+
+- automatic learning rate is `n / early_exaggeration`;
+- iteration defaults are chosen by a native helper;
+- CPU/small exact runs can use KLD-based stopping;
+- large FFT/GPU runs do not hide an expensive CPU KLD monitor.
+
+UMAP uses the KNN distance profile to choose internal defaults such as
+initialization effort and optimizer settings. If a KNN object is supplied, the
+KNN graph itself is not silently changed.
+
+## Backend Honesty
+
+The backend rule is simple:
+
+- `backend = "metal"` must run native Metal code or fail;
+- `backend = "cuda"` must run native CUDA/cuFFT code or fail;
+- CPU fallback is never reported as GPU work.
+
+Use `backend_info()` to inspect the current build:
+
+```{r, eval = FALSE}
+backend_info()
+```
+
+## Acknowledgements
+
+The following papers and projects shaped the implementation:
+
+- McInnes, Healy, and Melville: UMAP.
+- `uwot`: R UMAP behaviour and fast-SGD scheduling reference.
+- van der Maaten and Hinton: original t-SNE.
+- van der Maaten: Barnes-Hut t-SNE.
+- Policar, Strazar, and Zupan: openTSNE.
+- Linderman et al.: FIt-SNE.
+- Chan, Rao, Huang, and Canny: t-SNE-CUDA.
+- Belkina et al. and Multicore-opt-SNE: automatic t-SNE parameter policy.
+- `Rtsne::Rtsne_neighbors()`: KNN-input t-SNE validation reference.
+- FAISS and RAPIDS cuVS: nearest-neighbour acceleration through `faissR`.
+- AppleSiliconFFT: Stockham FFT design reference for native Metal FFT-grid
+  work.
+- `mlx-vis` and `annembed`: GPU-resident and ANN embedding design references.
+
+See `inst/NOTICE`, `inst/ALGORITHMIC_REFERENCES.md`, and the GitHub page
+`docs/algorithm-provenance.md` for detailed provenance and license notes.
+

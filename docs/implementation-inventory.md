@@ -40,11 +40,15 @@ For function-by-function implementation notes and literature, see
 
 | Backend | Implementation | Library or project used | Runtime dependency | Notes |
 | --- | --- | --- | --- | --- |
-| `cpu` / exact | Native C++ exact row-distance search | Rnanoflann-style API behaviour informed early design | No | Used for small data and reference checks. |
-| `cpu_nndescent` | Native C++ approximate NN-descent | mlx-vis and annembed design references | No | NEW/OLD candidate handling, reverse candidates, and active-row pruning are implemented in package code. |
-| `metal_nndescent` | Native Objective-C++/Metal approximate NN-descent | mlx-vis design reference | Apple Metal on macOS | Used for Metal benchmarks; results are reported as Metal only when this native path runs. |
-| `faiss` / `faiss_ivf` | Native C++ bridge to external FAISS | FAISS | Optional external FAISS library | FAISS is not vendored and is only linked when explicitly available. |
-| `cuda_cuvs*` | Native C++ bridge to external RAPIDS cuVS | RAPIDS cuVS | Optional external RAPIDS cuVS/CUDA install | Includes cuVS brute force, CAGRA, and NN-descent KNN. cuVS is not vendored. |
+| `fastEmbedR::nn()` | Thin wrapper around `faissR::nn()` | FAISS, RAPIDS cuVS | `faissR` | KNN implementation, tuning, and backend selection live in `faissR`. |
+| `fastEmbedR::candidate_knn()` | Thin wrapper around `faissR::candidate_knn()` | FAISS/candidate KNN work in `faissR` | `faissR` | Useful when candidate sets are produced outside the embedding optimizer. |
+| `fastEmbedR::knn_graph()` | Thin wrapper around `faissR::knn_graph()` | bluster/scran graph semantics informed `faissR` | `faissR`, optional `igraph` | Converts precomputed KNN or embedding layouts into clustering graphs. |
+| `fastEmbedR::fast_kmeans()` | Thin wrapper around `faissR::fast_kmeans()` | FAISS/cuVS k-means paths in `faissR` | `faissR` | Kept out of the embedding code. |
+
+Earlier native exact KNN, CPU NN-descent, Metal NN-descent, and grid KNN
+experiments were removed from `fastEmbedR`. They remain useful historical
+benchmarks, but the cleaned package delegates KNN to `faissR` so that FAISS and
+cuVS support have one owner.
 
 ## Studied But Not Runtime Dependencies
 
@@ -56,6 +60,7 @@ called by the package at runtime:
 - KeOps
 - mlx-vis
 - annembed
+- the removed native CPU/Metal NN-descent prototypes
 - t-SNE-CUDA
 - RAPIDS cuML
 - RAPIDS cuVS for non-KNN embedding kernels

@@ -12,12 +12,14 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 ```
 
 `fastEmbedR` is focused on KNN-first embeddings: UMAP from precomputed nearest
-neighbours, plus a native openTSNE-style optimizer.
+neighbours, plus a native openTSNE-style optimizer. Nearest-neighbour search,
+graph building, kNN models, and k-means live in the companion `faissR` package
+and are re-exported as thin `fastEmbedR` wrappers.
 
 The legacy `tsne()` and `infotsne()` entry points were removed from the public
 package API. The kept path is:
 
-1. compute or reuse KNN with `nn()`;
+1. compute or reuse KNN with `fastEmbedR::nn()`;
 2. embed with `umap_knn()` / `umap()` or, explicitly, `opentsne_knn()` /
    `opentsne()`;
 3. optionally place query/non-landmark points with `transform_tsne()`.
@@ -40,7 +42,7 @@ library(fastEmbedR)
 x <- scale(as.matrix(iris[, 1:4]))
 labels <- iris$Species
 
-knn <- nn(x, k = 31, n_threads = 2)
+knn <- fastEmbedR::nn(x, k = 31, n_threads = 2)
 layout <- umap_knn(knn, n_threads = 2, seed = 4)
 
 plot(layout, pch = 21, bg = labels)
@@ -183,7 +185,7 @@ ref_fit <- opentsne(
   preserve_sample = NULL
 )
 
-query_knn <- nn(reference, query, k = 15)
+query_knn <- fastEmbedR::nn(reference, query, k = 15)
 query_layout <- transform_tsne(
   ref_fit$layout,
   knn = query_knn,

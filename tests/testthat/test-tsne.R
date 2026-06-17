@@ -1,7 +1,7 @@
 test_that("embed_knn runs native openTSNE from supplied neighbours", {
   set.seed(321)
   x <- matrix(rnorm(50L * 5L), 50L, 5L)
-  knn <- nn(x, k = 16L, backend = "cpu")
+  knn <- faissR::nn(x, k = 16L, backend = "cpu")
 
   layout <- embed_knn(
     knn,
@@ -57,7 +57,7 @@ test_that("openTSNE auto configuration exposes opt-SNE policy metadata", {
 test_that("removed embedding methods fail at the public KNN dispatcher", {
   set.seed(320)
   x <- matrix(rnorm(32L * 4L), 32L, 4L)
-  knn <- nn(x, k = 10L, backend = "cpu")
+  knn <- faissR::nn(x, k = 10L, backend = "cpu")
 
   expect_error(embed_knn(knn, method = "tsne"), "opentsne", fixed = TRUE)
   expect_error(embed_knn(knn, method = "infotsne"), "opentsne", fixed = TRUE)
@@ -66,7 +66,7 @@ test_that("removed embedding methods fail at the public KNN dispatcher", {
 test_that("openTSNE exposes FFT and exact negative-gradient choices without Barnes-Hut or sampled GPU math", {
   set.seed(312)
   x <- matrix(rnorm(42L * 4L), 42L, 4L)
-  knn <- nn(x, k = 13L, backend = "cpu")
+  knn <- faissR::nn(x, k = 13L, backend = "cpu")
 
   expect_error(
     embed_knn(
@@ -125,7 +125,7 @@ test_that("opentsne has direct KNN input functions", {
   set.seed(322)
   x <- matrix(rnorm(54L * 5L), 54L, 5L)
   labels <- rep(1:3, length.out = nrow(x))
-  knn <- nn(x, k = 19L, backend = "cpu")
+  knn <- faissR::nn(x, k = 19L, backend = "cpu")
 
   layout <- opentsne_knn(
     knn$indices,
@@ -180,7 +180,7 @@ test_that("native Metal openTSNE runs FFT-grid without CPU fallback", {
 
   set.seed(323)
   x <- matrix(rnorm(96L * 5L), 96L, 5L)
-  knn <- nn(x, k = 16L, backend = "cpu")
+  knn <- faissR::nn(x, k = 16L, backend = "cpu")
   metal <- opentsne_knn(
     knn,
     n_neighbors = 15L,
@@ -203,7 +203,7 @@ test_that("native Metal openTSNE runs FFT-grid without CPU fallback", {
 test_that("openTSNE GPU optimizers are native and fail clearly when unavailable", {
   set.seed(319)
   x <- matrix(rnorm(32L * 4L), 32L, 4L)
-  knn <- nn(x, k = 10L, backend = "cpu")
+  knn <- faissR::nn(x, k = 10L, backend = "cpu")
 
   if (isTRUE(fastEmbedR:::embedding_metal_available_cpp()) &&
       isTRUE(fastEmbedR:::metal_opentsne_native_available())) {
@@ -266,7 +266,7 @@ test_that("opentsne can use cuVS for KNN without labelling the optimizer as GPU"
   set.seed(313)
   x <- matrix(rnorm(36L * 4L), 36L, 4L)
 
-  if (isTRUE(cuvs_available())) {
+  if (isTRUE(faissR::cuvs_available())) {
     fit <- opentsne(
       x,
       n_neighbors = 6L,

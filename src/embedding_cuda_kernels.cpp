@@ -1118,7 +1118,7 @@ __global__ void tsne_affinity_from_knn_kernel(const int* indices,
   }
 
   const double row_perplexity = fmax(1.0, fmin(static_cast<double>(perplexity),
-                                               floor(static_cast<double>(valid) / 3.0)));
+                                               static_cast<double>(valid)));
   const double target_entropy = log(row_perplexity);
   double beta = 1.0;
   double beta_min = 0.0;
@@ -1487,7 +1487,7 @@ __global__ void opentsne_affinity_sparse_kernel(const int* indices,
   }
 
   const double row_perplexity = fmax(1.0, fmin(static_cast<double>(perplexity),
-                                               floor(static_cast<double>(valid) / 3.0)));
+                                               static_cast<double>(valid)));
   const double target_entropy = log(row_perplexity);
   double beta = 1.0;
   double beta_min = 0.0;
@@ -2430,6 +2430,16 @@ int normalize_device_init(float* d_values,
 
 extern "C" const char* fastembedr_cuda_embedding_last_error() {
   return embedding_last_error.c_str();
+}
+
+extern "C" bool fastembedr_cuda_available() {
+  int count = 0;
+  cudaError_t code = cudaGetDeviceCount(&count);
+  if (code != cudaSuccess) {
+    set_embedding_error(std::string("cudaGetDeviceCount: ") + cudaGetErrorString(code));
+    return false;
+  }
+  return count > 0;
 }
 
 extern "C" int fastembedr_cuda_standardize_matrix(const double* values,

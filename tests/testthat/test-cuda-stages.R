@@ -100,7 +100,7 @@ test_that("CUDA preprocessing, projection, interpolation, and scoring match CPU"
 
   layout <- cbind(rnorm(30L), rnorm(30L))
   labels <- rep(1:3, each = 10L)
-  knn <- nn(layout, layout, k = 7L, backend = "cpu")
+  knn <- faissR::nn(layout, layout, k = 7L, backend = "cpu")
   high_indices <- knn$indices[, -1L, drop = FALSE]
   keep <- seq_len(nrow(layout))
   cpu_score <- fastEmbedR:::knn_structure_score_cpp(

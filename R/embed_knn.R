@@ -1,10 +1,10 @@
 #' Embed from precomputed KNN
 #'
-#' @param indices A KNN object returned by `nn()`, or an integer KNN index
+#' @param indices A KNN object returned by [faissR::nn()], or an integer KNN index
 #'   matrix. If a self-neighbor first column is present it is removed
 #'   automatically.
 #' @param distances Numeric KNN distance matrix matching `indices`. Leave as
-#'   `NULL` when `indices` is an `nn()` result.
+#'   `NULL` when `indices` is a [faissR::nn()] result.
 #' @param method Embedding method: `"opentsne"` or `"umap"`.
 #' @param n_components Output dimensionality.
 #' @param seed Random seed.

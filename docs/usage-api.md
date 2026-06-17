@@ -62,10 +62,9 @@ For embedding-layout graphs, `weight = "auto"` uses distance weights. You can
 also test `weight = "adaptive"` for local-density-scaled Gaussian weights and
 `mutual = TRUE` to keep only reciprocal neighbour edges.
 
-When `knn_graph()` has to compute neighbours itself, `backend = "auto"` uses
-the fastest available graph-KNN backend in this order: CUDA cuVS NN-descent,
-FAISS NN-descent, RcppHNSW, then exact CPU. If you pass an `nn()` result,
-neighbour search is not repeated.
+When `knn_graph()` has to compute neighbours itself, the call is delegated to
+`faissR`, so the available FAISS/cuVS backend rules come from the installed
+`faissR` build. If you pass an `nn()` result, neighbour search is not repeated.
 
 ## Distance Metrics In `nn()`
 
@@ -86,8 +85,8 @@ Current metric support is deliberately explicit:
 
 | metric | supported backends | notes |
 | --- | --- | --- |
-| `euclidean` | CPU exact/approximate, Metal, CUDA/cuVS, FAISS | Recommended default for large UMAP/openTSNE benchmarks. |
-| `cosine` | CPU exact | `backend = "auto"` resolves to CPU. Approximate/GPU/FAISS/cuVS cosine requests error until those paths are validated. |
+| `euclidean` | FAISS CPU and optional CUDA/cuVS through `faissR` | Recommended default for large UMAP/openTSNE benchmarks. |
+| `cosine` / inner product | FAISS/candidate paths where enabled by `faissR` | Use normalized rows when treating inner product as cosine similarity. |
 
 ## Basic KNN-First UMAP
 
@@ -215,7 +214,7 @@ defaults.
 
 | Function | Purpose |
 | --- | --- |
-| `nn()` | Native exact/approximate KNN for data/query matrices. |
+| `nn()` | Thin wrapper around `faissR::nn()` for data/query matrices. |
 | `umap_knn()` | UMAP from a supplied KNN object or matrices. |
 | `umap()` | One-call preprocessing, KNN, and UMAP embedding. |
 | `embed_knn()` | KNN dispatcher; UMAP by default, openTSNE with `method = "opentsne"`. |

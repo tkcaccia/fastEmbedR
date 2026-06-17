@@ -32,11 +32,11 @@ opentsne_knn(
 )
 }
 \arguments{
-\item{indices}{A KNN object returned by [nn()], or an integer KNN index
+\item{indices}{A KNN object returned by [faissR::nn()], or an integer KNN index
 matrix.}
 
 \item{distances}{Numeric KNN distance matrix matching `indices`. Leave
-`NULL` when `indices` is an [nn()] result.}
+`NULL` when `indices` is a [faissR::nn()] result.}
 
 \item{n_neighbors}{Optional number of non-self neighbor columns to use from
 the supplied KNN graph. This lets you compute a wide KNN once and reuse
@@ -113,13 +113,14 @@ A numeric embedding matrix with settings stored in
 }
 \description{
 `opentsne_knn()` is the direct KNN-input entry point for the native
-openTSNE-style optimizer. It accepts either an object returned by [nn()] or
+openTSNE-style optimizer. It accepts either an object returned by
+[faissR::nn()] or
 separate KNN index and distance matrices. No neighbour search, scaling, or
 PCA is done inside this function.
 }
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))
-knn <- nn(x, k = 31)
+knn <- faissR::nn(x, k = 31)
 layout <- opentsne_knn(knn, init_data = x, perplexity = 10,
   early_exaggeration_iter = 100, n_iter = 250)
 if (all(is.finite(layout))) {

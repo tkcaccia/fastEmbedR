@@ -14,7 +14,7 @@ test_that("transform_tsne places query rows from supplied reference neighbours",
     preserve_sample = NULL,
     silhouette_sample = NULL
   )
-  query_knn <- nn(ref, qry, k = 15L, backend = "cpu")
+  query_knn <- faissR::nn(ref, qry, k = 15L, backend = "cpu")
   layout <- transform_tsne(
     fit$layout,
     knn = query_knn,
@@ -145,7 +145,7 @@ test_that("transform_tsne reports GPU transform backends honestly", {
     preserve_sample = NULL,
     silhouette_sample = NULL
   )
-  query_knn <- nn(ref, qry, k = 12L, backend = "cpu")
+  query_knn <- faissR::nn(ref, qry, k = 12L, backend = "cpu")
 
   if (isTRUE(fastEmbedR:::embedding_cuda_available_cpp())) {
     cuda_layout <- transform_tsne(
@@ -343,8 +343,8 @@ test_that("landmark_tsne can use projection-specific approximate KNN", {
 
   expect_s3_class(fit, "fastEmbedR_embedding")
   expect_equal(dim(fit$layout), c(nrow(x), 2L))
-  expect_equal(fit$parameters$projection_nn_backend, "cpu_projection_approx")
-  expect_equal(fit$parameters$projection_strategy, "random_projection_landmark_query_knn")
+  expect_true(fit$parameters$projection_nn_backend %in% c("faiss_hnsw", "hnsw", "cpu"))
+  expect_equal(fit$parameters$projection_strategy, "faissR_landmark_query_knn")
   expect_true(is.list(attr(fit$landmarks$projection_knn, "approximation")))
 })
 

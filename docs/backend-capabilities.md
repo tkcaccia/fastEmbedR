@@ -8,11 +8,11 @@ rule is simple: if a function is requested with `backend = "metal"` or
 
 | Function | CPU | Metal | CUDA | Notes |
 | --- | --- | --- | --- | --- |
-| `nn()` | native exact and native NN-descent | native Metal NN-descent | optional RAPIDS cuVS NN-descent | KNN results are reusable across UMAP, openTSNE, and landmark workflows. |
+| `nn()` | `faissR` FAISS CPU search | not implemented in `fastEmbedR` | `faissR` optional RAPIDS cuVS / FAISS GPU search | KNN belongs to `faissR`; `fastEmbedR` re-exports a thin wrapper. |
 | `umap_knn()` | native C++ CSR graph and optimizer | native Metal `atomic_inplace` optimizer | native CUDA pure-atomic optimizer | Metal/CUDA optimizers use the supplied graph; unavailable GPU backends fail clearly. |
-| `umap()` | native KNN plus `umap_knn()` | native Metal KNN plus Metal UMAP where available | cuVS KNN plus CUDA UMAP where available | The backend actually used is reported. |
+| `umap()` | `faissR` KNN plus `umap_knn()` | `faissR` KNN plus native Metal UMAP where available | `faissR` cuVS/FAISS KNN plus CUDA UMAP where available | The backend actually used is reported. |
 | `opentsne_knn()` | native C++ FFT-grid optimizer | native Metal FFT-grid optimizer | native CUDA FFT-grid optimizer using cuFFT | PCA initialization is the default for quality/stability. |
-| `opentsne()` | native KNN plus `opentsne_knn()` | native Metal KNN plus Metal openTSNE where available | cuVS KNN plus CUDA openTSNE where available | The package does not call Python openTSNE in public functions. |
+| `opentsne()` | `faissR` KNN plus `opentsne_knn()` | `faissR` KNN plus Metal openTSNE where available | `faissR` cuVS/FAISS KNN plus CUDA openTSNE where available | The package does not call Python openTSNE in public functions. |
 | `transform_tsne()` | native fixed-reference transform | native Metal projection/transform kernels where available | native CUDA projection/transform kernels where built | Used by openTSNE landmarking. |
 | `landmark_umap()` | native landmark embed/project/refine | native Metal projection/refinement kernels where available | native CUDA projection/refinement kernels where built | Landmarking is an explicit approximation, not a replacement for full UMAP. |
 | `landmark_tsne()` | native landmark embed plus transform | native Metal projection/transform kernels where available | native CUDA projection/transform kernels where built | Projection quality is tracked separately in benchmark plots. |
@@ -22,8 +22,8 @@ rule is simple: if a function is requested with `backend = "metal"` or
 
 | `nn()` metric | CPU | Metal | CUDA/cuVS | FAISS | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `euclidean` | exact and approximate | native Metal KNN | cuVS/CUDA KNN where built | optional FAISS L2 indexes | Validated default for UMAP/openTSNE. |
-| `cosine` | exact CPU | not yet enabled | not yet enabled | not yet enabled | `backend = "auto"` resolves to CPU; unsupported explicit backends error clearly. |
+| `euclidean` | FAISS CPU where built | not in `fastEmbedR` | cuVS/CUDA KNN where built | FAISS L2 indexes | Validated default for UMAP/openTSNE. |
+| `cosine` / inner product | FAISS CPU where enabled by `faissR` | not in `fastEmbedR` | CUDA/cuVS/FAISS where enabled by `faissR` | FAISS IP indexes | Use normalized rows for cosine/IP workflows. |
 
 ## Backend Labels
 
@@ -53,11 +53,10 @@ parallelize. Current CPU priorities are:
 Metal is implemented with Objective-C++ and Metal kernels. Public UMAP and
 openTSNE paths do not call Python, Torch, MLX, or `reticulate`.
 
-For KNN, `backend = "auto"` uses exact Metal on moderate self-KNN searches
-where local benchmarks show it is faster than the current Metal NN-descent
-pipeline. Metal NN-descent remains available explicitly with
-`backend = "metal_nndescent"` and is reserved by auto for larger searches where
-exact all-pairs KNN is too expensive.
+KNN is no longer implemented in `fastEmbedR`. Use `faissR::nn()` or the
+`fastEmbedR::nn()` wrapper. Metal KNN experiments were removed from
+`fastEmbedR`; the supported accelerated KNN route is FAISS/cuVS through
+`faissR`.
 
 The validated UMAP Metal path is `atomic_inplace`; other slower or distorted
 Metal UMAP optimizer experiments were removed from the public API.
@@ -81,6 +80,5 @@ available, explicit CUDA requests fail clearly.
 ## External Libraries
 
 `fastEmbedR` does not vendor large GPU libraries such as RAPIDS cuVS or FAISS.
-It links to them only when they are explicitly available. This keeps the R
-package smaller and easier to submit while still allowing accelerated builds on
-CUDA machines.
+Those libraries are handled by `faissR`. This keeps the embedding package
+smaller while still allowing accelerated builds on CUDA machines.

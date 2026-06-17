@@ -1,10 +1,10 @@
 #' Run UMAP from a data matrix or precomputed KNN
 #'
 #' `umap()` is a small convenience wrapper. If `data` is already a KNN object
-#' returned by [nn()], it calls [umap_knn()] directly. Otherwise it preprocesses
+#' returned by [faissR::nn()], it calls [umap_knn()] directly. Otherwise it preprocesses
 #' the data, computes KNN once, and embeds from that KNN graph.
 #'
-#' @param data Numeric matrix/data frame, or a KNN object returned by [nn()].
+#' @param data Numeric matrix/data frame, or a KNN object returned by [faissR::nn()].
 #' @param labels Optional labels stored in the returned object and used for
 #'   optional scoring.
 #' @param n_neighbors Number of non-self neighbours. `NULL` chooses the package
@@ -22,8 +22,8 @@
 #' @param preserve_sample Optional sample size for local structure scoring.
 #' @param preserve_k Number of neighbours used for local structure scoring.
 #' @param keep_knn Keep KNN matrices in the returned object.
-#' @param graph_mode Graph weighting mode. `"binary"` uses unit-weight graph
-#'   edges. `"fuzzy"` uses standard UMAP fuzzy graph weights.
+#' @param graph_mode Graph weighting mode. `"binary"` uses a symmetric
+#'   unit-weight graph. `"fuzzy"` uses standard UMAP fuzzy graph weights.
 #' @param verbose Print progress.
 #' @return A `fastEmbedR_embedding` object.
 #' @examples

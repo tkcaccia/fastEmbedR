@@ -19,15 +19,101 @@ parse_args <- function(args) {
 
 args <- parse_args(commandArgs(trailingOnly = TRUE))
 
-data_root <- args$data_root %||% "/mnt/sata_ssd/fastEmbedR_Data"
+data_root <- args$data_root %||% "/mnt/sata_ssd/fastEmbedR/Data"
 out_dir <- args$out_dir %||% file.path("/mnt/sata_ssd", paste0("fastEmbedR_BENCHMARK3_", format(Sys.time(), "%Y%m%d_%H%M%S")))
 benchmark1_dir <- args$benchmark1_dir %||% ""
-k <- as.integer(args$k %||% "50")
+parse_positive_number_or_auto <- function(value, name) {
+  value <- value %||% "auto"
+  if (length(value) == 1L && tolower(as.character(value)) %in% c("auto", "dataset", "")) return(NA_real_)
+  value <- suppressWarnings(as.numeric(value))
+  if (length(value) != 1L || is.na(value) || !is.finite(value) || value <= 0) {
+    stop("`", name, "` must be one positive finite value, or `auto`.", call. = FALSE)
+  }
+  value
+}
+
+benchmark_perplexity <- parse_positive_number_or_auto(args$perplexity %||% Sys.getenv("FASTEMBEDR_BENCHMARK_PERPLEXITY", "auto"), "--perplexity")
+k_override <- parse_positive_number_or_auto(args$k %||% args$n_neighbors %||% Sys.getenv("FASTEMBEDR_BENCHMARK_K", "auto"), "--k")
+knn_cache_k_override <- parse_positive_number_or_auto(args$knn_k %||% Sys.getenv("FASTEMBEDR_BENCHMARK_KNN_K", "auto"), "--knn_k")
+equivalent_umap_k <- if (is.finite(benchmark_perplexity)) as.integer(ceiling(3 * benchmark_perplexity)) else NA_integer_
+k <- if (is.finite(k_override)) as.integer(k_override) else NA_integer_
+knn_cache_k <- if (is.finite(knn_cache_k_override)) as.integer(knn_cache_k_override) else NA_integer_
 n_threads <- as.integer(args$threads %||% "4")
 timeout_sec <- as.integer(args$timeout %||% "600")
 seed <- as.integer(args$seed %||% "42")
 metric_n <- as.integer(args$metric_n %||% "5000")
 worker <- isTRUE(as.logical(args$worker %||% FALSE))
+backend_filter <- tolower(trimws(strsplit(args$backends %||% Sys.getenv("FASTEMBEDR_BENCHMARK_BACKENDS", "cpu,cuda"), ",", fixed = TRUE)[[1L]]))
+backend_filter <- unique(backend_filter[nzchar(backend_filter)])
+if (!length(backend_filter)) backend_filter <- c("cpu", "cuda")
+
+benchmark_datasets <- c(
+  "USPS",
+  "FashionMNIST",
+  "FlowRepository_FR-FCM-ZYRM_files",
+  "flow18",
+  "MNIST",
+  "imagenet",
+  "MetRef",
+  "mass41",
+  "COIL20"
+)
+default_dataset_paths <- data.frame(
+  dataset = benchmark_datasets,
+  relative_path = c(
+    "USPS/USPS.RData",
+    "FashionMNIST/FashionMNIST.RData",
+    "FlowRepository_FR-FCM-ZYRM_files/van_unen_FR-FCM-ZYRM.RData",
+    "flow18/flow18.RData",
+    "MNIST/MNIST.RData",
+    "imagenet/imagenet.RData",
+    "MetRef/MetRef.RData",
+    "mass41/mass41.RData",
+    "COIL20/COIL20.RData"
+  ),
+  stringsAsFactors = FALSE
+)
+
+dataset_parameter_defaults <- data.frame(
+  dataset = benchmark_datasets,
+  perplexity = c(15, 15, 30, 30, 15, 50, 15, 30, 15),
+  k = c(15, 15, 30, 30, 15, 50, 15, 30, 15),
+  reason = c(
+    "small digit benchmark; low k preserves digit subclasses",
+    "70k fashion images; k 15 matches the visually validated MNIST/Fashion-MNIST setting",
+    "very large cytometry benchmark; moderate k balances local and population structure",
+    "flow cytometry benchmark; moderate k balances local and population structure",
+    "70k flattened digit images; user-validated k 15",
+    "large feature benchmark; higher k is used for broader semantic neighbourhoods",
+    "small metabolomics benchmark; low k is safer",
+    "mass cytometry benchmark; moderate k balances local and population structure",
+    "small image benchmark; low k avoids over-smoothing"
+  ),
+  stringsAsFactors = FALSE
+)
+
+dataset_parameters <- function(dataset_name, n) {
+  row <- dataset_parameter_defaults[dataset_parameter_defaults$dataset == dataset_name, , drop = FALSE]
+  p_auto <- if (nrow(row)) row$perplexity[[1L]] else {
+    if (n < 5000L) 15 else if (n < 100000L) 30 else 50
+  }
+  k_auto <- if (nrow(row)) row$k[[1L]] else as.integer(p_auto)
+  p <- if (is.finite(benchmark_perplexity)) benchmark_perplexity else p_auto
+  p <- min(as.numeric(p), max(1, floor((n - 1L) / 3L)))
+  k_embed <- if (is.finite(k_override)) as.integer(k_override) else as.integer(round(k_auto))
+  k_embed <- max(1L, min(k_embed, n - 1L))
+  cache_k <- if (is.finite(knn_cache_k_override)) as.integer(knn_cache_k_override) else max(100L, k_embed)
+  cache_k <- max(cache_k, k_embed)
+  cache_k <- min(cache_k, n - 1L)
+  list(
+    perplexity_reference = p,
+    k = k_embed,
+    equivalent_umap_k = k_embed,
+    knn_cache_k = cache_k,
+    policy = if (is.finite(benchmark_perplexity) || is.finite(k_override)) "user_override" else "dataset_auto",
+    reason = if (nrow(row)) row$reason[[1L]] else "fallback rule based on sample size"
+  )
+}
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -64,19 +150,41 @@ coerce_matrix <- function(x) {
   x
 }
 
-load_rdata_object <- function(path, name) {
+scale_dataset_matrix <- function(x) {
+  x <- coerce_matrix(x)
+  finite_cols <- apply(x, 2L, function(v) all(is.finite(v)))
+  if (any(!finite_cols)) x <- x[, finite_cols, drop = FALSE]
+  if (!ncol(x)) stop("Dataset has no finite numeric columns after filtering.", call. = FALSE)
+  sdv <- apply(x, 2L, stats::sd)
+  keep <- is.finite(sdv) & sdv > 0
+  x <- x[, keep, drop = FALSE]
+  if (!ncol(x)) stop("Dataset has no variable numeric columns after filtering.", call. = FALSE)
+  x <- scale(x, center = TRUE, scale = FALSE)
+  x[!is.finite(x)] <- 0
+  storage.mode(x) <- "double"
+  x
+}
+
+load_rdata_object <- function(path, name = NULL) {
   env <- new.env(parent = emptyenv())
-  load(path, envir = env)
-  if (!exists(name, envir = env, inherits = FALSE)) {
+  objects <- load(path, envir = env)
+  if (!is.null(name) && exists(name, envir = env, inherits = FALSE)) {
+    return(get(name, envir = env, inherits = FALSE))
+  }
+  if (!is.null(name)) {
     stop("No object named `", name, "` in ", path, call. = FALSE)
   }
-  get(name, envir = env, inherits = FALSE)
+  for (object_name in objects) {
+    obj <- get(object_name, envir = env, inherits = FALSE)
+    if (is.list(obj) && !is.null(obj$data)) return(obj)
+  }
+  stop("No list object with `$data` found in ", path, call. = FALSE)
 }
 
 load_dataset <- function(dataset, data_path) {
-  obj <- load_rdata_object(data_path, "dataset")
+  obj <- load_rdata_object(data_path)
   list(
-    data = coerce_matrix(obj$data),
+    data = scale_dataset_matrix(obj$data),
     labels = if (is.null(obj$labels)) NULL else as.factor(obj$labels),
     metadata = obj$metadata %||% list(),
     source = data_path
@@ -89,6 +197,19 @@ manifest <- utils::read.csv(manifest_path, stringsAsFactors = FALSE)
 if (!all(c("dataset", "path") %in% names(manifest))) {
   stop("dataset_manifest.csv must contain columns `dataset` and `path`.", call. = FALSE)
 }
+if (!"relative_path" %in% names(manifest)) {
+  manifest <- merge(manifest, default_dataset_paths, by = "dataset", all.x = TRUE, sort = FALSE)
+}
+resolve_dataset_path <- function(row) {
+  candidates <- unique(c(
+    if ("path" %in% names(row)) as.character(row$path) else character(),
+    file.path(data_root, as.character(row$relative_path))
+  ))
+  candidates <- candidates[nzchar(candidates)]
+  hit <- candidates[file.exists(candidates)]
+  if (length(hit)) hit[[1L]] else candidates[[length(candidates)]]
+}
+manifest$path <- vapply(seq_len(nrow(manifest)), function(i) resolve_dataset_path(manifest[i, , drop = FALSE]), character(1L))
 
 pca_manifest_path <- file.path(data_root, "pca_init_manifest.csv")
 pca_manifest <- if (file.exists(pca_manifest_path)) {
@@ -97,9 +218,12 @@ pca_manifest <- if (file.exists(pca_manifest_path)) {
   data.frame(dataset = character(), pca_init_path = character(), stringsAsFactors = FALSE)
 }
 
-dataset_filter <- strsplit(args$datasets %||% paste(manifest$dataset, collapse = ","), ",", fixed = TRUE)[[1L]]
+dataset_filter <- strsplit(args$datasets %||% paste(benchmark_datasets, collapse = ","), ",", fixed = TRUE)[[1L]]
 dataset_filter <- trimws(dataset_filter)
 manifest <- manifest[manifest$dataset %in% dataset_filter, , drop = FALSE]
+manifest$dataset <- factor(manifest$dataset, levels = benchmark_datasets)
+manifest <- manifest[order(manifest$dataset), , drop = FALSE]
+manifest$dataset <- as.character(manifest$dataset)
 if (nrow(manifest) == 0L) stop("No requested datasets found in manifest.", call. = FALSE)
 
 standardize_knn <- function(obj) {
@@ -132,7 +256,7 @@ find_existing_cuvs_knn <- function(dataset, k) {
     candidates <- c(candidates, file.path(benchmark1_dir, "knn_cuvs_nndescent", paste0(dataset, "_cuvs_nndescent_k", k, ".RData")))
   }
   b1_dirs <- list.dirs("/mnt/sata_ssd", recursive = FALSE, full.names = TRUE)
-  b1_dirs <- b1_dirs[grepl("fastEmbedR_BENCHMARK1_", basename(b1_dirs))]
+  b1_dirs <- b1_dirs[grepl("(fastEmbedR|faissR)_BENCHMARK1_", basename(b1_dirs))]
   b1_dirs <- b1_dirs[order(file.info(b1_dirs)$mtime, decreasing = TRUE)]
   candidates <- c(candidates, file.path(b1_dirs, "knn_cuvs_nndescent", paste0(dataset, "_cuvs_nndescent_k", k, ".RData")))
   candidates <- candidates[file.exists(candidates)]
@@ -140,47 +264,97 @@ find_existing_cuvs_knn <- function(dataset, k) {
 }
 
 preferred_cpu_knn_backend <- function() {
-  if (available_pkg("fastEmbedR") && isTRUE(tryCatch(fastEmbedR::faiss_available(), error = function(e) FALSE))) {
+  if (available_pkg("faissR") && isTRUE(tryCatch(faissR::faiss_available(), error = function(e) FALSE))) {
     return("faiss_hnsw")
   }
-  "hnsw"
+  stop("faissR with FAISS support is required for Benchmark #3 KNN cache creation.", call. = FALSE)
 }
 
-load_or_compute_knn <- function(dataset_name, x) {
+select_reliable_fast_nn_backends <- function() {
+  if (!available_pkg("faissR")) return(character())
+  cuda_ready <- isTRUE(tryCatch(faissR::cuda_available() && faissR::cuvs_available(), error = function(e) FALSE))
+  faiss_cuda_ready <- isTRUE(tryCatch(faissR::cuda_available() && faissR::faiss_available(), error = function(e) FALSE))
+  faiss_ready <- isTRUE(tryCatch(faissR::faiss_available(), error = function(e) FALSE))
+  backends <- character()
+  if (cuda_ready) {
+    backends <- c(backends, "cuda_cuvs_cagra", "cuda_cuvs_nndescent", "cuda_cuvs_ivf_flat", "cuda_cuvs_bruteforce")
+  }
+  if (faiss_cuda_ready) {
+    backends <- c("faiss_gpu_flat_l2", backends, "faiss_gpu_ivf_flat")
+  }
+  if (faiss_ready) {
+    backends <- c(backends, "faiss_hnsw", "faiss_nndescent", "faiss_ivf", "faiss")
+  }
+  unique(backends)
+}
+
+precompute_dataset_inputs <- function(dataset_name) {
+  row <- manifest[manifest$dataset == dataset_name, , drop = FALSE]
+  if (nrow(row) != 1L) stop("Dataset not found in manifest: ", dataset_name, call. = FALSE)
+  ds <- load_dataset(dataset_name, row$path)
+  params <- dataset_parameters(dataset_name, nrow(ds$data))
+  knn_info <- load_or_compute_knn(dataset_name, ds$data, target_k = params$k, cache_k = params$knn_cache_k)
+  log_msg(
+    "Prepared %s: k=%d KNN cache=%s",
+    dataset_name,
+    params$k,
+    knn_info$knn_cache_file
+  )
+  invisible(knn_info)
+}
+
+as_uwot_knn <- function(knn, target_k) {
+  idx <- as.matrix(knn$indices)
+  dist <- as.matrix(knn$distances)
+  target_k <- min(as.integer(target_k), ncol(idx), ncol(dist))
+  if (target_k < ncol(idx)) {
+    idx <- idx[, seq_len(target_k), drop = FALSE]
+    dist <- dist[, seq_len(target_k), drop = FALSE]
+  }
+  storage.mode(idx) <- "integer"
+  storage.mode(dist) <- "double"
+  list(
+    idx = idx,
+    dist = dist
+  )
+}
+
+load_or_compute_knn <- function(dataset_name, x, target_k = NULL, cache_k = NULL) {
+  if (is.null(target_k) || !is.finite(target_k)) target_k <- dataset_parameters(dataset_name, nrow(x))$k
+  if (is.null(cache_k) || !is.finite(cache_k)) cache_k <- dataset_parameters(dataset_name, nrow(x))$knn_cache_k
+  target_k <- as.integer(target_k)
+  cache_k <- as.integer(cache_k)
   cache_dir <- file.path(out_dir, "knn_cache")
   dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
-  local_cache <- file.path(cache_dir, paste0(dataset_name, "_cuvs_nndescent_k", k, ".RData"))
+  local_cache <- file.path(cache_dir, paste0(dataset_name, "_scaled_euclidean_best_k", cache_k, ".RData"))
+  data_cache <- file.path(data_root, dataset_name, paste0(dataset_name, "_centered_raw_euclidean_k", cache_k, "_nn.RData"))
   source <- "benchmark3_cache"
-  if (!file.exists(local_cache)) {
-    existing <- find_existing_cuvs_knn(dataset_name, k)
-    if (nzchar(existing)) {
-      file.copy(existing, local_cache, overwrite = TRUE)
-      source <- paste0("precomputed:", existing)
+  if (file.exists(data_cache)) {
+    obj <- load_rdata_object(data_cache, paste0("nn_centered_euclidean_k", cache_k))
+    sx <- standardize_knn(obj)
+    if (ncol(sx$indices) >= min(target_k, cache_k)) {
+      return(list(knn = drop_self_if_first(sx$indices, sx$distances, min(target_k, cache_k)), source = "precomputed_centered_raw_data_cache", knn_sec = 0, knn_cache_file = data_cache, knn_cache_k = cache_k))
     }
   }
   if (file.exists(local_cache)) {
-    obj <- load_rdata_object(local_cache, "nn_cuvs_nndescent")
+    obj <- load_rdata_object(local_cache, "nn_scaled_euclidean_k100")
     sx <- standardize_knn(obj)
-    if (ncol(sx$indices) >= k) {
-      return(list(knn = drop_self_if_first(sx$indices, sx$distances, k), source = source, knn_sec = 0))
+    if (ncol(sx$indices) >= min(target_k, cache_k)) {
+      return(list(knn = drop_self_if_first(sx$indices, sx$distances, min(target_k, cache_k)), source = source, knn_sec = 0, knn_cache_file = local_cache, knn_cache_k = cache_k))
     }
   }
-  if (!available_pkg("fastEmbedR")) stop("fastEmbedR is required to compute KNN.", call. = FALSE)
-  knn_backends <- if (isTRUE(tryCatch(fastEmbedR::cuvs_available() && fastEmbedR::cuda_available(), error = function(e) FALSE))) {
-    c("cuda_cuvs_nndescent", "cuda_cuvs_bruteforce", "cuda_exact", "faiss_hnsw", "rcpphnsw")
-  } else {
-    c(preferred_cpu_knn_backend(), "rcpphnsw")
-  }
+  if (!available_pkg("faissR")) stop("faissR is required to compute KNN.", call. = FALSE)
+  knn_backends <- select_reliable_fast_nn_backends()
   knn_backends <- unique(knn_backends)
-  nn_cuvs_nndescent <- NULL
+  nn_scaled_euclidean_k100 <- NULL
   last_error <- NULL
   used_backend <- NA_character_
   t <- system.time({
     for (candidate_backend in knn_backends) {
       attempt <- tryCatch(
-        fastEmbedR::nn(
+        faissR::nn_without_self(
           x,
-          k = k,
+          k = cache_k,
           backend = candidate_backend,
           n_threads = n_threads,
           metric = "euclidean"
@@ -191,18 +365,29 @@ load_or_compute_knn <- function(dataset_name, x) {
         }
       )
       if (!is.null(attempt)) {
-        nn_cuvs_nndescent <- attempt
+        nn_scaled_euclidean_k100 <- attempt
         used_backend <- candidate_backend
         break
       }
     }
   })[["elapsed"]]
-  if (is.null(nn_cuvs_nndescent)) {
+  if (is.null(nn_scaled_euclidean_k100)) {
     stop("Could not compute fallback KNN for BENCHMARK #3. Last error: ", last_error, call. = FALSE)
   }
-  save(nn_cuvs_nndescent, file = local_cache, compress = "gzip")
-  sx <- standardize_knn(nn_cuvs_nndescent)
-  list(knn = drop_self_if_first(sx$indices, sx$distances, k), source = paste0("computed_benchmark3_", used_backend), knn_sec = as.numeric(t))
+  attr(nn_scaled_euclidean_k100, "benchmark_scaled") <- TRUE
+  attr(nn_scaled_euclidean_k100, "benchmark_metric") <- "euclidean"
+  attr(nn_scaled_euclidean_k100, "benchmark_k") <- as.integer(cache_k)
+  attr(nn_scaled_euclidean_k100, "benchmark_backend") <- used_backend
+  attr(nn_scaled_euclidean_k100, "benchmark_dataset") <- dataset_name
+  save(nn_scaled_euclidean_k100, file = local_cache, compress = "gzip")
+  sx <- standardize_knn(nn_scaled_euclidean_k100)
+  list(
+    knn = drop_self_if_first(sx$indices, sx$distances, min(target_k, cache_k)),
+    source = paste0("computed_benchmark3_scaled_euclidean_k", cache_k, "_", used_backend),
+    knn_sec = as.numeric(t),
+    knn_cache_file = local_cache,
+    knn_cache_k = cache_k
+  )
 }
 
 load_pca_init <- function(dataset_name, n) {
@@ -461,7 +646,7 @@ method_specs <- function() {
       }
     ),
     list(
-      method = "uwot_umap_fast_sgd",
+      method = "uwot_umap_fast_sgd_precomputed",
       package = "uwot",
       backend = "cpu",
       uses_precomputed_nn = TRUE,
@@ -470,8 +655,8 @@ method_specs <- function() {
       runner = function(ctx) {
         uwot::umap(
           ctx$x,
-          n_neighbors = k,
-          nn_method = ctx$knn,
+          n_neighbors = ctx$k,
+          nn_method = as_uwot_knn(ctx$knn, ctx$k),
           n_threads = n_threads,
           n_sgd_threads = n_threads,
           fast_sgd = TRUE,
@@ -484,7 +669,7 @@ method_specs <- function() {
       }
     ),
     list(
-      method = "uwot_umap_default",
+      method = "uwot_umap_default_precomputed",
       package = "uwot",
       backend = "cpu",
       uses_precomputed_nn = TRUE,
@@ -493,8 +678,52 @@ method_specs <- function() {
       runner = function(ctx) {
         uwot::umap(
           ctx$x,
-          n_neighbors = k,
-          nn_method = ctx$knn,
+          n_neighbors = ctx$k,
+          nn_method = as_uwot_knn(ctx$knn, ctx$k),
+          n_threads = n_threads,
+          n_sgd_threads = 0,
+          fast_sgd = FALSE,
+          init = "spectral",
+          min_dist = 0.1,
+          ret_model = FALSE,
+          verbose = FALSE,
+          seed = seed
+        )
+      }
+    ),
+    list(
+      method = "uwot_umap_fast_sgd_internal_nn",
+      package = "uwot",
+      backend = "cpu",
+      uses_precomputed_nn = FALSE,
+      graph_mode = "fuzzy",
+      init_policy = "uwot_internal_spectral",
+      runner = function(ctx) {
+        uwot::umap(
+          ctx$x,
+          n_neighbors = ctx$k,
+          n_threads = n_threads,
+          n_sgd_threads = n_threads,
+          fast_sgd = TRUE,
+          init = "spectral",
+          min_dist = 0.1,
+          ret_model = FALSE,
+          verbose = FALSE,
+          seed = seed
+        )
+      }
+    ),
+    list(
+      method = "uwot_umap_default_internal_nn",
+      package = "uwot",
+      backend = "cpu",
+      uses_precomputed_nn = FALSE,
+      graph_mode = "fuzzy",
+      init_policy = "uwot_internal_spectral",
+      runner = function(ctx) {
+        uwot::umap(
+          ctx$x,
+          n_neighbors = ctx$k,
           n_threads = n_threads,
           n_sgd_threads = 0,
           fast_sgd = FALSE,
@@ -517,7 +746,7 @@ method_specs <- function() {
         uknn <- umap::umap.knn(ctx$knn$indices, ctx$knn$distances)
         cfg <- umap::umap.defaults
         cfg$knn <- uknn
-        cfg$n_neighbors <- k
+        cfg$n_neighbors <- ctx$k
         cfg$init <- "spectral"
         cfg$min_dist <- 0.1
         umap::umap(ctx$x, knn = uknn, config = cfg)$layout
@@ -537,13 +766,17 @@ result_template <- function(dataset_name, method, package, backend, status, erro
     n = NA_integer_,
     p = NA_integer_,
     seed = seed,
-    k = k,
+    k = NA_integer_,
+    perplexity_equivalent = NA_real_,
+    umap_equivalent_rule = "dataset-specific n_neighbors policy",
     graph_mode = NA_character_,
     uses_precomputed_nn = NA,
     pca_init_available = NA,
     init_policy = NA_character_,
     knn_source = NA_character_,
     knn_sec = NA_real_,
+    knn_cache_k = NA_integer_,
+    knn_cache_file = NA_character_,
     embedding_sec = NA_real_,
     total_sec = NA_real_,
     peak_ram_gb = NA_real_,
@@ -565,17 +798,44 @@ run_one <- function(dataset_name, method_name, row_out) {
   labels <- ds$labels
   n <- nrow(x)
   p <- ncol(x)
+  params <- dataset_parameters(dataset_name, n)
+  if (params$k >= n) {
+    row <- result_template(
+      dataset_name,
+      spec$method,
+      spec$package,
+      spec$backend,
+      "invalid_parameter",
+      sprintf("Dataset UMAP n_neighbors = %d is too large for n = %d.", params$k, n)
+    )
+    row$n <- n
+    row$p <- p
+    row$k <- params$k
+    row$perplexity_equivalent <- params$perplexity_reference
+    row$uses_precomputed_nn <- isTRUE(spec$uses_precomputed_nn)
+    row$graph_mode <- spec$graph_mode %||% NA_character_
+    row$parameters_json <- json_or_text(list(
+      perplexity_reference = params$perplexity_reference,
+      k = params$k,
+      parameter_policy = params$policy,
+      parameter_reason = params$reason
+    ))
+    utils::write.csv(row, row_out, row.names = FALSE)
+    return(invisible(row))
+  }
   if (!available_pkg(spec$package)) {
     row <- result_template(dataset_name, spec$method, spec$package, spec$backend, "not_installed",
                            paste0("Package ", spec$package, " is not installed."))
     row$n <- n
     row$p <- p
+    row$k <- params$k
+    row$perplexity_equivalent <- params$perplexity_reference
     utils::write.csv(row, row_out, row.names = FALSE)
     return(invisible(row))
   }
   Y_init <- load_pca_init(dataset_name, n)
-  knn_info <- load_or_compute_knn(dataset_name, x)
-  ctx <- list(dataset = dataset_name, x = x, labels = labels, knn = knn_info$knn, Y_init = Y_init)
+  knn_info <- load_or_compute_knn(dataset_name, x, target_k = params$k, cache_k = params$knn_cache_k)
+  ctx <- list(dataset = dataset_name, x = x, labels = labels, knn = knn_info$knn, Y_init = Y_init, k = params$k)
   status <- "success"
   error <- NA_character_
   measured <- NULL
@@ -589,14 +849,26 @@ run_one <- function(dataset_name, method_name, row_out) {
   row <- result_template(dataset_name, spec$method, spec$package, spec$backend, status, error)
   row$n <- n
   row$p <- p
+  row$k <- params$k
+  row$perplexity_equivalent <- params$perplexity_reference
   row$uses_precomputed_nn <- isTRUE(spec$uses_precomputed_nn)
   row$graph_mode <- spec$graph_mode %||% NA_character_
   row$pca_init_available <- !is.null(Y_init)
   row$init_policy <- spec$init_policy
   row$knn_source <- knn_info$source
   row$knn_sec <- knn_info$knn_sec
+  row$knn_cache_k <- knn_info$knn_cache_k %||% NA_integer_
+  row$knn_cache_file <- knn_info$knn_cache_file %||% NA_character_
   row$parameters_json <- json_or_text(list(
-    k = k,
+    k = params$k,
+    perplexity_reference = params$perplexity_reference,
+    equivalent_umap_k = params$equivalent_umap_k,
+    umap_equivalent_rule = "dataset-specific n_neighbors policy",
+    knn_cache_k = params$knn_cache_k,
+    parameter_policy = params$policy,
+    parameter_reason = params$reason,
+    knn_metric = "euclidean",
+    knn_input_scaled = FALSE,
     seed = seed,
     n_threads = n_threads,
     min_dist = 0.1,
@@ -619,7 +891,10 @@ run_one <- function(dataset_name, method_name, row_out) {
       labels = labels,
       metrics = metrics,
       parameters = list(
-        k = k,
+        k = params$k,
+        perplexity_reference = params$perplexity_reference,
+        parameter_policy = params$policy,
+        parameter_reason = params$reason,
         seed = seed,
         n_threads = n_threads,
         graph_mode = spec$graph_mode %||% NA_character_,
@@ -629,7 +904,10 @@ run_one <- function(dataset_name, method_name, row_out) {
     save(layout_result, file = layout_file, compress = "gzip")
     plot_layout(layout, labels, plot_file, paste(dataset_name, spec$method))
     row$embedding_sec <- measured$embedding_sec
-    row$total_sec <- measured$embedding_sec + if (is.finite(knn_info$knn_sec)) knn_info$knn_sec else 0
+    row$total_sec <- sum(c(
+      measured$embedding_sec,
+      if (is.finite(knn_info$knn_sec)) knn_info$knn_sec else 0
+    ), na.rm = TRUE)
     row$peak_ram_gb <- measured$peak_ram_gb
     row$layout_rdata <- layout_file
     row$plot_png <- plot_file
@@ -650,6 +928,83 @@ combine_worker_rows <- function(worker_dir) {
     x[, common, drop = FALSE]
   })
   do.call(rbind, rows)
+}
+
+score01 <- function(x, higher_is_better = TRUE) {
+  x <- suppressWarnings(as.numeric(x))
+  out <- rep(NA_real_, length(x))
+  ok <- is.finite(x)
+  if (!any(ok)) return(out)
+  rng <- range(x[ok], na.rm = TRUE)
+  if (!is.finite(diff(rng)) || diff(rng) < .Machine$double.eps) {
+    out[ok] <- 1
+    return(out)
+  }
+  val <- (x - rng[[1L]]) / diff(rng)
+  if (!higher_is_better) val <- 1 - val
+  out[ok] <- pmax(0, pmin(1, val[ok]))
+  out
+}
+
+safe_row_mean <- function(x) {
+  out <- rowMeans(x, na.rm = TRUE)
+  out[!is.finite(out)] <- NA_real_
+  out
+}
+
+add_benchmark_scores <- function(results) {
+  if (!nrow(results)) return(results)
+  score_cols <- c("runtime_score", "memory_score", "structure_score", "label_score", "combined_score")
+  for (nm in score_cols) results[[nm]] <- NA_real_
+  ok <- which(results$status == "success")
+  if (!length(ok)) return(results)
+  for (idx in split(ok, results$dataset[ok])) {
+    runtime_raw <- suppressWarnings(as.numeric(results$total_sec[idx]))
+    fallback_runtime <- suppressWarnings(as.numeric(results$embedding_sec[idx]))
+    runtime_raw[!is.finite(runtime_raw)] <- fallback_runtime[!is.finite(runtime_raw)]
+    memory_raw <- suppressWarnings(as.numeric(results$peak_ram_gb[idx]))
+    structure <- safe_row_mean(cbind(
+      score01(results$trustworthiness[idx], TRUE),
+      score01(results$continuity[idx], TRUE),
+      score01(results$knn_preservation_15[idx], TRUE),
+      score01(results$knn_preservation_30[idx], TRUE),
+      score01(results$knn_preservation_50[idx], TRUE),
+      score01(results$distance_spearman[idx], TRUE),
+      score01(results$distance_pearson[idx], TRUE),
+      score01(results$stress[idx], FALSE)
+    ))
+    labels <- safe_row_mean(cbind(
+      score01(results$silhouette[idx], TRUE),
+      score01(results$label_knn_accuracy[idx], TRUE),
+      score01(results$ari[idx], TRUE),
+      score01(results$nmi[idx], TRUE),
+      score01(results$rare_class_recall[idx], TRUE)
+    ))
+    runtime <- score01(runtime_raw, FALSE)
+    memory <- score01(memory_raw, FALSE)
+    quality <- safe_row_mean(cbind(structure, labels))
+    combined <- 0.40 * structure + 0.25 * labels + 0.20 * runtime + 0.15 * memory
+    combined[!is.finite(combined)] <- safe_row_mean(cbind(quality, runtime, memory))[!is.finite(combined)]
+    results$runtime_score[idx] <- runtime
+    results$memory_score[idx] <- memory
+    results$structure_score[idx] <- structure
+    results$label_score[idx] <- labels
+    results$combined_score[idx] <- combined
+  }
+  results
+}
+
+write_ranked_results <- function(results, out_dir) {
+  ok <- results[results$status == "success", , drop = FALSE]
+  if (!nrow(ok)) return(invisible(NULL))
+  ranked <- ok[order(ok$dataset, -ok$combined_score, ok$total_sec, ok$peak_ram_gb), , drop = FALSE]
+  utils::write.csv(ranked, file.path(out_dir, "benchmark3_ranked_speed_memory_quality.csv"), row.names = FALSE)
+  best_combined <- do.call(rbind, lapply(split(ranked, ranked$dataset), head, 1L))
+  utils::write.csv(best_combined, file.path(out_dir, "benchmark3_best_by_dataset_combined.csv"), row.names = FALSE)
+  best_quality <- ok[order(ok$dataset, -ok$structure_score, -ok$label_score), , drop = FALSE]
+  best_quality <- do.call(rbind, lapply(split(best_quality, best_quality$dataset), head, 1L))
+  utils::write.csv(best_quality, file.path(out_dir, "benchmark3_best_by_dataset_quality.csv"), row.names = FALSE)
+  invisible(NULL)
 }
 
 make_barplots <- function(results, out_dir) {
@@ -673,6 +1028,15 @@ make_barplots <- function(results, out_dir) {
           ylab = "Trustworthiness", main = "BENCHMARK #3 UMAP embedding quality")
   legend("topright", legend = c("CPU", "Metal", "CUDA"), fill = c("#0072B2", "#009E73", "#D55E00"), bty = "n")
   dev.off()
+
+  if ("combined_score" %in% names(ok)) {
+    png(file.path(out_dir, "benchmark3_combined_score_barplot.png"), width = 2200, height = 1500, res = 180)
+    par(mar = c(10, 5, 4, 1), bg = "white")
+    barplot(ok$combined_score, names.arg = labels, las = 2, cex.names = 0.55, col = cols,
+            ylab = "Combined score", main = "BENCHMARK #3 speed, memory, and quality score")
+    legend("topright", legend = c("CPU", "Metal", "CUDA"), fill = c("#0072B2", "#009E73", "#D55E00"), bty = "n")
+    dev.off()
+  }
 }
 
 write_methods_file <- function(out_dir) {
@@ -681,28 +1045,39 @@ write_methods_file <- function(out_dir) {
     "",
     "This benchmark compares UMAP implementations across the curated fastEmbedR datasets. On macOS it includes CPU and native Metal rows; on the chiamaka GPU workstation it includes CPU and native CUDA rows.",
     "",
-    "Datasets are loaded from `dataset_manifest.csv`. Labels are used only for post-hoc quality metrics and plots, not for fitting.",
+    "Datasets are loaded from `dataset_manifest.csv`. Before KNN construction or embedding, non-finite and zero-variance columns are removed and the remaining variables are mean-centered without variance scaling. Labels are used only for post-hoc quality metrics and plots, not for fitting.",
     "",
-    "Nearest-neighbour input: all methods use the same saved cuVS NN-descent KNN matrix from BENCHMARK #1 when present. If the required KNN cache is absent, the script computes it once with `fastEmbedR::nn()`, preferring `backend = \"cuda_cuvs_nndescent\"` when CUDA/cuVS is available.",
+    "Nearest-neighbour input: after scaling each dataset, the script computes or reuses a saved Euclidean non-self `faissR::nn_without_self()` cache. The cache k is dataset-specific and is at least the dataset embedding k. The backend is chosen from available FAISS/cuVS methods; if no FAISS/cuVS backend is available, the row is recorded as failed rather than silently switching to another KNN implementation.",
     "",
     "Initialization: spectral initialization is used wherever the implementation exposes it. `fastEmbedR::umap_knn()` uses its internal KNN spectral initialization, including native CUDA fused spectral initialization on the CUDA path. `uwot::umap()` is called with `init = \"spectral\"`. The `umap` package is called with `config$init = \"spectral\"`. Precomputed fastPLS PCA initialization files are loaded only to record availability in the result table and are not used for this spectral-initialization benchmark.",
     "",
     "Compared implementations:",
     "",
+    sprintf("Backend filter for this run: %s. By default Benchmark #3 runs CPU and CUDA rows; Metal can be requested explicitly with `--backends=cpu,metal,cuda`.", paste(backend_filter, collapse = ", ")),
+    "",
     "- `fastEmbedR_umap_cpu_binary` and `fastEmbedR_umap_cpu_fuzzy`: native fastEmbedR UMAP from precomputed KNN, CPU backend, four CPU threads.",
     "- `fastEmbedR_umap_metal_binary` and `fastEmbedR_umap_metal_fuzzy`: native fastEmbedR UMAP from precomputed KNN, Metal backend when available.",
     "- `fastEmbedR_umap_cuda_binary` and `fastEmbedR_umap_cuda_fuzzy`: native fastEmbedR UMAP from precomputed KNN, CUDA backend when available.",
-    "- `uwot_umap_fast_sgd`: `uwot::umap()` with shared precomputed KNN and `fast_sgd = TRUE`.",
-    "- `uwot_umap_default`: `uwot::umap()` with shared precomputed KNN and `fast_sgd = FALSE`.",
+    "- `uwot_umap_fast_sgd_precomputed`: `uwot::umap()` with the shared precomputed KNN converted to `list(idx = ..., dist = ...)` and `fast_sgd = TRUE`.",
+    "- `uwot_umap_default_precomputed`: `uwot::umap()` with the shared precomputed KNN converted to `list(idx = ..., dist = ...)` and `fast_sgd = FALSE`.",
+    "- `uwot_umap_fast_sgd_internal_nn`: `uwot::umap()` with uwot's internal neighbour search and `fast_sgd = TRUE`, measuring the full uwot pipeline.",
+    "- `uwot_umap_default_internal_nn`: `uwot::umap()` with uwot's internal neighbour search and `fast_sgd = FALSE`, measuring the full uwot pipeline.",
     "- `umap_package`: `umap::umap()` with `umap::umap.knn()` built from the shared precomputed KNN.",
     "",
-    sprintf("Default settings: k = %d non-self neighbours, min_dist = 0.1, seed = %d, CPU threads = %d. fastEmbedR UMAP is evaluated with graph_mode = \"binary\" and graph_mode = \"fuzzy\".", k, seed, n_threads),
+    "Default parameter policy: each dataset receives one dataset-level UMAP k from the benchmark policy table, unless the user explicitly supplies `--k` or `--n_neighbors`. Every UMAP implementation uses the same k for the same dataset.",
+    "",
+    "Dataset defaults:",
+    paste(utils::capture.output(print(dataset_parameter_defaults[, c("dataset", "perplexity", "k", "reason")], row.names = FALSE)), collapse = "\n"),
+    "",
+    sprintf("Other settings: min_dist = 0.1, seed = %d, CPU threads = %d. fastEmbedR UMAP is evaluated with graph_mode = \"binary\" and graph_mode = \"fuzzy\".", seed, n_threads),
     "",
     sprintf("Each method-dataset worker is executed with a %d second timeout. Failed, unavailable, or timed-out rows are retained in the result table.", timeout_sec),
     "",
     "Quality metrics are computed on a reproducible sample of up to 5000 cells/samples using `fastEmbedR::evaluate_embedding()`: trustworthiness, continuity, kNN preservation at 15/30/50, global distance correlations, stress, silhouette, label kNN accuracy, ARI, NMI, and rare-class recall when labels are available.",
     "",
-    "Outputs: `benchmark3_umap_results.csv`, per-method `.RData` layout files, per-method PNG plots, runtime/quality barplots, and a narrative result summary."
+    "Derived comparison scores are added per dataset: `runtime_score` and `memory_score` are scaled so higher is better; `structure_score` combines trustworthiness, continuity, kNN preservation, global distance correlations, and inverse stress; `label_score` combines silhouette, label kNN accuracy, ARI, NMI, and rare-class recall when available. `combined_score = 0.40 * structure_score + 0.25 * label_score + 0.20 * runtime_score + 0.15 * memory_score`. Raw metrics remain in the main CSV and should be inspected alongside the combined score.",
+    "",
+    "Outputs: `benchmark3_umap_results.csv`, ranked speed-memory-quality CSVs, per-method `.RData` layout files, per-method PNG plots, runtime/quality/combined-score barplots, and a narrative result summary."
   )
   writeLines(txt, file.path(out_dir, "BENCHMARK3_MATERIALS_AND_METHODS.md"))
 }
@@ -721,6 +1096,11 @@ write_summary_file <- function(results, out_dir) {
       best_quality <- ok[order(ok$dataset, -ok$trustworthiness), c("dataset", "method", "backend_requested", "embedding_sec", "trustworthiness", "label_knn_accuracy")]
       best_quality <- do.call(rbind, lapply(split(best_quality, best_quality$dataset), head, 1L))
       lines <- c(lines, "Highest trustworthiness per dataset:", "", capture.output(print(best_quality, row.names = FALSE)), "")
+      if ("combined_score" %in% names(ok)) {
+        best_combined <- ok[order(ok$dataset, -ok$combined_score), c("dataset", "method", "backend_requested", "embedding_sec", "peak_ram_gb", "trustworthiness", "label_knn_accuracy", "combined_score")]
+        best_combined <- do.call(rbind, lapply(split(best_combined, best_combined$dataset), head, 1L))
+        lines <- c(lines, "Best combined speed-memory-quality score per dataset:", "", capture.output(print(best_combined, row.names = FALSE)), "")
+      }
     }
     failed <- results[results$status != "success", c("dataset", "method", "status", "error_message"), drop = FALSE]
     if (nrow(failed)) lines <- c(lines, "Failed/unavailable rows:", "", capture.output(print(failed, row.names = FALSE)), "")
@@ -751,7 +1131,13 @@ write_methods_file(out_dir)
 worker_dir <- file.path(out_dir, "worker_rows")
 dir.create(worker_dir, recursive = TRUE, showWarnings = FALSE)
 
-methods <- vapply(method_specs(), `[[`, character(1L), "method")
+specs_all <- method_specs()
+methods <- vapply(
+  specs_all[vapply(specs_all, function(z) tolower(z$backend) %in% backend_filter, logical(1L))],
+  `[[`,
+  character(1L),
+  "method"
+)
 if (!is.null(args$methods)) {
   method_filter <- trimws(strsplit(args$methods, ",", fixed = TRUE)[[1L]])
   methods <- methods[methods %in% method_filter]
@@ -760,7 +1146,15 @@ if (!is.null(args$methods)) {
 
 log_msg("BENCHMARK #3 output: %s", out_dir)
 log_msg("Datasets: %s", paste(manifest$dataset, collapse = ", "))
+log_msg("Backends: %s", paste(backend_filter, collapse = ", "))
 log_msg("Methods: %s", paste(methods, collapse = ", "))
+if (is.finite(benchmark_perplexity) || is.finite(k_override)) {
+  log_msg("User parameter override: perplexity_reference=%s k=%s", as.character(benchmark_perplexity), as.character(k_override))
+} else {
+  log_msg("Dataset-aware UMAP k policy is active")
+}
+
+log_msg("Using per-worker KNN preparation so dataset failures do not stop the full benchmark")
 
 cmd_args_all <- commandArgs(FALSE)
 file_arg <- cmd_args_all[grepl("^--file=", cmd_args_all)]
@@ -768,6 +1162,9 @@ script_path <- if (length(file_arg)) sub("^--file=", "", file_arg[[1L]]) else "t
 script_path <- normalizePath(script_path, mustWork = FALSE)
 
 for (dataset_name in manifest$dataset) {
+  ds_row <- manifest[manifest$dataset == dataset_name, , drop = FALSE]
+  ds_n <- nrow(load_dataset(dataset_name, ds_row$path[[1L]])$data)
+  params <- dataset_parameters(dataset_name, ds_n)
   for (method_name in methods) {
     row_file <- file.path(worker_dir, paste0(sanitize(dataset_name), "__", sanitize(method_name), ".csv"))
     if (file.exists(row_file)) {
@@ -775,8 +1172,11 @@ for (dataset_name in manifest$dataset) {
       next
     }
     log_msg("Running %s / %s", dataset_name, method_name)
+    worker_perplexity_arg <- if (is.finite(benchmark_perplexity)) as.character(params$perplexity_reference) else "auto"
+    worker_k_arg <- if (is.finite(k_override)) as.character(params$k) else "auto"
+    worker_knn_k_arg <- if (is.finite(knn_cache_k_override)) as.character(params$knn_cache_k) else "auto"
     cmd <- sprintf(
-      "timeout %d Rscript %s --worker=TRUE --data_root=%s --out_dir=%s --benchmark1_dir=%s --dataset=%s --method=%s --k=%d --threads=%d --timeout=%d --seed=%d --metric_n=%d --row_out=%s",
+      "timeout %d Rscript %s --worker=TRUE --data_root=%s --out_dir=%s --benchmark1_dir=%s --dataset=%s --method=%s --perplexity=%s --k=%s --knn_k=%s --threads=%d --timeout=%d --seed=%d --metric_n=%d --row_out=%s",
       timeout_sec,
       shQuote(script_path),
       shQuote(data_root),
@@ -784,7 +1184,9 @@ for (dataset_name in manifest$dataset) {
       shQuote(benchmark1_dir),
       shQuote(dataset_name),
       shQuote(method_name),
-      k,
+      shQuote(worker_perplexity_arg),
+      shQuote(worker_k_arg),
+      shQuote(worker_knn_k_arg),
       n_threads,
       timeout_sec,
       seed,
@@ -801,10 +1203,17 @@ for (dataset_name in manifest$dataset) {
     }
   }
   results_partial <- combine_worker_rows(worker_dir)
+  results_partial <- add_benchmark_scores(results_partial)
   utils::write.csv(results_partial, file.path(out_dir, "benchmark3_umap_results_partial.csv"), row.names = FALSE)
+  if (nrow(results_partial)) {
+    write_ranked_results(results_partial, out_dir)
+    make_barplots(results_partial, out_dir)
+    write_summary_file(results_partial, out_dir)
+  }
 }
 
 results <- combine_worker_rows(worker_dir)
+results <- add_benchmark_scores(results)
 utils::write.csv(results, file.path(out_dir, "benchmark3_umap_results.csv"), row.names = FALSE)
 if (nrow(results)) {
   ok <- results[results$status == "success", , drop = FALSE]
@@ -812,6 +1221,7 @@ if (nrow(results)) {
     best_by_dataset <- do.call(rbind, lapply(split(ok, ok$dataset), function(z) z[order(z$embedding_sec), , drop = FALSE][1L, , drop = FALSE]))
     utils::write.csv(best_by_dataset, file.path(out_dir, "benchmark3_best_by_dataset_runtime.csv"), row.names = FALSE)
   }
+  write_ranked_results(results, out_dir)
   make_barplots(results, out_dir)
   write_summary_file(results, out_dir)
 }

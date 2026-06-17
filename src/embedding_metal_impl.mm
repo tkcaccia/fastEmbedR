@@ -52,6 +52,7 @@ struct MetalEmbeddingState {
   id<MTLLibrary> library;
   id<MTLComputePipelineState> embed_pipeline;
   id<MTLComputePipelineState> embed_atomic_inplace_pipeline;
+  id<MTLComputePipelineState> embed_clean_atomic_inplace_pipeline;
   id<MTLComputePipelineState> refine_prepare_pipeline;
   id<MTLComputePipelineState> refine_rows_pipeline;
   id<MTLComputePipelineState> standardize_stats_pipeline;
@@ -251,6 +252,7 @@ MetalEmbeddingState& metal_embedding_state() {
   static MetalEmbeddingState state{};
   if (state.device != nil && state.embed_pipeline != nil &&
       state.embed_atomic_inplace_pipeline != nil &&
+      state.embed_clean_atomic_inplace_pipeline != nil &&
       state.refine_prepare_pipeline != nil &&
       state.refine_rows_pipeline != nil &&
       state.affine_project_pipeline != nil &&
@@ -297,6 +299,7 @@ MetalEmbeddingState& metal_embedding_state() {
 
   state.embed_pipeline = make_pipeline(state, "embed_epoch");
   state.embed_atomic_inplace_pipeline = make_pipeline(state, "embed_epoch_atomic_inplace");
+  state.embed_clean_atomic_inplace_pipeline = make_pipeline(state, "embed_epoch_clean_atomic_inplace");
   state.refine_prepare_pipeline = make_pipeline(state, "umap_refine_prepare_rows");
   state.refine_rows_pipeline = make_pipeline(state, "umap_refine_rows_atomic_inplace");
   state.standardize_stats_pipeline = make_pipeline(state, "standardize_stats");
@@ -1257,6 +1260,80 @@ kernel void embed_epoch_atomic_inplace(
     uint neg_samples = uint(negative_samples_this_epoch_period(period, p, epoch));
     for (uint s = 0; s < neg_samples; ++s) {
       uint neg = deterministic_vertex(p.n, p.seed, epoch, gid, e, s);
+      if (neg == gid || neg == nb) continue;
+      uint neg_base = neg * 2u;
+      head_x = float(atomic_load_explicit(&layout[head_base], memory_order_relaxed)) * inv_scale;
+      head_y = float(atomic_load_explicit(&layout[head_base + 1u], memory_order_relaxed)) * inv_scale;
+      float neg_x = float(atomic_load_explicit(&layout[neg_base], memory_order_relaxed)) * inv_scale;
+      float neg_y = float(atomic_load_explicit(&layout[neg_base + 1u], memory_order_relaxed)) * inv_scale;
+      float2 ndiff = float2(head_x - neg_x, head_y - neg_y);
+      float nd2 = max(1.1920928955078125e-7f, dot(ndiff, ndiff));
+      float rcoeff = repulsive_coeff(nd2, p);
+      float2 repulsive = alpha * float2(clip4(rcoeff * ndiff.x), clip4(rcoeff * ndiff.y));
+      atomic_fetch_add_explicit(&layout[head_base], fixed_delta(repulsive.x), memory_order_relaxed);
+      atomic_fetch_add_explicit(&layout[head_base + 1u], fixed_delta(repulsive.y), memory_order_relaxed);
+    }
+  }
+}
+
+uint clean_metal_hash(uint seed, uint epoch, uint head, uint tail, uint edge, uint sample, uint stream) {
+  uint x = seed;
+  x ^= (epoch + 1u) * 0x9e3779b9u;
+  x ^= (head + 1u) * 0x85ebca6bu;
+  x ^= (tail + 1u) * 0xc2b2ae35u;
+  x ^= (edge + 1u) * 0x27d4eb2du;
+  x ^= (sample + 1u) * 0x165667b1u;
+  x ^= (stream + 1u) * 0xd3a2646cu;
+  return mix_uint(x);
+}
+
+float clean_metal_uniform01(uint seed, uint epoch, uint head, uint tail, uint edge, uint sample, uint stream) {
+  return float(clean_metal_hash(seed, epoch, head, tail, edge, sample, stream) & 0x00ffffffu) / 16777216.0f;
+}
+
+kernel void embed_epoch_clean_atomic_inplace(
+  device atomic_int* layout [[buffer(0)]],
+  device const int* neighbors [[buffer(1)]],
+  device const float* weights [[buffer(2)]],
+  device const float* epochs_per_sample [[buffer(3)]],
+  constant EmbedParams& p [[buffer(4)]],
+  constant uint& epoch [[buffer(5)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= p.n) return;
+
+  constexpr float inv_scale = 1.0f / 65536.0f;
+  float progress = float(epoch) / max(1.0f, float(p.n_epochs - 1u));
+  float alpha = p.learning_rate * (1.0f - progress);
+
+  for (uint e = 0; e < p.k; ++e) {
+    uint pos = gid * p.k + e;
+    int nb_i = neighbors[pos];
+    if (nb_i < 0 || uint(nb_i) >= p.n || uint(nb_i) == gid) continue;
+    uint nb = uint(nb_i);
+    float w = weights[pos];
+    float edge_prob = clamp(w / max(p.max_weight, 1.0e-6f), 0.0f, 1.0f);
+    if (edge_prob < 1.0f && clean_metal_uniform01(p.seed, epoch, gid, nb, e, 0u, 3u) >= edge_prob) continue;
+
+    uint head_base = gid * 2u;
+    uint tail_base = nb * 2u;
+    float head_x = float(atomic_load_explicit(&layout[head_base], memory_order_relaxed)) * inv_scale;
+    float head_y = float(atomic_load_explicit(&layout[head_base + 1u], memory_order_relaxed)) * inv_scale;
+    float tail_x = float(atomic_load_explicit(&layout[tail_base], memory_order_relaxed)) * inv_scale;
+    float tail_y = float(atomic_load_explicit(&layout[tail_base + 1u], memory_order_relaxed)) * inv_scale;
+
+    float2 diff = float2(head_x - tail_x, head_y - tail_y);
+    float d2 = max(1.1920928955078125e-7f, dot(diff, diff));
+    float coeff = attractive_coeff(d2, w, p);
+    float2 attractive = alpha * float2(clip4(coeff * diff.x), clip4(coeff * diff.y));
+
+    atomic_fetch_add_explicit(&layout[head_base], fixed_delta(attractive.x), memory_order_relaxed);
+    atomic_fetch_add_explicit(&layout[head_base + 1u], fixed_delta(attractive.y), memory_order_relaxed);
+    atomic_fetch_add_explicit(&layout[tail_base], fixed_delta(-attractive.x), memory_order_relaxed);
+    atomic_fetch_add_explicit(&layout[tail_base + 1u], fixed_delta(-attractive.y), memory_order_relaxed);
+
+    for (uint s = 0; s < p.negative_sample_rate; ++s) {
+      uint neg = clean_metal_hash(p.seed, epoch, gid, nb, e, s, 17u) % p.n;
       if (neg == gid || neg == nb) continue;
       uint neg_base = neg * 2u;
       head_x = float(atomic_load_explicit(&layout[head_base], memory_order_relaxed)) * inv_scale;
@@ -6551,7 +6628,8 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
                                        double min_dist,
                                        double max_weight_input,
                                        double repulsion_strength,
-                                       int seed) {
+                                       int seed,
+                                       int sampler_mode) {
   const int n = init.nrow();
   if (n < 1 || init.ncol() != 2) {
     Rcpp::stop("Metal CSR embedding currently requires a two-dimensional initialization.");
@@ -6632,11 +6710,14 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
       Rcpp::stop("Failed to allocate Metal CSR embedding buffers.");
     }
 
-    const char* metal_optimizer = "atomic_inplace";
+    const bool clean_sampler = sampler_mode == 1;
+    const char* metal_optimizer = clean_sampler ? "clean_atomic_inplace" : "atomic_inplace";
     const MTLSize grid_size = MTLSizeMake(static_cast<NSUInteger>(n), 1, 1);
     const std::uint32_t epochs_per_command = kMetalEmbeddingEpochsPerCommand;
 
-    const NSUInteger embed_threads = bounded_threads(state.embed_atomic_inplace_pipeline);
+    id<MTLComputePipelineState> selected_pipeline =
+      clean_sampler ? state.embed_clean_atomic_inplace_pipeline : state.embed_atomic_inplace_pipeline;
+    const NSUInteger embed_threads = bounded_threads(selected_pipeline);
     const MTLSize embed_threadgroup_size = MTLSizeMake(embed_threads, 1, 1);
     for (std::uint32_t epoch0 = 0; epoch0 < static_cast<std::uint32_t>(n_epochs); epoch0 += epochs_per_command) {
       id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
@@ -6646,7 +6727,7 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
       );
       for (std::uint32_t epoch = epoch0; epoch < epoch_end; ++epoch) {
         id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
-        [encoder setComputePipelineState:state.embed_atomic_inplace_pipeline];
+        [encoder setComputePipelineState:selected_pipeline];
         [encoder setBuffer:fixed_layout_buffer offset:0 atIndex:0];
         [encoder setBuffer:neighbors_buffer offset:0 atIndex:1];
         [encoder setBuffer:weights_buffer offset:0 atIndex:2];

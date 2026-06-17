@@ -14,72 +14,62 @@ they do not silently run on CPU while reporting a GPU backend.
 
 | Function | Main implementation | Native backends | Main inspiration |
 | --- | --- | --- | --- |
-| `nn()` | Native exact and approximate KNN dispatcher | CPU, Metal, optional FAISS, optional CUDA/cuVS | NN-descent, FAISS, RAPIDS cuVS, mlx-vis, annembed, Rnanoflann-style API |
+| `nn()` | Thin wrapper around `faissR::nn()` | FAISS CPU and optional CUDA/cuVS through `faissR` | FAISS, RAPIDS cuVS, KNN-first embedding workflow |
 | `umap_knn()` | UMAP directly from supplied KNN | CPU, Metal, CUDA when compiled | UMAP, uwot fast-SGD, RAPIDS/cuML GPU-resident design |
-| `umap()` | Data preprocessing, KNN, then `umap_knn()` | CPU, Metal, CUDA when compiled | Same as `umap_knn()` plus KNN-first workflow |
+| `umap()` | `faissR` KNN, then `umap_knn()` | CPU, Metal, CUDA when compiled | Same as `umap_knn()` plus KNN-first workflow |
 | `embed_knn()` | Small dispatcher for KNN-input embedding | CPU, Metal, CUDA when available | KNN reuse across UMAP/openTSNE |
 | `opentsne_knn()` | openTSNE-style t-SNE directly from KNN | CPU, Metal, CUDA when compiled | openTSNE, FIt-SNE, t-SNE-CUDA, Rtsne_neighbors, opt-SNE |
-| `opentsne()` | Data preprocessing, KNN, PCA init, then `opentsne_knn()` | CPU, Metal, CUDA when compiled | openTSNE and opt-SNE workflows |
+| `opentsne()` | `faissR` KNN, PCA init, then `opentsne_knn()` | CPU, Metal, CUDA when compiled | openTSNE and opt-SNE workflows |
 | `transform_tsne()` | Fixed-reference openTSNE-style query transform | CPU, Metal | openTSNE transform, t-SNE-CUDA GPU residency |
 | `landmark_tsne()` | Embed landmarks, project/transform remaining points | CPU, Metal | openTSNE transform, landmark t-SNE workflows |
 | `landmark_umap()` | Embed landmarks, project/refine remaining points | CPU, Metal | UMAP transform/landmark workflow |
 | `evaluate_embedding()` | Embedding quality metrics | CPU | Trustworthiness, neighbour preservation, silhouette, label KNN accuracy |
-| `knn_graph()` | Native graph builder from KNN or embedding output | CPU | bluster/scran_graph_cluster SNN construction, igraph graph output |
+| `knn_graph()` | Thin wrapper around `faissR::knn_graph()` | FAISS CPU and optional CUDA/cuVS for neighbour search through `faissR` | bluster/scran_graph_cluster SNN construction, igraph graph output |
 | `backend_info()` | Backend detection and reporting | CPU, Metal, CUDA, FAISS, cuVS | Explicit backend reporting, no silent fallback |
 | `metal_available()` | Metal availability probe | Metal | Apple Metal |
 | `cuda_available()` | CUDA availability probe | CUDA | CUDA runtime/build probes |
-| `faiss_available()` | FAISS bridge availability probe | FAISS | FAISS |
-| `cuvs_available()` | cuVS bridge availability probe | RAPIDS cuVS | RAPIDS cuVS |
+| `faiss_available()` | Thin wrapper around `faissR::faiss_available()` | FAISS | FAISS |
+| `cuvs_available()` | Thin wrapper around `faissR::cuvs_available()` | RAPIDS cuVS | RAPIDS cuVS |
 
 ## `nn()`
 
-`nn()` is the single nearest-neighbour API. It accepts a reference matrix,
-optional query matrix, `k`, a backend, and `n_threads`.
+`nn()` is re-exported by `fastEmbedR`, but the implementation lives in the
+companion `faissR` package. It accepts a reference matrix, optional query
+matrix, `k`, a backend, and `n_threads`.
 
 Implementation:
 
-- Converts input once to numeric matrix form and validates dimensions, finite
-  values, `k`, and self-neighbour exclusion.
-- Chooses a backend from explicit user choice or `backend = "auto"`.
-- Returns a list with `indices` and `distances`, plus backend/approximation
-  attributes used by UMAP, openTSNE, and benchmarks.
-- Can attach approximate KNN recall diagnostics when
-  `options(fastEmbedR.gpu_approx_recall = TRUE)`.
+- `fastEmbedR::nn()` forwards arguments directly to `faissR::nn()`.
+- The returned object is reused by `umap_knn()`, `opentsne_knn()`,
+  landmarking, metrics, and graph construction.
+- Backend selection, FAISS/cuVS linkage, candidate KNN, and KNN diagnostics are
+  documented and implemented in `faissR`.
 
 Native paths:
 
-- `cpu`: exact native C++ row-distance KNN.
-- `cpu_nndescent`: native C++ approximate NN-descent for self-KNN.
-- `metal_nndescent`: native Objective-C++/Metal approximate NN-descent.
-- `metal_grid`: older native Metal grid-candidate KNN path, kept out of the
-  default benchmark path.
-- `faiss` and `faiss_ivf`: native C++ bridge to an external FAISS install.
-- `cuda_cuvs`, `cuda_cuvs_bruteforce`, `cuda_cuvs_cagra`, and
-  `cuda_cuvs_nndescent`: native C++ bridge to external RAPIDS cuVS.
+- FAISS CPU indexes through `faissR`.
+- Optional CUDA/cuVS or FAISS GPU indexes through `faissR`.
+- Removed from `fastEmbedR`: old native CPU/Metal NN-descent and grid KNN
+  experiments. They were useful during development, but the cleaned package
+  keeps KNN ownership in `faissR`.
 
 Distance metrics:
 
-- `metric = "euclidean"` is the validated default and is used by all high-speed
-  CPU/GPU/FAISS/cuVS KNN paths.
-- `metric = "cosine"` is implemented in the exact C++ CPU path. It returns
-  cosine distance `1 - cos(x, y)`, treats two zero vectors as distance 0, and
-  treats a zero vector compared with a non-zero vector as distance 1.
-- Approximate, Metal, CUDA, FAISS, and cuVS cosine paths are intentionally not
-  enabled yet. They error clearly instead of silently returning Euclidean
-  neighbours with a cosine label.
+- `metric = "euclidean"` is the validated default for UMAP/openTSNE.
+- Cosine/inner-product support is available where the installed `faissR`
+  backend enables it. Users should normalize rows before treating inner product
+  as cosine similarity.
+- Unsupported metric/backend combinations fail clearly instead of silently
+  returning neighbours computed under a different metric.
 
 Inspiration and literature:
 
-- NN-descent: Dong, Moses, and Li, "Efficient K-Nearest Neighbor Graph
-  Construction for Generic Similarity Measures", WWW 2011.
 - FAISS: Johnson, Douze, and Jegou, "Billion-scale similarity search with
   GPUs", IEEE Transactions on Big Data 2019, originally arXiv:1702.08734.
 - RAPIDS cuVS and cuML: NVIDIA/RAPIDS GPU nearest-neighbour and UMAP
   engineering references.
-- mlx-vis: Apache-2.0 design reference for NN-descent scheduling and
-  GPU-resident pipelines.
-- annembed: MIT/Apache-2.0 design reference for ANN/embedding graph ideas.
-- Rnanoflann: API and exact-KNN benchmark reference, not vendored.
+- KNN-first workflow: the original benchmark requirement to separate KNN time
+  from UMAP/openTSNE embedding time.
 
 ## `umap_knn()`
 
@@ -171,7 +161,8 @@ Inspiration:
 
 ## `knn_graph()`
 
-`knn_graph()` converts either a precomputed `nn()` result or an embedding object
+`knn_graph()` is re-exported by `fastEmbedR`, but the implementation lives in
+`faissR`. It converts either a precomputed `nn()` result or an embedding object
 returned by `opentsne()` / `umap()` into a plain `igraph` graph.
 
 Implementation:
@@ -195,8 +186,8 @@ Inspiration and provenance:
   observations that share at least one neighbour and use Jaccard weighting.
 - `scran_graph_cluster::build_snn_graph()` informed the sparse
   neighbour-incidence construction strategy.
-- The implementation in `src/graph.cpp` is native fastEmbedR C++ code. It does
-  not link to or call `bluster` at runtime.
+- The implementation is in `faissR`; `fastEmbedR` only forwards the call. It
+  does not link to or call `bluster` at runtime.
 
 ## `opentsne_knn()`
 
@@ -368,9 +359,9 @@ Inspiration:
 
 Implementation:
 
-- Check compiled symbols and optional native library availability.
+- Check compiled embedding symbols and optional native library availability.
 - Report CPU, Metal, CUDA, FAISS, and cuVS status without crashing when a
-  backend is absent.
+  backend is absent. FAISS/cuVS probes are forwarded to `faissR`.
 - Keep explicit backend requests honest: unavailable GPU/FAISS/cuVS requests
   fail rather than silently falling back to CPU.
 

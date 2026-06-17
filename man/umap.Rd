@@ -56,8 +56,8 @@ internally at four threads for the restored stable UMAP path.}
 
 \item{keep_knn}{If \code{TRUE}, retain KNN matrices in the returned object.}
 
-\item{graph_mode}{Graph weighting mode. \code{"binary"} uses unit-weight graph
-edges. \code{"fuzzy"} uses standard UMAP fuzzy graph weights.}
+\item{graph_mode}{Graph weighting mode. \code{"binary"} uses a symmetric
+unit-weight graph. \code{"fuzzy"} uses standard UMAP fuzzy graph weights.}
 
 \item{verbose}{Print progress.}
 }

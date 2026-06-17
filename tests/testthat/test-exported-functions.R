@@ -13,9 +13,11 @@ expect_embedding <- function(layout, n) {
 test_that("public API is KNN and openTSNE focused", {
   exports <- getNamespaceExports("fastEmbedR")
   expect_true(all(c(
-    "umap", "umap_knn", "opentsne", "opentsne_knn", "embed_knn", "nn", "backend_info",
-    "metal_available", "cuda_available", "cuvs_available", "faiss_available",
-    "evaluate_embedding", "transform_tsne", "landmark_tsne"
+    "umap", "umap_knn", "opentsne", "opentsne_knn", "embed_knn", "backend_info",
+    "metal_available", "cuda_available",
+    "evaluate_embedding", "transform_tsne", "landmark_tsne",
+    "nn", "nn_without_self", "candidate_knn", "knn_graph", "fast_kmeans",
+    "knn_fit", "predict_proba", "knn_recall", "faiss_available", "cuvs_available"
   ) %in% exports))
   expect_false(any(c(
     "supervised_umap", "tsne", "infotsne", "pacmap", "trimap",
@@ -43,8 +45,8 @@ test_that("core exported functions have tiny openTSNE smoke tests", {
   expect_length(metal_available(), 1L)
   expect_type(cuda_available(), "logical")
   expect_length(cuda_available(), 1L)
-  expect_type(cuvs_available(), "logical")
-  expect_length(cuvs_available(), 1L)
+  expect_type(faissR::cuvs_available(), "logical")
+  expect_length(faissR::cuvs_available(), 1L)
 
   info <- backend_info()
   expect_s3_class(info, "data.frame")
@@ -57,6 +59,8 @@ test_that("core exported functions have tiny openTSNE smoke tests", {
   expect_equal(dim(knn$indices), c(n, fastEmbedR:::auto_k(x, include_self = TRUE)))
   expect_equal(dim(knn$distances), c(n, fastEmbedR:::auto_k(x, include_self = TRUE)))
   expect_equal(attr(knn, "backend"), "cpu")
+  expect_identical(faiss_available(), faissR::faiss_available())
+  expect_identical(cuvs_available(), faissR::cuvs_available())
 
   layout <- embed_knn(knn, method = "opentsne", perplexity = 1, early_exaggeration_iter = 2L, n_iter = 3L)
   expect_embedding(layout, n)

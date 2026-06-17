@@ -32,8 +32,8 @@ backend; the package does not label CPU work as GPU.}
 \item{n_threads}{Number of CPU worker threads for CPU UMAP, capped internally
 at four threads for the restored stable path.}
 
-\item{graph_mode}{Graph weighting mode. \code{"binary"} uses unit-weight graph
-edges. \code{"fuzzy"} uses standard UMAP fuzzy graph weights.}
+\item{graph_mode}{Graph weighting mode. \code{"binary"} uses a symmetric
+unit-weight graph. \code{"fuzzy"} uses standard UMAP fuzzy graph weights.}
 
 }
 \value{
@@ -47,7 +47,7 @@ point used by \code{\link{embed_knn}} with \code{method = "umap"}.
 }
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))
-knn <- nn(x, k = 16)
+knn <- faissR::nn(x, k = 16)
 layout <- umap_knn(knn, seed = 1)
 plot(layout, pch = 21, bg = iris$Species)
 }

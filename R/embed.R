@@ -662,7 +662,7 @@ sampled_score_indices <- function(x,
     end <- min(length(keep), start + batch_size - 1L)
     rows <- start:end
     batch_keep <- keep[rows]
-    raw <- fastEmbedR::nn(
+    raw <- faissR::nn(
       x,
       x[batch_keep, , drop = FALSE],
       k = query_k,
