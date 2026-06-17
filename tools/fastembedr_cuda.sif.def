@@ -53,6 +53,7 @@ From: mambaorg/micromamba:2.3.3
       r-data.table \
       r-matrix \
       r-igraph \
+      r-leidenbase \
       r-ggplot2 \
       r-uwot \
       r-rtsne \
