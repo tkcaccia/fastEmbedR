@@ -43,7 +43,9 @@ GPU=disabled
 started=$(date -Is)
 EOF
 
+export SINGULARITYENV_R_LIBS="${SINGULARITYENV_R_LIBS:-/opt/conda/lib/R/library}"
 export SINGULARITYENV_R_LIBS_USER="${SINGULARITYENV_R_LIBS_USER:-/opt/conda/lib/R/library}"
+export SINGULARITYENV_R_LIBS_SITE="${SINGULARITYENV_R_LIBS_SITE:-/opt/conda/lib/R/library}"
 export SINGULARITYENV_LD_LIBRARY_PATH="${SINGULARITYENV_LD_LIBRARY_PATH:-/opt/conda/targets/x86_64-linux/lib:/opt/conda/lib}"
 export SINGULARITYENV_OMP_NUM_THREADS="${THREADS}"
 export SINGULARITYENV_OPENBLAS_NUM_THREADS="${THREADS}"
