@@ -52,6 +52,7 @@ From: mambaorg/micromamba:2.3.3
       r-jsonlite \
       r-data.table \
       r-matrix \
+      r-igraph \
       r-ggplot2 \
       r-uwot \
       r-rtsne \
