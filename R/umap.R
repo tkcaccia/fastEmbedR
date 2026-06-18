@@ -9,7 +9,8 @@
 #'   default for the data size.
 #' @param n_components Output dimensionality.
 #' @param standardize Center and scale columns before KNN when `data` is a
-#'   matrix.
+#'   matrix. Defaults to `FALSE` so one-call results match a KNN object computed
+#'   from the supplied matrix.
 #' @param pca_dims Optional PCA dimension before KNN.
 #' @param nn Optional precomputed KNN result when `data` is a matrix.
 #' @param seed Random seed.
@@ -31,7 +32,7 @@
 umap <- function(data,
                  n_neighbors = NULL,
                  n_components = 2L,
-                 standardize = TRUE,
+                 standardize = FALSE,
                  pca_dims = NULL,
                  nn = NULL,
                  seed = 4L,

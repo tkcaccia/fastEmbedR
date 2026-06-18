@@ -8,10 +8,9 @@ opentsne(
   data,
   perplexity = NULL,
   n_components = 2L,
-  init = c("pca", "random"),
   init_data = NULL,
   Y_init = NULL,
-  standardize = TRUE,
+  standardize = FALSE,
   pca_dims = NULL,
   nn = NULL,
   seed = 4L,
@@ -43,19 +42,15 @@ largest safe value up to 30 that is available for the input.}
 
 \item{n_components}{Output dimensionality, from 1 to 3.}
 
-\item{init}{Initialization for matrix input. `"pca"` is the default because
-it improves visual stability on large MNIST-like data without changing the
-t-SNE objective. `"random"` uses openTSNE-style tiny random initialization.
-KNN-only input computes PCA when `init_data` is supplied, otherwise it uses
-the existing KNN-native default.}
-
 \item{init_data}{Optional original high-dimensional data matrix used only to
-compute PCA initialization when `data` is a precomputed KNN object.}
+compute PCA initialization with [opentsne_pca_init()]. It is not used for
+neighbour search or optimization.}
 
-\item{Y_init}{Optional explicit initial layout. If supplied, it overrides
-`init`.}
+\item{Y_init}{Optional explicit initial layout. Use [opentsne_pca_init()] to
+precompute and reuse a PCA initialization.}
 
-\item{standardize}{Center and scale columns before KNN.}
+\item{standardize}{Center and scale columns before KNN. Defaults to `FALSE`
+so one-call results match a KNN object computed from the supplied matrix.}
 
 \item{pca_dims}{Optional PCA dimension before KNN.}
 

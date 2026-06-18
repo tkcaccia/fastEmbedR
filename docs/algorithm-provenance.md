@@ -108,8 +108,8 @@ strong existing implementations:
 - Symmetrize sparse high-dimensional probabilities.
 - Run early exaggeration followed by the normal optimization phase.
 - Use momentum, adaptive gains, auto learning rate, clipping, and recentering.
-- Use PCA initialization by default when original data or a saved PCA
-  initialization is available.
+- Use KNN-native initialization by default; use `Y_init` or `init_data` for
+  explicit PCA initialization.
 
 The default large-data negative-gradient method is the FFT-grid/FIt-SNE-style
 approximation. The older Barnes-Hut path was removed from the public benchmark
@@ -131,9 +131,9 @@ behaviour and a diagnostic MPSGraph FFT path. MPSGraph FFT remains diagnostic
 only because it did not provide enough quality/speed benefit to justify a
 second public backend option.
 
-PCA initialization is the default for openTSNE because visual inspection on
-MNIST 70k showed that it prevents unstable cluster splitting without changing
-the t-SNE objective.
+PCA initialization remains available through `opentsne_pca_init()`, `Y_init`,
+or `init_data`. MNIST 70k visual checks showed that explicit PCA initialization
+can prevent unstable cluster splitting without changing the t-SNE objective.
 
 ### CUDA Path
 

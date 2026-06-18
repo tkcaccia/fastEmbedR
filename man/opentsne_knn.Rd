@@ -10,7 +10,6 @@ opentsne_knn(
   n_neighbors = NULL,
   perplexity = NULL,
   n_components = 2L,
-  init = c("pca", "random"),
   init_data = NULL,
   Y_init = NULL,
   seed = 4L,
@@ -47,16 +46,12 @@ value from the supplied KNN width and sample size.}
 
 \item{n_components}{Output dimensionality, from 1 to 3.}
 
-\item{init}{Initialization strategy. `"pca"` is the default when
-`init_data` is supplied; KNN-only calls without `init_data` use the
-existing KNN-native default.}
-
 \item{init_data}{Optional original high-dimensional data matrix used only to
 compute PCA initialization for KNN-input runs. It is not used for neighbor
 search or optimization.}
 
-\item{Y_init}{Optional explicit initial layout. If supplied, it overrides
-`init`.}
+\item{Y_init}{Optional explicit initial layout. Use [opentsne_pca_init()] to
+precompute and reuse a PCA initialization.}
 
 \item{seed}{Random seed.}
 

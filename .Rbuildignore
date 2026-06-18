@@ -18,6 +18,11 @@
 ^fastEmbedR_[0-9.]+[.]tar[.]gz$
 ^faissR_[0-9.]+[.]tar[.]gz$
 ^Rplots[.]pdf$
+^results$
+^results/
+^src/.*[.]o$
+^src/.*[.]so$
+^src/.*[.]dSYM$
 ^cache$
 ^cache/
 ^_umap_cycle_cache$

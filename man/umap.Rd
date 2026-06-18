@@ -6,7 +6,7 @@ umap(
   data,
   n_neighbors = NULL,
   n_components = 2L,
-  standardize = TRUE,
+  standardize = FALSE,
   pca_dims = NULL,
   nn = NULL,
   seed = 4L,
@@ -26,7 +26,8 @@ package default for the data size.}
 \item{n_components}{Output dimensionality.}
 
 \item{standardize}{Center and scale columns before KNN when \code{data} is a
-matrix.}
+matrix. Defaults to \code{FALSE} so one-call results match a KNN object computed
+from the supplied matrix.}
 
 \item{pca_dims}{Optional PCA dimension before KNN.}
 

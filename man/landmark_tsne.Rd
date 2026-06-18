@@ -46,7 +46,8 @@ sample size.}
 
 \item{n_components}{Output dimensionality, from 1 to 3.}
 
-\item{standardize}{Center and scale columns before KNN.}
+\item{standardize}{Center and scale columns before KNN. Defaults to `FALSE`
+so one-call results match a KNN object computed from the supplied matrix.}
 
 \item{pca_dims}{Optional PCA dimension before KNN.}
 

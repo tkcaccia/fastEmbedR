@@ -19,7 +19,7 @@ they do not silently run on CPU while reporting a GPU backend.
 | `umap()` | `faissR` KNN, then `umap_knn()` | CPU, Metal, CUDA when compiled | Same as `umap_knn()` plus KNN-first workflow |
 | `embed_knn()` | Small dispatcher for KNN-input embedding | CPU, Metal, CUDA when available | KNN reuse across UMAP/openTSNE |
 | `opentsne_knn()` | openTSNE-style t-SNE directly from KNN | CPU, Metal, CUDA when compiled | openTSNE, FIt-SNE, t-SNE-CUDA, Rtsne_neighbors, opt-SNE |
-| `opentsne()` | `faissR` KNN, PCA init, then `opentsne_knn()` | CPU, Metal, CUDA when compiled | openTSNE and opt-SNE workflows |
+| `opentsne()` | `faissR` KNN, then `opentsne_knn()` | CPU, Metal, CUDA when compiled | openTSNE and opt-SNE workflows |
 | `transform_tsne()` | Fixed-reference openTSNE-style query transform | CPU, Metal | openTSNE transform, t-SNE-CUDA GPU residency |
 | `landmark_tsne()` | Embed landmarks, project/transform remaining points | CPU, Metal | openTSNE transform, landmark t-SNE workflows |
 | `landmark_umap()` | Embed landmarks, project/refine remaining points | CPU, Metal | UMAP transform/landmark workflow |
@@ -223,15 +223,16 @@ Implementation:
   CPU/Metal use FAISS CPU IVF-Flat and CUDA uses FAISS GPU IVF-Flat.
   The one-call API uses `ceiling(perplexity)` non-self neighbours internally;
   `n_neighbors` is intentionally not a public `opentsne()` argument.
-- Computes PCA initialization by default when original data are available.
+- Uses the same KNN-native default initialization as `opentsne_knn()` unless
+  the user supplies `Y_init` or `init_data`.
 - Calls `opentsne_knn()` for the native optimizer.
 - Stores configuration, timing, and backend metadata.
 
 Autotuning:
 
 - Same opt-SNE-style parameter selection as `opentsne_knn()`.
-- Uses PCA initialization by default because the MNIST benchmark showed better
-  visual stability without changing the t-SNE objective.
+- PCA initialization is explicit through `opentsne_pca_init()`, `Y_init`, or
+  `init_data`, so KNN-input and matrix-input calls remain comparable by default.
 
 Inspiration:
 

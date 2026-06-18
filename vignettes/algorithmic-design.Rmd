@@ -140,9 +140,9 @@ y_tsne <- opentsne_knn(
 
 ### PCA Initialization
 
-PCA initialization is the default when original data or a saved initialization
-is available. For t-SNE this initialization is centered and scaled to the small
-scale expected by t-SNE:
+PCA initialization is explicit. Provide `Y_init` or `init_data` when you want
+it. For t-SNE this initialization is centered and scaled to the small scale
+expected by t-SNE:
 
 ```{r, eval = FALSE}
 Y_init <- opentsne_pca_init(x)

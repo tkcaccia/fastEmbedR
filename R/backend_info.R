@@ -1,10 +1,4 @@
-#' Summarize fastEmbedR backend availability
-#'
-#' `backend_info()` reports embedding backend availability in `fastEmbedR` and
-#' nearest-neighbour backend availability supplied by the companion `faissR`
-#' package. Explicit GPU requests never silently fall back to CPU.
-#'
-#' @return A data frame with one row per backend.
+# Internal backend summary used by tests and diagnostics.
 backend_info <- function() {
   nn_info <- tryCatch(
     faissR::backend_info(),
