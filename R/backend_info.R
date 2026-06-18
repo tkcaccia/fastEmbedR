@@ -5,7 +5,6 @@
 #' package. Explicit GPU requests never silently fall back to CPU.
 #'
 #' @return A data frame with one row per backend.
-#' @export
 backend_info <- function() {
   nn_info <- tryCatch(
     faissR::backend_info(),
@@ -86,7 +85,7 @@ resolve_native_gpu_backend <- function(need_knn = FALSE,
   stop(
     "No native GPU backend is available for ",
     paste(need, collapse = " and "),
-    ". Use `backend_info()` to inspect available backends.",
+    ". Use `faissR::backend_info()` to inspect available KNN backends.",
     call. = FALSE
   )
 }

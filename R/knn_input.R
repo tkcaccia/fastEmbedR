@@ -6,7 +6,7 @@ coerce_knn_input <- function(indices,
     if (!is.list(indices) || !all(c("indices", "distances") %in% names(indices))) {
       stop(
         "`distances` is required unless `", arg_name,
-        "` is a list returned by `nn()` with `indices` and `distances`.",
+        "` is a list returned by `faissR::nn()` with `indices` and `distances`.",
         call. = FALSE
       )
     }

@@ -40,9 +40,9 @@ For function-by-function implementation notes and literature, see
 
 | Backend | Implementation | Library or project used | Runtime dependency | Notes |
 | --- | --- | --- | --- | --- |
-| `fastEmbedR::nn()` | Thin wrapper around `faissR::nn()` | FAISS, RAPIDS cuVS | `faissR` | KNN implementation, tuning, and backend selection live in `faissR`. |
-| `fastEmbedR::candidate_knn()` | Thin wrapper around `faissR::candidate_knn()` | FAISS/candidate KNN work in `faissR` | `faissR` | Useful when candidate sets are produced outside the embedding optimizer. |
-| `fastEmbedR::fast_kmeans()` | Thin wrapper around `faissR::fast_kmeans()` | FAISS/cuVS k-means paths in `faissR` | `faissR` | Kept out of the embedding code. |
+| `faissR::nn()` | Companion-package KNN provider | FAISS, RAPIDS cuVS | `faissR` | KNN implementation, tuning, and backend selection live in `faissR`. |
+| `faissR::candidate_knn()` | Candidate KNN utility | FAISS/candidate KNN work in `faissR` | `faissR` | Useful when candidate sets are produced outside the embedding optimizer. |
+| `faissR::fast_kmeans()` | FAISS/cuVS k-means utility | FAISS/cuVS k-means paths in `faissR` | `faissR` | Kept out of the embedding code. |
 
 Earlier native exact KNN, CPU NN-descent, Metal NN-descent, and grid KNN
 experiments were removed from `fastEmbedR`. They remain useful historical

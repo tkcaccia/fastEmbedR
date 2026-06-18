@@ -14,7 +14,7 @@ they do not silently run on CPU while reporting a GPU backend.
 
 | Function | Main implementation | Native backends | Main inspiration |
 | --- | --- | --- | --- |
-| `nn()` | Thin wrapper around `faissR::nn()` | FAISS CPU and optional CUDA/cuVS through `faissR` | FAISS, RAPIDS cuVS, KNN-first embedding workflow |
+| `faissR::nn()` | Companion-package KNN provider consumed by fastEmbedR | FAISS CPU and optional CUDA/cuVS through `faissR` | FAISS, RAPIDS cuVS, KNN-first embedding workflow |
 | `umap_knn()` | UMAP directly from supplied KNN | CPU, Metal, CUDA when compiled | UMAP algorithm, `uwot` benchmark behaviour, RAPIDS/cuML GPU-resident design |
 | `umap()` | `faissR` KNN, then `umap_knn()` | CPU, Metal, CUDA when compiled | Same as `umap_knn()` plus KNN-first workflow |
 | `embed_knn()` | Small dispatcher for KNN-input embedding | CPU, Metal, CUDA when available | KNN reuse across UMAP/openTSNE |
@@ -24,21 +24,22 @@ they do not silently run on CPU while reporting a GPU backend.
 | `landmark_tsne()` | Embed landmarks, project/transform remaining points | CPU, Metal | openTSNE transform, landmark t-SNE workflows |
 | `landmark_umap()` | Embed landmarks, project/refine remaining points | CPU, Metal | UMAP transform/landmark workflow |
 | `evaluate_embedding()` | Embedding quality metrics | CPU | Trustworthiness, neighbour preservation, silhouette, label KNN accuracy |
-| `backend_info()` | Backend detection and reporting | CPU, Metal, CUDA, FAISS, cuVS | Explicit backend reporting, no silent fallback |
-| `metal_available()` | Metal availability probe | Metal | Apple Metal |
-| `cuda_available()` | CUDA availability probe | CUDA | CUDA runtime/build probes |
-| `faiss_available()` | Thin wrapper around `faissR::faiss_available()` | FAISS | FAISS |
-| `cuvs_available()` | Thin wrapper around `faissR::cuvs_available()` | RAPIDS cuVS | RAPIDS cuVS |
+| `faissR::backend_info()` | faissR backend detection and reporting | CPU, CUDA, FAISS, cuVS | Explicit backend reporting, no silent fallback |
+| `faissR::metal_available()` | faissR Metal KNN probe where supported | Metal | Apple Metal |
+| `faissR::cuda_available()` | faissR CUDA KNN probe | CUDA | CUDA runtime/build probes |
+| `faissR::faiss_available()` | FAISS availability probe in faissR | FAISS | FAISS |
+| `faissR::cuvs_available()` | cuVS availability probe in faissR | RAPIDS cuVS | RAPIDS cuVS |
 
-## `nn()`
+## `faissR::nn()`
 
-`nn()` is re-exported by `fastEmbedR`, but the implementation lives in the
-companion `faissR` package. It accepts a reference matrix, optional query
+`faissR::nn()` lives in the companion `faissR` package. `fastEmbedR` imports
+and calls it internally for one-call embeddings, but does not re-export it.
+It accepts a reference matrix, optional query
 matrix, `k`, a backend, and `n_threads`.
 
 Implementation:
 
-- `fastEmbedR::nn()` forwards arguments directly to `faissR::nn()`.
+- Public KNN calls should use `faissR::nn()` directly.
 - The returned object is reused by `umap_knn()`, `opentsne_knn()`,
   landmarking, metrics, and graph construction.
 - Backend selection, FAISS/cuVS linkage, candidate KNN, and KNN diagnostics are
@@ -78,7 +79,7 @@ can be reused across methods.
 
 Implementation:
 
-- Accepts an `nn()` result or explicit `indices` and `distances`.
+- Accepts an `faissR::nn()` result or explicit `indices` and `distances`.
 - Normalizes KNN input, removes self-neighbour columns where needed, and
   records the input backend.
 - Uses native C++ to derive UMAP defaults from the KNN distance profile.
@@ -165,7 +166,7 @@ KNN.
 
 Implementation:
 
-- Accepts an `nn()` result or explicit KNN matrices.
+- Accepts an `faissR::nn()` result or explicit KNN matrices.
 - Computes row-wise perplexity affinities from supplied neighbour distances.
 - Symmetrizes sparse high-dimensional probabilities.
 - Uses a two-phase optimizer: early exaggeration followed by normal
@@ -327,8 +328,8 @@ Inspiration:
 
 ## Backend Detection Functions
 
-`backend_info()`, `metal_available()`, `cuda_available()`,
-`faiss_available()`, and `cuvs_available()` are lightweight probes.
+`faissR::backend_info()`, `faissR::metal_available()`, `faissR::cuda_available()`,
+`faissR::faiss_available()`, and `faissR::cuvs_available()` are lightweight probes.
 
 Implementation:
 

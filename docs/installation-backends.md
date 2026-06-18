@@ -12,8 +12,7 @@ remotes::install_github("tkcaccia/fastEmbedR")
 ```
 
 Native KNN backends are implemented in the companion `faissR` package.
-`fastEmbedR::nn()` is a thin wrapper around `faissR::nn()`, so FAISS/cuVS KNN
-availability is controlled by the `faissR` build. Explicit unavailable GPU,
+FAISS/cuVS KNN availability is controlled by the `faissR` build. Explicit unavailable GPU,
 FAISS, or cuVS backends fail clearly rather than silently running on CPU.
 
 For a local macOS FAISS build through conda-forge:
@@ -59,9 +58,9 @@ After installation:
 
 ```r
 library(fastEmbedR)
-cuvs_available()
-backend_info()
-knn <- nn(x, k = 50, backend = "cuda_cuvs_nndescent")
+faissR::cuvs_available()
+faissR::backend_info()
+knn <- faissR::nn(x, k = 50, backend = "cuda_cuvs_nndescent")
 ```
 
 If cuVS is unavailable, explicit cuVS requests fail clearly. They are never

@@ -19,7 +19,7 @@ nearest-neighbour graphs. It focuses on:
 
 The intended workflow is:
 
-1. compute nearest neighbours with `fastEmbedR::nn()` or `faissR::nn()`;
+1. compute nearest neighbours with `faissR::nn()`;
 2. reuse the same KNN object in `fastEmbedR::opentsne_knn()` or
    `fastEmbedR::umap_knn()`;
 3. evaluate or plot the embedding.
@@ -37,7 +37,7 @@ library(fastEmbedR)
 x <- scale(as.matrix(iris[, 1:4]))
 labels <- iris$Species
 
-knn <- fastEmbedR::nn(x, k = 15, backend = "auto", n_threads = 4)
+knn <- faissR::nn(x, k = 15, backend = "auto", n_threads = 4)
 
 y_tsne <- fastEmbedR::opentsne_knn(
   knn,
@@ -61,14 +61,14 @@ plot(y_umap, pch = 21, bg = labels)
 
 | Function | Purpose |
 | --- | --- |
-| `nn()` | Thin wrapper around `faissR::nn()` for FAISS/cuVS neighbour search. |
+| `faissR::nn()` | FAISS/cuVS neighbour search supplied by the companion package. |
 | `opentsne_knn()` | Native openTSNE-style t-SNE from a supplied KNN object. |
 | `opentsne()` | One-call KNN plus openTSNE-style t-SNE. |
 | `umap_knn()` | Native UMAP from a supplied KNN object. |
 | `umap()` | One-call KNN plus UMAP. |
 | `landmark_tsne()` / `landmark_umap()` | Landmark embedding and projection workflows. |
 | `evaluate_embedding()` | Trustworthiness, neighbour preservation, label accuracy, and related metrics. |
-| `backend_info()` | Report CPU, Metal, CUDA, FAISS, and cuVS availability. |
+| `faissR::backend_info()` | Report FAISS/cuVS neighbour-search availability. |
 
 ## Installation
 

@@ -340,7 +340,6 @@ test_that("landmark_tsne can use projection-specific approximate KNN", {
 test_that("landmark_tsne uses fused Metal projection when requested", {
   skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
   skip_if_not(fastEmbedR:::metal_opentsne_native_available())
-  skip_if_not(metal_available())
   old_fused <- getOption("fastEmbedR.landmark_projection_fused", NULL)
   on.exit({
     if (is.null(old_fused)) {
@@ -384,7 +383,6 @@ test_that("landmark_tsne uses fused Metal projection when requested", {
 test_that("landmark_tsne keeps Metal projection and transform native when intermediates are not requested", {
   skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
   skip_if_not(fastEmbedR:::metal_opentsne_native_available())
-  skip_if_not(metal_available())
 
   set.seed(406)
   x <- rbind(

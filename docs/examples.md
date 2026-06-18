@@ -16,7 +16,7 @@ library(fastEmbedR)
 x <- scale(as.matrix(iris[, 1:4]))
 labels <- iris$Species
 
-knn <- fastEmbedR::nn(x, k = 15, backend = "auto", n_threads = 4)
+knn <- faissR::nn(x, k = 15, backend = "auto", n_threads = 4)
 
 y_tsne <- fastEmbedR::opentsne_knn(knn, init_data = x, backend = "cpu", seed = 1)
 y_umap <- fastEmbedR::umap_knn(knn, backend = "cpu", graph_mode = "fuzzy", seed = 1)
@@ -45,7 +45,7 @@ Explicit GPU requests fail clearly if the backend is unavailable.
 For matrix input, the KNN search is fixed inside `opentsne()`: CPU and Metal
 use FAISS CPU IVF-Flat, while CUDA uses FAISS GPU IVF-Flat. The internal
 non-self KNN width is `ceiling(perplexity)`. Use
-`opentsne_knn()` with an explicit `nn()` result when benchmarking alternative
+`opentsne_knn()` with an explicit `faissR::nn()` result when benchmarking alternative
 KNN algorithms.
 
 ## One-Call UMAP

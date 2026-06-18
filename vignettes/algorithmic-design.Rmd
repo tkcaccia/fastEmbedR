@@ -25,15 +25,15 @@ The current project is split into two packages.
 | Package | Main responsibility |
 | --- | --- |
 | `faissR` | FAISS/cuVS nearest neighbours, candidate KNN, KNN graphs, KNN prediction, and k-means. |
-| `fastEmbedR` | UMAP, openTSNE-style t-SNE, landmark transforms, quality metrics, and backend reporting. |
+| `fastEmbedR` | UMAP, openTSNE-style t-SNE, landmark transforms, and quality metrics. |
 
-`fastEmbedR::nn()` is a convenience wrapper around `faissR::nn()` so users can
-start a KNN-first embedding workflow from one namespace.
+Use `faissR::nn()` directly so the same KNN object can be shared across UMAP
+and openTSNE runs.
 
 ```{r, eval = FALSE}
 library(fastEmbedR)
 
-knn <- nn(x, k = 50, backend = "faiss_ivf_flat", n_threads = 4)
+knn <- faissR::nn(x, k = 50, backend = "faiss_ivf_flat", n_threads = 4)
 y_umap <- umap_knn(knn, backend = "cpu", seed = 1)
 y_tsne <- opentsne_knn(knn, init_data = x, backend = "cpu", seed = 1)
 ```
@@ -110,7 +110,7 @@ one-call embedding API uses FAISS GPU IVF-Flat on CUDA. KNN-first workflows can
 use other explicit `faissR::nn()` backends for benchmarking.
 
 ```{r, eval = FALSE}
-knn_cuda <- nn(x, k = 50, backend = "faiss_gpu_ivf_flat", n_threads = 4)
+knn_cuda <- faissR::nn(x, k = 50, backend = "faiss_gpu_ivf_flat", n_threads = 4)
 y_cuda <- umap_knn(knn_cuda, backend = "cuda", seed = 1)
 ```
 
@@ -239,10 +239,10 @@ The backend rule is simple:
 - `backend = "cuda"` must run native CUDA/cuFFT code or fail;
 - CPU fallback is never reported as GPU work.
 
-Use `backend_info()` to inspect the current build:
+Use `faissR::backend_info()` to inspect the current KNN build:
 
 ```{r, eval = FALSE}
-backend_info()
+faissR::backend_info()
 ```
 
 ## Acknowledgements

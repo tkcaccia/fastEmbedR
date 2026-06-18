@@ -51,7 +51,8 @@ required by the core `fastEmbedR` embedding functions.
 
 ## CPU And FAISS
 
-`fastEmbedR::nn()` delegates to `faissR::nn()`. On CPU, FAISS should be
+`fastEmbedR` calls `faissR::nn()` internally for one-call embeddings. On CPU,
+FAISS should be
 available through `faissR`.
 
 Example conda-forge FAISS CPU setup:
@@ -108,11 +109,11 @@ After installation:
 
 ```r
 library(fastEmbedR)
-backend_info()
-faiss_available()
-cuda_available()
-cuvs_available()
-metal_available()
+faissR::backend_info()
+faissR::faiss_available()
+faissR::cuda_available()
+faissR::cuvs_available()
+faissR::metal_available()
 ```
 
 ## Backend Rule

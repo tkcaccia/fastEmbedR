@@ -14,12 +14,12 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 `fastEmbedR` is focused on KNN-first embeddings: UMAP from precomputed nearest
 neighbours, plus a native openTSNE-style optimizer. Nearest-neighbour search,
 graph building, kNN models, and k-means live in the companion `faissR` package
-and are re-exported as thin `fastEmbedR` wrappers.
+and are called directly as `faissR::...` functions.
 
 The legacy `tsne()` and `infotsne()` entry points were removed from the public
 package API. The kept path is:
 
-1. compute or reuse KNN with `fastEmbedR::nn()`;
+1. compute or reuse KNN with `faissR::nn()`;
 2. embed with `umap_knn()` / `umap()` or, explicitly, `opentsne_knn()` /
    `opentsne()`;
 3. optionally place query/non-landmark points with `transform_tsne()`.
@@ -32,7 +32,7 @@ silently relabelled when unavailable.
 For one-call `umap()` and `opentsne()` runs, `backend` is deliberately limited
 to `"cpu"`, `"metal"`, or `"cuda"`. Matrix-input KNN is fixed internally: CPU
 and Metal use FAISS CPU IVF-Flat through `faissR`, and CUDA uses FAISS GPU
-IVF-Flat. To benchmark another KNN algorithm, compute it with `nn()` and pass
+IVF-Flat. To benchmark another KNN algorithm, compute it with `faissR::nn()` and pass
 the result to `umap_knn()` or `opentsne_knn()`.
 
 The package deliberately keeps the backend surface small. The local MPSGraph
@@ -48,7 +48,7 @@ library(fastEmbedR)
 x <- scale(as.matrix(iris[, 1:4]))
 labels <- iris$Species
 
-knn <- fastEmbedR::nn(x, k = 31, n_threads = 2)
+knn <- faissR::nn(x, k = 31, n_threads = 2)
 layout <- umap_knn(knn, n_threads = 2, seed = 4)
 
 plot(layout, pch = 21, bg = labels)
@@ -189,7 +189,7 @@ ref_fit <- opentsne(
   seed = 5
 )
 
-query_knn <- fastEmbedR::nn(reference, query, k = 15)
+query_knn <- faissR::nn(reference, query, k = 15)
 query_layout <- transform_tsne(
   ref_fit$layout,
   knn = query_knn,
@@ -204,12 +204,12 @@ points(query_layout, pch = 24, bg = labels[101:110], cex = 1.2)
 
 ## Backend Reporting
 
-`backend_info()` reports optional CUDA, Metal, FAISS, and cuVS availability.
+`faissR::backend_info()` reports optional CUDA, Metal, FAISS, and cuVS KNN availability.
 Requested unavailable GPU/accelerator backends fail clearly rather than being
 silently replaced by CPU and reported as GPU.
 
 ```{r}
-backend_info()
+faissR::backend_info()
 ```
 
 ## Reproducing the MNIST Benchmark

@@ -21,7 +21,7 @@ metrics, and clustering graphs. This led to the two-package layout:
 | Package | Responsibility |
 | --- | --- |
 | `faissR` | FAISS/cuVS nearest neighbours, KNN graph construction, KNN classifier/regressor, k-means. |
-| `fastEmbedR` | UMAP, openTSNE-style t-SNE, landmark transforms, quality metrics, backend reporting. |
+| `fastEmbedR` | UMAP, openTSNE-style t-SNE, landmark transforms, and quality metrics. |
 
 This split keeps the embedding package smaller and makes the accelerated KNN
 layer independently testable.

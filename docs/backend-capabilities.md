@@ -8,7 +8,7 @@ rule is simple: if a function is requested with `backend = "metal"` or
 
 | Function | CPU | Metal | CUDA | Notes |
 | --- | --- | --- | --- | --- |
-| `nn()` | `faissR` FAISS CPU search | not implemented in `fastEmbedR` | `faissR` optional RAPIDS cuVS / FAISS GPU search | KNN belongs to `faissR`; `fastEmbedR` re-exports a thin wrapper. |
+| `faissR::nn()` | `faissR` FAISS CPU search | not implemented in `fastEmbedR` | `faissR` optional RAPIDS cuVS / FAISS GPU search | KNN belongs to `faissR`; `fastEmbedR` consumes it but does not re-export it. |
 | `umap_knn()` | native C++ CSR graph and optimizer | native Metal `atomic_inplace` optimizer | native CUDA pure-atomic optimizer | Metal/CUDA optimizers use the supplied graph; unavailable GPU backends fail clearly. |
 | `umap()` | FAISS CPU IVF-Flat through `faissR`, then `umap_knn()` | FAISS CPU IVF-Flat through `faissR`, then native Metal UMAP where available | FAISS GPU IVF-Flat through `faissR`, then CUDA UMAP where available | The KNN algorithm is fixed inside the one-call API. |
 | `opentsne_knn()` | native C++ FFT-grid optimizer | native Metal FFT-grid optimizer | native CUDA FFT-grid optimizer using cuFFT | PCA initialization is the default for quality/stability. |
@@ -20,7 +20,7 @@ rule is simple: if a function is requested with `backend = "metal"` or
 
 ## Distance Metrics
 
-| `nn()` metric | CPU | Metal | CUDA/cuVS | FAISS | Notes |
+| `faissR::nn()` metric | CPU | Metal | CUDA/cuVS | FAISS | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `euclidean` | FAISS CPU where built | not in `fastEmbedR` | cuVS/CUDA KNN where built | FAISS L2 indexes | Validated default for UMAP/openTSNE. |
 | `cosine` / inner product | FAISS CPU where enabled by `faissR` | not in `fastEmbedR` | CUDA/cuVS/FAISS where enabled by `faissR` | FAISS IP indexes | Use normalized rows for cosine/IP workflows. |
@@ -53,8 +53,8 @@ parallelize. Current CPU priorities are:
 Metal is implemented with Objective-C++ and Metal kernels. Public UMAP and
 openTSNE paths do not call Python, Torch, MLX, or `reticulate`.
 
-KNN is no longer implemented in `fastEmbedR`. Use `faissR::nn()` or the
-`fastEmbedR::nn()` wrapper. Metal KNN experiments were removed from
+KNN is no longer implemented or re-exported in `fastEmbedR`. Use
+`faissR::nn()` directly. Metal KNN experiments were removed from
 `fastEmbedR`; the supported accelerated KNN route is FAISS/cuVS through
 `faissR`.
 

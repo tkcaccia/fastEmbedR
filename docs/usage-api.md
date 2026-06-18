@@ -8,7 +8,7 @@ This page gives the main KNN-first workflows and the public API.
 | --- | --- |
 | You already computed nearest neighbours | `umap_knn()` or `opentsne_knn()` |
 | You want one call from a data matrix | `umap()` or `opentsne()` |
-| You want to compare UMAP and openTSNE fairly | compute `knn <- nn(...)` once, then reuse it |
+| You want to compare UMAP and openTSNE fairly | compute `knn <- faissR::nn(...)` once, then reuse it |
 | You want Apple GPU | set `backend = "metal"` explicitly |
 | You want NVIDIA GPU | build with CUDA/cuVS, then set embedding `backend = "cuda"` |
 | You want a fast approximation for very large data | use `landmark_umap()` or `landmark_tsne()` and report it as landmarking |
@@ -17,7 +17,7 @@ This page gives the main KNN-first workflows and the public API.
 The recommended workflow is KNN first:
 
 ```r
-knn <- nn(x, k = 50, backend = "auto", n_threads = 4)
+knn <- faissR::nn(x, k = 50, backend = "auto", n_threads = 4)
 layout_umap <- umap_knn(knn, seed = 1)
 layout_tsne <- opentsne_knn(knn, init_data = x, seed = 1)
 ```
@@ -29,21 +29,21 @@ The one-call functions intentionally hide the KNN algorithm choice. For
 `opentsne()` and `umap()`, `backend` accepts only `"cpu"`, `"metal"`, or
 `"cuda"`. Matrix-input KNN is fixed: CPU and Metal use FAISS CPU IVF-Flat
 through `faissR`; CUDA uses FAISS GPU IVF-Flat. To benchmark another KNN
-algorithm, compute it explicitly with `nn()`/`faissR::nn()` and pass the result
+algorithm, compute it explicitly with `faissR::nn()` and pass the result
 to `opentsne_knn()` or `umap_knn()`.
 
-## Distance Metrics In `nn()`
+## Distance Metrics In `faissR::nn()`
 
 The default distance is Euclidean:
 
 ```r
-knn <- nn(x, k = 50, metric = "euclidean", backend = "auto", n_threads = 4)
+knn <- faissR::nn(x, k = 50, metric = "euclidean", backend = "auto", n_threads = 4)
 ```
 
 Cosine distance is available through exact CPU KNN:
 
 ```r
-knn_cosine <- nn(x, k = 50, metric = "cosine", backend = "cpu", n_threads = 4)
+knn_cosine <- faissR::nn(x, k = 50, metric = "cosine", backend = "cpu", n_threads = 4)
 layout <- umap_knn(knn_cosine, seed = 1)
 ```
 
@@ -63,7 +63,7 @@ set.seed(1)
 x <- scale(as.matrix(iris[, 1:4]))
 labels <- iris$Species
 
-knn <- nn(x, k = 31)
+knn <- faissR::nn(x, k = 31)
 layout <- umap_knn(knn)
 
 plot(layout, pch = 21, bg = labels)
@@ -103,7 +103,7 @@ GPU use is explicit. A request for Metal or CUDA must run that backend or fail
 clearly.
 
 ```r
-knn <- nn(x, k = 50, backend = "metal")
+knn <- faissR::nn(x, k = 50, backend = "metal")
 layout <- opentsne_knn(knn, init_data = x, backend = "metal", seed = 1)
 ```
 
@@ -176,7 +176,7 @@ defaults.
 
 | Function | Purpose |
 | --- | --- |
-| `nn()` | Thin wrapper around `faissR::nn()` for data/query matrices. |
+| `faissR::nn()` | Companion-package KNN function for data/query matrices. |
 | `umap_knn()` | UMAP from a supplied KNN object or matrices. |
 | `umap()` | One-call preprocessing, KNN, and UMAP embedding. |
 | `embed_knn()` | KNN dispatcher; UMAP by default, openTSNE with `method = "opentsne"`. |
@@ -186,4 +186,4 @@ defaults.
 | `landmark_tsne()` | Embed landmarks, then transform remaining rows. |
 | `landmark_umap()` | Embed landmarks with UMAP, then project/refine remaining rows. |
 | `evaluate_embedding()` | Embedding quality metrics. |
-| `backend_info()` | CPU/CUDA/Metal/FAISS/cuVS detection without silent fallback. |
+| `faissR::backend_info()` | FAISS/cuVS KNN backend detection without silent fallback. |

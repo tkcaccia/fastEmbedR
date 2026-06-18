@@ -910,7 +910,7 @@ landmark_tsne <- function(data,
   n_landmarks <- nrow(x_landmarks)
   landmark_neighbors <- min(n_neighbors, n_landmarks - 1L)
   reference_time <- system.time({
-    reference_knn <- nn_without_self(
+    reference_knn <- faissR::nn_without_self(
       x_landmarks,
       k = landmark_neighbors,
       backend = fixed_embedding_knn_backend(backend),

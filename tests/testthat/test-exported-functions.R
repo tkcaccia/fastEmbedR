@@ -13,15 +13,15 @@ expect_embedding <- function(layout, n) {
 test_that("public API is KNN and openTSNE focused", {
   exports <- getNamespaceExports("fastEmbedR")
   expect_true(all(c(
-    "umap", "umap_knn", "opentsne", "opentsne_knn", "embed_knn", "backend_info",
-    "metal_available", "cuda_available",
-    "evaluate_embedding", "transform_tsne", "landmark_tsne",
-    "nn", "nn_without_self", "candidate_knn", "fast_kmeans",
-    "knn_fit", "predict_proba", "knn_recall", "faiss_available", "cuvs_available"
+    "umap", "umap_knn", "opentsne", "opentsne_knn", "embed_knn",
+    "evaluate_embedding", "transform_tsne", "landmark_tsne"
   ) %in% exports))
   expect_false(any(c(
     "supervised_umap", "tsne", "infotsne", "pacmap", "trimap",
-    "localmap", "transform_embedding", "knn_graph"
+    "localmap", "transform_embedding", "knn_graph",
+    "nn", "nn_without_self", "candidate_knn", "fast_kmeans",
+    "knn_fit", "predict_proba", "knn_recall", "faiss_available",
+    "cuvs_available", "cuda_available", "metal_available", "backend_info"
   ) %in% exports))
 
   expect_true("n_threads" %in% names(formals(opentsne)))
@@ -41,27 +41,24 @@ test_that("core exported functions have tiny openTSNE smoke tests", {
   labels <- fixture$labels
   n <- nrow(x)
 
-  expect_type(metal_available(), "logical")
-  expect_length(metal_available(), 1L)
-  expect_type(cuda_available(), "logical")
-  expect_length(cuda_available(), 1L)
+  expect_type(fastEmbedR:::embedding_metal_available_cpp(), "logical")
+  expect_length(fastEmbedR:::embedding_metal_available_cpp(), 1L)
+  expect_type(fastEmbedR:::embedding_cuda_available_cpp(), "logical")
+  expect_length(fastEmbedR:::embedding_cuda_available_cpp(), 1L)
   expect_type(faissR::cuvs_available(), "logical")
   expect_length(faissR::cuvs_available(), 1L)
 
-  info <- backend_info()
+  info <- fastEmbedR:::backend_info()
   expect_s3_class(info, "data.frame")
   expect_true(all(c("backend", "available", "knn_available", "embedding_available") %in% names(info)))
   expect_true(all(c("cpu", "cuvs", "cuda", "metal") %in% info$backend))
   expect_true(isTRUE(info$available[info$backend == "cpu"]))
 
-  knn <- nn(x, backend = "cpu")
+  knn <- faissR::nn(x, backend = "cpu")
   expect_s3_class(knn, "fastEmbedR_nn")
   expect_equal(dim(knn$indices), c(n, fastEmbedR:::auto_k(x, include_self = TRUE)))
   expect_equal(dim(knn$distances), c(n, fastEmbedR:::auto_k(x, include_self = TRUE)))
   expect_equal(attr(knn, "backend"), "cpu")
-  expect_identical(faiss_available(), faissR::faiss_available())
-  expect_identical(cuvs_available(), faissR::cuvs_available())
-
   layout <- embed_knn(knn, method = "opentsne", perplexity = 1, early_exaggeration_iter = 2L, n_iter = 3L)
   expect_embedding(layout, n)
   expect_equal(attr(layout, "fastEmbedR_config")$method, "opentsne")

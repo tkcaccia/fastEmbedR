@@ -113,7 +113,7 @@ umap <- function(data,
 
   knn_time <- system.time({
     knn_result <- if (is.null(nn)) {
-      nn_without_self(
+      faissR::nn_without_self(
         x,
         k = as.integer(n_neighbors),
         backend = fixed_embedding_knn_backend(backend),

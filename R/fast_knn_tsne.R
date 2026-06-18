@@ -1221,7 +1221,7 @@ opentsne <- function(data,
 
   knn_time <- system.time({
     if (is.null(nn)) {
-      raw_knn <- nn_without_self(
+      raw_knn <- faissR::nn_without_self(
         x,
         k = n_neighbors,
         backend = fixed_embedding_knn_backend(backend),

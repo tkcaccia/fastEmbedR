@@ -162,7 +162,6 @@ test_that("opentsne has direct KNN input functions", {
 test_that("native Metal openTSNE runs FFT-grid without CPU fallback", {
   skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
   skip_if_not(fastEmbedR:::metal_opentsne_native_available())
-  skip_if_not(metal_available())
 
   old_grid <- Sys.getenv("FASTEMBEDR_TSNE_FFT_GRID", unset = NA_character_)
   Sys.setenv(FASTEMBEDR_TSNE_FFT_GRID = "32")
