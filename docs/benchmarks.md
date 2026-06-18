@@ -21,7 +21,7 @@ CSV are shown on the [Examples](examples.md) page.
 The benchmark command is:
 
 ```sh
-Rscript tools/benchmark_github_mnist70k.R --n=70000 --k=15 --perplexity=15
+Rscript tools/benchmark_github_mnist70k.R --n=70000 --k=15 --perplexity=15 --threads=4
 ```
 
 The script can compare:

@@ -279,6 +279,15 @@ out_dir <- arg_value("out-dir", file.path("results", paste0("github_mnist70k_", 
 run_metal <- arg_flag("run-metal", TRUE)
 run_cuda <- arg_flag("run-cuda", FALSE)
 run_refs <- arg_flag("run-references", TRUE)
+Sys.setenv(
+  OMP_NUM_THREADS = as.character(n_threads),
+  OPENBLAS_NUM_THREADS = as.character(n_threads),
+  MKL_NUM_THREADS = as.character(n_threads),
+  RCPP_PARALLEL_NUM_THREADS = as.character(n_threads)
+)
+if (requireNamespace("RcppParallel", quietly = TRUE)) {
+  RcppParallel::setThreadOptions(numThreads = n_threads)
+}
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 specs <- machine_specs(n_threads)
 write_machine_specs(specs, out_dir)
@@ -291,7 +300,16 @@ labels <- droplevels(mnist$labels[rows])
 layouts <- list()
 results <- list()
 
-add_row <- function(method, family, backend, nn_sec, embed_sec, total_sec, layout, status = "success", error = NA_character_) {
+add_row <- function(method,
+                    family,
+                    backend,
+                    nn_sec,
+                    embed_sec,
+                    total_sec,
+                    layout,
+                    nn_backend = NA_character_,
+                    status = "success",
+                    error = NA_character_) {
   metrics <- if (!is.null(layout)) score(x, layout, labels, seed, n_threads) else NULL
   results[[length(results) + 1L]] <<- data.frame(
     method = method,
@@ -304,6 +322,7 @@ add_row <- function(method, family, backend, nn_sec, embed_sec, total_sec, layou
     machine = specs$machine,
     cpu = specs$cpu,
     requested_threads = n_threads,
+    nn_backend = nn_backend,
     nn_sec = nn_sec,
     embed_sec = embed_sec,
     total_sec = total_sec,
@@ -324,6 +343,13 @@ extract_stage_time <- function(fit, stage) {
   as.numeric(timings[stage, "elapsed"])
 }
 
+extract_nn_backend <- function(fit) {
+  if (is.list(fit) && !is.null(fit$parameters) && !is.null(fit$parameters$nn_backend)) {
+    return(as.character(fit$parameters$nn_backend))
+  }
+  NA_character_
+}
+
 run_one <- function(method, family, backend, expr) {
   tryCatch({
     t <- timed(expr())
@@ -331,9 +357,9 @@ run_one <- function(method, family, backend, expr) {
     nn_sec <- extract_stage_time(t$value, "knn")
     embed_sec <- extract_stage_time(t$value, "embedding")
     if (!is.finite(embed_sec)) embed_sec <- t$sec
-    add_row(method, family, backend, nn_sec, embed_sec, t$sec, y)
+    add_row(method, family, backend, nn_sec, embed_sec, t$sec, y, extract_nn_backend(t$value))
   }, error = function(e) {
-    add_row(method, family, backend, NA_real_, NA_real_, NA_real_, NULL, "failed", conditionMessage(e))
+    add_row(method, family, backend, NA_real_, NA_real_, NA_real_, NULL, NA_character_, "failed", conditionMessage(e))
   })
 }
 
@@ -373,7 +399,13 @@ if (run_cuda) {
 
 if (run_refs && requireNamespace("Rtsne", quietly = TRUE)) {
   run_one("Rtsne full", "Rtsne", "cpu", function() {
-    Rtsne::Rtsne(x, perplexity = perplexity, check_duplicates = FALSE, pca = TRUE)
+    Rtsne::Rtsne(
+      x,
+      perplexity = perplexity,
+      check_duplicates = FALSE,
+      pca = TRUE,
+      num_threads = n_threads
+    )
   })
 }
 

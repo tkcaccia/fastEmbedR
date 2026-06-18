@@ -77,12 +77,18 @@ The benchmark script uses the full 70,000 MNIST observations as flattened
 `.RData` object with `data` and `labels` fields.
 
 The CUDA run below was executed on `chiamaka` on 2026-06-18 using the prepared
-dataset at `/mnt/sata_ssd/fastEmbedR/Data/MNIST/MNIST.RData`:
+dataset at `/mnt/sata_ssd/fastEmbedR/Data/MNIST/MNIST.RData`. CPU paths were
+requested with 4 threads for KNN search and embedding:
 
 ```sh
-export LD_PRELOAD=/home/chiamaka/.fastEmbedR/micromamba/envs/fastembedr-faissgpu-cuvs/lib/libstdc++.so.6
+export OMP_NUM_THREADS=4
+export OPENBLAS_NUM_THREADS=4
+export MKL_NUM_THREADS=4
+export RCPP_PARALLEL_NUM_THREADS=4
 
-Rscript tools/benchmark_github_mnist70k.R \
+singularity exec --nv -B /mnt/sata_ssd:/mnt/sata_ssd \
+  /mnt/sata_ssd/fastEmbedR/singularity/fastembedr_cuda.sif \
+  /opt/conda/bin/Rscript /mnt/sata_ssd/fastEmbedR/tools/benchmark_github_mnist70k.R \
   --mnist-rdata=/mnt/sata_ssd/fastEmbedR/Data/MNIST/MNIST.RData \
   --n=70000 \
   --k=15 \
@@ -91,7 +97,7 @@ Rscript tools/benchmark_github_mnist70k.R \
   --run-metal=false \
   --run-cuda=true \
   --run-references=true \
-  --out-dir=/mnt/sata_ssd/fastEmbedR/results/github_mnist70k_cuda_codex_20260618
+  --out-dir=/mnt/sata_ssd/fastEmbedR/results/github_mnist70k_cuda_thread4_20260618_170053
 ```
 
 The script compares:
@@ -109,7 +115,7 @@ This run used:
 - CPU: 13th Gen Intel(R) Core(TM) i7-13700
 - GPU: NVIDIA GeForce RTX 5060 Ti, driver 595.71.05, 16311 MiB
 - RAM: 31.02 GB
-- R: 4.6.0
+- R: 4.5.3
 - fastEmbedR: 0.1.0
 - faissR: 0.1.0
 - uwot: 0.2.4
@@ -122,14 +128,18 @@ The benchmark intentionally does not show `graph_mode = "binary"`.
 
 ![MNIST 70k computational time](assets/mnist70k_cuda_codex_20260618/mnist70k_github_benchmark_time_barplot.png)
 
-| method | backend | NN sec | embedding sec | total sec | trust | label KNN acc |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| fastEmbedR openTSNE CPU | CPU | 87.326 | 26.823 | 114.981 | 0.332 | 0.968 |
-| fastEmbedR openTSNE CUDA | CUDA | 8.453 | 1.660 | 10.796 | 0.334 | 0.969 |
-| Rtsne full | CPU | internal | 379.155 | 379.155 | 0.324 | 0.973 |
-| fastEmbedR UMAP CPU fuzzy | CPU | 86.931 | 5.918 | 93.525 | 0.280 | 0.972 |
-| fastEmbedR UMAP CUDA fuzzy | CUDA | 3.652 | 0.559 | 4.865 | 0.273 | 0.972 |
-| uwot UMAP fast_sgd full | CPU | internal | 38.144 | 38.144 | 0.277 | 0.970 |
+| method | backend | KNN backend | NN sec | embedding sec | total sec | trust | label KNN acc |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| fastEmbedR openTSNE CPU | CPU | faiss_ivf | 35.979 | 28.331 | 65.155 | 0.332 | 0.968 |
+| fastEmbedR openTSNE CUDA | CUDA | faiss_gpu_ivf_flat | 4.350 | 0.903 | 6.033 | 0.333 | 0.969 |
+| Rtsne full | CPU | internal | internal | 107.674 | 107.674 | 0.324 | 0.973 |
+| fastEmbedR UMAP CPU fuzzy | CPU | faiss_ivf | 35.844 | 6.043 | 42.610 | 0.279 | 0.971 |
+| fastEmbedR UMAP CUDA fuzzy | CUDA | faiss_gpu_ivf_flat | 3.760 | 0.532 | 5.049 | 0.274 | 0.971 |
+| uwot UMAP fast_sgd full | CPU | internal | internal | 39.008 | 39.008 | 0.277 | 0.970 |
+
+For fastEmbedR matrix-input runs, CPU KNN used `faiss_ivf` and CUDA KNN used
+`faiss_gpu_ivf_flat`. The reference methods use their own internal neighbour
+search, so the table reports their full runtime as embedding/runtime.
 
 ![MNIST 70k embeddings](assets/mnist70k_cuda_codex_20260618/mnist70k_github_benchmark.png)
 
