@@ -340,7 +340,6 @@ run_one <- function(method, family, backend, expr) {
 run_one("fastEmbedR openTSNE CPU", "openTSNE", "cpu", function() {
   fastEmbedR::opentsne(
     x,
-    n_neighbors = k,
     perplexity = perplexity,
     backend = "cpu",
     n_threads = n_threads,
@@ -352,7 +351,6 @@ if (run_metal) {
   run_one("fastEmbedR openTSNE Metal", "openTSNE", "metal", function() {
     fastEmbedR::opentsne(
       x,
-      n_neighbors = k,
       perplexity = perplexity,
       backend = "metal",
       n_threads = n_threads,
@@ -365,7 +363,6 @@ if (run_cuda) {
   run_one("fastEmbedR openTSNE CUDA", "openTSNE", "cuda", function() {
     fastEmbedR::opentsne(
       x,
-      n_neighbors = k,
       perplexity = perplexity,
       backend = "cuda",
       n_threads = n_threads,

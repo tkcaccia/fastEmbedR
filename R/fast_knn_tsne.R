@@ -23,6 +23,48 @@ auto_tsne_k <- function(n, perplexity = NULL) {
   max(1L, min(n - 1L, k))
 }
 
+opentsne_neighbor_policy <- function(n, perplexity = NULL, available = NULL) {
+  n <- as.integer(n)
+  if (length(n) != 1L || is.na(n) || n < 2L) {
+    stop("`data` must contain at least two rows.", call. = FALSE)
+  }
+  max_perplexity <- floor((n - 1L) / 3L)
+  if (!is.null(available)) {
+    available <- as.integer(available)
+    if (length(available) != 1L || is.na(available) || available < 1L) {
+      stop("The supplied KNN object has no usable non-self neighbour columns.", call. = FALSE)
+    }
+  }
+  if (is.null(perplexity)) {
+    default_max <- max_perplexity
+    if (!is.null(available)) {
+      default_max <- min(default_max, available)
+    }
+    perplexity <- max(1, min(30, default_max))
+  } else {
+    perplexity <- suppressWarnings(as.numeric(perplexity))
+    if (length(perplexity) != 1L || is.na(perplexity) ||
+        !is.finite(perplexity) || perplexity <= 0) {
+      stop("`perplexity` must be a positive finite number.", call. = FALSE)
+    }
+  }
+  if (perplexity > max_perplexity) {
+    stop(
+      "`perplexity` must be no larger than floor((nrow(data) - 1) / 3).",
+      call. = FALSE
+    )
+  }
+  n_neighbors <- as.integer(ceiling(perplexity))
+  n_neighbors <- max(1L, min(n - 1L, n_neighbors))
+  if (!is.null(available) && n_neighbors > available) {
+    stop(
+      "The supplied KNN object has fewer non-self columns than `ceiling(perplexity)`.",
+      call. = FALSE
+    )
+  }
+  list(perplexity = as.numeric(perplexity), n_neighbors = n_neighbors)
+}
+
 resolve_opentsne_auto_parameters <- function(n,
                                              k,
                                              perplexity,
@@ -853,6 +895,8 @@ fast_knn_opentsne_core <- function(indices,
 #' @param n_neighbors Optional number of non-self neighbor columns to use from
 #'   the supplied KNN graph. This lets you compute a wide KNN once and reuse
 #'   its first columns for comparable tests.
+#' @param perplexity t-SNE perplexity. If `NULL`, the optimizer chooses a safe
+#'   value from the supplied KNN width and sample size.
 #' @param init Initialization strategy. `"pca"` is the default when
 #'   `init_data` is supplied; KNN-only calls without `init_data` use the
 #'   existing KNN-native default.
@@ -950,10 +994,9 @@ opentsne_knn <- function(indices,
 #'
 #' @param data Numeric matrix/data frame with observations in rows, or a KNN
 #'   object returned by [faissR::nn()].
-#' @param n_neighbors Number of non-self neighbors. If `NULL`, the package uses
-#'   `3 * perplexity`, matching the usual t-SNE neighbour convention.
-#' @param perplexity t-SNE perplexity. If `NULL`, uses
-#'   `min(30, floor((n - 1) / 3), floor(k / 3))`.
+#' @param perplexity t-SNE perplexity. The one-call API uses
+#'   `ceiling(perplexity)` non-self neighbours internally. If `NULL`, uses the
+#'   largest safe value up to 30 that is available for the input.
 #' @param n_components Output dimensionality, from 1 to 3.
 #' @param init Initialization for matrix input. `"pca"` is the default because
 #'   it improves visual stability on large MNIST-like data without changing the
@@ -1004,7 +1047,6 @@ opentsne_knn <- function(indices,
 #' @return A `fastEmbedR_embedding` object.
 #' @export
 opentsne <- function(data,
-                     n_neighbors = NULL,
                      perplexity = NULL,
                      n_components = 2L,
                      init = c("pca", "random"),
@@ -1031,14 +1073,33 @@ opentsne <- function(data,
                       auto_config = TRUE,
                       ...) {
   backend <- resolve_embedding_backend(backend)
+  dots <- list(...)
+  if ("n_neighbors" %in% names(dots)) {
+    stop(
+      "`n_neighbors` is not an argument of `opentsne()`; use `perplexity`, ",
+      "which also determines the internal non-self KNN width.",
+      call. = FALSE
+    )
+  }
   init <- match.arg(init)
   optimizer_backend <- backend
   if (is_knn_input(data)) {
     if (!is.null(nn)) {
       stop("When `data` is a KNN object, do not also pass `nn`.", call. = FALSE)
     }
-    knn_result <- normalize_opentsne_knn_input(data, NULL, n_neighbors)
-    n <- knn_result$n
+    full_knn <- normalize_opentsne_knn_input(data, NULL, NULL)
+    n <- full_knn$n
+    neighbour_policy <- opentsne_neighbor_policy(
+      n,
+      perplexity = perplexity,
+      available = full_knn$n_neighbors
+    )
+    perplexity <- neighbour_policy$perplexity
+    knn_result <- normalize_opentsne_knn_input(
+      data,
+      NULL,
+      neighbour_policy$n_neighbors
+    )
     Y_init <- resolve_opentsne_y_init(Y_init, n, n_components)
     if (is.null(Y_init) && identical(init, "pca") && !is.null(init_data)) {
       init_backend <- if (optimizer_backend %in% c("metal", "cuda")) optimizer_backend else "cpu"
@@ -1154,14 +1215,9 @@ opentsne <- function(data,
   })
   x <- prepared$data
   n <- nrow(x)
-  if (is.null(n_neighbors)) {
-    n_neighbors <- auto_tsne_k(n, perplexity)
-  } else {
-    n_neighbors <- as.integer(n_neighbors)
-    if (length(n_neighbors) != 1L || is.na(n_neighbors) || n_neighbors < 1L || n_neighbors >= n) {
-      stop("`n_neighbors` must be a positive integer smaller than `nrow(data)`.", call. = FALSE)
-    }
-  }
+  neighbour_policy <- opentsne_neighbor_policy(n, perplexity = perplexity)
+  perplexity <- neighbour_policy$perplexity
+  n_neighbors <- neighbour_policy$n_neighbors
 
   knn_time <- system.time({
     if (is.null(nn)) {

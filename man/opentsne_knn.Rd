@@ -42,8 +42,8 @@ matrix.}
 the supplied KNN graph. This lets you compute a wide KNN once and reuse
 its first columns for comparable tests.}
 
-\item{perplexity}{t-SNE perplexity. If `NULL`, uses
-`min(30, floor((n - 1) / 3), floor(k / 3))`.}
+\item{perplexity}{t-SNE perplexity. If `NULL`, the optimizer chooses a safe
+value from the supplied KNN width and sample size.}
 
 \item{n_components}{Output dimensionality, from 1 to 3.}
 

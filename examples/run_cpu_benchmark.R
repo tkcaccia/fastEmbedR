@@ -33,7 +33,7 @@ run_fit <- function(dataset_name, method, seed) {
     ),
     opentsne = opentsne(
       item$x,
-      n_neighbors = 15L,
+      perplexity = 15,
       seed = seed,
       backend = "cpu"
     ),

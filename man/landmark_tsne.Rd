@@ -36,11 +36,13 @@ landmark count, or explicit row indices.}
 \item{reference_method}{Kept for compatibility. Only `"opentsne"` is
 accepted in the cleaned package API.}
 
-\item{n_neighbors}{Number of non-self neighbors. If `NULL`, the package uses
-`3 * perplexity`, matching the usual t-SNE neighbour convention.}
+\item{n_neighbors}{Number of non-self neighbours used to embed the landmark
+reference set. If `NULL`, uses the standard t-SNE support width
+`3 * perplexity`.}
 
-\item{perplexity}{t-SNE perplexity. If `NULL`, uses
-`min(30, floor((n - 1) / 3), floor(k / 3))`.}
+\item{perplexity}{t-SNE perplexity for the landmark reference embedding. If
+`NULL`, the optimizer chooses a safe value from the reference KNN width and
+sample size.}
 
 \item{n_components}{Output dimensionality, from 1 to 3.}
 

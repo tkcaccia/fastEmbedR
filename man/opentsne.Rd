@@ -6,7 +6,6 @@
 \usage{
 opentsne(
   data,
-  n_neighbors = NULL,
   perplexity = NULL,
   n_components = 2L,
   init = c("pca", "random"),
@@ -38,11 +37,9 @@ opentsne(
 \item{data}{Numeric matrix/data frame with observations in rows, or a KNN
 object returned by [faissR::nn()].}
 
-\item{n_neighbors}{Number of non-self neighbors. If `NULL`, the package uses
-`3 * perplexity`, matching the usual t-SNE neighbour convention.}
-
-\item{perplexity}{t-SNE perplexity. If `NULL`, uses
-`min(30, floor((n - 1) / 3), floor(k / 3))`.}
+\item{perplexity}{t-SNE perplexity. The one-call API uses
+`ceiling(perplexity)` non-self neighbours internally. If `NULL`, uses the
+largest safe value up to 30 that is available for the input.}
 
 \item{n_components}{Output dimensionality, from 1 to 3.}
 

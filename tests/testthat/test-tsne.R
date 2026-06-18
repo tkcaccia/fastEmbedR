@@ -146,7 +146,6 @@ test_that("opentsne has direct KNN input functions", {
 
   fit <- opentsne(
     knn,
-    n_neighbors = 12L,
     perplexity = 3,
     early_exaggeration_iter = 2L,
     n_iter = 3L,
@@ -155,7 +154,7 @@ test_that("opentsne has direct KNN input functions", {
   expect_s3_class(fit, "fastEmbedR_embedding")
   expect_equal(dim(fit$layout), c(nrow(x), 2L))
   expect_equal(fit$parameters$input, "knn")
-  expect_equal(fit$metrics$n_neighbors, 12L)
+  expect_equal(fit$metrics$n_neighbors, 3L)
   expect_equal(fit$metrics$preprocess_elapsed, 0)
   expect_equal(fit$metrics$knn_elapsed, 0)
 })
@@ -265,7 +264,6 @@ test_that("opentsne rejects low-level KNN backend names", {
   expect_error(
     opentsne(
       x,
-      n_neighbors = 6L,
       perplexity = 2,
       early_exaggeration_iter = 2L,
       n_iter = 3L,

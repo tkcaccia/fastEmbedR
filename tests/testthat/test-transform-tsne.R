@@ -6,7 +6,6 @@ test_that("transform_tsne places query rows from supplied reference neighbours",
 
   fit <- opentsne(
     ref,
-    n_neighbors = 15L,
     perplexity = 5,
     early_exaggeration_iter = 2L,
     n_iter = 3L,
@@ -135,7 +134,6 @@ test_that("transform_tsne reports GPU transform backends honestly", {
   qry <- x[43:50, , drop = FALSE]
   fit <- opentsne(
     ref,
-    n_neighbors = 12L,
     perplexity = 4,
     early_exaggeration_iter = 2L,
     n_iter = 3L,

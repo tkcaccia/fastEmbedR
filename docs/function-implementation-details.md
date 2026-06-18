@@ -187,7 +187,8 @@ Negative-gradient paths:
 
 Autotuning:
 
-- `auto_tsne_perplexity()` uses `min(30, floor((n - 1) / 3), floor(k / 3))`.
+- `auto_tsne_perplexity()` keeps KNN-input calls inside safe sample-size and
+  available-neighbour limits when perplexity is omitted.
 - `resolve_opentsne_auto_parameters()` calls native C++ opt-SNE-style logic.
 - `learning_rate = "auto"` resolves to the opt-SNE rule
   `n / early_exaggeration`.
@@ -219,6 +220,8 @@ Implementation:
 - Validates and optionally standardizes input.
 - Computes KNN with the fixed one-call policy unless a KNN object is supplied:
   CPU/Metal use FAISS CPU IVF-Flat and CUDA uses FAISS GPU IVF-Flat.
+  The one-call API uses `ceiling(perplexity)` non-self neighbours internally;
+  `n_neighbors` is intentionally not a public `opentsne()` argument.
 - Computes PCA initialization by default when original data are available.
 - Calls `opentsne_knn()` for the native optimizer.
 - Stores configuration, timing, and backend metadata.

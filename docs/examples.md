@@ -30,7 +30,6 @@ plot(y_umap, pch = 21, bg = labels)
 ```r
 fit <- fastEmbedR::opentsne(
   x,
-  n_neighbors = 30,
   perplexity = 30,
   backend = "cpu",
   n_threads = 4,
@@ -44,7 +43,8 @@ fit$metrics
 Use `backend = "metal"` on Apple Silicon or `backend = "cuda"` on a CUDA build.
 Explicit GPU requests fail clearly if the backend is unavailable.
 For matrix input, the KNN search is fixed inside `opentsne()`: CPU and Metal
-use FAISS CPU IVF-Flat, while CUDA uses FAISS GPU IVF-Flat. Use
+use FAISS CPU IVF-Flat, while CUDA uses FAISS GPU IVF-Flat. The internal
+non-self KNN width is `ceiling(perplexity)`. Use
 `opentsne_knn()` with an explicit `nn()` result when benchmarking alternative
 KNN algorithms.
 

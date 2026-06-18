@@ -828,6 +828,12 @@ resident_projection_result <- function(backend, k) {
 #' @param transform_perplexity Perplexity used by `transform_tsne()`.
 #' @param transform_iter Number of normal transform iterations. Use `0` for
 #'   projection-only landmarking with no transform refinement.
+#' @param n_neighbors Number of non-self neighbours used to embed the landmark
+#'   reference set. If `NULL`, uses the standard t-SNE support width
+#'   `3 * perplexity`.
+#' @param perplexity t-SNE perplexity for the landmark reference embedding. If
+#'   `NULL`, the optimizer chooses a safe value from the reference KNN width and
+#'   sample size.
 #' @param transform_early_exaggeration_iter Number of transform early
 #'   exaggeration iterations.
 #' @param transform_n_negatives Number of sampled reference negatives used by
@@ -887,7 +893,6 @@ landmark_tsne <- function(data,
   if (is.null(landmark_indices)) {
     return(opentsne(
       x,
-      n_neighbors = n_neighbors,
       perplexity = perplexity,
       n_components = n_components,
       standardize = FALSE,
@@ -905,21 +910,60 @@ landmark_tsne <- function(data,
   n_landmarks <- nrow(x_landmarks)
   landmark_neighbors <- min(n_neighbors, n_landmarks - 1L)
   reference_time <- system.time({
-    reference_fit <- opentsne(
+    reference_knn <- nn_without_self(
       x_landmarks,
+      k = landmark_neighbors,
+      backend = fixed_embedding_knn_backend(backend),
+      n_threads = n_threads
+    )
+    reference_layout <- opentsne_knn(
+      reference_knn,
       n_neighbors = landmark_neighbors,
       perplexity = perplexity,
       n_components = n_components,
-      standardize = FALSE,
-      pca_dims = NULL,
+      init_data = x_landmarks,
       seed = seed,
       backend = backend,
-      keep_knn = keep_knn,
       verbose = verbose,
       n_threads = n_threads,
       ...
     )
   })
+  reference_cfg <- attr(reference_layout, "fastEmbedR_config")
+  reference_knn_backend <- attr(reference_knn, "backend")
+  if (is.null(reference_knn_backend)) reference_knn_backend <- "supplied"
+  reference_fit <- list(
+    layout = reference_layout,
+    metrics = data.frame(
+      method = "opentsne",
+      n = n_landmarks,
+      p = ncol(x_landmarks),
+      n_neighbors = landmark_neighbors,
+      perplexity = reference_cfg$perplexity,
+      elapsed = reference_time[["elapsed"]],
+      preprocess_elapsed = 0,
+      knn_elapsed = NA_real_,
+      embedding_elapsed = NA_real_,
+      stringsAsFactors = FALSE
+    ),
+    parameters = c(
+      list(
+        method = "opentsne",
+        input = "knn",
+        n = n_landmarks,
+        p = ncol(x_landmarks),
+        n_neighbors = landmark_neighbors,
+        k = landmark_neighbors + 1L,
+        n_components = as.integer(n_components),
+        seed = as.integer(seed),
+        nn_backend = reference_knn_backend,
+        keep_knn = keep_knn
+      ),
+      reference_cfg,
+      list(preprocess = "none_precomputed_knn")
+    ),
+    knn = if (isTRUE(keep_knn)) reference_knn else NULL
+  )
 
   non_landmarks <- setdiff(seq_len(n), landmark_indices)
   if (is.null(transform_k)) {

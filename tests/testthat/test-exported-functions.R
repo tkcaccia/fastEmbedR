@@ -82,7 +82,7 @@ test_that("core exported functions have tiny openTSNE smoke tests", {
   expect_embedding(layout_knn, n)
   expect_equal(attr(layout_knn, "fastEmbedR_config")$method, "opentsne")
 
-  fit <- opentsne(x, n_neighbors = 4L, perplexity = 1,
+  fit <- opentsne(x, perplexity = 1,
     early_exaggeration_iter = 2L, n_iter = 3L,
     n_threads = 2L)
   expect_s3_class(fit, "fastEmbedR_embedding")
@@ -90,6 +90,7 @@ test_that("core exported functions have tiny openTSNE smoke tests", {
   expect_equal(fit$parameters$method, "opentsne")
   expect_equal(fit$parameters$n_threads, 2L)
   expect_null(fit$knn)
+  expect_false("n_neighbors" %in% names(formals(opentsne)))
 
   fit_knn <- opentsne(knn, perplexity = 1,
     early_exaggeration_iter = 2L, n_iter = 3L)

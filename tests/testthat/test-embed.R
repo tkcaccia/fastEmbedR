@@ -36,7 +36,6 @@ test_that("opentsne convenience wrapper runs the automatic KNN workflow", {
 
   fit <- opentsne(
     x,
-    n_neighbors = 4L,
     perplexity = 1,
     early_exaggeration_iter = 2L,
     n_iter = 3L,
@@ -55,7 +54,6 @@ test_that("high-level embeddings avoid retaining KNN matrices by default", {
 
   compact <- opentsne(
     x,
-    n_neighbors = 5L,
     perplexity = 1,
     early_exaggeration_iter = 2L,
     n_iter = 3L,
@@ -63,7 +61,6 @@ test_that("high-level embeddings avoid retaining KNN matrices by default", {
   )
   retained <- opentsne(
     x,
-    n_neighbors = 5L,
     perplexity = 1,
     early_exaggeration_iter = 2L,
     n_iter = 3L,
@@ -72,6 +69,6 @@ test_that("high-level embeddings avoid retaining KNN matrices by default", {
   )
 
   expect_null(compact$knn)
-  expect_equal(dim(retained$knn$indices), c(nrow(x), 5L))
-  expect_equal(dim(retained$knn$distances), c(nrow(x), 5L))
+  expect_equal(dim(retained$knn$indices), c(nrow(x), 1L))
+  expect_equal(dim(retained$knn$distances), c(nrow(x), 1L))
 })

@@ -119,7 +119,6 @@ stopifnot(identical(cfg$probabilities, "symmetric_sparse_knn_cuda"))
 
 fit <- opentsne(
   x,
-  n_neighbors = 8L,
   perplexity = 2,
   early_exaggeration_iter = 2L,
   n_iter = 3L,

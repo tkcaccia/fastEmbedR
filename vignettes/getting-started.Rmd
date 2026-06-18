@@ -182,7 +182,6 @@ query <- x[101:110, , drop = FALSE]
 
 ref_fit <- opentsne(
   reference,
-  n_neighbors = 30,
   perplexity = 10,
   early_exaggeration_iter = 100,
   n_iter = 250,

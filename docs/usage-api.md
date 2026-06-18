@@ -110,7 +110,7 @@ layout <- opentsne_knn(knn, init_data = x, backend = "metal", seed = 1)
 For CUDA builds with RAPIDS cuVS available:
 
 ```r
-fit <- opentsne(x, n_neighbors = 50, backend = "cuda", seed = 1)
+fit <- opentsne(x, perplexity = 50, backend = "cuda", seed = 1)
 ```
 
 The package does not silently run these examples on CPU and report them as GPU

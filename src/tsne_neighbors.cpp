@@ -1433,13 +1433,16 @@ List tsne_auto_parameters_cpp(const int n,
   double resolved_perplexity = perplexity_missing || !std::isfinite(perplexity) || perplexity <= 0.0 ?
     static_cast<double>(std::min(30, std::min(max_perplexity_n, max_perplexity_k))) :
     perplexity;
+  const int max_resolved_perplexity = perplexity_missing ?
+    std::min(max_perplexity_n, max_perplexity_k) :
+    max_perplexity_n;
   resolved_perplexity = std::max(
     1.0,
-    std::min(resolved_perplexity, static_cast<double>(std::min(max_perplexity_n, max_perplexity_k)))
+    std::min(resolved_perplexity, static_cast<double>(max_resolved_perplexity))
   );
 
   const double early_exaggeration = 12.0;
-  const int needed_k = std::max(1, std::min(n - 1, static_cast<int>(std::ceil(3.0 * resolved_perplexity))));
+  const int needed_k = std::max(1, std::min(n - 1, static_cast<int>(std::ceil(resolved_perplexity))));
   const int early_max = n >= 10000 ? 750 : 500;
   const int normal_max = n >= 10000 ? 750 : 500;
 
