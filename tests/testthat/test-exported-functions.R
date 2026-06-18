@@ -16,12 +16,12 @@ test_that("public API is KNN and openTSNE focused", {
     "umap", "umap_knn", "opentsne", "opentsne_knn", "embed_knn", "backend_info",
     "metal_available", "cuda_available",
     "evaluate_embedding", "transform_tsne", "landmark_tsne",
-    "nn", "nn_without_self", "candidate_knn", "knn_graph", "fast_kmeans",
+    "nn", "nn_without_self", "candidate_knn", "fast_kmeans",
     "knn_fit", "predict_proba", "knn_recall", "faiss_available", "cuvs_available"
   ) %in% exports))
   expect_false(any(c(
     "supervised_umap", "tsne", "infotsne", "pacmap", "trimap",
-    "localmap", "transform_embedding"
+    "localmap", "transform_embedding", "knn_graph"
   ) %in% exports))
 
   expect_true("n_threads" %in% names(formals(opentsne)))

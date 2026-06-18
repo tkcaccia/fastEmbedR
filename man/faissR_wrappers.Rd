@@ -3,22 +3,19 @@
 \alias{nn}
 \alias{nn_without_self}
 \alias{candidate_knn}
-\alias{knn_graph}
 \alias{fast_kmeans}
 \alias{knn_fit}
 \alias{predict_proba}
 \alias{knn_recall}
 \alias{faiss_available}
 \alias{cuvs_available}
-\title{Nearest-neighbour and graph utilities from faissR}
+\title{Nearest-neighbour utilities from faissR}
 \usage{
 nn(...)
 
 nn_without_self(...)
 
 candidate_knn(...)
-
-knn_graph(...)
 
 fast_kmeans(...)
 

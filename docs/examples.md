@@ -123,13 +123,3 @@ UMAP fuzzy graph only:
 | fastEmbedR CPU fuzzy | fastEmbedR Metal fuzzy | fastEmbedR CUDA fuzzy | uwot fast_sgd |
 | --- | --- | --- | --- |
 | ![fastEmbedR CPU fuzzy](assets/mnist70k-umap-fastembedr-cpu-fuzzy.png) | ![fastEmbedR Metal fuzzy](assets/mnist70k-umap-fastembedr-metal-fuzzy.png) | ![fastEmbedR CUDA fuzzy](assets/mnist70k-umap-fastembedr-cuda-fuzzy.png) | ![uwot fast_sgd](assets/mnist70k-umap-uwot-fast-sgd.png) |
-
-## Graph Construction
-
-```r
-if (requireNamespace("igraph", quietly = TRUE)) {
-  graph <- fastEmbedR::knn_graph(knn, k = 15)
-  clusters <- igraph::cluster_louvain(graph, weights = igraph::E(graph)$weight)
-  plot(y_tsne, pch = 21, bg = igraph::membership(clusters))
-}
-```

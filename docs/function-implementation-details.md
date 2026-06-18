@@ -24,7 +24,6 @@ they do not silently run on CPU while reporting a GPU backend.
 | `landmark_tsne()` | Embed landmarks, project/transform remaining points | CPU, Metal | openTSNE transform, landmark t-SNE workflows |
 | `landmark_umap()` | Embed landmarks, project/refine remaining points | CPU, Metal | UMAP transform/landmark workflow |
 | `evaluate_embedding()` | Embedding quality metrics | CPU | Trustworthiness, neighbour preservation, silhouette, label KNN accuracy |
-| `knn_graph()` | Thin wrapper around `faissR::knn_graph()` | FAISS CPU and optional CUDA/cuVS for neighbour search through `faissR` | bluster/scran_graph_cluster SNN construction, igraph graph output |
 | `backend_info()` | Backend detection and reporting | CPU, Metal, CUDA, FAISS, cuVS | Explicit backend reporting, no silent fallback |
 | `metal_available()` | Metal availability probe | Metal | Apple Metal |
 | `cuda_available()` | CUDA availability probe | CUDA | CUDA runtime/build probes |
@@ -160,36 +159,6 @@ Inspiration:
 
 - Shared KNN graph benchmarking: compute neighbours once, reuse them for UMAP,
   t-SNE/openTSNE, landmarking, and quality checks.
-
-## `knn_graph()`
-
-`knn_graph()` is re-exported by `fastEmbedR`, but the implementation lives in
-`faissR`. It converts either a precomputed `nn()` result or an embedding object
-returned by `opentsne()` / `umap()` into a plain `igraph` graph.
-
-Implementation:
-
-- If the input is an `nn()` result, no neighbour search is repeated. The graph
-  is built on the original data-space neighbours already stored in the object.
-- If the input is an embedding fit, neighbours are computed on the visible
-  two-dimensional layout and the graph is built in embedding space.
-- `weight = "auto"` uses full shared-nearest-neighbour Jaccard weights for
-  original-data KNN objects and distance weights for embedding-layout graphs.
-- The full SNN path builds an inverted neighbour index and counts sparse
-  shared-neighbour co-occurrences in C++, then creates an undirected `igraph`
-  object with numeric `weight` edge attributes.
-- `mutual = TRUE` keeps the stricter reciprocal direct-KNN interpretation for
-  users who want a smaller boundary-focused graph.
-
-Inspiration and provenance:
-
-- `bluster::makeSNNGraph()` and `neighborsToSNNGraph()` were used as the
-  behavioural reference for full SNN graph semantics: connect all pairs of
-  observations that share at least one neighbour and use Jaccard weighting.
-- `scran_graph_cluster::build_snn_graph()` informed the sparse
-  neighbour-incidence construction strategy.
-- The implementation is in `faissR`; `fastEmbedR` only forwards the call. It
-  does not link to or call `bluster` at runtime.
 
 ## `opentsne_knn()`
 

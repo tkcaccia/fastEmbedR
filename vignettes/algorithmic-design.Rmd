@@ -27,9 +27,8 @@ The current project is split into two packages.
 | `faissR` | FAISS/cuVS nearest neighbours, candidate KNN, KNN graphs, KNN prediction, and k-means. |
 | `fastEmbedR` | UMAP, openTSNE-style t-SNE, landmark transforms, quality metrics, and backend reporting. |
 
-`fastEmbedR::nn()` and `fastEmbedR::knn_graph()` are convenience wrappers
-around `faissR`. They are kept so that users can run a complete workflow from
-one namespace, but the KNN implementation belongs to `faissR`.
+`fastEmbedR::nn()` is a convenience wrapper around `faissR::nn()` so users can
+start a KNN-first embedding workflow from one namespace.
 
 ```{r, eval = FALSE}
 library(fastEmbedR)

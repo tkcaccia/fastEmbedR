@@ -22,8 +22,7 @@ The intended workflow is:
 1. compute nearest neighbours with `fastEmbedR::nn()` or `faissR::nn()`;
 2. reuse the same KNN object in `fastEmbedR::opentsne_knn()` or
    `fastEmbedR::umap_knn()`;
-3. evaluate or plot the embedding;
-4. optionally build an `igraph` graph with `fastEmbedR::knn_graph()`.
+3. evaluate or plot the embedding.
 
 ## Quick Start
 
@@ -63,7 +62,6 @@ plot(y_umap, pch = 21, bg = labels)
 | `umap_knn()` | Native UMAP from a supplied KNN object. |
 | `umap()` | One-call KNN plus UMAP. |
 | `landmark_tsne()` / `landmark_umap()` | Landmark embedding and projection workflows. |
-| `knn_graph()` | Convert KNN or embedding output to an `igraph` graph. |
 | `evaluate_embedding()` | Trustworthiness, neighbour preservation, label accuracy, and related metrics. |
 | `backend_info()` | Report CPU, Metal, CUDA, FAISS, and cuVS availability. |
 

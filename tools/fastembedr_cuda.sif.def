@@ -10,6 +10,9 @@ From: mambaorg/micromamba:2.3.3
     export MAMBA_ROOT_PREFIX=/opt/conda
     export PATH=/opt/conda/bin:/opt/fit-sne/bin:$PATH
     export CONDA_PREFIX=/opt/conda
+    export R_LIBS=/opt/conda/lib/R/library
+    export R_LIBS_USER=/opt/conda/lib/R/library
+    export R_LIBS_SITE=/opt/conda/lib/R/library
     export CUDA_HOME=/opt/conda
     export FAISS_HOME=/opt/conda
     export CUVS_HOME=/opt/conda
@@ -120,10 +123,10 @@ From: mambaorg/micromamba:2.3.3
     Rscript -e "remotes::install_github('tkcaccia/faissR', upgrade = 'never', dependencies = TRUE)"
     Rscript -e "remotes::install_github('tkcaccia/fastEmbedR', upgrade = 'never', dependencies = TRUE)"
 
-    Rscript -e "library(faissR); library(fastEmbedR); print(faissR::backend_info()); print(fastEmbedR::backend_info())"
+    Rscript -e ".libPaths('/opt/conda/lib/R/library'); library(faissR); library(fastEmbedR); print(faissR::backend_info()); print(fastEmbedR::backend_info())"
 
 %runscript
     exec "$@"
 
 %test
-    Rscript -e "library(faissR); library(fastEmbedR); stopifnot(faissR::faiss_available()); print(faissR::backend_info()); print(fastEmbedR::backend_info())"
+    Rscript -e ".libPaths('/opt/conda/lib/R/library'); library(faissR); library(fastEmbedR); stopifnot(faissR::faiss_available()); print(faissR::backend_info()); print(fastEmbedR::backend_info())"

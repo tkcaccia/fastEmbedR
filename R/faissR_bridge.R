@@ -6,9 +6,9 @@ normalize_nn_threads <- function(n_threads) {
   n_threads
 }
 
-#' Nearest-neighbour and graph utilities from faissR
+#' Nearest-neighbour utilities from faissR
 #'
-#' These functions are re-exported as thin wrappers around the companion
+#' These functions are exported as thin wrappers around the companion
 #' `faissR` package so users can call the complete fastEmbedR workflow from one
 #' namespace. The implementation, optional FAISS/cuVS backends, and detailed
 #' backend selection logic remain in `faissR`.
@@ -36,12 +36,6 @@ nn_without_self <- function(...) {
 #' @export
 candidate_knn <- function(...) {
   faissR::candidate_knn(...)
-}
-
-#' @rdname faissR_wrappers
-#' @export
-knn_graph <- function(...) {
-  faissR::knn_graph(...)
 }
 
 #' @rdname faissR_wrappers

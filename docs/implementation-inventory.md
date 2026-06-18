@@ -42,7 +42,6 @@ For function-by-function implementation notes and literature, see
 | --- | --- | --- | --- | --- |
 | `fastEmbedR::nn()` | Thin wrapper around `faissR::nn()` | FAISS, RAPIDS cuVS | `faissR` | KNN implementation, tuning, and backend selection live in `faissR`. |
 | `fastEmbedR::candidate_knn()` | Thin wrapper around `faissR::candidate_knn()` | FAISS/candidate KNN work in `faissR` | `faissR` | Useful when candidate sets are produced outside the embedding optimizer. |
-| `fastEmbedR::knn_graph()` | Thin wrapper around `faissR::knn_graph()` | bluster/scran graph semantics informed `faissR` | `faissR`, optional `igraph` | Converts precomputed KNN or embedding layouts into clustering graphs. |
 | `fastEmbedR::fast_kmeans()` | Thin wrapper around `faissR::fast_kmeans()` | FAISS/cuVS k-means paths in `faissR` | `faissR` | Kept out of the embedding code. |
 
 Earlier native exact KNN, CPU NN-descent, Metal NN-descent, and grid KNN
