@@ -124,12 +124,12 @@ The benchmark intentionally does not show `graph_mode = "binary"`.
 
 | method | backend | NN sec | embedding sec | total sec | trust | label KNN acc |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| fastEmbedR openTSNE CPU | CPU | 659.379 | 29.381 | 693.347 | 0.255 | 0.921 |
-| fastEmbedR openTSNE CUDA | CUDA | 5.087 | 0.805 | 9.548 | 0.255 | 0.920 |
-| Rtsne full | CPU | internal | 349.551 | 349.551 | 0.324 | 0.973 |
-| fastEmbedR UMAP CPU fuzzy | CPU | 659.677 | 5.768 | 666.550 | 0.217 | 0.920 |
-| fastEmbedR UMAP CUDA fuzzy | CUDA | 2.915 | 0.531 | 4.405 | 0.214 | 0.923 |
-| uwot UMAP fast_sgd full | CPU | internal | 37.071 | 37.071 | 0.277 | 0.971 |
+| fastEmbedR openTSNE CPU | CPU | 87.326 | 26.823 | 114.981 | 0.332 | 0.968 |
+| fastEmbedR openTSNE CUDA | CUDA | 8.453 | 1.660 | 10.796 | 0.334 | 0.969 |
+| Rtsne full | CPU | internal | 379.155 | 379.155 | 0.324 | 0.973 |
+| fastEmbedR UMAP CPU fuzzy | CPU | 86.931 | 5.918 | 93.525 | 0.280 | 0.972 |
+| fastEmbedR UMAP CUDA fuzzy | CUDA | 3.652 | 0.559 | 4.865 | 0.273 | 0.972 |
+| uwot UMAP fast_sgd full | CPU | internal | 38.144 | 38.144 | 0.277 | 0.970 |
 
 ![MNIST 70k embeddings](assets/mnist70k_cuda_codex_20260618/mnist70k_github_benchmark.png)
 

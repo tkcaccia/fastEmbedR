@@ -9,10 +9,14 @@
 [References](references.md)
 
 `fastEmbedR` implements two nonlinear embedding families: UMAP and an
-openTSNE-style t-SNE. The package is intentionally KNN-first. Nearest-neighbour
-search is delegated to the companion `faissR` package, while `fastEmbedR`
-performs graph/affinity construction, initialization, stochastic optimization,
-native fixed-reference transforms, backend reporting, and quality metrics.
+openTSNE-style t-SNE. UMAP follows the fuzzy simplicial-set graph formulation
+introduced by McInnes and colleagues [7,13]. The t-SNE path follows the
+probabilistic neighbour-embedding objective of van der Maaten and Hinton [1],
+with modern openTSNE/FIt-SNE-style optimization and interpolation ideas [3-4].
+The package is intentionally KNN-first. Nearest-neighbour search is delegated
+to the companion `faissR` package, while `fastEmbedR` performs graph/affinity
+construction, initialization, stochastic optimization, native fixed-reference
+transforms, backend reporting, and quality metrics.
 
 The public package surface is deliberately small:
 
@@ -27,7 +31,8 @@ The public package surface is deliberately small:
 
 `fastEmbedR` does not re-export neighbour-search functions. Users call
 `faissR::nn()` directly when they want explicit control over KNN search, and
-the one-call embedding functions call `faissR` internally.
+the one-call embedding functions call `faissR` internally. The neighbour layer
+uses FAISS/cuVS concepts for high-throughput vector search [8-9].
 
 For reproducibility, the one-call API fixes the internal KNN policy:
 
@@ -43,10 +48,11 @@ reported separately.
 ## UMAP From KNN
 
 UMAP is implemented as a sparse graph optimization from a supplied KNN matrix.
-The implementation follows the UMAP fuzzy simplicial-set formulation: local
-bandwidths are estimated per observation, neighbour distances are converted to
-directed membership strengths, the graph is symmetrized, and a low-dimensional
-layout is optimized with attractive edge updates and sampled repulsive updates.
+The implementation follows the UMAP fuzzy simplicial-set formulation [7,13]:
+local bandwidths are estimated per observation, neighbour distances are
+converted to directed membership strengths, the graph is symmetrized, and a
+low-dimensional layout is optimized with attractive edge updates and sampled
+repulsive updates.
 
 ### CPU Graph Construction
 
@@ -66,10 +72,12 @@ copies between R and C++.
 ### UMAP Optimizer
 
 The optimizer uses stochastic edge sampling, negative sampling, a decaying
-learning rate, and compact contiguous layout buffers. The current permissive
-implementation uses package-local samplers, random-number generation, and
-update kernels rather than vendored `uwot` code. `uwot` remains an external
-benchmark and behavioural reference, not a source dependency.
+learning rate, and compact contiguous layout buffers, following the UMAP
+objective rather than an exact copy of any R implementation [7,10,13]. The
+current permissive implementation uses package-local samplers, random-number
+generation, and update kernels rather than vendored `uwot` code. `uwot`
+remains an external benchmark and behavioural reference, not a source
+dependency [10].
 
 UMAP exposes two graph modes:
 
@@ -83,7 +91,9 @@ UMAP exposes two graph modes:
 The Metal backend is implemented in Objective-C++/Metal and uses the validated
 atomic in-place edge-update kernel. It does not call Python, Torch, MLX, or
 `reticulate`. The Metal optimizer consumes the same prepared graph as the CPU
-path and returns only the final layout and metadata to R.
+path and returns only the final layout and metadata to R. The package-native
+Metal FFT work used by openTSNE was informed by permissive Apple GPU FFT
+engineering references [12].
 
 ### CUDA UMAP
 
@@ -96,7 +106,7 @@ actually ran.
 ## openTSNE-Style t-SNE From KNN
 
 `opentsne_knn()` implements the t-SNE optimization structure used by modern
-openTSNE/FIt-SNE workflows:
+openTSNE/FIt-SNE workflows [3-4]:
 
 1. Convert KNN distances to conditional probabilities by binary search on the
    Gaussian bandwidth for a target perplexity.
@@ -112,7 +122,8 @@ openTSNE/FIt-SNE workflows:
 The public `opentsne()` function is now only a convenience wrapper around this
 KNN implementation. If a KNN object is supplied through `nn`, then
 `opentsne(data, nn = knn)` calls the same path as `opentsne_knn(knn)` and
-produces the same layout for the same seed and parameters.
+produces the same layout for the same seed and parameters. This mirrors the
+KNN-input validation style used by R t-SNE tooling [11].
 
 ### Initialization
 
@@ -131,19 +142,21 @@ compare.
 ### Repulsive Force Approximation
 
 The default large-data path uses an FFT-grid approximation inspired by
-FIt-SNE. Sparse attractive forces are evaluated from the KNN affinity graph.
-The negative force is approximated by placing points on a two-dimensional grid,
-convolving with the t-SNE kernel, and interpolating the resulting force back to
-points. The Barnes-Hut path is not part of the public benchmark surface because
-the FFT-grid path is the intended standard for MNIST70k-scale data.
+FIt-SNE [3]. Sparse attractive forces are evaluated from the KNN affinity
+graph. The negative force is approximated by placing points on a
+two-dimensional grid, convolving with the t-SNE kernel, and interpolating the
+resulting force back to points [3-5]. The Barnes-Hut path is not part of the
+public benchmark surface because the FFT-grid path is the intended standard
+for MNIST70k-scale data; Barnes-Hut remains an important historical reference
+for tree-based t-SNE acceleration [2].
 
 ### CPU, Metal, and CUDA
 
 | Backend | Native implementation |
 | --- | --- |
-| CPU | C++ sparse affinities, FFT-grid repulsion, gains/momentum optimizer. |
-| Metal | Objective-C++/Metal scatter, FFT-grid convolution, gather, attractive-force, update, and centering kernels. |
-| CUDA | CUDA kernels with cuFFT for the FFT-grid convolution and device-side optimizer updates. |
+| CPU | C++ sparse affinities, FFT-grid repulsion, gains/momentum optimizer [3-4]. |
+| Metal | Objective-C++/Metal scatter, FFT-grid convolution, gather, attractive-force, update, and centering kernels [3,12]. |
+| CUDA | CUDA kernels with cuFFT for the FFT-grid convolution and device-side optimizer updates [3,5]. |
 
 The Metal implementation includes package-native FFT kernels. MPSGraph FFT was
 tested diagnostically, but it is not a public option because it did not provide
@@ -161,16 +174,16 @@ separately. Landmarking is not used silently inside full `opentsne()` or
 
 The API asks for few parameters, but selected defaults are saved in the output.
 For openTSNE-style t-SNE, the native helper follows opt-SNE-inspired rules for
-learning rate and iteration defaults. For UMAP, the code uses the supplied KNN
-and data size to choose internal initialization effort and optimizer defaults
-without silently changing the supplied neighbour graph.
+learning rate and iteration defaults [6]. For UMAP, the code uses the supplied
+KNN and data size to choose internal initialization effort and optimizer
+defaults without silently changing the supplied neighbour graph [7,13].
 
 ## License Boundary
 
 The implementation is intended to remain compatible with the MIT license.
 References such as `uwot`, `Rtsne`, openTSNE, FIt-SNE, t-SNE-CUDA, FAISS,
-RAPIDS cuVS, and AppleSiliconFFT informed design and benchmarking decisions.
-GPL code is not vendored, linked, or required by the package.
+RAPIDS cuVS, and AppleSiliconFFT informed design and benchmarking decisions
+[3-5,8-12]. GPL code is not vendored, linked, or required by the package.
 
 See [References](references.md) for AACR-style citations and software
 acknowledgements.
