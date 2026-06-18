@@ -1,8 +1,0 @@
-"dataset","method","backend_used","n","p","nn_sec","init_sec","embedding_sec","total_sec","trustworthiness","knn_preservation_50","label_knn_accuracy","layout_path"
-"uci_shuttle_58000","opentsne_cpu","cpu",58000,9,8.976,0.028,3.137,12.113,0.479911111111111,0.472573333333333,0.978666666666667,"results/extended_dr_shuttle_local/layouts/uci_shuttle_58000_opentsne_cpu_seed6.rds"
-"uci_shuttle_58000","opentsne_metal","metal",58000,9,1.214,0.028,3.103,4.317,0.355488888888889,0.284913333333333,0.942,"results/extended_dr_shuttle_local/layouts/uci_shuttle_58000_opentsne_metal_seed6.rds"
-"uci_shuttle_58000","opentsne_metal_mpsgraph","metal_mpsgraph_diagnostic",58000,9,1.214,0.028,3.148,4.362,0.346422222222223,0.28244,0.946333333333333,"results/extended_dr_shuttle_local/layouts/uci_shuttle_58000_opentsne_metal_mpsgraph_seed6.rds"
-"uci_shuttle_58000","rtsne_neighbors","cpu",58000,9,8.976,NA,28.851,37.827,0.214333333333334,0.09762,0.788,"results/extended_dr_shuttle_local/layouts/uci_shuttle_58000_rtsne_neighbors_seed6.rds"
-"uci_shuttle_58000","umap_cpu","cpu",58000,9,8.976,NA,4.988,13.964,0.501244444444445,0.319886666666666,0.922,"results/extended_dr_shuttle_local/layouts/uci_shuttle_58000_umap_cpu_seed6.rds"
-"uci_shuttle_58000","umap_metal","metal",58000,9,1.214,NA,1.519,2.733,0.498644444444445,0.313113333333333,0.926,"results/extended_dr_shuttle_local/layouts/uci_shuttle_58000_umap_metal_seed6.rds"
-"uci_shuttle_58000","uwot_fast_sgd","cpu",58000,9,8.976,NA,88.694,97.67,0.493511111111112,0.336066666666666,0.901666666666667,"results/extended_dr_shuttle_local/layouts/uci_shuttle_58000_uwot_fast_sgd_seed6.rds"

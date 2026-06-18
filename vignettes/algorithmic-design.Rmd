@@ -245,23 +245,20 @@ Use `faissR::backend_info()` to inspect the current KNN build:
 faissR::backend_info()
 ```
 
-## Acknowledgements
+## References
 
-The following papers and projects shaped the implementation:
+Key references are listed in AACR journal style.
 
-- McInnes, Healy, and Melville: UMAP.
-- `uwot`: R UMAP benchmark and behavioural reference.
-- van der Maaten and Hinton: original t-SNE.
-- van der Maaten: Barnes-Hut t-SNE.
-- Policar, Strazar, and Zupan: openTSNE.
-- Linderman et al.: FIt-SNE.
-- Chan, Rao, Huang, and Canny: t-SNE-CUDA.
-- Belkina et al. and Multicore-opt-SNE: automatic t-SNE parameter policy.
-- `Rtsne::Rtsne_neighbors()`: KNN-input t-SNE validation reference.
-- FAISS and RAPIDS cuVS: nearest-neighbour acceleration through `faissR`.
-- AppleSiliconFFT: Stockham FFT design reference for native Metal FFT-grid
-  work.
-- `mlx-vis` and `annembed`: GPU-resident and ANN embedding design references.
+1. van der Maaten L, Hinton G. Visualizing data using t-SNE. J Mach Learn Res 2008;9:2579-2605.
+2. van der Maaten L. Accelerating t-SNE using tree-based algorithms. J Mach Learn Res 2014;15:3221-3245.
+3. Linderman GC, Rachh M, Hoskins JG, Steinerberger S, Kluger Y. Fast interpolation-based t-SNE for improved visualization of single-cell RNA-seq data. Nat Methods 2019;16:243-245.
+4. Policar PG, Strazar M, Zupan B. openTSNE: a modular Python library for t-SNE dimensionality reduction and embedding. J Open Source Softw 2019;4:1576.
+5. Chan DM, Rao R, Huang F, Canny JF. t-SNE-CUDA: GPU-accelerated t-SNE and its applications to modern data. arXiv 2018;1807.11824.
+6. Belkina AC, Ciccolella CO, Anno R, Halpert R, Spidlen J, Snyder-Cappione JE. Automated optimized parameters for T-distributed stochastic neighbor embedding improve visualization and analysis of large datasets. Nat Commun 2019;10:5415.
+7. McInnes L, Healy J, Melville J. UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction. arXiv 2018;1802.03426.
+8. Johnson J, Douze M, Jegou H. Billion-scale similarity search with GPUs. IEEE Trans Big Data 2021;7:535-547.
 
-See `inst/NOTICE`, `inst/ALGORITHMIC_REFERENCES.md`, and the GitHub page
-`docs/algorithm-provenance.md` for detailed provenance and license notes.
+Software acknowledgements include `uwot`, `Rtsne`, FAISS, RAPIDS cuVS,
+AppleSiliconFFT, `mlx-vis`, and `annembed`. See `inst/NOTICE`,
+`inst/ALGORITHMIC_REFERENCES.md`, and `docs/references.md` for provenance and
+license notes.

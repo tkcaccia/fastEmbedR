@@ -6,9 +6,9 @@
 **Examples** |
 [Benchmarks](benchmarks.md) |
 [API](usage-api.md) |
-[Provenance](algorithm-provenance.md)
+[References](references.md)
 
-## KNN-First Workflow
+## Iris KNN-First Workflow
 
 ```r
 library(fastEmbedR)
@@ -25,7 +25,7 @@ plot(y_tsne, pch = 21, bg = labels)
 plot(y_umap, pch = 21, bg = labels)
 ```
 
-## One-Call openTSNE
+## Iris One-Call openTSNE
 
 ```r
 fit <- fastEmbedR::opentsne(
@@ -48,7 +48,7 @@ non-self KNN width is `ceiling(perplexity)`. Use
 `opentsne_knn()` with an explicit `faissR::nn()` result when benchmarking alternative
 KNN algorithms.
 
-## One-Call UMAP
+## Iris One-Call UMAP
 
 For standard UMAP comparison use the fuzzy graph:
 

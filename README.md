@@ -6,7 +6,7 @@
 [Examples](docs/examples.md) |
 [Benchmarks](docs/benchmarks.md) |
 [API](docs/usage-api.md) |
-[Provenance](docs/algorithm-provenance.md)
+[References](docs/references.md)
 
 `fastEmbedR` is a native R/C++ package for fast dimensionality reduction from
 nearest-neighbour graphs. It focuses on:
@@ -94,8 +94,7 @@ kept on the [Examples](docs/examples.md) page.
 The implementation details and acknowledgements are split across:
 
 - [Implementation](docs/implementation.md)
-- [Function implementation details](docs/function-implementation-details.md)
-- [Algorithm design, improvements, and acknowledgements](docs/algorithm-provenance.md)
+- [AACR-style references](docs/references.md)
 - [Installed NOTICE](inst/NOTICE)
 - [Algorithmic references](inst/ALGORITHMIC_REFERENCES.md)
 
@@ -107,9 +106,9 @@ In short:
   negative-gradient approximation, with native Metal and CUDA paths where
   compiled.
 - `faissR` owns FAISS/cuVS KNN, graph building, kNN prediction, and k-means.
-- `uwot`, `Rtsne`, FIt-SNE, openTSNE, cuML/cuVS, AppleSiliconFFT, and related
-  papers are acknowledged as references or optional benchmark tools according
-  to their licenses.
+- `uwot`, `Rtsne`, FIt-SNE, openTSNE, FAISS, RAPIDS cuVS, AppleSiliconFFT,
+  and related papers are acknowledged as references or optional benchmark
+  tools according to their licenses.
 
 ## License
 

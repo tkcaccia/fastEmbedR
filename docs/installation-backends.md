@@ -102,9 +102,8 @@ The main remaining Metal openTSNE speed gap is the FFT itself. CUDA uses NVIDIA
 cuFFT, while the Mac path uses package-native Metal FFT kernels. The 512x512
 openTSNE/FIt-SNE grid path uses a validated Stockham FFT kernel implemented
 using the MIT-licensed AppleSiliconFFT design as a reference; other grid sizes
-use the generic package-native Metal Cooley-Tukey path. See
-[metal-fft-roadmap.md](metal-fft-roadmap.md) and profile the current FFT
-stages with:
+use the generic package-native Metal Cooley-Tukey path. To profile the current
+FFT stages, run:
 
 ```r
 system("Rscript tools/profile_metal_opentsne_fft.R --n=10000 --k=50")

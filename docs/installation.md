@@ -6,7 +6,7 @@
 [Examples](examples.md) |
 [Benchmarks](benchmarks.md) |
 [API](usage-api.md) |
-[Provenance](algorithm-provenance.md)
+[References](references.md)
 
 `fastEmbedR` is split from the nearest-neighbour package `faissR`.
 

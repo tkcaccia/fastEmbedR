@@ -168,9 +168,8 @@ policy but do not perform a hidden CPU O(n^2) KLD poll or report it as GPU
 work.
 
 `umap()` and `umap_knn()` also choose internal defaults from the supplied KNN
-distance profile in C++. This keeps the public API small while letting
-Shuttle-like broad-shell data and high-variability data get less brittle
-defaults.
+distance profile in C++. This keeps the public API small while preserving the
+supplied neighbour graph.
 
 ## Public API
 
