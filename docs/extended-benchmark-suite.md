@@ -154,7 +154,7 @@ Interpretation:
 
 - Metal UMAP is the strongest local result on Shuttle: about 5.1x faster than
   package CPU UMAP and about 35.7x faster than the `uwot` reference row, while
-  matching CPU/uwot trustworthiness closely.
+  matching the CPU and `uwot` trustworthiness values closely.
 - Metal openTSNE and the MPSGraph diagnostic are much faster than CPU
   openTSNE, but they lose local-neighbourhood quality on Shuttle. This means
   MPSGraph is still diagnostic-only, not a default.

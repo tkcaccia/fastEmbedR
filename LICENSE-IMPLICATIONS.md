@@ -1,108 +1,98 @@
 # License Implications Report
 
-Date: 2026-06-11
+Date: 2026-06-18
 
 This report summarizes the practical license implications for the current
-fastEmbedR repository. It is a development compliance note, not legal advice.
+`fastEmbedR` repository. It is a development compliance note, not legal advice.
 
 ## Current Package License
 
-fastEmbedR currently declares:
+`fastEmbedR` currently declares:
 
 ```text
-License: GPL (>= 3)
+License: MIT + file LICENSE
 ```
 
-This is the correct license posture for the current codebase because the UMAP
-implementation was intentionally developed to match and adapt behaviour from
-GPL-compatible R implementations, especially `uwot`.
+The intended permissive-license posture is:
 
-Practical implication:
+- core package code is implemented in package-local R, C++, Objective-C++,
+  Metal, CUDA, and Fortran sources;
+- GPL packages may be used only as optional benchmark/reference tools, not as
+  Imports, LinkingTo dependencies, vendored source, or required runtime code;
+- optional external libraries such as FAISS, cuVS, CUDA, cuFFT, and Apple Metal
+  are linked or used only when available and are reported explicitly.
 
-- The package can be published as a free R package on GitHub, CRAN, and in an
-  R Journal workflow.
-- Users may use the package in academic, clinical, and commercial settings.
-- If someone distributes fastEmbedR or a modified derivative, they must keep
-  the distribution GPL-compatible and provide the corresponding source code.
-- The project should not be advertised as MIT/permissive while GPL-adapted
-  implementation code remains in the package.
+## Package Core Versus Benchmark Code
 
-## Repository Scripts
+The package core consists of files installed by `R CMD build`: `R/`, `src/`,
+`inst/`, vignettes, DESCRIPTION, NAMESPACE, and license files. These files must
+be compatible with MIT distribution.
 
-The benchmark and development scripts in `tools/`, examples, vignettes, native
-sources, and R sources are part of the GitHub distribution unless a file says
-otherwise. They therefore inherit the repository/package GPL-3-or-later
-licensing policy.
-
-The R build excludes `tools/`, `examples/`, `.github/`, and this report through
-`.Rbuildignore`, so they are not part of the CRAN-style source tarball unless
-that choice is changed later. They are still distributed by GitHub pushes.
+Benchmark and development scripts in `tools/`, external result folders, and
+paper-generation scripts may call reference implementations such as `uwot`,
+`umap`, `Rtsne`, `tsne`, and FIt-SNE for comparison. Those scripts must make it
+clear that the reference packages are optional benchmark dependencies and not
+part of the `fastEmbedR` core implementation.
 
 ## Third-Party Provenance And Compatibility
 
 The detailed provenance log is in `inst/NOTICE` and
 `inst/ALGORITHMIC_REFERENCES.md`. Current status:
 
-| Source | License | Current use | Implication |
+| Source | License | Current use | MIT implication |
 |---|---|---|---|
-| `uwot` | GPL (>= 3) | UMAP behaviour and fast-SGD scheduling studied/adapted | Keeps fastEmbedR GPL-compatible; incompatible with MIT-only distribution. |
-| `Rtsne` | BSD-style | R-level KNN API/defaults studied; Barnes-Hut C++ not vendored | Compatible if notices are kept; avoid copying the old Delft advertising-clause C++ files without explicit review. |
-| FAISS | MIT | Optional external C++ link backend; no vendored FAISS source | Compatible with GPL-3-or-later. Keep attribution if source is copied later. |
-| RAPIDS cuML/cuVS | Apache-2.0 | Optional external cuVS link backend and design reference | Apache-2.0 is GPLv3-compatible. Preserve notices if source is copied later. |
-| `mlx-vis` | Apache-2.0 | NN-descent schedule ideas adapted into native R/C++/Metal code | Compatible with GPLv3 if copied with notices; current code is native and records provenance. |
-| `annembed` | MIT OR Apache-2.0 | Design reference only | Compatible. Keep original notices if implementation code is copied later. |
-| KeOps | MIT | Design reference for blocked map-reduce exact t-SNE repulsion | Compatible. No runtime dependency or vendored code currently. |
-| TorchDR | BSD-3-Clause | InfoTSNE/negative-sampling design reference | Compatible. No Python/PyTorch runtime dependency currently. |
-| openTSNE | BSD-3-Clause | Transform and Barnes-Hut/negative-force design reference | Compatible. No Python/Cython source vendored currently. |
-| t-SNE-CUDA | BSD-3-Clause | GPU t-SNE architecture design reference | Compatible. No CannyLab source vendored currently. |
+| UMAP paper / umap-learn | BSD-3-Clause implementation; algorithm paper | Mathematical reference | Compatible as algorithmic reference; no Python source vendored or called. |
+| `uwot` | GPL (>= 3) | External R benchmark and behavioural reference only | Do not copy, vendor, link, or require source/runtime code in MIT package core. |
+| `Rtsne` | BSD-style | KNN-input t-SNE validation/reference behaviour | Compatible as reference; old Barnes-Hut C++ files are not vendored. |
+| FAISS | MIT | Required by companion `faissR`; optional KNN provider via wrapper | Compatible. FAISS source is not vendored in `fastEmbedR`. |
+| RAPIDS cuVS | Apache-2.0 | Optional KNN provider through `faissR`; CUDA design reference | Compatible with MIT use as external dependency/reference. |
+| DLPack | Apache-2.0 | Minimal C ABI compatibility header for cuVS bridge where needed | Compatible with notice retained. |
+| openTSNE | BSD-3-Clause | Design reference for native openTSNE-style optimizer/transform | Compatible. Python/Cython source is not vendored or called. |
+| t-SNE-CUDA | BSD-3-Clause | GPU architecture and FFT-grid design reference | Compatible. Source is not vendored or called. |
+| AppleSiliconFFT | MIT | Design/source reference for native Metal Stockham FFT kernels | Compatible; retain MIT attribution in NOTICE. |
+| mlx-vis | Apache-2.0 | Apple GPU design reference | Compatible as design reference; no MLX/Python runtime. |
+| annembed | MIT OR Apache-2.0 | Design reference | Compatible as design reference. |
+| opt-SNE / Multicore-opt-SNE | BSD-3-Clause | Automatic t-SNE parameter design reference | Compatible as design reference. |
 
-## Optional Native Backends
+## Fast Power Approximation
 
-The optional CUDA, Metal, FAISS, and cuVS paths must fail clearly when the
-required library/backend is unavailable. This is a license and reproducibility
-issue as much as a technical issue: a benchmark row must not claim that GPL
-package code used a GPU implementation when it silently fell back to CPU or to
-an unreported external library.
+The UMAP optimizers use package-local positive-power approximations based on
+IEEE-754 exponent interpolation. The documented provenance is:
 
-Current policy:
+- Nicol N. Schraudolph, "A Fast, Compact Approximation of the Exponential
+  Function", Neural Computation, 1999.
+- Additional permissive prior art reviewed: Harrison Ainsworth / HXA7241
+  fast power approximation material under a new-BSD-style license.
 
-- FAISS and cuVS are linked only when explicitly available at build time.
-- FAISS and cuVS source code is not vendored.
-- Metal and CUDA code in `src/` is fastEmbedR package code and is therefore
-  distributed under GPL-3-or-later.
-- Apple Metal and CUDA toolkit/system SDK headers are treated as external
-  system/build dependencies, not copied package source.
+The implemented helpers are local expressions written for `fastEmbedR`:
 
-## What We Can Safely Do Next
+- `src/fast_knn_umap.cpp::umap_pow`
+- `src/fast_knn_umap.cpp::umap_powf_fast`
+- `src/embedding_metal_impl.mm::fast_positive_pow`
+- `src/embedding_cuda_kernels.cpp::fast_positive_pow`
 
-- Continue adapting GPL-compatible code from `uwot`, as long as fastEmbedR
-  remains GPL-3-or-later and provenance comments are kept.
-- Copy or adapt MIT/BSD-3/Apache-2.0 implementation pieces only when useful,
-  preserving upstream copyright headers and license notices next to the copied
-  code.
-- Keep `inst/NOTICE` updated whenever an implementation moves from
-  "inspired by" to "adapted from" or "copied from".
+They are not copied from `uwot`, blog union snippets, or vendored third-party
+source. If maximum legal simplicity is ever preferred over speed, these helpers
+can be replaced with `std::pow`/backend-native `pow` after benchmarking.
+
+## Required Ongoing Rules
+
+- Do not claim a GPL package implementation is inside `fastEmbedR`.
+- Do not copy or closely adapt `uwot` source while keeping `fastEmbedR` MIT.
+- Keep `uwot`, `umap`, `Rtsne`, and similar R packages in `Suggests` or
+  benchmark scripts only.
+- Keep optional GPU libraries explicit: no silent CPU fallback reported as GPU.
+- Preserve upstream notices when permissive code is copied or substantially
+  adapted, especially MIT/BSD/Apache code.
 - Keep generated benchmark outputs, private credentials, Kaggle tokens, and
   private datasets out of the repository.
 
-## What We Should Avoid
-
-- Do not claim the package is MIT/permissive while GPL-adapted code remains.
-- Do not copy Rtsne's old Barnes-Hut C++ files without a focused license
-  compatibility review.
-- Do not vendor FAISS, cuVS, cuML, mlx-vis, openTSNE, TorchDR, KeOps, or
-  t-SNE-CUDA source without retaining their notices and updating
-  `inst/NOTICE`.
-- Do not include private datasets, remote machine credentials, Kaggle tokens,
-  or generated result folders in GitHub.
-
 ## Publication Note
 
-For an R Journal or CRAN-style submission, GPL-3-or-later is acceptable for a
-free R package. The strongest publication posture is:
+For a CRAN/R Journal-oriented permissive package, the strongest posture is:
 
-- `DESCRIPTION` declares `GPL (>= 3)`.
-- `README.md` briefly explains provenance.
-- `inst/NOTICE` records third-party design/code provenance.
-- `LICENSE-IMPLICATIONS.md` remains a GitHub-facing development note and is
-  excluded from the R build.
+- `DESCRIPTION` declares `MIT + file LICENSE`;
+- core UMAP/openTSNE implementation is package-local and independently written;
+- benchmark scripts clearly label external reference packages;
+- `inst/NOTICE`, `inst/ALGORITHMIC_REFERENCES.md`, and this report stay current;
+- license/provenance scans are run before release.

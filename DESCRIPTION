@@ -14,7 +14,7 @@ Description: A compact UMAP and openTSNE-style implementation focused on fast
     fastEmbedR keeps preprocessing helpers, fixed-reference transform, and
     stochastic layout optimization in native code with explicit CPU/Metal/CUDA
     backend reporting.
-License: GPL (>= 3)
+License: MIT + file LICENSE
 URL: https://github.com/tkcaccia/fastEmbedR
 BugReports: https://github.com/tkcaccia/fastEmbedR/issues
 Encoding: UTF-8

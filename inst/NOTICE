@@ -1,6 +1,8 @@
 fastEmbedR third-party provenance notice
 
-fastEmbedR is distributed under GPL (>= 3).
+fastEmbedR is being cleaned for permissive distribution. This notice documents
+third-party libraries, papers, and implementations reviewed or optionally linked
+by the package.
 
 This notice documents code provenance and design references for the cleaned
 package. The public API is focused on nearest-neighbour search and native UMAP
@@ -82,44 +84,23 @@ KNN bandwidths, fuzzy graph weights, epoch schedules, graph-smoothed
 initialization, and UMAP SGD in C++/Metal kernels. It does not call Python/MLX
 or reuse CPU UMAP graph builders for Metal-labelled UMAP runs.
 
-Shared-nearest-neighbour graph reference
-----------------------------------------
-
-The `knn_graph(..., weight = "snn")` path was informed by:
-
-  bluster
-  Author: Aaron Lun and contributors
-  Repository: https://bioconductor.org/packages/bluster
-  License: GPL-3
-
-  scran_graph_cluster
-  Repository: https://github.com/LTLA/scran_graph_cluster
-  License: MIT
-
-The transferred idea is the graph construction strategy used by
-`bluster::neighborsToSNNGraph()`: build a full SNN graph from a neighbour-index
-matrix by connecting all pairs of observations that share at least one
-neighbour, then use Jaccard weights for `type = "jaccard"`. fastEmbedR
-implements this directly in `src/graph.cpp` using an inverted neighbour index
-and sparse co-occurrence counting. It does not link to, call, or require
-bluster at runtime.
-
 Native Metal FFT design reference
 ---------------------------------
 
 The package-native Metal openTSNE FFT-grid path includes a validated 512x512
-Stockham FFT kernel adapted from:
+Stockham FFT kernel implemented using design ideas from:
 
   AppleSiliconFFT
   Author: Mohamed Amine Bergach
   Repository: https://github.com/aminems/AppleSiliconFFT
   License: MIT
 
-The adapted ideas are radix-4 Stockham autosort stages, threadgroup-memory
+The transferred ideas are radix-4 Stockham autosort stages, threadgroup-memory
 staging, and row/column 512-point transform structure. The implementation is
-kept inside fastEmbedR's Objective-C++/Metal source and is used only for
-validated 512x512 openTSNE FFT grids. Other FFT grid sizes use fastEmbedR's
-generic package-native Metal Cooley-Tukey kernels.
+kept inside fastEmbedR's Objective-C++/Metal source, with MIT-compatible
+attribution retained here, and is used only for validated 512x512 openTSNE FFT
+grids. Other FFT grid sizes use fastEmbedR's generic package-native Metal
+Cooley-Tukey kernels.
 
 openTSNE design reference
 -------------------------

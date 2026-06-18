@@ -53,7 +53,7 @@ MIT/Apache-2.0 copyright and license notices.
 - Version studied locally: 0.17
 - License: BSD-style package license in Rtsne's `LICENSE` file.
 - Current use in `fastEmbedR`: R-level neighbour-input behaviour and parameter
-  checking are adapted from `Rtsne::Rtsne_neighbors()`. Rtsne's Barnes-Hut C++
+  checking are informed by `Rtsne::Rtsne_neighbors()`. Rtsne's Barnes-Hut C++
   source files are not copied or vendored.
 
 Ideas/code behaviour used:
@@ -78,10 +78,10 @@ Source locations studied:
 
 License decision:
 
-- Do not copy Rtsne's Barnes-Hut C++ files into the GPL fastEmbedR package.
-  They include the original Delft advertising-clause BSD text. The current
-  native optimizer in `src/tsne_neighbors.cpp` is a fresh implementation of
-  the t-SNE-from-KNN math with Rtsne-compatible defaults.
+- Do not copy Rtsne's Barnes-Hut C++ files into fastEmbedR. They include the
+  original Delft advertising-clause BSD text. The current native optimizer in
+  `src/tsne_neighbors.cpp` is a fresh implementation of the t-SNE-from-KNN math
+  tested against the same public default parameters where appropriate.
 
 ## opt-SNE / Multicore-opt-SNE
 
@@ -169,8 +169,9 @@ Implemented native extensions:
 - Repository: <https://github.com/aminems/AppleSiliconFFT>
 - Author: Mohamed Amine Bergach
 - License: MIT
-- Current use in `fastEmbedR`: adapted native Metal 512-point Stockham FFT
-  kernels for the openTSNE/FIt-SNE 512x512 grid path.
+- Current use in `fastEmbedR`: native Metal 512-point Stockham FFT kernels for
+  the openTSNE/FIt-SNE 512x512 grid path, implemented using AppleSiliconFFT as
+  a permissive design reference.
 
 Ideas/code behaviour used:
 
@@ -194,7 +195,7 @@ Validation:
 
 License decision:
 
-- AppleSiliconFFT is MIT licensed and compatible with fastEmbedR's GPL
+- AppleSiliconFFT is MIT licensed and compatible with permissive fastEmbedR
   distribution. Keep this notice if the Stockham kernels are modified further.
 
 ## t-SNE-CUDA
@@ -248,29 +249,61 @@ CUDA notes to keep for later:
 - Repository: <https://github.com/jlmelville/uwot>
 - CRAN: <https://cran.r-project.org/package=uwot>
 - License: GPL (>= 3)
-- Current use in `fastEmbedR`: behavioural and mathematical reference for the
-  public UMAP path, especially the KNN-input fuzzy graph construction and
-  fast-SGD schedule. The package license is GPL (>= 3), so adapting GPL
-  algorithmic structure is compatible with distribution, but the cleaned
-  implementation keeps fastEmbedR's native C++/Metal/CUDA API and does not
-  vendor uwot source files wholesale.
+- Current use in `fastEmbedR`: benchmark and behavioural reference for public
+  UMAP results from precomputed KNN input. The cleaned implementation does not
+  vendor uwot source files; it keeps its own C++/Metal/CUDA API and uses
+  independently written CSR graph buffers, negative sampling, RNG, and optimizer
+  loops.
 
-Ideas/code behaviour used:
+License boundary:
+
+- `uwot` may appear in benchmark scripts, vignettes, papers, and external
+  comparisons.
+- `uwot` is not an Import, LinkingTo dependency, vendored source tree, or
+  runtime requirement for `fastEmbedR::umap()` or `fastEmbedR::umap_knn()`.
+- Do not add GPL-derived optimizer code to `R/`, `src/`, or installed package
+  docs while retaining the MIT package license.
+
+Behaviour compared in benchmarks:
 
 - Smooth KNN bandwidth search with UMAP local connectivity.
 - Fuzzy simplicial set weights and fuzzy union graph behaviour.
 - `epochs_per_sample` edge scheduling for sampled attractive updates.
-- UMAP negative sampling, learning-rate decay, and fast asynchronous SGD
-  structure close to `uwot::umap(..., fast_sgd = TRUE)`.
+- UMAP negative sampling, learning-rate decay, and asynchronous SGD behaviour.
 - Public benchmarks compare against both supplied-KNN and end-to-end
   `uwot::umap(..., fast_sgd = TRUE)` runs where available.
 
+## Fast power approximation
+
+- Primary algorithmic reference: Nicol N. Schraudolph, "A Fast, Compact
+  Approximation of the Exponential Function", Neural Computation, 1999.
+- Additional permissive prior art reviewed: Harrison Ainsworth / HXA7241,
+  "Fast pow() With Adjustable Accuracy", whose downloadable source is provided
+  under the new BSD license.
+- Current use in `fastEmbedR`: the CPU, Metal, and CUDA UMAP optimizers use
+  local IEEE-754 exponent interpolation helpers for positive powers in the
+  attractive and repulsive force calculations. The CPU helper uses `memcpy`;
+  the GPU helpers use the corresponding backend bit-cast intrinsics. The code
+  is not vendored from the HXA package or from blog snippets; it is a
+  package-local implementation of the published bit-level approximation idea,
+  with float-specialized variants for hot 2D optimizer paths.
+
+License boundary:
+
+- The constants and bit operations are used as an independently written
+  implementation of the published approximation technique.
+- The helper names, control flow, and memory representation are package-local;
+  the CPU version uses `std::memcpy` rather than union-punning snippets.
+- If future review requires the most conservative posture, replace these
+  helpers with standard `pow` calls or another clearly permissive
+  implementation and rerun the speed/quality gates.
+
 Implemented locations:
 
-- `R/fast_knn_umap.R::resolve_umap_auto_config`
-- `src/fast_knn_umap.cpp::umap_knn_cpp`
-- `src/embedding_metal_impl.mm::knn_embed_metal_csr_impl`
-- `src/embedding_cuda_impl.cpp::knn_embed_cuda_impl`
+- `src/fast_knn_umap.cpp::umap_pow`
+- `src/fast_knn_umap.cpp::umap_powf_fast`
+- `src/embedding_metal_impl.mm::fast_positive_pow`
+- `src/embedding_cuda_kernels.cpp::fast_positive_pow`
 
 ## UMAP reference implementation
 
@@ -286,6 +319,25 @@ Ideas used:
 - `a`/`b` curve parameters for the low-dimensional UMAP attraction curve.
 - Negative-sampling repulsive force objective.
 
+## Permissive C++ UMAP / Optimizer References
+
+- `umappp` repository: <https://github.com/libscran/umappp>
+- `umappp` license: BSD-2-Clause
+- `ensmallen` repository: <https://github.com/mlpack/ensmallen>
+- `ensmallen` license: BSD-3-Clause
+- Current use in `fastEmbedR`: provenance and design references for a
+  permissively licensed, standalone C++ UMAP implementation style and for
+  optimizer-implementation patterns. fastEmbedR does not vendor either project,
+  does not link to them at runtime, and does not copy their source code.
+
+Ideas reviewed:
+
+- Keeping the public API independent from a specific R implementation.
+- Separating neighbour search, graph construction, initialization, and
+  optimization into testable modules.
+- Maintaining package-local optimizer code rather than adapting GPL-only
+  implementation details from benchmark reference packages.
+
 ## RAPIDS cuML / cuVS
 
 - cuML repository: <https://github.com/rapidsai/cuml>
@@ -298,10 +350,10 @@ Ideas used:
 
 Implemented locations:
 
-- `src/nn_cuvs_impl.cpp`: optional native bridge to external cuVS brute-force,
-  CAGRA, and NN-descent KNN.
-- `src/embedding_cuda_impl.cpp`: package-native CUDA UMAP and openTSNE kernels
-  when CUDA support is compiled.
+- KNN is supplied through the companion `faissR` package when FAISS/cuVS
+  support is available; fastEmbedR itself does not vendor RAPIDS source.
+- `src/embedding_cuda_impl.cpp` and `src/embedding_cuda_kernels.cpp`:
+  package-native CUDA UMAP and openTSNE kernels when CUDA support is compiled.
 
 ## mlx-vis
 

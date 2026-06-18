@@ -24,6 +24,30 @@ data/
 cache/
 results/
 backups/
+_umap_cycle_cache/
+*_gate/
+*_baseline/
+*_pass/
+*_decay/
+*_clamp/
+*_conversion/
+*_copy/
+*_pointers/
+*_fastpath/
+*_active_edge/
+active_metadata_single_pass/
+alpha_float_decay/
+branch_eps_clamp/
+denom_split_gate/
+epochfloat_gate/
+expanded_gate_baseline/
+graph_dummy_weight_late_alloc/
+neg_floor_no_max/
+prefetch_next_edge/
+reciprocal_negative_period/
+release_temp_vectors/
+parallel_layout_copy/
+unit_schedule_fastpath/
 
 # Local IDE/editor files
 .vscode/

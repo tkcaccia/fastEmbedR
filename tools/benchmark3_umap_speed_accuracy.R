@@ -43,6 +43,13 @@ timeout_sec <- as.integer(args$timeout %||% "600")
 seed <- as.integer(args$seed %||% "42")
 metric_n <- as.integer(args$metric_n %||% "5000")
 worker <- isTRUE(as.logical(args$worker %||% FALSE))
+finalize <- isTRUE(as.logical(args$finalize %||% FALSE))
+resume_existing <- isTRUE(as.logical(args$resume %||% Sys.getenv("FASTEMBEDR_BENCHMARK_RESUME", "TRUE")))
+memory_guard <- isTRUE(as.logical(args$memory_guard %||% Sys.getenv("FASTEMBEDR_BENCHMARK_MEMORY_GUARD", "TRUE")))
+allow_risky_methods <- isTRUE(as.logical(args$allow_risky_methods %||% Sys.getenv("FASTEMBEDR_BENCHMARK_ALLOW_RISKY", "FALSE")))
+max_embedding_n <- as.numeric(args$max_embedding_n %||% Sys.getenv("FASTEMBEDR_BENCHMARK_MAX_EMBEDDING_N", "250000"))
+max_dense_cells <- as.numeric(args$max_dense_cells %||% Sys.getenv("FASTEMBEDR_BENCHMARK_MAX_DENSE_CELLS", "120000000"))
+timeout_prefix <- args$timeout_prefix %||% Sys.getenv("FASTEMBEDR_BENCHMARK_TIMEOUT_PREFIX", "timeout --kill-after=30s")
 backend_filter <- tolower(trimws(strsplit(args$backends %||% Sys.getenv("FASTEMBEDR_BENCHMARK_BACKENDS", "cpu,cuda"), ",", fixed = TRUE)[[1L]]))
 backend_filter <- unique(backend_filter[nzchar(backend_filter)])
 if (!length(backend_filter)) backend_filter <- c("cpu", "cuda")
@@ -56,6 +63,7 @@ benchmark_datasets <- c(
   "imagenet",
   "MetRef",
   "mass41",
+  "TabulaMuris",
   "COIL20"
 )
 default_dataset_paths <- data.frame(
@@ -69,6 +77,7 @@ default_dataset_paths <- data.frame(
     "imagenet/imagenet.RData",
     "MetRef/MetRef.RData",
     "mass41/mass41.RData",
+    "TabulaMuris/TabulaMuris.RData",
     "COIL20/COIL20.RData"
   ),
   stringsAsFactors = FALSE
@@ -76,8 +85,8 @@ default_dataset_paths <- data.frame(
 
 dataset_parameter_defaults <- data.frame(
   dataset = benchmark_datasets,
-  perplexity = c(15, 15, 30, 30, 15, 50, 15, 30, 15),
-  k = c(15, 15, 30, 30, 15, 50, 15, 30, 15),
+  perplexity = c(15, 15, 30, 30, 15, 50, 15, 30, 30, 15),
+  k = c(15, 15, 30, 30, 15, 50, 15, 30, 30, 15),
   reason = c(
     "small digit benchmark; low k preserves digit subclasses",
     "70k fashion images; k 15 matches the visually validated MNIST/Fashion-MNIST setting",
@@ -87,6 +96,7 @@ dataset_parameter_defaults <- data.frame(
     "large feature benchmark; higher k is used for broader semantic neighbourhoods",
     "small metabolomics benchmark; low k is safer",
     "mass cytometry benchmark; moderate k balances local and population structure",
+    "single-cell atlas benchmark; moderate k balances cell-type locality and global tissue structure",
     "small image benchmark; low k avoids over-smoothing"
   ),
   stringsAsFactors = FALSE
@@ -113,6 +123,30 @@ dataset_parameters <- function(dataset_name, n) {
     policy = if (is.finite(benchmark_perplexity) || is.finite(k_override)) "user_override" else "dataset_auto",
     reason = if (nrow(row)) row$reason[[1L]] else "fallback rule based on sample size"
   )
+}
+
+benchmark3_skip_reason <- function(dataset_name, method_name, n, p) {
+  if (!isTRUE(memory_guard) || isTRUE(allow_risky_methods)) return(NA_character_)
+  cells <- as.numeric(n) * as.numeric(p)
+  if (is.finite(max_embedding_n) && n > max_embedding_n) {
+    return(sprintf(
+      "memory_guard: skipped because n=%d exceeds FASTEMBEDR_BENCHMARK_MAX_EMBEDDING_N=%d for this 600-second embedding benchmark.",
+      n, as.integer(max_embedding_n)
+    ))
+  }
+  if (is.finite(max_dense_cells) && cells > max_dense_cells) {
+    return(sprintf(
+      "memory_guard: skipped because n*p=%.0f exceeds FASTEMBEDR_BENCHMARK_MAX_DENSE_CELLS=%.0f; dense R method/metric allocations can be OOM-killed.",
+      cells, max_dense_cells
+    ))
+  }
+  if (method_name %in% c("uwot_umap_fast_sgd_internal_nn", "uwot_umap_default_internal_nn") && n >= 100000L) {
+    return("memory_guard: uwot internal-neighbour variants are skipped for n >= 100000; precomputed-KNN uwot rows remain the fair embedding comparison.")
+  }
+  if (identical(method_name, "umap_package") && n >= 100000L) {
+    return("memory_guard: umap::umap is skipped for n >= 100000 because the reference R implementation repeatedly exceeded the benchmark timeout/resource envelope.")
+  }
+  NA_character_
 }
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
@@ -799,6 +833,31 @@ run_one <- function(dataset_name, method_name, row_out) {
   n <- nrow(x)
   p <- ncol(x)
   params <- dataset_parameters(dataset_name, n)
+  skip_reason <- benchmark3_skip_reason(dataset_name, spec$method, n, p)
+  if (!is.na(skip_reason)) {
+    row <- result_template(dataset_name, spec$method, spec$package, spec$backend, "skipped", skip_reason)
+    row$n <- n
+    row$p <- p
+    row$k <- params$k
+    row$perplexity_equivalent <- params$perplexity_reference
+    row$uses_precomputed_nn <- isTRUE(spec$uses_precomputed_nn)
+    row$graph_mode <- spec$graph_mode %||% NA_character_
+    row$init_policy <- spec$init_policy
+    row$knn_cache_k <- params$knn_cache_k
+    row$parameters_json <- json_or_text(list(
+      skipped_by = "memory_guard",
+      reason = skip_reason,
+      k = params$k,
+      perplexity_reference = params$perplexity_reference,
+      equivalent_umap_k = params$equivalent_umap_k,
+      knn_cache_k = params$knn_cache_k,
+      parameter_policy = params$policy,
+      graph_mode = spec$graph_mode %||% NA_character_,
+      init_policy = spec$init_policy
+    ))
+    utils::write.csv(row, row_out, row.names = FALSE)
+    return(invisible(row))
+  }
   if (params$k >= n) {
     row <- result_template(
       dataset_name,
@@ -1127,6 +1186,29 @@ if (worker) {
   quit(save = "no", status = 0L)
 }
 
+if (finalize) {
+  write_methods_file(out_dir)
+  worker_dir <- file.path(out_dir, "worker_rows")
+  dir.create(worker_dir, recursive = TRUE, showWarnings = FALSE)
+  results <- combine_worker_rows(worker_dir)
+  results <- add_benchmark_scores(results)
+  utils::write.csv(results, file.path(out_dir, "benchmark3_umap_results.csv"), row.names = FALSE)
+  if (nrow(results)) {
+    ok <- results[results$status == "success", , drop = FALSE]
+    if (nrow(ok)) {
+      best_by_dataset <- do.call(rbind, lapply(split(ok, ok$dataset), function(z) z[order(z$embedding_sec), , drop = FALSE][1L, , drop = FALSE]))
+      utils::write.csv(best_by_dataset, file.path(out_dir, "benchmark3_best_by_dataset_runtime.csv"), row.names = FALSE)
+    }
+    write_ranked_results(results, out_dir)
+    make_barplots(results, out_dir)
+    write_summary_file(results, out_dir)
+  } else {
+    write_summary_file(results, out_dir)
+  }
+  log_msg("BENCHMARK #3 finalized from worker rows: %s", out_dir)
+  quit(save = "no", status = 0L)
+}
+
 write_methods_file(out_dir)
 worker_dir <- file.path(out_dir, "worker_rows")
 dir.create(worker_dir, recursive = TRUE, showWarnings = FALSE)
@@ -1148,6 +1230,12 @@ log_msg("BENCHMARK #3 output: %s", out_dir)
 log_msg("Datasets: %s", paste(manifest$dataset, collapse = ", "))
 log_msg("Backends: %s", paste(backend_filter, collapse = ", "))
 log_msg("Methods: %s", paste(methods, collapse = ", "))
+log_msg("Resume existing rows: %s", if (resume_existing) "TRUE" else "FALSE")
+log_msg("Memory guard: %s (max_n=%s, max_dense_cells=%s, allow_risky=%s)",
+        if (memory_guard) "TRUE" else "FALSE",
+        as.character(max_embedding_n),
+        as.character(max_dense_cells),
+        if (allow_risky_methods) "TRUE" else "FALSE")
 if (is.finite(benchmark_perplexity) || is.finite(k_override)) {
   log_msg("User parameter override: perplexity_reference=%s k=%s", as.character(benchmark_perplexity), as.character(k_override))
 } else {
@@ -1167,7 +1255,7 @@ for (dataset_name in manifest$dataset) {
   params <- dataset_parameters(dataset_name, ds_n)
   for (method_name in methods) {
     row_file <- file.path(worker_dir, paste0(sanitize(dataset_name), "__", sanitize(method_name), ".csv"))
-    if (file.exists(row_file)) {
+    if (isTRUE(resume_existing) && file.exists(row_file)) {
       log_msg("Skipping existing %s / %s", dataset_name, method_name)
       next
     }
@@ -1176,7 +1264,8 @@ for (dataset_name in manifest$dataset) {
     worker_k_arg <- if (is.finite(k_override)) as.character(params$k) else "auto"
     worker_knn_k_arg <- if (is.finite(knn_cache_k_override)) as.character(params$knn_cache_k) else "auto"
     cmd <- sprintf(
-      "timeout %d Rscript %s --worker=TRUE --data_root=%s --out_dir=%s --benchmark1_dir=%s --dataset=%s --method=%s --perplexity=%s --k=%s --knn_k=%s --threads=%d --timeout=%d --seed=%d --metric_n=%d --row_out=%s",
+      "%s %d Rscript %s --worker=TRUE --data_root=%s --out_dir=%s --benchmark1_dir=%s --dataset=%s --method=%s --perplexity=%s --k=%s --knn_k=%s --threads=%d --timeout=%d --seed=%d --metric_n=%d --row_out=%s",
+      timeout_prefix,
       timeout_sec,
       shQuote(script_path),
       shQuote(data_root),

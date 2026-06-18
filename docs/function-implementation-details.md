@@ -15,7 +15,7 @@ they do not silently run on CPU while reporting a GPU backend.
 | Function | Main implementation | Native backends | Main inspiration |
 | --- | --- | --- | --- |
 | `nn()` | Thin wrapper around `faissR::nn()` | FAISS CPU and optional CUDA/cuVS through `faissR` | FAISS, RAPIDS cuVS, KNN-first embedding workflow |
-| `umap_knn()` | UMAP directly from supplied KNN | CPU, Metal, CUDA when compiled | UMAP, uwot fast-SGD, RAPIDS/cuML GPU-resident design |
+| `umap_knn()` | UMAP directly from supplied KNN | CPU, Metal, CUDA when compiled | UMAP algorithm, `uwot` benchmark behaviour, RAPIDS/cuML GPU-resident design |
 | `umap()` | `faissR` KNN, then `umap_knn()` | CPU, Metal, CUDA when compiled | Same as `umap_knn()` plus KNN-first workflow |
 | `embed_knn()` | Small dispatcher for KNN-input embedding | CPU, Metal, CUDA when available | KNN reuse across UMAP/openTSNE |
 | `opentsne_knn()` | openTSNE-style t-SNE directly from KNN | CPU, Metal, CUDA when compiled | openTSNE, FIt-SNE, t-SNE-CUDA, Rtsne_neighbors, opt-SNE |
@@ -85,11 +85,12 @@ Implementation:
 - Uses native C++ to derive UMAP defaults from the KNN distance profile.
 - Builds a compact fuzzy graph, stores graph data in CSR/COO-style native
   buffers, and runs UMAP SGD.
-- Preserves uwot-like UMAP mathematics: smooth KNN distances, fuzzy graph
-  union, `epochs_per_sample`, negative sampling, and learning-rate decay.
+- Implements the documented UMAP mathematics with package-local code: smooth
+  KNN distances, fuzzy graph union, `epochs_per_sample`, negative sampling,
+  and learning-rate decay.
 Backend details:
 
-- CPU: native C++ CSR fuzzy graph and fast-SGD-style optimizer.
+- CPU: native C++ CSR fuzzy graph and epoch-scheduled stochastic optimizer.
 - Metal: native Objective-C++/Metal `atomic_inplace` optimizer. The public
   Metal UMAP path has only this validated optimizer mode.
 - CUDA: native CUDA fused pure-atomic UMAP path when compiled. Old hybrid and
@@ -110,8 +111,9 @@ Inspiration and literature:
 
 - UMAP: McInnes, Healy, and Melville, "UMAP: Uniform Manifold Approximation
   and Projection for Dimension Reduction", arXiv:1802.03426, 2018.
-- uwot: Jim Melville's R implementation, especially fuzzy graph and
-  fast-SGD-compatible behaviour.
+- `uwot`: Jim Melville's R implementation is used as an external benchmark
+  and behavioural reference; its GPL source is not copied or required by the
+  package core.
 - RAPIDS cuML UMAP engineering notes for GPU-resident graph/optimizer design.
 - mlx-vis as Metal design reference for GPU-resident KNN and optimizer
   structure.
@@ -140,7 +142,7 @@ Autotuning:
 Inspiration:
 
 - KNN-first benchmark design from the user's original UMAP workflow.
-- UMAP/uwot defaults and fast-SGD behaviour.
+- UMAP defaults and epoch-scheduled stochastic optimization behaviour.
 - opt-SNE-style philosophy: reduce user parameter burden with internal
   data-aware choices.
 

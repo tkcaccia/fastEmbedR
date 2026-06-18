@@ -7,8 +7,9 @@ native Metal openTSNE FFT-grid path.
 
 The most useful direction is a package-native Metal FFT plan with standalone
 correctness checks before each kernel family is used by openTSNE. The first
-validated improvement is a Stockham-512 row/column FFT path adapted from
-AppleSiliconFFT. It is enabled only for 512x512 openTSNE/FIt-SNE grids.
+validated improvement is a Stockham-512 row/column FFT path implemented using
+AppleSiliconFFT as a permissive design reference. It is enabled only for
+512x512 openTSNE/FIt-SNE grids.
 
 ## Libraries
 

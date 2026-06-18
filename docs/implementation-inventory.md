@@ -29,10 +29,10 @@ For function-by-function implementation notes and literature, see
 | Component | fastEmbedR implementation | Library or project used | Runtime dependency | Notes |
 | --- | --- | --- | --- | --- |
 | UMAP KNN input API | Native R/C++ wrapper accepts precomputed KNN | `umap`, `uwot`, and KNN-first benchmark practice informed API shape | No | `umap_knn()` and `umap()` keep KNN time separate from embedding time. |
-| CPU fuzzy graph | Native C++ CSR graph path | uwot/UMAP fuzzy simplicial set behaviour | No | Uses smooth KNN bandwidths, local connectivity, fuzzy union weights, and compact CSR storage. |
-| CPU optimizer | Native C++ uwot-compatible fast-SGD-style path | uwot fast-SGD scheduling and UMAP objective | No | Epoch scheduling, negative sampling, learning-rate decay, and edge sampling are kept close to uwot for visual parity. |
+| CPU fuzzy graph | Native C++ CSR graph path | UMAP fuzzy simplicial set formulation; `uwot` only as an external behavioural benchmark | No | Uses smooth KNN bandwidths, local connectivity, fuzzy union weights, and compact CSR storage. |
+| CPU optimizer | Native C++ epoch-scheduled stochastic optimizer | UMAP objective and package-local sampler/RNG/update loops | No | Epoch scheduling, negative sampling, learning-rate decay, and edge sampling are implemented locally for visual parity with UMAP references. |
 | Metal UMAP | Native Objective-C++/Metal `atomic_inplace` optimizer | mlx-vis design ideas for GPU-resident NN-descent/UMAP style work | Apple Metal on macOS | No Python/MLX runtime. Slow/distorted Metal optimizer variants were removed; `atomic_inplace` is the default and only public Metal optimizer. |
-| CUDA UMAP | Native CUDA fused pure-atomic UMAP path when built with CUDA | RAPIDS cuML/cuVS and uwot/UMAP scheduling ideas informed architecture | CUDA toolkit at build/runtime | Explicit CUDA requests fail if unavailable. Old hybrid/deterministic CUDA UMAP variants were removed. |
+| CUDA UMAP | Native CUDA fused pure-atomic UMAP path when built with CUDA | RAPIDS cuML/cuVS and UMAP scheduling concepts informed architecture | CUDA toolkit at build/runtime | Explicit CUDA requests fail if unavailable. Old hybrid/deterministic CUDA UMAP variants were removed. |
 | Landmark UMAP | Native C++/Metal projection and refinement helpers | UMAP transform/landmark workflow and package benchmarks | No for CPU; Apple Metal for Metal backend | Landmarking is an explicit approximation and is labelled separately in benchmark tables. |
 | Spectral/PCA initialization | Native C++ helpers; optional fastPLS-style randomized SVD/PCA ideas | tkcaccia/fastPLS rSVD/PCA design reference | No external fastPLS runtime | Used for stable initialization where appropriate; no fastPLS package call is required. |
 

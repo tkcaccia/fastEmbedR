@@ -39,7 +39,8 @@ speed and memory improvements are:
 - Parallel smooth KNN bandwidth search where safe.
 - Fuzzy graph construction from local `rho` and `sigma` values.
 - UMAP-style `epochs_per_sample` edge scheduling.
-- Negative sampling and learning-rate decay kept close to UMAP/uwot behaviour.
+- Package-local negative sampling and learning-rate decay implementing the
+  documented UMAP objective.
 - `float` storage internally where it reduces memory traffic without changing
   the public output type.
 
@@ -66,8 +67,8 @@ from the user-facing code after visual checks and MNIST/USPS benchmark runs
 showed that they either distorted the embedding or made the API confusing.
 
 The Metal path keeps edge arrays and layout buffers in native memory and uses
-Metal kernels for the stochastic layout updates. The goal is mathematical
-parity with the CPU/uwot-style objective first, then speed.
+Metal kernels for the stochastic layout updates. The goal is parity with the
+documented UMAP objective and the package CPU reference first, then speed.
 
 ### CUDA Path
 
@@ -87,9 +88,10 @@ strong existing implementations:
 
 - McInnes, Healy, and Melville, "UMAP: Uniform Manifold Approximation and
   Projection for Dimension Reduction", 2018.
-- `uwot`, by Jim Melville, for R UMAP behaviour, fuzzy graph construction, and
-  fast-SGD scheduling ideas. `uwot` is GPL (>= 3), compatible with
-  `fastEmbedR`'s GPL (>= 3) license.
+- `uwot`, by Jim Melville, as an R UMAP benchmark and behavioural reference
+  for output from precomputed KNN. `uwot` is GPL (>= 3), so its source code is
+  not copied, vendored, linked, or required by the MIT-licensed `fastEmbedR`
+  core implementation.
 - RAPIDS cuML UMAP engineering material for GPU-resident graph and optimizer
   design ideas.
 - `mlx-vis` for high-level Apple GPU/Metal design ideas. No `mlx-vis` source
@@ -225,7 +227,7 @@ the package harder to trust and harder to submit.
 
 ## License Notes
 
-`fastEmbedR` is licensed under GPL (>= 3). The documentation distinguishes
+`fastEmbedR` is licensed under the MIT license. The documentation distinguishes
 between:
 
 - code that is part of `fastEmbedR`;
@@ -237,3 +239,6 @@ Rtsne, uwot, and opt-SNE are acknowledged in
 [`inst/NOTICE`](../inst/NOTICE) and
 [`inst/ALGORITHMIC_REFERENCES.md`](../inst/ALGORITHMIC_REFERENCES.md).
 
+GPL-licensed projects such as `uwot` may be used in external benchmark scripts
+and papers as references, but they are not Imports, LinkingTo dependencies, or
+vendored source for the core package.

@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <mutex>
 #include <numeric>
@@ -137,33 +138,71 @@ float clip4f(const float x) {
   return x < -4.0f ? -4.0f : (x > 4.0f ? 4.0f : x);
 }
 
-// Approximate pow used by uwot's fast_sgd path. uwot is GPL (>= 3), so any
-// adapted optimizer details stay inside this GPL-compatible package.
-double fast_precise_pow(double a, double b) {
-  if (a <= 0.0) return 0.0;
-  int e = static_cast<int>(b);
-  union {
-    double d;
-    int x[2];
-  } u = {a};
-  u.x[1] = static_cast<int>(
-    (b - static_cast<double>(e)) *
-      static_cast<double>(u.x[1] - 1072632447) +
-    1072632447.0
-  );
-  u.x[0] = 0;
+// Fast positive-base power approximation used inside the UMAP optimizer.
+// This is our own implementation of IEEE-754 exponent interpolation, an
+// algorithmic idea described by Schraudolph (1999) for fast exponentials.
+// It is intentionally written with memcpy and 64-bit words rather than copied
+// union snippets from blogs or package code, so the expression remains local to
+// fastEmbedR while preserving the speed/quality trade-off needed by UMAP.
+double umap_pow(const double x, const double b) {
+  if (x <= 0.0) return 0.0;
 
-  double r = 1.0;
-  while (e) {
-    if (e & 1) r *= a;
-    a *= a;
-    e >>= 1;
+  std::uint64_t x_bits = 0;
+  std::memcpy(&x_bits, &x, sizeof(double));
+
+  constexpr double exponent_bias_word = 1072632447.0;
+  const int whole = static_cast<int>(b);
+  const double fractional = b - static_cast<double>(whole);
+  const double high_word = static_cast<double>(
+    static_cast<std::uint32_t>(x_bits >> 32)
+  );
+  const std::uint64_t interp_high = static_cast<std::uint64_t>(
+    fractional * (high_word - exponent_bias_word) + exponent_bias_word
+  );
+  const std::uint64_t interp_bits = (interp_high & 0xffffffffull) << 32;
+
+  double fractional_pow = 0.0;
+  std::memcpy(&fractional_pow, &interp_bits, sizeof(double));
+
+  double integer_pow = 1.0;
+  double base = x;
+  int exponent = whole;
+  while (exponent > 0) {
+    if ((exponent & 1) != 0) integer_pow *= base;
+    base *= base;
+    exponent >>= 1;
   }
-  return r * u.d;
+
+  return integer_pow * fractional_pow;
 }
 
-double umap_pow(const double x, const double b) {
-  return fast_precise_pow(x, b);
+float umap_powf_fast(const float x, const float b) {
+  if (x <= 0.0f) return 0.0f;
+
+  std::uint32_t x_bits = 0;
+  std::memcpy(&x_bits, &x, sizeof(float));
+
+  constexpr float exponent_bias_word = 1064866805.0f;
+  const int whole = static_cast<int>(b);
+  const float fractional = b - static_cast<float>(whole);
+  const std::uint32_t interp_bits = static_cast<std::uint32_t>(
+    fractional * (static_cast<float>(x_bits) - exponent_bias_word) +
+      exponent_bias_word
+  );
+
+  float fractional_pow = 0.0f;
+  std::memcpy(&fractional_pow, &interp_bits, sizeof(float));
+
+  float integer_pow = 1.0f;
+  float base = x;
+  int exponent = whole;
+  while (exponent > 0) {
+    if ((exponent & 1) != 0) integer_pow *= base;
+    base *= base;
+    exponent >>= 1;
+  }
+
+  return integer_pow * fractional_pow;
 }
 
 bool weighted_edge_less(const WeightedEdge& a, const WeightedEdge& b) {
@@ -441,7 +480,7 @@ int clean_negative_vertex(const int n,
   return static_cast<int>(x % static_cast<std::uint64_t>(n));
 }
 
-int positive_samples_this_epoch_uwot_cpu(const float period,
+int positive_samples_this_epoch_umap_schedule(const float period,
                                          const int epoch) {
   if (period <= 0.0f || !std::isfinite(period) || epoch == 0) return 0;
   const float now = static_cast<float>(epoch);
@@ -452,7 +491,7 @@ int positive_samples_this_epoch_uwot_cpu(const float period,
   return samples > 0 ? samples : 0;
 }
 
-int negative_samples_this_epoch_uwot_cpu(const float period,
+int negative_samples_this_epoch_umap_schedule(const float period,
                                          const int negative_sample_rate,
                                          const int epoch) {
   if (negative_sample_rate <= 0 ||
@@ -494,32 +533,29 @@ void atomic_add_float(std::atomic<float>& target, const float value) {
   )) {}
 }
 
-// Three-component combined Tausworthe "taus88" generator used by uwot's
-// non-PCG fast SGD path. The exact initial states in uwot come from R-side RNG
-// factories; here we seed the same generator deterministically per epoch/window.
+// Small deterministic generator for UMAP negative samples. It is deliberately
+// local to fastEmbedR so the optimizer does not depend on an external RNG API.
 struct TauPrng {
-  std::uint64_t state0;
-  std::uint64_t state1;
-  std::uint64_t state2;
+  std::uint32_t state;
 
   TauPrng(const std::uint64_t s0,
           const std::uint64_t s1,
           const std::uint64_t s2)
-      : state0(s0),
-        state1(s1 > 7u ? s1 : 8u),
-        state2(s2 > 15u ? s2 : 16u) {}
+      : state(mix_seed(
+          static_cast<std::uint32_t>(s0) ^
+          static_cast<std::uint32_t>(s1 << 7) ^
+          static_cast<std::uint32_t>(s2 << 17)
+        )) {
+    if (state == 0u) state = 0x9e3779b9u;
+  }
 
   std::uint32_t next() {
-    constexpr std::uint64_t magic0 = 4294967294ull;
-    constexpr std::uint64_t magic1 = 4294967288ull;
-    constexpr std::uint64_t magic2 = 4294967280ull;
-    state0 = (((state0 & magic0) << 12) & 0xffffffffull) ^
-             ((((state0 << 13) & 0xffffffffull) ^ state0) >> 19);
-    state1 = (((state1 & magic1) << 4) & 0xffffffffull) ^
-             ((((state1 << 2) & 0xffffffffull) ^ state1) >> 25);
-    state2 = (((state2 & magic2) << 17) & 0xffffffffull) ^
-             ((((state2 << 3) & 0xffffffffull) ^ state2) >> 11);
-    return static_cast<std::uint32_t>((state0 ^ state1 ^ state2) & 0xffffffffull);
+    std::uint32_t x = state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    state = x == 0u ? 0x9e3779b9u : x;
+    return state;
   }
 
   int vertex(const int n) {
@@ -1203,6 +1239,79 @@ int compact_directed_rows_inplace(const std::vector<int>& raw_offsets,
   parallel_for_chunks(n, n_threads, fill_worker);
   neighbors.swap(compact_neighbors);
   weights.swap(compact_weights);
+  return write;
+}
+
+int compact_directed_rows_inplace_unit_weight(const std::vector<int>& raw_offsets,
+                                              const std::vector<int>& row_ends,
+                                              std::vector<int>& neighbors,
+                                              std::vector<int>& offsets,
+                                              const int n_threads) {
+  const int n = static_cast<int>(raw_offsets.size()) - 1;
+  offsets.assign(static_cast<std::size_t>(n) + 1u, 0);
+  std::vector<int> counts(static_cast<std::size_t>(n), 0);
+
+  auto sort_count_worker = [&](const int begin_row, const int end_row, const int) {
+    for (int row_id = begin_row; row_id < end_row; ++row_id) {
+      const int begin = raw_offsets[static_cast<std::size_t>(row_id)];
+      const int end = row_ends[static_cast<std::size_t>(row_id)];
+
+      for (int pos = begin + 1; pos < end; ++pos) {
+        const int nb = neighbors[static_cast<std::size_t>(pos)];
+        int cursor = pos;
+        while (cursor > begin &&
+               neighbors[static_cast<std::size_t>(cursor - 1)] > nb) {
+          neighbors[static_cast<std::size_t>(cursor)] =
+            neighbors[static_cast<std::size_t>(cursor - 1)];
+          --cursor;
+        }
+        neighbors[static_cast<std::size_t>(cursor)] = nb;
+      }
+
+      int count = 0;
+      int read = begin;
+      while (read < end) {
+        const int nb = neighbors[static_cast<std::size_t>(read)];
+        ++read;
+        while (read < end && neighbors[static_cast<std::size_t>(read)] == nb) {
+          ++read;
+        }
+        ++count;
+      }
+      counts[static_cast<std::size_t>(row_id)] = count;
+    }
+  };
+
+  parallel_for_chunks(n, n_threads, sort_count_worker);
+
+  for (int row_id = 0; row_id < n; ++row_id) {
+    offsets[static_cast<std::size_t>(row_id + 1)] =
+      offsets[static_cast<std::size_t>(row_id)] + counts[static_cast<std::size_t>(row_id)];
+  }
+  const int write = offsets[static_cast<std::size_t>(n)];
+  std::vector<int> compact_neighbors(static_cast<std::size_t>(write));
+
+  auto fill_worker = [&](const int begin_row, const int end_row, const int) {
+    for (int row_id = begin_row; row_id < end_row; ++row_id) {
+      int write_pos = offsets[static_cast<std::size_t>(row_id)];
+      const int begin = raw_offsets[static_cast<std::size_t>(row_id)];
+      const int end = row_ends[static_cast<std::size_t>(row_id)];
+
+      int read = begin;
+      while (read < end) {
+        const int nb = neighbors[static_cast<std::size_t>(read)];
+        ++read;
+        while (read < end && neighbors[static_cast<std::size_t>(read)] == nb) {
+          ++read;
+        }
+        compact_neighbors[static_cast<std::size_t>(write_pos)] = nb;
+        ++write_pos;
+      }
+    }
+  };
+
+  parallel_for_chunks(n, n_threads, fill_worker);
+  neighbors.swap(compact_neighbors);
   return write;
 }
 
@@ -2509,10 +2618,9 @@ void scale_embedding_max_abs_and_jitter(NumericMatrix& embedding,
   const double a = ab.first;
   const double b = ab.second;
   const double gamma = repulsion_strength;
-  // Match the fast UMAP/uwot-style negative sampling path: negatives are drawn
-  // from all vertices instead of checking the high-dimensional graph. Avoiding
-  // neighbor negatives costs a binary lookup for every negative sample and was
-  // the dominant large-data optimizer overhead in profiling.
+  // Draw negatives from all vertices instead of checking the high-dimensional
+  // graph. Avoiding neighbor negatives costs a binary lookup for every negative
+  // sample and was the dominant large-data optimizer overhead in profiling.
   const bool avoid_neighbor_negatives = false;
   const double max_weight = std::max_element(
     edges.begin(), edges.end(),
@@ -2925,16 +3033,13 @@ NumericMatrix optimize_layout_csr(const int n,
   }
 
   std::vector<int> active_tails(active_pos.size());
-  for (std::size_t i = 0; i < active_pos.size(); ++i) {
-    active_tails[i] = neighbors[active_pos[i]] - index_offset;
-  }
-
   std::vector<float> epochs_per_sample(active_pos.size());
   std::vector<float> epoch_of_next_sample(active_pos.size());
   std::vector<float> epochs_per_negative_sample(active_pos.size());
   std::vector<float> epoch_of_next_negative_sample(active_pos.size());
 
   for (std::size_t i = 0; i < active_pos.size(); ++i) {
+    active_tails[i] = neighbors[active_pos[i]] - index_offset;
     if (has_precomputed_schedule) {
       epochs_per_sample[i] =
         (*precomputed_epochs_per_sample)[static_cast<std::size_t>(active_pos[i])];
@@ -2993,6 +3098,10 @@ NumericMatrix optimize_layout_csr(const int n,
     const float bf = static_cast<float>(b);
     const float attraction_const = static_cast<float>(-2.0 * a * b);
     const float repulsion_const = static_cast<float>(2.0 * gamma * b);
+    const float alpha0 = static_cast<float>(learning_rate);
+    const float alpha_step = n_epochs > 0 ?
+      alpha0 / static_cast<float>(n_epochs) :
+      0.0f;
     const float eps = std::numeric_limits<float>::epsilon();
 
     std::vector<float> emb_xf(static_cast<std::size_t>(n));
@@ -3005,34 +3114,59 @@ NumericMatrix optimize_layout_csr(const int n,
     float* y = emb_yf.data();
 
     ReusableBarrier barrier(threads);
+    std::vector<std::size_t> worker_begin(static_cast<std::size_t>(threads) + 1u, 0u);
+    worker_begin[0] = 0u;
+    worker_begin[static_cast<std::size_t>(threads)] = active_pos.size();
+    for (int t = 1; t < threads; ++t) {
+      std::size_t boundary =
+        active_pos.size() * static_cast<std::size_t>(t) / threads;
+      while (boundary < active_pos.size() &&
+             active_rows_ptr[boundary] == active_rows_ptr[boundary - 1u]) {
+        ++boundary;
+      }
+      worker_begin[static_cast<std::size_t>(t)] = boundary;
+    }
 
     auto run_worker = [&](const int t) {
-      const std::size_t begin = active_pos.size() * static_cast<std::size_t>(t) / threads;
-      const std::size_t end = active_pos.size() * static_cast<std::size_t>(t + 1) / threads;
+      const std::size_t begin = worker_begin[static_cast<std::size_t>(t)];
+      const std::size_t end = worker_begin[static_cast<std::size_t>(t + 1)];
 
-      for (int epoch = 0; epoch < n_epochs; ++epoch) {
+    float alpha = alpha0;
+    for (int epoch = 0; epoch < n_epochs; ++epoch) {
         TauPrng prng = make_tau_prng(seed, epoch, end, t);
-        const float alpha = static_cast<float>(
-          learning_rate * (1.0 - static_cast<double>(epoch) / n_epochs)
-        );
+        int cached_head = -1;
+        float cached_head_x = 0.0f;
+        float cached_head_y = 0.0f;
         for (std::size_t i = begin; i < end; ++i) {
           if (epoch_of_next_sample[i] > epoch) continue;
           const int j = active_rows_ptr[i];
           const int k = active_tails_ptr[i];
 
-          const float dx = x[j] - x[k];
-          const float dy = y[j] - y[k];
+          float head_x;
+          float head_y;
+          if (j == cached_head) {
+            head_x = cached_head_x;
+            head_y = cached_head_y;
+          } else {
+            cached_head = j;
+            head_x = x[j];
+            head_y = y[j];
+          }
+          float tail_x = x[k];
+          float tail_y = y[k];
+          const float dx = head_x - tail_x;
+          const float dy = head_y - tail_y;
           const float dist_sq = std::max(eps, dx * dx + dy * dy);
 
-          const float dist_pow = static_cast<float>(umap_pow(dist_sq, bf));
+          const float dist_pow = umap_powf_fast(dist_sq, bf);
           const float grad_coeff =
             attraction_const * dist_pow / (dist_sq * (af * dist_pow + 1.0f));
           const float gx = clip4f(grad_coeff * dx) * alpha;
           const float gy = clip4f(grad_coeff * dy) * alpha;
-          x[j] += gx;
-          y[j] += gy;
-          x[k] -= gx;
-          y[k] -= gy;
+          head_x += gx;
+          head_y += gy;
+          tail_x -= gx;
+          tail_y -= gy;
           epoch_of_next_sample[i] += epochs_per_sample_ptr[i];
 
           int n_neg_samples = 0;
@@ -3046,25 +3180,35 @@ NumericMatrix optimize_layout_csr(const int n,
             const int neg = prng.vertex(n);
             if (neg == j) continue;
 
-            const float ndx = x[j] - x[neg];
-            const float ndy = y[j] - y[neg];
+            const float neg_x = neg == k ? tail_x : x[neg];
+            const float neg_y = neg == k ? tail_y : y[neg];
+            const float ndx = head_x - neg_x;
+            const float ndy = head_y - neg_y;
             const float neg_dist_sq = std::max(eps, ndx * ndx + ndy * ndy);
-            const float neg_pow = static_cast<float>(umap_pow(neg_dist_sq, bf));
+            const float neg_pow = umap_powf_fast(neg_dist_sq, bf);
             const float repulse =
               repulsion_const / ((0.001f + neg_dist_sq) * (af * neg_pow + 1.0f));
-            x[j] += clip4f(repulse * ndx) * alpha;
-            y[j] += clip4f(repulse * ndy) * alpha;
+            head_x += clip4f(repulse * ndx) * alpha;
+            head_y += clip4f(repulse * ndy) * alpha;
           }
+          x[j] = head_x;
+          y[j] = head_y;
+          cached_head_x = head_x;
+          cached_head_y = head_y;
+          x[k] = tail_x;
+          y[k] = tail_y;
           if (n_neg_samples > 0) {
             epoch_of_next_negative_sample[i] += n_neg_samples * epochs_per_negative_sample_ptr[i];
           }
         }
 
-        barrier.wait();
         if (t == 0 && verbose && (epoch == 0 || epoch == n_epochs - 1 || (epoch + 1) % 50 == 0)) {
           Rcpp::Rcout << "epoch " << (epoch + 1) << "/" << n_epochs << "\n";
         }
-        barrier.wait();
+        if ((epoch + 1) % 50 == 0 || epoch == n_epochs - 1) {
+          barrier.wait();
+        }
+        alpha -= alpha_step;
       }
     };
 
@@ -3454,7 +3598,7 @@ NumericMatrix optimize_layout_csr_masked(const int n,
           const float dx = x[j] - x[k];
           const float dy = y[j] - y[k];
           const float dist_sq = std::max(eps, dx * dx + dy * dy);
-          const float dist_pow = static_cast<float>(umap_pow(dist_sq, bf));
+          const float dist_pow = umap_powf_fast(dist_sq, bf);
           const float grad_coeff =
             attraction_const * dist_pow / (dist_sq * (af * dist_pow + 1.0f));
           const float gx = clip4f(grad_coeff * dx) * alpha;
@@ -3480,7 +3624,7 @@ NumericMatrix optimize_layout_csr_masked(const int n,
             const float ndx = x[j] - x[neg];
             const float ndy = y[j] - y[neg];
             const float neg_dist_sq = std::max(eps, ndx * ndx + ndy * ndy);
-            const float neg_pow = static_cast<float>(umap_pow(neg_dist_sq, bf));
+            const float neg_pow = umap_powf_fast(neg_dist_sq, bf);
             const float repulse =
               repulsion_const / ((0.001f + neg_dist_sq) * (af * neg_pow + 1.0f));
             x[j] += clip4f(repulse * ndx) * alpha;
@@ -3950,47 +4094,175 @@ Rcpp::List umap_graph_csr_binary_union_cpp(IntegerMatrix indices,
   }
   const int index_offset = (min_idx >= 1 && max_idx <= n) ? 1 : 0;
 
-  std::vector<std::uint64_t> keys;
-  keys.reserve(
-    static_cast<std::size_t>(n) *
-    static_cast<std::size_t>(n_cols) * 2u
-  );
-  for (int row = 0; row < n; ++row) {
-    for (int j = 0; j < n_cols; ++j) {
-      const int nb = indices(row, j + col_start) - index_offset;
-      if (nb < 0 || nb >= n || nb == row) continue;
-      keys.push_back(edge_key(row, nb));
-      keys.push_back(edge_key(nb, row));
+  std::vector<int> raw_counts(static_cast<std::size_t>(n), 0);
+  parallel_for_chunks(n, n_threads, [&](const int begin_row, const int end_row, const int) {
+    for (int row = begin_row; row < end_row; ++row) {
+      int count = 0;
+      for (int j = 0; j < n_cols; ++j) {
+        const int nb = indices(row, j + col_start) - index_offset;
+        if (nb >= 0 && nb < n && nb != row) ++count;
+      }
+      raw_counts[static_cast<std::size_t>(row)] = count;
     }
+  });
+
+  std::vector<int> raw_offsets(static_cast<std::size_t>(n) + 1u, 0);
+  for (int row = 0; row < n; ++row) {
+    raw_offsets[static_cast<std::size_t>(row + 1)] =
+      raw_offsets[static_cast<std::size_t>(row)] + raw_counts[static_cast<std::size_t>(row)];
   }
-  if (keys.empty()) {
+  const int directed_nnz = raw_offsets[static_cast<std::size_t>(n)];
+  if (directed_nnz == 0) {
     Rcpp::stop("no valid non-self KNN edges were found");
   }
-  std::sort(keys.begin(), keys.end());
-  keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
 
-  std::vector<int> offsets(static_cast<std::size_t>(n) + 1u, 0);
-  for (const std::uint64_t key : keys) {
-    const int head = key_head(key);
-    if (head >= 0 && head < n) {
-      ++offsets[static_cast<std::size_t>(head + 1)];
+  std::vector<int> directed_neighbors(static_cast<std::size_t>(directed_nnz));
+  std::vector<int> row_ends = raw_offsets;
+  parallel_for_chunks(n, n_threads, [&](const int begin_row, const int end_row, const int) {
+    for (int row = begin_row; row < end_row; ++row) {
+      int out = raw_offsets[static_cast<std::size_t>(row)];
+      for (int j = 0; j < n_cols; ++j) {
+        const int nb = indices(row, j + col_start) - index_offset;
+        if (nb < 0 || nb >= n || nb == row) continue;
+        directed_neighbors[static_cast<std::size_t>(out)] = nb;
+        ++out;
+      }
+      row_ends[static_cast<std::size_t>(row)] = out;
+    }
+  });
+
+  std::vector<int> directed_offsets(static_cast<std::size_t>(n) + 1u, 0);
+  const int compact_nnz = compact_directed_rows_inplace_unit_weight(
+    raw_offsets, row_ends, directed_neighbors, directed_offsets, n_threads
+  );
+  release_vector(raw_counts);
+  release_vector(raw_offsets);
+  release_vector(row_ends);
+
+  const int graph_threads = effective_cpu_threads(n_threads, n);
+  std::vector<std::vector<int>> incoming_counts(
+    static_cast<std::size_t>(graph_threads),
+    std::vector<int>(static_cast<std::size_t>(n), 0)
+  );
+  parallel_for_chunks(n, graph_threads, [&](const int begin_row, const int end_row, const int thread_id) {
+    auto& local_counts = incoming_counts[static_cast<std::size_t>(thread_id)];
+    for (int row = begin_row; row < end_row; ++row) {
+      const int begin = directed_offsets[static_cast<std::size_t>(row)];
+      const int end = directed_offsets[static_cast<std::size_t>(row + 1)];
+      for (int pos = begin; pos < end; ++pos) {
+        const int target = directed_neighbors[static_cast<std::size_t>(pos)];
+        ++local_counts[static_cast<std::size_t>(target)];
+      }
+    }
+  });
+
+  std::vector<int> incoming_offsets(static_cast<std::size_t>(n) + 1u, 0);
+  for (int row = 0; row < n; ++row) {
+    int count = 0;
+    for (int t = 0; t < graph_threads; ++t) {
+      count += incoming_counts[static_cast<std::size_t>(t)][static_cast<std::size_t>(row)];
+    }
+    incoming_offsets[static_cast<std::size_t>(row + 1)] =
+      incoming_offsets[static_cast<std::size_t>(row)] + count;
+  }
+
+  for (int row = 0; row < n; ++row) {
+    int start = incoming_offsets[static_cast<std::size_t>(row)];
+    for (int t = 0; t < graph_threads; ++t) {
+      const int count = incoming_counts[static_cast<std::size_t>(t)][static_cast<std::size_t>(row)];
+      incoming_counts[static_cast<std::size_t>(t)][static_cast<std::size_t>(row)] = start;
+      start += count;
     }
   }
-  for (int i = 0; i < n; ++i) {
-    offsets[static_cast<std::size_t>(i + 1)] += offsets[static_cast<std::size_t>(i)];
-  }
 
-  std::vector<int> neighbors(keys.size());
-  std::vector<float> weights(keys.size(), 1.0f);
-  std::vector<float> epochs_per_sample(keys.size(), 1.0f);
-  std::vector<int> cursor = offsets;
-  for (const std::uint64_t key : keys) {
-    const int head = key_head(key);
-    const int tail = key_tail(key);
-    if (head < 0 || head >= n || tail < 0 || tail >= n || head == tail) continue;
-    const int pos = cursor[static_cast<std::size_t>(head)]++;
-    neighbors[static_cast<std::size_t>(pos)] = tail;
+  std::vector<int> incoming_neighbors(static_cast<std::size_t>(compact_nnz));
+  parallel_for_chunks(n, graph_threads, [&](const int begin_row, const int end_row, const int thread_id) {
+    auto& local_cursor = incoming_counts[static_cast<std::size_t>(thread_id)];
+    for (int row = begin_row; row < end_row; ++row) {
+      const int begin = directed_offsets[static_cast<std::size_t>(row)];
+      const int end = directed_offsets[static_cast<std::size_t>(row + 1)];
+      for (int pos = begin; pos < end; ++pos) {
+        const int target = directed_neighbors[static_cast<std::size_t>(pos)];
+        const int out = local_cursor[static_cast<std::size_t>(target)]++;
+        incoming_neighbors[static_cast<std::size_t>(out)] = row;
+      }
+    }
+  });
+  release_nested_vector(incoming_counts);
+
+  auto merge_count_row = [&](const int row) {
+    int out_pos = directed_offsets[static_cast<std::size_t>(row)];
+    const int out_end = directed_offsets[static_cast<std::size_t>(row + 1)];
+    int in_pos = incoming_offsets[static_cast<std::size_t>(row)];
+    const int in_end = incoming_offsets[static_cast<std::size_t>(row + 1)];
+    int count = 0;
+    while (out_pos < out_end || in_pos < in_end) {
+      const int out_nb = out_pos < out_end ?
+        directed_neighbors[static_cast<std::size_t>(out_pos)] :
+        std::numeric_limits<int>::max();
+      const int in_nb = in_pos < in_end ?
+        incoming_neighbors[static_cast<std::size_t>(in_pos)] :
+        std::numeric_limits<int>::max();
+      if (out_nb == in_nb) {
+        ++out_pos;
+        ++in_pos;
+      } else if (out_nb < in_nb) {
+        ++out_pos;
+      } else {
+        ++in_pos;
+      }
+      ++count;
+    }
+    return count;
+  };
+
+  std::vector<int> counts(static_cast<std::size_t>(n), 0);
+  parallel_for_chunks(n, n_threads, [&](const int begin_row, const int end_row, const int) {
+    for (int row = begin_row; row < end_row; ++row) {
+      counts[static_cast<std::size_t>(row)] = merge_count_row(row);
+    }
+  });
+
+  std::vector<int> offsets(static_cast<std::size_t>(n) + 1u, 0);
+  for (int row = 0; row < n; ++row) {
+    offsets[static_cast<std::size_t>(row + 1)] =
+      offsets[static_cast<std::size_t>(row)] + counts[static_cast<std::size_t>(row)];
   }
+  std::vector<int> neighbors(static_cast<std::size_t>(offsets[static_cast<std::size_t>(n)]));
+  parallel_for_chunks(n, n_threads, [&](const int begin_row, const int end_row, const int) {
+    for (int row = begin_row; row < end_row; ++row) {
+      int out_pos = directed_offsets[static_cast<std::size_t>(row)];
+      const int out_end = directed_offsets[static_cast<std::size_t>(row + 1)];
+      int in_pos = incoming_offsets[static_cast<std::size_t>(row)];
+      const int in_end = incoming_offsets[static_cast<std::size_t>(row + 1)];
+      int write = offsets[static_cast<std::size_t>(row)];
+      while (out_pos < out_end || in_pos < in_end) {
+        const int out_nb = out_pos < out_end ?
+          directed_neighbors[static_cast<std::size_t>(out_pos)] :
+          std::numeric_limits<int>::max();
+        const int in_nb = in_pos < in_end ?
+          incoming_neighbors[static_cast<std::size_t>(in_pos)] :
+          std::numeric_limits<int>::max();
+        int nb = 0;
+        if (out_nb == in_nb) {
+          nb = out_nb;
+          ++out_pos;
+          ++in_pos;
+        } else if (out_nb < in_nb) {
+          nb = out_nb;
+          ++out_pos;
+        } else {
+          nb = in_nb;
+          ++in_pos;
+        }
+        neighbors[static_cast<std::size_t>(write)] = nb;
+        ++write;
+      }
+    }
+  });
+
+  std::vector<float> weights(neighbors.size(), 1.0f);
+  std::vector<float> epochs_per_sample(neighbors.size(), 1.0f);
 
   return Rcpp::List::create(
     Rcpp::Named("offsets") = Rcpp::wrap(offsets),
@@ -4001,7 +4273,7 @@ Rcpp::List umap_graph_csr_binary_union_cpp(IntegerMatrix indices,
     Rcpp::Named("n") = n,
     Rcpp::Named("nnz") = static_cast<int>(neighbors.size()),
     Rcpp::Named("cuda_like_width") = Rcpp::IntegerVector::create(NA_INTEGER),
-    Rcpp::Named("graph_builder") = "binary_symmetric_union"
+    Rcpp::Named("graph_builder") = "binary_symmetric_union_direct_csr"
   );
 }
 
@@ -4216,7 +4488,7 @@ NumericMatrix fast_knn_umap_csr_atomic_cpp(IntegerVector offsets,
         const int head = heads[static_cast<std::size_t>(gid)];
         const int tail = tails[static_cast<std::size_t>(gid)];
         const float period = periods[static_cast<std::size_t>(gid)];
-        const int positive_samples = positive_samples_this_epoch_uwot_cpu(period, epoch);
+        const int positive_samples = positive_samples_this_epoch_umap_schedule(period, epoch);
         if (positive_samples <= 0) continue;
 
         for (int sample = 0; sample < positive_samples; ++sample) {
@@ -4229,7 +4501,7 @@ NumericMatrix fast_knn_umap_csr_atomic_cpp(IntegerVector offsets,
           const float dx = head_x - tail_x;
           const float dy = head_y - tail_y;
           const float d2 = std::max(eps, dx * dx + dy * dy);
-          const float d2b = std::pow(d2, bf);
+          const float d2b = umap_powf_fast(d2, bf);
           const float coeff = -2.0f * af * bf * (d2b / d2) / (af * d2b + 1.0f);
           const float gx = clip4f(coeff * dx) * alpha;
           const float gy = clip4f(coeff * dy) * alpha;
@@ -4240,7 +4512,7 @@ NumericMatrix fast_knn_umap_csr_atomic_cpp(IntegerVector offsets,
         }
 
         const int neg_samples =
-          negative_samples_this_epoch_uwot_cpu(period, negative_sample_rate, epoch);
+          negative_samples_this_epoch_umap_schedule(period, negative_sample_rate, epoch);
         for (int s = 0; s < neg_samples; ++s) {
           const int neg = deterministic_vertex_cuda_style(
             n, seed, epoch, head, static_cast<std::size_t>(gid), s
@@ -4255,7 +4527,7 @@ NumericMatrix fast_knn_umap_csr_atomic_cpp(IntegerVector offsets,
           const float dx = head_x - neg_x;
           const float dy = head_y - neg_y;
           const float d2 = std::max(eps, dx * dx + dy * dy);
-          const float d2b = std::pow(d2, bf);
+          const float d2b = umap_powf_fast(d2, bf);
           const float rcoeff = static_cast<float>(repulsion_strength) * 2.0f * bf /
             ((0.001f + d2) * (af * d2b + 1.0f));
           atomic_add_float(layout[head_base], clip4f(rcoeff * dx) * alpha);
@@ -4355,17 +4627,23 @@ NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets,
   }
 
   const int threads = effective_cpu_threads(n_threads, n_edges);
-  for (int epoch = 0; epoch < n_epochs; ++epoch) {
-    const float progress = static_cast<float>(epoch) / std::max(1.0f, static_cast<float>(n_epochs - 1));
-    float decay = 1.0f - progress;
-    if (decay_mode == 1) {
-      constexpr float pi_f = 3.14159265358979323846f;
-      decay = 0.5f * (1.0f + std::cos(pi_f * progress));
-    } else if (decay_mode == 2) {
-      decay = std::sqrt(std::max(0.0f, 1.0f - progress));
-    }
-    const float alpha = learning_rate_f * decay;
-    parallel_for_chunks(n_edges, threads, [&](const int begin_edge, const int end_edge, const int) {
+  ReusableBarrier barrier(threads);
+  auto run_worker = [&](const int thread_id) {
+    const int begin_edge =
+      static_cast<int>(static_cast<long long>(n_edges) * thread_id / threads);
+    const int end_edge =
+      static_cast<int>(static_cast<long long>(n_edges) * (thread_id + 1) / threads);
+
+    for (int epoch = 0; epoch < n_epochs; ++epoch) {
+      const float progress = static_cast<float>(epoch) / std::max(1.0f, static_cast<float>(n_epochs - 1));
+      float decay = 1.0f - progress;
+      if (decay_mode == 1) {
+        constexpr float pi_f = 3.14159265358979323846f;
+        decay = 0.5f * (1.0f + std::cos(pi_f * progress));
+      } else if (decay_mode == 2) {
+        decay = std::sqrt(std::max(0.0f, 1.0f - progress));
+      }
+      const float alpha = learning_rate_f * decay;
       for (int gid = begin_edge; gid < end_edge; ++gid) {
         const int head = heads[static_cast<std::size_t>(gid)];
         const int tail = tails[static_cast<std::size_t>(gid)];
@@ -4384,7 +4662,7 @@ NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets,
         const float dx = head_x - tail_x;
         const float dy = head_y - tail_y;
         const float d2 = std::max(eps, dx * dx + dy * dy);
-        const float d2b = std::pow(d2, bf);
+        const float d2b = umap_powf_fast(d2, bf);
         const float coeff = -2.0f * af * bf * (d2b / d2) / (af * d2b + 1.0f);
         const float gx = clip4f(coeff * dx) * alpha;
         const float gy = clip4f(coeff * dy) * alpha;
@@ -4404,18 +4682,32 @@ NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets,
           const float ndx = current_head_x - neg_x;
           const float ndy = current_head_y - neg_y;
           const float nd2 = std::max(eps, ndx * ndx + ndy * ndy);
-          const float nd2b = std::pow(nd2, bf);
+          const float nd2b = umap_powf_fast(nd2, bf);
           const float rcoeff = repulsion_strength_f * 2.0f * bf /
             ((0.001f + nd2) * (af * nd2b + 1.0f));
           atomic_add_float(layout[head_base], clip4f(rcoeff * ndx) * alpha);
           atomic_add_float(layout[head_base + 1u], clip4f(rcoeff * ndy) * alpha);
         }
       }
-    });
 
-    if (verbose && (epoch == 0 || epoch == n_epochs - 1 || (epoch + 1) % 50 == 0)) {
-      Rcpp::Rcout << "clean epoch " << (epoch + 1) << "/" << n_epochs << "\n";
+      barrier.wait();
+      if (thread_id == 0 &&
+          verbose &&
+          (epoch == 0 || epoch == n_epochs - 1 || (epoch + 1) % 50 == 0)) {
+        Rcpp::Rcout << "clean epoch " << (epoch + 1) << "/" << n_epochs << "\n";
+      }
+      barrier.wait();
     }
+  };
+
+  std::vector<std::thread> workers;
+  workers.reserve(static_cast<std::size_t>(std::max(0, threads - 1)));
+  for (int t = 1; t < threads; ++t) {
+    workers.emplace_back(run_worker, t);
+  }
+  run_worker(0);
+  for (auto& worker : workers) {
+    worker.join();
   }
 
   NumericMatrix out(n, 2);
@@ -4502,7 +4794,7 @@ NumericMatrix fast_knn_umap_coo_replay_cpp(IntegerVector heads,
         if (head < 0 || head >= n || tail < 0 || tail >= n || head == tail) continue;
 
         const float per = period[static_cast<std::size_t>(gid)];
-        const int positive_samples = positive_samples_this_epoch_uwot_cpu(per, epoch);
+        const int positive_samples = positive_samples_this_epoch_umap_schedule(per, epoch);
         if (positive_samples <= 0) continue;
 
         for (int sample = 0; sample < positive_samples; ++sample) {
@@ -4515,7 +4807,7 @@ NumericMatrix fast_knn_umap_coo_replay_cpp(IntegerVector heads,
           const float dx = head_x - tail_x;
           const float dy = head_y - tail_y;
           const float d2 = std::max(eps, dx * dx + dy * dy);
-          const float d2b = std::pow(d2, bf);
+          const float d2b = umap_powf_fast(d2, bf);
           const float coeff = -2.0f * af * bf * (d2b / d2) / (af * d2b + 1.0f);
           const float gx = clip4f(coeff * dx) * alpha;
           const float gy = clip4f(coeff * dy) * alpha;
@@ -4526,7 +4818,7 @@ NumericMatrix fast_knn_umap_coo_replay_cpp(IntegerVector heads,
         }
 
         const int neg_samples =
-          negative_samples_this_epoch_uwot_cpu(per, negative_sample_rate, epoch);
+          negative_samples_this_epoch_umap_schedule(per, negative_sample_rate, epoch);
         for (int s = 0; s < neg_samples; ++s) {
           const int neg = deterministic_vertex_cuda_style(
             n, seed, epoch, head, static_cast<std::size_t>(gid), s
@@ -4541,7 +4833,7 @@ NumericMatrix fast_knn_umap_coo_replay_cpp(IntegerVector heads,
           const float dx = head_x - neg_x;
           const float dy = head_y - neg_y;
           const float d2 = std::max(eps, dx * dx + dy * dy);
-          const float d2b = std::pow(d2, bf);
+          const float d2b = umap_powf_fast(d2, bf);
           const float rcoeff = repulsion_strength_f * 2.0f * bf /
             ((0.001f + d2) * (af * d2b + 1.0f));
           atomic_add_float(layout[head_base], clip4f(rcoeff * dx) * alpha);
@@ -4909,7 +5201,7 @@ Rcpp::List umap_auto_parameters_cpp(NumericMatrix distances,
   int spectral_n_iter = very_large ? (k <= 15 ? 30 : 20) : (n >= 500 ? 60 : 50);
   double init_scale = NA_REAL;
   double learning_rate = 1.0;
-  std::string rule = very_large ? "uwot_fast_sgd_compatible_cpp_profile" : "uwot_default_cpp_profile";
+  std::string rule = very_large ? "clean_atomic_large_cpp_profile" : "clean_atomic_standard_cpp_profile";
 
   if (very_large && std::isfinite(ratio50) && std::isfinite(cv) && ratio50 >= 1.25 && cv >= 1.0) {
     min_dist = 0.1;

@@ -1471,7 +1471,7 @@ List tsne_auto_parameters_cpp(const int n,
 // Native openTSNE-style optimizer from precomputed KNN probabilities. This
 // follows openTSNE's two-phase optimization contract while keeping the
 // implementation in fastEmbedR C++ and using the same sparse KNN affinity
-// builder as the Rtsne-compatible path above.
+// builder used for public KNN-input t-SNE reference checks.
 // [[Rcpp::export]]
 List knn_tsne_opentsne_cpp(IntegerMatrix indices,
                            NumericMatrix distances,

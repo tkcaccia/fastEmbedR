@@ -184,7 +184,7 @@ fast_knn_umap_core <- function(indices,
     cfg$gpu_optimizer_update_rule <- if (gpu_backend == "metal") {
       "native_metal_csr_clean_linear_atomic_inplace_edge_update"
     } else {
-      "native_cuda_atomic_coo_uwot_schedule"
+      "native_cuda_atomic_coo_umap_schedule"
     }
     cfg$gpu_optimizer_schedule <- if (gpu_backend == "metal") {
       "clean_edge_probability_linear_decay"
@@ -409,9 +409,9 @@ fast_knn_umap_core <- function(indices,
     cfg$graph_cuda_like_width <- graph$cuda_like_width
     cfg$graph_builder <- graph$graph_builder
     cfg$init_backend <- attr(init, "backend")
-    cfg$optimizer_mode <- "clean_linear_atomic"
-    cfg$optimizer_schedule <- "clean_edge_probability_linear_decay"
-    layout <- fast_knn_umap_csr_clean_atomic_cpp(
+    cfg$optimizer_mode <- "csr_epoch_schedule"
+    cfg$optimizer_schedule <- "epochs_per_sample_binary_csr"
+    layout <- fast_knn_umap_csr_init_cpp(
       graph$offsets,
       graph$neighbors,
       graph$weights,
@@ -423,7 +423,6 @@ fast_knn_umap_core <- function(indices,
       cfg$repulsion_strength,
       as.integer(cfg$n_threads),
       as.integer(seed),
-      0L,
       isTRUE(verbose)
     )
     layout <- set_embedding_colnames(layout, "UMAP")
@@ -539,113 +538,6 @@ umap_csr_to_coo <- function(graph) {
   )
 }
 
-fast_knn_umap_clean_sampler_experiment <- function(indices,
-                                                   distances = NULL,
-                                                   n_components = 2L,
-                                                   seed = 42L,
-                                                   verbose = FALSE,
-                                                   n_threads = NULL,
-                                                   graph_mode = c("binary", "fuzzy"),
-                                                   backend = c("cpu", "metal"),
-                                                   sampler = c("current", "clean"),
-                                                   clean_decay = c("linear", "cosine", "sqrt")) {
-  graph_mode <- match.arg(graph_mode)
-  backend <- match.arg(backend)
-  sampler <- match.arg(sampler)
-  clean_decay <- match.arg(clean_decay)
-  n_components <- validate_n_components(n_components)
-  if (n_components != 2L) {
-    stop("The clean sampler experiment currently supports two output components.", call. = FALSE)
-  }
-  knn <- coerce_knn_input(indices, distances)
-  cfg <- fast_knn_umap_config(
-    n = nrow(knn$indices),
-    k = knn$n_neighbors,
-    backend = "cpu"
-  )
-  if (!is.null(n_threads)) {
-    n_threads <- as.integer(n_threads)
-    if (length(n_threads) != 1L || is.na(n_threads) || !is.finite(n_threads) || n_threads < 1L) {
-      stop("`n_threads` must be NULL or a positive integer.", call. = FALSE)
-    }
-    cfg$n_threads <- as.integer(max(1L, min(4L, n_threads)))
-  }
-  graph <- umap_build_csr_graph(
-    knn$indices,
-    knn$distances,
-    as.integer(knn$col_start),
-    as.integer(knn$n_neighbors),
-    as.integer(knn$n_neighbors),
-    as.integer(cfg$n_threads),
-    graph_mode = graph_mode
-  )
-  init <- umap_init_from_csr_graph(
-    graph,
-    n_components = n_components,
-    cfg = cfg,
-    seed = seed,
-    verbose = FALSE
-  )
-  if (identical(backend, "metal") && !metal_available()) {
-    stop("Metal backend is not available on this machine.", call. = FALSE)
-  }
-  layout <- if (identical(backend, "metal")) {
-    knn_embed_metal_csr_cpp(
-      graph$offsets,
-      graph$neighbors,
-      graph$weights,
-      init,
-      as.integer(cfg$n_epochs),
-      as.integer(cfg$negative_sample_rate),
-      cfg$learning_rate,
-      cfg$min_dist,
-      as.numeric(graph$max_weight),
-      cfg$repulsion_strength,
-      as.integer(seed),
-      if (identical(sampler, "clean")) 1L else 0L
-    )
-  } else if (identical(sampler, "clean")) {
-    fast_knn_umap_csr_clean_atomic_cpp(
-      graph$offsets,
-      graph$neighbors,
-      graph$weights,
-      init,
-      as.integer(cfg$n_epochs),
-      cfg$min_dist,
-      as.integer(cfg$negative_sample_rate),
-      cfg$learning_rate,
-      cfg$repulsion_strength,
-      as.integer(cfg$n_threads),
-      as.integer(seed),
-      as.integer(match(clean_decay, c("linear", "cosine", "sqrt")) - 1L),
-      isTRUE(verbose)
-    )
-  } else {
-    fast_knn_umap_csr_atomic_cpp(
-      graph$offsets,
-      graph$neighbors,
-      graph$weights,
-      init,
-      as.integer(cfg$n_epochs),
-      cfg$min_dist,
-      as.integer(cfg$negative_sample_rate),
-      cfg$learning_rate,
-      cfg$repulsion_strength,
-      as.integer(cfg$n_threads),
-      as.integer(seed),
-      isTRUE(verbose)
-    )
-  }
-  layout <- set_embedding_colnames(layout, "UMAP")
-  cfg$graph_mode <- graph_mode
-  cfg$backend <- backend
-  cfg$sampler_experiment <- sampler
-  cfg$clean_decay <- if (identical(sampler, "clean")) clean_decay else NA_character_
-  cfg$graph_nnz <- as.integer(graph$nnz)
-  cfg$graph_builder <- graph$graph_builder
-  attr(layout, "fastEmbedR_config") <- cfg
-  layout
-}
 
 apply_fast_knn_umap_config_override <- function(cfg, override) {
   if (is.null(override) || length(override) == 0L) {
@@ -754,7 +646,7 @@ fast_knn_umap_should_auto_pilot <- function(cfg,
                                             n_epochs = NULL) {
   if (!is.null(config_override) || !is.null(n_epochs)) return(FALSE)
   if (!identical(cfg$backend, "cpu")) return(FALSE)
-  if (!cfg$epoch_source %in% c("uwot_fast_sgd_default")) return(FALSE)
+  if (!cfg$epoch_source %in% c("clean_large_default")) return(FALSE)
   if (!isTRUE(getOption("fastEmbedR.knn_pilot", FALSE))) return(FALSE)
   n <- nrow(indices)
   k <- ncol(indices)
@@ -768,7 +660,7 @@ fast_knn_umap_auto_pilot_skip_reason <- function(cfg,
   if (!is.null(config_override)) return("explicit config override supplied")
   if (!is.null(n_epochs)) return("explicit epoch override supplied")
   if (!identical(cfg$backend, "cpu")) return("auto KNN pilot currently runs only on the CPU optimizer path")
-  if (!cfg$epoch_source %in% c("uwot_fast_sgd_default")) return("default is not the uwot-compatible UMAP path")
+  if (!cfg$epoch_source %in% c("clean_large_default")) return("default is not the clean atomic UMAP path")
   if (!isTRUE(getOption("fastEmbedR.knn_pilot", FALSE))) return("disabled by default; set option fastEmbedR.knn_pilot = TRUE for internal benchmarking")
   if (nrow(indices) < fast_knn_umap_auto_pilot_min_n()) return("below auto KNN pilot size threshold")
   if (ncol(indices) < 10L) return("too few supplied neighbours for a stable pilot")
@@ -837,24 +729,24 @@ fast_knn_umap_config <- function(n,
     negative_sample_rate <- 5L
     spectral_n_iter <- if (k <= 15L) 30L else 20L
     init_scale <- NA_real_
-    preset <- "uwot_fast_sgd_compatible"
-    epoch_source <- "uwot_fast_sgd_default"
+    preset <- "clean_atomic_large"
+    epoch_source <- "clean_large_default"
   } else if (medium_or_large) {
     n_epochs <- 500L
     min_dist <- 0.01
     negative_sample_rate <- 5L
     spectral_n_iter <- 60L
     init_scale <- NA_real_
-    preset <- "uwot_default"
-    epoch_source <- "uwot_size_rule"
+    preset <- "clean_atomic_standard"
+    epoch_source <- "clean_size_rule"
   } else {
     n_epochs <- 500L
     min_dist <- 0.01
     negative_sample_rate <- 5L
     spectral_n_iter <- 50L
     init_scale <- NA_real_
-    preset <- "uwot_default"
-    epoch_source <- "uwot_size_rule"
+    preset <- "clean_atomic_standard"
+    epoch_source <- "clean_size_rule"
   }
   repulsion_strength <- 1
   learning_rate <- 1
@@ -899,8 +791,8 @@ fast_knn_umap_config <- function(n,
     graph_pruning = if (prune_fraction > 0) "adaptive_weight_with_connectivity_rescue" else "none",
     graph_prune_fraction = as.numeric(prune_fraction),
     graph_prune_min_degree = as.integer(fast_knn_umap_prune_min_degree(k)),
-    graph_mode = "uwot_fuzzy_union",
-    optimizer_math = "uwot_fast_sgd_compatible",
+    graph_mode = "native_csr_graph",
+    optimizer_math = "clean_atomic_edge_sampler",
     n = as.integer(n),
     k = as.integer(k),
     n_threads = as.integer(n_threads),

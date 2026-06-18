@@ -1,105 +1,116 @@
 # Benchmarks
 
-The full current benchmark summary is kept in
-[../BENCHMARK_SUMMARY.md](../BENCHMARK_SUMMARY.md). This page records the main
-MNIST 70k benchmark command and the latest local raw-image snapshot.
+[Home](../README.md) |
+[Installation](installation.md) |
+[Implementation](implementation.md) |
+[Examples](examples.md) |
+**Benchmarks** |
+[API](usage-api.md) |
+[Provenance](algorithm-provenance.md)
 
-## Methods To Compare
+This page summarizes the GitHub-facing benchmark setup. The publication
+benchmark scripts under `tools/` contain the larger multi-dataset benchmark
+suite.
 
-After the cleanup, benchmarks should compare:
+## MNIST 70k Benchmark
 
-- `fastEmbedR::umap_knn()` from a supplied KNN graph.
-- `uwot::umap()` / `uwot::umap(..., fast_sgd = TRUE)` as the R reference UMAP
-  path.
-- `fastEmbedR::opentsne_knn()` from a supplied KNN graph.
-- `Rtsne::Rtsne_neighbors()` as the R reference t-SNE-from-KNN path.
-- `ReductionWrappers::openTSNE()` as the Python openTSNE wrapper when the
-  configured `reticulate` Python can import `openTSNE`.
+The GitHub benchmark uses the full 70,000 MNIST observations from the public
+IDX files, represented as flattened 28x28 raw images.
 
-## MNIST 70k Raw-Image Benchmark
-
-The command below runs the local MNIST 70k benchmark on raw flattened 28x28
-images, not on PCA features:
+Run locally on Apple Silicon:
 
 ```sh
-Rscript tools/benchmark_mnist70k_current_backends.R \
-  --feature-source=raw \
+Rscript tools/benchmark_github_mnist70k.R \
   --n=70000 \
-  --k=50 \
-  --seed=6 \
+  --k=15 \
+  --perplexity=15 \
   --threads=4 \
-  --backends=cpu,metal \
-  --run-uwot=true \
-  --run-umap=true \
-  --run-opentsne=true \
-  --run-rtsne=true \
-  --run-landmark=true
+  --run-metal=true \
+  --run-cuda=false \
+  --run-references=true \
+  --out-dir=results/github_mnist70k_local
 ```
 
-Latest local raw-MNIST run, using flattened 784-column images and a
-5,000-point quality sample:
-
-| method | backend | NN sec | embed sec | proj+transform sec | trust |
-| --- | --- | ---: | ---: | ---: | ---: |
-| openTSNE | CPU | 64.752 | 4.263 | NA | 0.319 |
-| openTSNE | Metal | 40.787 | 6.696 | NA | 0.305 |
-| Rtsne_neighbors | CPU | 64.752 | 34.871 | NA | 0.198 |
-| openTSNE landmark50 | CPU | 192.299 | 2.535 | 143.509 | 0.269 |
-| openTSNE landmark50 | Metal | 50.390 | 3.709 | 49.807 | 0.270 |
-| UMAP | CPU | 64.752 | 6.914 | NA | 0.281 |
-| UMAP | Metal | 40.787 | 2.159 | NA | 0.283 |
-| UMAP landmark50 | CPU | 197.833 | 3.581 | 159.008 | 0.267 |
-| UMAP landmark50 | Metal | 51.452 | 1.236 | 53.215 | 0.262 |
-| uwot::umap fast_sgd | CPU | NA | 67.581 | NA | 0.283 |
-
-For `uwot::umap`, `embed sec` is the total exposed call time because `uwot`
-does not report KNN, graph construction, and SGD timing separately. For
-fastEmbedR rows, KNN and embedding/projection timing are recorded separately.
-
-## MPSGraph Diagnostic Result
-
-The MPSGraph FFT diagnostic is not the default path. On flattened MNIST 70k
-with the same cached KNN and same PCA initialization, it was slightly faster
-but shifted the plot and quality slightly:
-
-| backend | NN sec | PCA init sec | embed sec | trust | label acc |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| current Metal FFT-grid | 40.904 | 3.734 | 3.608 | 0.303 | 0.969 |
-| MPSGraph FFT diagnostic | 40.904 | 3.734 | 3.271 | 0.300 | 0.967 |
-
-The conclusion for now is to keep package-native Metal FFT-grid as the default
-and keep MPSGraph diagnostic-only.
-
-## GitHub Figure: openTSNE PCA Init, CPU vs Metal vs CUDA
-
-The figure below shows `fastEmbedR::opentsne_knn()` on MNIST 70k raw flattened
-images using KNN input and PCA initialization. CPU and Metal were rerun locally
-from cached backend-specific KNN. CUDA uses the saved chiamaka CUDA run with
-RAPIDS cuVS NN-descent KNN and native CUDA FFT-grid openTSNE.
-
-![MNIST 70k openTSNE PCA embeddings](assets/mnist70k-opentsne-pca-embeddings-cpu-metal-cuda.png)
-
-The stacked bar plot separates nearest-neighbour time from embedding time, as
-requested. PCA initialization time is not included in the stacked bars; the
-bars report only NN search plus openTSNE embedding.
-
-![MNIST 70k openTSNE PCA timing](assets/mnist70k-opentsne-pca-timing-stacked.png)
-
-Timing table:
-
-| backend | machine | NN sec | embedding sec | total sec | trust | label KNN acc |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| CPU | Stefanos-MacBook-Pro.local | 61.642 | 3.896 | 65.538 | 0.324 | 0.958 |
-| Metal | Stefanos-MacBook-Pro.local | 40.904 | 3.250 | 44.154 | 0.312 | 0.966 |
-| CUDA | icgeb-bioinformatics-unit | 2.046 | 0.410 | 2.456 | 0.327 | 0.972 |
-
-The source CSV for the figure is
-[assets/mnist70k-opentsne-pca-timing.csv](assets/mnist70k-opentsne-pca-timing.csv).
-The figure was generated with:
+Run on CUDA:
 
 ```sh
-Rscript tools/make_mnist70k_pca_github_figures.R \
-  --local-dir=results/mnist70k_pca_opentsne_github_local_20260612_214031 \
-  --cuda-dir=results/chiamaka_mnist70k_cpu_cuda_20260612_150230/results \
-  --out-dir=docs/assets
+Rscript tools/benchmark_github_mnist70k.R \
+  --n=70000 \
+  --k=15 \
+  --perplexity=15 \
+  --threads=4 \
+  --run-metal=false \
+  --run-cuda=true \
+  --run-references=true \
+  --out-dir=results/github_mnist70k_cuda
 ```
+
+Compared methods:
+
+| Family | fastEmbedR method | Reference method |
+| --- | --- | --- |
+| openTSNE/t-SNE | `fastEmbedR::opentsne()` on CPU, Metal, CUDA | `Rtsne::Rtsne()` full call with its own internal KNN |
+| UMAP | `fastEmbedR::umap(..., graph_mode = "fuzzy")` on CPU, Metal, CUDA | `uwot::umap(..., fast_sgd = TRUE)` full call with its own internal KNN |
+
+`graph_mode = "binary"` is not displayed in this GitHub benchmark.
+
+## openTSNE Result
+
+The figure below shows a representative MNIST 70k openTSNE comparison.
+
+![MNIST 70k openTSNE CPU Metal CUDA](assets/mnist70k-opentsne-pca-embeddings-cpu-metal-cuda.png)
+
+Timing from the saved run:
+
+| method | backend | machine | NN sec | embedding sec | total sec | trust | label KNN acc |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| fastEmbedR openTSNE | CPU | Mac | 61.642 | 3.896 | 65.538 | 0.324 | 0.958 |
+| fastEmbedR openTSNE | Metal | Mac | 40.904 | 3.250 | 44.154 | 0.312 | 0.966 |
+| fastEmbedR openTSNE | CUDA | chiamaka | 2.046 | 0.410 | 2.456 | 0.327 | 0.972 |
+
+The source CSV is
+[assets/mnist70k-opentsne-pca-timing.csv](assets/mnist70k-opentsne-pca-timing.csv).
+
+For full t-SNE comparison, use the benchmark script above. It runs
+`Rtsne::Rtsne()` as a complete function call, including its own neighbour
+calculation.
+
+## UMAP Result: Fuzzy Graph Only
+
+The UMAP GitHub examples show only the standard fuzzy graph mode.
+
+| fastEmbedR CPU fuzzy | fastEmbedR Metal fuzzy |
+| --- | --- |
+| ![fastEmbedR CPU fuzzy](assets/mnist70k-umap-fastembedr-cpu-fuzzy.png) | ![fastEmbedR Metal fuzzy](assets/mnist70k-umap-fastembedr-metal-fuzzy.png) |
+
+| fastEmbedR CUDA fuzzy | uwot fast_sgd full baseline |
+| --- | --- |
+| ![fastEmbedR CUDA fuzzy](assets/mnist70k-umap-fastembedr-cuda-fuzzy.png) | ![uwot fast_sgd](assets/mnist70k-umap-uwot-fast-sgd.png) |
+
+Representative timing from saved MNIST runs:
+
+| method | backend | k | NN sec | embedding sec | total sec |
+| --- | --- | ---: | ---: | ---: | ---: |
+| fastEmbedR UMAP fuzzy | CPU | 15 | 20.897 | 5.817 | 26.714 |
+| fastEmbedR UMAP fuzzy | Metal | 15 | 20.897 | 0.937 | 21.834 |
+| fastEmbedR UMAP fuzzy | CUDA | 15 | 12.594 | 3.207 | 15.801 |
+| `uwot::umap(..., fast_sgd = TRUE)` | CPU | 15 | internal | 6.832 | full-call benchmark |
+
+The `uwot` row in the saved local table reports the exposed embedding call time
+from the test harness; for the GitHub benchmark script, `uwot::umap()` is run
+as a full function call with its own internal neighbour calculation.
+
+## Larger Benchmark Suite
+
+The larger paper-oriented benchmark scripts are:
+
+- `tools/benchmark1_nn_speed.R`: neighbour-search benchmark.
+- `tools/benchmark2_tsne_speed_accuracy.R`: t-SNE/openTSNE benchmark.
+- `tools/benchmark3_umap_speed_accuracy.R`: UMAP benchmark.
+- `tools/benchmark_embeddings.sh`: Singularity/HPC wrapper that runs method
+  workers independently and records timeout/OOM failures instead of stopping
+  the whole benchmark.
+
+See [extended-benchmark-suite.md](extended-benchmark-suite.md) for the
+multi-dataset plan and [benchmark-gallery.md](benchmark-gallery.md) for
+publication-style figure guidance.

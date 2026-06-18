@@ -7,40 +7,29 @@ for `fastEmbedR`.
 
 ```r
 install.packages("remotes")
+remotes::install_github("tkcaccia/faissR")
 remotes::install_github("tkcaccia/fastEmbedR")
 ```
 
-Optional native KNN backends are linked only when available at build time.
-Explicit unavailable GPU, FAISS, or cuVS backends fail clearly rather than
-silently running on CPU.
-
-Automatic selectors do not require optional libraries. If FAISS, cuVS, or CUDA
-headers/libraries are absent during compilation, the package builds with stub
-objects and `nn(..., backend = "auto")` / `nn(..., backend = "cpu_approx")`
-choose the best available native alternative. With FAISS compiled in, the
-large-data CPU approximation prefers FAISS `IndexHNSWFlat`; without FAISS it
-falls back to package-native CPU approximations. With CUDA/cuVS compiled in,
-explicit CUDA KNN uses RAPIDS cuVS; without it, explicit CUDA/cuVS requests fail
-with an install message instead of being relabelled as CPU.
-
-```sh
-FASTEMBEDR_USE_FAISS=1 FAISS_HOME=/path/to/faiss R CMD INSTALL .
-FASTEMBEDR_USE_CUDA=1 FASTEMBEDR_USE_CUVS=1 CUVS_HOME=/path/to/cuvs R CMD INSTALL .
-```
+Native KNN backends are implemented in the companion `faissR` package.
+`fastEmbedR::nn()` is a thin wrapper around `faissR::nn()`, so FAISS/cuVS KNN
+availability is controlled by the `faissR` build. Explicit unavailable GPU,
+FAISS, or cuVS backends fail clearly rather than silently running on CPU.
 
 For a local macOS FAISS build through conda-forge:
 
 ```sh
 conda create -n fastembedr-faiss -c conda-forge faiss-cpu r-base r-rcpp
 conda activate fastembedr-faiss
-FASTEMBEDR_USE_FAISS=1 FAISS_HOME="$CONDA_PREFIX" R CMD INSTALL .
+FAISSR_USE_FAISS=1 FAISS_HOME="$CONDA_PREFIX" R CMD INSTALL /path/to/faissR
+R CMD INSTALL /path/to/fastEmbedR
 ```
 
 ## Optional RAPIDS cuVS KNN
 
-`fastEmbedR` includes native C++ bindings for RAPIDS cuVS KNN, including
+`faissR` includes native C++ bindings for RAPIDS cuVS KNN, including
 brute-force search, CAGRA, and NN-descent. The RAPIDS libraries themselves are
-not vendored into the R package because the CUDA binary stack is large and must
+not vendored into `fastEmbedR` because the CUDA binary stack is large and must
 match the host NVIDIA driver/CUDA runtime.
 
 On a CUDA Linux machine, install the external cuVS SDK with:
@@ -58,12 +47,13 @@ NVIDIA driver but an older system `nvcc`:
 ```sh
 FASTEMBEDR_CUVS_CUDA_VERSION=12.9 tools/install_cuvs_linux.sh
 . ~/.fastEmbedR/cuvs_env.sh
-R CMD INSTALL .
+R CMD INSTALL /path/to/faissR
+FASTEMBEDR_USE_CUDA=1 R CMD INSTALL /path/to/fastEmbedR
 ```
 
-The activation file sets `CUVS_HOME`, `CUDA_HOME`, `NVCC`,
-`FASTEMBEDR_USE_CUDA=1`, and `FASTEMBEDR_USE_CUVS=1`, so fastEmbedR builds
-against the micromamba cuVS/CUDA environment instead of `/usr/bin/nvcc`.
+The activation file sets `CUVS_HOME`, `CUDA_HOME`, `NVCC`, and CUDA/cuVS build
+flags, so `faissR` and `fastEmbedR` build against the micromamba cuVS/CUDA
+environment instead of `/usr/bin/nvcc`.
 
 After installation:
 
@@ -111,9 +101,9 @@ the package-native Metal FFT-grid path. MPSGraph is kept diagnostic-only.
 
 The main remaining Metal openTSNE speed gap is the FFT itself. CUDA uses NVIDIA
 cuFFT, while the Mac path uses package-native Metal FFT kernels. The 512x512
-openTSNE/FIt-SNE grid path uses a validated Stockham FFT kernel adapted from
-the MIT-licensed AppleSiliconFFT design; other grid sizes use the generic
-package-native Metal Cooley-Tukey path. See
+openTSNE/FIt-SNE grid path uses a validated Stockham FFT kernel implemented
+using the MIT-licensed AppleSiliconFFT design as a reference; other grid sizes
+use the generic package-native Metal Cooley-Tukey path. See
 [metal-fft-roadmap.md](metal-fft-roadmap.md) and profile the current FFT
 stages with:
 

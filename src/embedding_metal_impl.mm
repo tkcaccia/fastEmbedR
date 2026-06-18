@@ -1055,10 +1055,35 @@ float clip4(float x) {
   return clamp(x, -4.0f, 4.0f);
 }
 
+// Package-local positive-base power approximation for UMAP force kernels.
+// It uses IEEE-754 exponent interpolation, following Schraudolph's published
+// fast exponential idea, and is mirrored from the CPU implementation without
+// vendoring third-party source.
+float fast_positive_pow(float x, float b) {
+  if (x <= 0.0f) return 0.0f;
+  uint x_bits = as_type<uint>(x);
+  const float exponent_bias_word = 1064866805.0f;
+  int whole = int(b);
+  float fractional = b - float(whole);
+  uint interp_bits = uint(
+    fractional * (float(x_bits) - exponent_bias_word) + exponent_bias_word
+  );
+  float fractional_pow = as_type<float>(interp_bits);
+  float integer_pow = 1.0f;
+  float base = x;
+  int exponent = whole;
+  while (exponent > 0) {
+    if ((exponent & 1) != 0) integer_pow *= base;
+    base *= base;
+    exponent >>= 1;
+  }
+  return integer_pow * fractional_pow;
+}
+
 float attractive_coeff(float d2, float weight, constant EmbedParams& p) {
   if (p.objective == 0u) {
     if (d2 <= 0.0f) return 0.0f;
-    float d2b = pow(d2, p.b);
+    float d2b = fast_positive_pow(d2, p.b);
     return -2.0f * p.a * p.b * (d2b / d2) / (p.a * d2b + 1.0f);
   }
   if (p.objective == 1u) return -2.0f * weight / (1.0f + d2);
@@ -1070,7 +1095,7 @@ float attractive_coeff(float d2, float weight, constant EmbedParams& p) {
 float repulsive_coeff(float d2, constant EmbedParams& p) {
   if (d2 <= 0.0f) return 0.0f;
   if (p.objective == 0u) {
-    float d2b = pow(d2, p.b);
+    float d2b = fast_positive_pow(d2, p.b);
     return p.repulsion_strength * 2.0f * p.b / ((0.001f + d2) * (p.a * d2b + 1.0f));
   }
   if (p.objective == 1u) return p.repulsion_strength * 2.0f / ((1.0f + d2) * (1.0f + d2));
@@ -2318,10 +2343,11 @@ kernel void opentsne_fft_scale(
   values[gid] *= scale;
 }
 
-// Stockham 512 kernels adapted for fastEmbedR from the MIT-licensed
-// AppleSiliconFFT radix-4 Stockham design by Mohamed Amine Bergach. They are
-// used only for validated 512x512 openTSNE FFT grids; other sizes stay on the
-// generic Cooley-Tukey Metal path.
+// Stockham 512 kernels implemented for fastEmbedR using the MIT-licensed
+// AppleSiliconFFT radix-4 Stockham design by Mohamed Amine Bergach as a
+// reference. Attribution is recorded in inst/NOTICE. They are used only for
+// validated 512x512 openTSNE FFT grids; other sizes stay on the generic
+// Cooley-Tukey Metal path.
 inline void opentsne_fft_radix4(thread float2& x0, thread float2& x1,
                                 thread float2& x2, thread float2& x3,
                                 bool inverse) {

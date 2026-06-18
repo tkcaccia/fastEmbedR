@@ -42,7 +42,7 @@ A numeric embedding matrix with resolved settings in
 }
 \description{
 \code{umap_knn()} embeds observations from a supplied nearest-neighbour graph
-using the restored uwot-compatible UMAP path. It is the KNN-input UMAP entry
+using the stable native UMAP path. It is the KNN-input UMAP entry
 point used by \code{\link{embed_knn}} with \code{method = "umap"}.
 }
 \examples{

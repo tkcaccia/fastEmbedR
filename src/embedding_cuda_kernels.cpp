@@ -184,10 +184,35 @@ __device__ void insert_top_neighbor(double* top_dist,
   }
 }
 
+// Package-local positive-base power approximation for UMAP force kernels.
+// It uses IEEE-754 exponent interpolation, following Schraudolph's published
+// fast exponential idea, and is mirrored from the CPU implementation without
+// vendoring third-party source.
+__device__ float fast_positive_pow(float x, float b) {
+  if (x <= 0.0f) return 0.0f;
+  const unsigned int x_bits = __float_as_uint(x);
+  constexpr float exponent_bias_word = 1064866805.0f;
+  const int whole = static_cast<int>(b);
+  const float fractional = b - static_cast<float>(whole);
+  const unsigned int interp_bits = static_cast<unsigned int>(
+      fractional * (static_cast<float>(x_bits) - exponent_bias_word) +
+      exponent_bias_word);
+  const float fractional_pow = __uint_as_float(interp_bits);
+  float integer_pow = 1.0f;
+  float base = x;
+  int exponent = whole;
+  while (exponent > 0) {
+    if ((exponent & 1) != 0) integer_pow *= base;
+    base *= base;
+    exponent >>= 1;
+  }
+  return integer_pow * fractional_pow;
+}
+
 __device__ float attractive_coeff(float d2, float weight, const EmbedParams p) {
   if (p.objective == 0) {
     if (d2 <= 0.0f) return 0.0f;
-    const float d2b = powf(d2, p.b);
+    const float d2b = fast_positive_pow(d2, p.b);
     return -2.0f * p.a * p.b * (d2b / d2) / (p.a * d2b + 1.0f);
   }
   if (p.objective == 1) return -2.0f * weight / (1.0f + d2);
@@ -199,7 +224,7 @@ __device__ float attractive_coeff(float d2, float weight, const EmbedParams p) {
 __device__ float repulsive_coeff(float d2, const EmbedParams p) {
   if (d2 <= 0.0f) return 0.0f;
   if (p.objective == 0) {
-    const float d2b = powf(d2, p.b);
+    const float d2b = fast_positive_pow(d2, p.b);
     return p.repulsion_strength * 2.0f * p.b / ((0.001f + d2) * (p.a * d2b + 1.0f));
   }
   if (p.objective == 1) return p.repulsion_strength * 2.0f / ((1.0f + d2) * (1.0f + d2));
@@ -2122,7 +2147,7 @@ __global__ void pack_coo_graph_kernel(const int* dense_neighbors,
   }
 }
 
-__device__ int positive_samples_this_epoch_uwot(float period, unsigned int epoch) {
+__device__ int positive_samples_this_epoch_umap_schedule(float period, unsigned int epoch) {
   if (period <= 0.0f || !isfinite(period) || epoch == 0u) return 0;
   const float now = static_cast<float>(epoch);
   const float previous = static_cast<float>(epoch - 1u);
@@ -2132,7 +2157,7 @@ __device__ int positive_samples_this_epoch_uwot(float period, unsigned int epoch
   return samples > 0 ? samples : 0;
 }
 
-__device__ int negative_samples_this_epoch_uwot(float period,
+__device__ int negative_samples_this_epoch_umap_schedule(float period,
                                                 const EmbedParams p,
                                                 unsigned int epoch) {
   if (p.negative_sample_rate <= 0 ||
@@ -2180,7 +2205,7 @@ __global__ void embed_epoch_coo_atomic_kernel(float* layout,
   if (head < 0 || head >= p.n || tail < 0 || tail >= p.n || head == tail) return;
 
   const float period = epochs_per_sample[gid];
-  const int positive_samples = positive_samples_this_epoch_uwot(period, epoch);
+  const int positive_samples = positive_samples_this_epoch_umap_schedule(period, epoch);
   if (positive_samples <= 0) return;
 
   const float alpha = p.learning_rate *
@@ -2207,7 +2232,7 @@ __global__ void embed_epoch_coo_atomic_kernel(float* layout,
     atomicAdd(layout + tail_base + 1u, -gy);
   }
 
-  const int neg_samples = negative_samples_this_epoch_uwot(period, p, epoch);
+  const int neg_samples = negative_samples_this_epoch_umap_schedule(period, p, epoch);
   for (int s = 0; s < neg_samples; ++s) {
     const unsigned int neg = deterministic_vertex(
       static_cast<unsigned int>(p.n),
@@ -2251,7 +2276,7 @@ __global__ void embed_epoch_coo_delta_kernel(const float* layout,
   if (head < 0 || head >= p.n || tail < 0 || tail >= p.n || head == tail) return;
 
   const float period = epochs_per_sample[gid];
-  const int positive_samples = positive_samples_this_epoch_uwot(period, epoch);
+  const int positive_samples = positive_samples_this_epoch_umap_schedule(period, epoch);
   if (positive_samples <= 0) return;
 
   const float alpha = p.learning_rate *
@@ -2278,7 +2303,7 @@ __global__ void embed_epoch_coo_delta_kernel(const float* layout,
     atomicAdd(delta + tail_base + 1u, -gy);
   }
 
-  const int neg_samples = negative_samples_this_epoch_uwot(period, p, epoch);
+  const int neg_samples = negative_samples_this_epoch_umap_schedule(period, p, epoch);
   for (int s = 0; s < neg_samples; ++s) {
     const unsigned int neg = deterministic_vertex(
       static_cast<unsigned int>(p.n),

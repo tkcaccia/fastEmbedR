@@ -67,7 +67,7 @@ mathematics:
 - fewer avoidable copies between R and C++;
 - `float` internal weights where safe;
 - parallel row-wise work where deterministic enough;
-- uwot-like fast-SGD scheduling and learning-rate decay.
+- native sampled-edge optimization with negative sampling and learning-rate decay.
 
 ### `graph_mode`
 
@@ -250,7 +250,7 @@ backend_info()
 The following papers and projects shaped the implementation:
 
 - McInnes, Healy, and Melville: UMAP.
-- `uwot`: R UMAP behaviour and fast-SGD scheduling reference.
+- `uwot`: R UMAP benchmark and behavioural reference.
 - van der Maaten and Hinton: original t-SNE.
 - van der Maaten: Barnes-Hut t-SNE.
 - Policar, Strazar, and Zupan: openTSNE.
@@ -265,4 +265,3 @@ The following papers and projects shaped the implementation:
 
 See `inst/NOTICE`, `inst/ALGORITHMIC_REFERENCES.md`, and the GitHub page
 `docs/algorithm-provenance.md` for detailed provenance and license notes.
-

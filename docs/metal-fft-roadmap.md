@@ -28,7 +28,8 @@ embedding quality unchanged.
 ## Current Validated Path
 
 The 512x512 Metal openTSNE grid now uses a radix-4 Stockham row/column FFT
-kernel adapted from the MIT-licensed AppleSiliconFFT design. The standalone
+kernel implemented using the MIT-licensed AppleSiliconFFT design as a
+reference. The standalone
 diagnostic compares this fast path against the previous generic Metal
 Cooley-Tukey implementation:
 
