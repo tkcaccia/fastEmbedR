@@ -36,14 +36,11 @@ test_that("opentsne convenience wrapper runs the automatic KNN workflow", {
 
   fit <- opentsne(
     x,
-    labels = labels,
     n_neighbors = 4L,
     perplexity = 1,
     early_exaggeration_iter = 2L,
     n_iter = 3L,
-    seed = 43L,
-    silhouette_sample = NULL,
-    preserve_sample = NULL
+    seed = 43L
   )
 
   expect_s3_class(fit, "fastEmbedR_embedding")
@@ -62,9 +59,7 @@ test_that("high-level embeddings avoid retaining KNN matrices by default", {
     perplexity = 1,
     early_exaggeration_iter = 2L,
     n_iter = 3L,
-    seed = 47L,
-    silhouette_sample = NULL,
-    preserve_sample = NULL
+    seed = 47L
   )
   retained <- opentsne(
     x,
@@ -73,9 +68,7 @@ test_that("high-level embeddings avoid retaining KNN matrices by default", {
     early_exaggeration_iter = 2L,
     n_iter = 3L,
     seed = 47L,
-    keep_knn = TRUE,
-    silhouette_sample = NULL,
-    preserve_sample = NULL
+    keep_knn = TRUE
   )
 
   expect_null(compact$knn)

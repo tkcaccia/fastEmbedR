@@ -7,11 +7,8 @@ if (!cuda_available()) {
   labels <- iris$Species
   fit <- umap(
     x,
-    labels = labels,
     n_neighbors = 15L,
-    backend = "cuda",
-    silhouette_sample = NULL,
-    preserve_sample = NULL
+    backend = "cuda"
   )
   print(fit$metrics)
 }

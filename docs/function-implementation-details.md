@@ -124,19 +124,17 @@ Inspiration and literature:
 Implementation:
 
 - Validates and optionally standardizes data.
-- Selects or computes KNN with `nn()`.
+- Computes KNN with a fixed backend policy when KNN is not supplied: CPU and
+  Metal use FAISS CPU IVF-Flat through `faissR`; CUDA uses FAISS GPU IVF-Flat.
 - Passes the resulting KNN object to `umap_knn()`.
 - Stores timing/configuration metadata in the returned fit object.
 
 Autotuning:
 
 - If `n_neighbors` is omitted, `auto_embedding_k()` chooses a size-aware K.
-- If the data are large enough and KNN was not supplied, the pilot tuner can
-  sample 2,000 to 5,000 rows, test a small candidate set, and choose K/UMAP
-  settings using quality proxies.
-- If labels are available in benchmark/pilot contexts, label-aware proxies can
-  contribute to the pilot score. Without labels, neighbour preservation and
-  continuity-like proxies are used.
+- `umap_auto_parameters_cpp()` derives internal UMAP settings from the KNN
+  distance profile. The one-call API no longer accepts labels or scoring
+  samples; benchmark quality is computed separately with `evaluate_embedding()`.
 
 Inspiration:
 
@@ -219,7 +217,8 @@ Inspiration and literature:
 Implementation:
 
 - Validates and optionally standardizes input.
-- Computes KNN using `nn()` unless a KNN object is supplied.
+- Computes KNN with the fixed one-call policy unless a KNN object is supplied:
+  CPU/Metal use FAISS CPU IVF-Flat and CUDA uses FAISS GPU IVF-Flat.
 - Computes PCA initialization by default when original data are available.
 - Calls `opentsne_knn()` for the native optimizer.
 - Stores configuration, timing, and backend metadata.

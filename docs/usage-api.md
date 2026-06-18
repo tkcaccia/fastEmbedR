@@ -10,9 +10,9 @@ This page gives the main KNN-first workflows and the public API.
 | You want one call from a data matrix | `umap()` or `opentsne()` |
 | You want to compare UMAP and openTSNE fairly | compute `knn <- nn(...)` once, then reuse it |
 | You want Apple GPU | set `backend = "metal"` explicitly |
-| You want NVIDIA GPU | build with CUDA/cuVS, then set `backend = "cuda"` or a CUDA KNN backend |
+| You want NVIDIA GPU | build with CUDA/cuVS, then set embedding `backend = "cuda"` |
 | You want a fast approximation for very large data | use `landmark_umap()` or `landmark_tsne()` and report it as landmarking |
-| You want quality metrics | `evaluate_embedding(x, layout, labels = labels)` |
+| You want quality metrics | `evaluate_embedding(x, layout)` |
 
 The recommended workflow is KNN first:
 
@@ -24,6 +24,13 @@ layout_tsne <- opentsne_knn(knn, init_data = x, seed = 1)
 
 This keeps nearest-neighbour time separate from embedding time and makes
 benchmarks easier to interpret.
+
+The one-call functions intentionally hide the KNN algorithm choice. For
+`opentsne()` and `umap()`, `backend` accepts only `"cpu"`, `"metal"`, or
+`"cuda"`. Matrix-input KNN is fixed: CPU and Metal use FAISS CPU IVF-Flat
+through `faissR`; CUDA uses FAISS GPU IVF-Flat. To benchmark another KNN
+algorithm, compute it explicitly with `nn()`/`faissR::nn()` and pass the result
+to `opentsne_knn()` or `umap_knn()`.
 
 ## Distance Metrics In `nn()`
 
@@ -67,7 +74,6 @@ The one-call interface computes KNN internally:
 ```r
 fit <- umap(
   x,
-  labels = labels,
   n_neighbors = 30,
   seed = 1
 )
@@ -104,8 +110,7 @@ layout <- opentsne_knn(knn, init_data = x, backend = "metal", seed = 1)
 For CUDA builds with RAPIDS cuVS available:
 
 ```r
-knn <- nn(x, k = 50, backend = "cuda_cuvs_nndescent")
-layout <- opentsne_knn(knn, init_data = x, backend = "cuda", seed = 1)
+fit <- opentsne(x, n_neighbors = 50, backend = "cuda", seed = 1)
 ```
 
 The package does not silently run these examples on CPU and report them as GPU
@@ -116,7 +121,6 @@ results.
 ```r
 fit <- landmark_tsne(
   x,
-  labels = labels,
   landmarks = 0.5,
   n_neighbors = 30,
   perplexity = 10,
@@ -133,10 +137,9 @@ UMAP has the same landmark pattern:
 ```r
 fit <- landmark_umap(
   x,
-  labels = labels,
   landmarks = 0.5,
   n_neighbors = 30,
-  backend = "auto",
+  backend = "cpu",
   seed = 1
 )
 plot(fit)
@@ -144,7 +147,7 @@ plot(fit)
 
 For landmark runs, `backend = "metal"` uses a fused native Metal projection
 kernel that computes query-to-landmark KNN, interpolation, and projection
-confidence in one pass before the fixed-reference transform. CPU/auto runs use
+confidence in one pass before the fixed-reference transform. CPU runs use
 exact multi-threaded projection KNN by default and switch to a native
 projection-specific approximation only for large projections where the cheaper
 candidate search is worthwhile.

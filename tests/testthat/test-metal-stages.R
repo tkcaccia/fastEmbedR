@@ -104,8 +104,6 @@ test_that("Metal UMAP landmark refinement stays native and reports its backend",
     n_threads = 2L,
     seed = 91L,
     standardize = FALSE,
-    preserve_sample = NULL,
-    silhouette_sample = NULL,
     verbose = FALSE
   )
 

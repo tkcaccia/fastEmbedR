@@ -9,8 +9,7 @@
 #' @param n_components Output dimensionality.
 #' @param seed Random seed.
 #' @param verbose Print native optimizer progress.
-#' @param backend Execution backend. `"gpu"` explicitly requests a real native
-#'   GPU backend and errors if CUDA or Metal is unavailable.
+#' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`.
 #' @param n_threads Number of CPU worker threads used by the CPU optimizer.
 #'   Native GPU optimizers ignore this argument.
 #' @param ... Additional openTSNE-specific parameters such as `perplexity`,
@@ -25,11 +24,11 @@ embed_knn <- function(indices,
                       n_components = 2L,
                       seed = 4L,
                       verbose = FALSE,
-                      backend = c("auto", "cpu", "gpu", "metal", "cuda"),
+                      backend = c("cpu", "cuda", "metal"),
                       n_threads = NULL,
                       ...) {
   method <- match.arg(method, c("umap", "opentsne"))
-  backend <- match.arg(backend)
+  backend <- resolve_embedding_backend(backend)
   n_components <- validate_n_components(n_components)
 
   if (identical(method, "umap")) {

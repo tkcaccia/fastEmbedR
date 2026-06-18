@@ -117,6 +117,24 @@ resolve_backend_request <- function(backend,
   }
 }
 
+embedding_backend_choices <- function() {
+  c("cpu", "cuda", "metal")
+}
+
+resolve_embedding_backend <- function(backend) {
+  backend <- match.arg(backend, embedding_backend_choices())
+  backend
+}
+
+fixed_embedding_knn_backend <- function(backend) {
+  backend <- resolve_embedding_backend(backend)
+  if (identical(backend, "cuda")) {
+    "faiss_gpu_ivf_flat"
+  } else {
+    "faiss_ivf_flat"
+  }
+}
+
 cpu_summary <- function() {
   cores <- suppressWarnings(parallel::detectCores(logical = TRUE))
   if (length(cores) != 1L || is.na(cores) || !is.finite(cores)) {

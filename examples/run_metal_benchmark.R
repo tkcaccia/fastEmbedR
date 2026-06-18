@@ -7,11 +7,8 @@ if (!metal_available()) {
   labels <- iris$Species
   fit <- umap(
     x,
-    labels = labels,
     n_neighbors = 15L,
-    backend = "metal",
-    silhouette_sample = NULL,
-    preserve_sample = NULL
+    backend = "metal"
   )
   print(fit$metrics)
 }

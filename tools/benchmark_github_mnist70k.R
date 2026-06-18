@@ -25,6 +25,116 @@ timed <- function(expr) {
   list(value = value, sec = unname(t[["elapsed"]]))
 }
 
+first_nonempty <- function(x, default = NA_character_) {
+  x <- x[nzchar(x)]
+  if (length(x)) x[[1L]] else default
+}
+
+run_cmd <- function(cmd, args = character()) {
+  out <- tryCatch(
+    suppressWarnings(system2(cmd, args, stdout = TRUE, stderr = FALSE)),
+    error = function(e) character()
+  )
+  first_nonempty(out)
+}
+
+machine_specs <- function(n_threads) {
+  os <- Sys.info()
+  mem_bytes <- suppressWarnings(as.numeric(run_cmd("sysctl", c("-n", "hw.memsize"))))
+  if (!is.finite(mem_bytes) && file.exists("/proc/meminfo")) {
+    meminfo <- readLines("/proc/meminfo", warn = FALSE)
+    mem_total <- sub("^MemTotal:[[:space:]]*([0-9]+).*", "\\1", meminfo[grepl("^MemTotal:", meminfo)][1L])
+    mem_bytes <- suppressWarnings(as.numeric(mem_total) * 1024)
+  }
+  total_ram_gb <- if (is.finite(mem_bytes)) round(mem_bytes / 1024^3, 2) else NA_real_
+  cpu <- run_cmd("sysctl", c("-n", "machdep.cpu.brand_string"))
+  if (is.na(cpu) && file.exists("/proc/cpuinfo")) {
+    cpu_lines <- readLines("/proc/cpuinfo", warn = FALSE)
+    model <- sub("^model name[[:space:]]*:[[:space:]]*", "", cpu_lines[grepl("^model name", cpu_lines)][1L])
+    cpu <- first_nonempty(model)
+  }
+  gpu <- run_cmd("nvidia-smi", c("--query-gpu=name,driver_version,memory.total", "--format=csv,noheader"))
+  data.frame(
+    run_timestamp_utc = format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z", tz = "UTC"),
+    machine = unname(os[["nodename"]]),
+    system = paste(unname(os[["sysname"]]), unname(os[["release"]])),
+    platform = R.version$platform,
+    cpu = cpu,
+    gpu = gpu,
+    logical_cores = parallel::detectCores(logical = TRUE),
+    total_ram_gb = total_ram_gb,
+    r_version = as.character(getRversion()),
+    fastEmbedR_version = as.character(utils::packageVersion("fastEmbedR")),
+    faissR_version = if (requireNamespace("faissR", quietly = TRUE)) as.character(utils::packageVersion("faissR")) else NA_character_,
+    uwot_version = if (requireNamespace("uwot", quietly = TRUE)) as.character(utils::packageVersion("uwot")) else NA_character_,
+    Rtsne_version = if (requireNamespace("Rtsne", quietly = TRUE)) as.character(utils::packageVersion("Rtsne")) else NA_character_,
+    requested_threads = n_threads,
+    stringsAsFactors = FALSE
+  )
+}
+
+write_machine_specs <- function(specs, out_dir) {
+  csv_path <- file.path(out_dir, "machine-specs.csv")
+  md_path <- file.path(out_dir, "machine-specs.md")
+  utils::write.csv(specs, csv_path, row.names = FALSE)
+  lines <- c(
+    "# Machine Specification",
+    "",
+    sprintf("- Run timestamp: %s", specs$run_timestamp_utc),
+    sprintf("- Machine: %s", specs$machine),
+    sprintf("- System: %s", specs$system),
+    sprintf("- Platform: %s", specs$platform),
+    sprintf("- CPU: %s", specs$cpu),
+    sprintf("- GPU: %s", specs$gpu),
+    sprintf("- Logical cores: %s", specs$logical_cores),
+    sprintf("- RAM: %s GB", specs$total_ram_gb),
+    sprintf("- R: %s", specs$r_version),
+    sprintf("- fastEmbedR: %s", specs$fastEmbedR_version),
+    sprintf("- faissR: %s", specs$faissR_version),
+    sprintf("- uwot: %s", specs$uwot_version),
+    sprintf("- Rtsne: %s", specs$Rtsne_version),
+    sprintf("- Requested benchmark threads: %s", specs$requested_threads)
+  )
+  writeLines(lines, md_path)
+  invisible(list(csv = csv_path, md = md_path))
+}
+
+plot_time_barplot <- function(results, path) {
+  ok <- results[results$status == "success" & is.finite(results$total_sec), , drop = FALSE]
+  if (!nrow(ok)) return(invisible(FALSE))
+  labels <- gsub("^fastEmbedR ", "", ok$method)
+  labels <- gsub(" UMAP fast_sgd full$", "\nfast_sgd full", labels)
+  labels <- gsub(" UMAP ", "\nUMAP ", labels)
+  labels <- gsub(" openTSNE ", "\nopenTSNE ", labels)
+  nn <- ifelse(is.finite(ok$nn_sec), ok$nn_sec, 0)
+  embed <- ifelse(is.finite(ok$embed_sec), ok$embed_sec, ok$total_sec)
+  other <- pmax(0, ok$total_sec - nn - embed)
+  values <- rbind(
+    `NN search` = nn,
+    Embedding = embed,
+    Other = other
+  )
+  png(path, width = 1700, height = 1050, res = 150)
+  on.exit(dev.off(), add = TRUE)
+  old <- par(no.readonly = TRUE)
+  on.exit(par(old), add = TRUE)
+  par(mar = c(8.8, 4.8, 4.2, 1.2))
+  cols <- c("#4C78A8", "#F58518", "#54A24B")
+  bp <- barplot(
+    values,
+    names.arg = labels,
+    las = 2,
+    col = cols,
+    border = NA,
+    ylab = "Seconds",
+    main = "MNIST 70k computational time",
+    ylim = c(0, max(ok$total_sec, na.rm = TRUE) * 1.18)
+  )
+  legend("topright", fill = cols, legend = rownames(values), bty = "n")
+  text(bp, ok$total_sec, labels = sprintf("%.2fs", ok$total_sec), pos = 3, cex = 0.85)
+  invisible(TRUE)
+}
+
 download_file <- function(url, path) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   if (file.exists(path) && file.info(path)$size > 0) return(path)
@@ -79,6 +189,26 @@ load_mnist <- function(cache_dir) {
   dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
   saveRDS(out, cache_file, version = 2)
   out
+}
+
+load_mnist_rdata <- function(path) {
+  env <- new.env(parent = emptyenv())
+  load(path, envir = env)
+  objects <- mget(ls(env), env, inherits = FALSE)
+  if ("mnist" %in% names(objects) && is.list(objects$mnist)) objects <- objects$mnist
+  if ("dataset" %in% names(objects) && is.list(objects$dataset)) objects <- objects$dataset
+  if (length(objects) == 1L && is.list(objects[[1L]])) objects <- objects[[1L]]
+  data_candidates <- c("data", "x", "X", "images", "train")
+  label_candidates <- c("labels", "y", "Y", "label", "Label")
+  data_name <- data_candidates[data_candidates %in% names(objects)][1L]
+  label_name <- label_candidates[label_candidates %in% names(objects)][1L]
+  if (is.na(data_name) || is.na(label_name)) {
+    stop("Could not find MNIST data and labels in ", path, call. = FALSE)
+  }
+  list(
+    data = as.matrix(objects[[data_name]]),
+    labels = factor(objects[[label_name]])
+  )
 }
 
 sample_rows <- function(labels, n, seed) {
@@ -144,13 +274,16 @@ k <- arg_int("k", 15L)
 perplexity <- arg_int("perplexity", 15L)
 n_threads <- arg_int("threads", 4L)
 cache_dir <- arg_value("cache-dir", file.path("results", "dataset_cache"))
+mnist_rdata <- arg_value("mnist-rdata", "")
 out_dir <- arg_value("out-dir", file.path("results", paste0("github_mnist70k_", format(Sys.time(), "%Y%m%d_%H%M%S"))))
 run_metal <- arg_flag("run-metal", TRUE)
 run_cuda <- arg_flag("run-cuda", FALSE)
 run_refs <- arg_flag("run-references", TRUE)
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+specs <- machine_specs(n_threads)
+write_machine_specs(specs, out_dir)
 
-mnist <- load_mnist(cache_dir)
+mnist <- if (nzchar(mnist_rdata)) load_mnist_rdata(mnist_rdata) else load_mnist(cache_dir)
 rows <- sample_rows(mnist$labels, min(n, nrow(mnist$data)), seed)
 x <- mnist$data[rows, , drop = FALSE]
 labels <- droplevels(mnist$labels[rows])
@@ -168,6 +301,9 @@ add_row <- function(method, family, backend, nn_sec, embed_sec, total_sec, layou
     p = ncol(x),
     k = k,
     perplexity = perplexity,
+    machine = specs$machine,
+    cpu = specs$cpu,
+    requested_threads = n_threads,
     nn_sec = nn_sec,
     embed_sec = embed_sec,
     total_sec = total_sec,
@@ -204,7 +340,6 @@ run_one <- function(method, family, backend, expr) {
 run_one("fastEmbedR openTSNE CPU", "openTSNE", "cpu", function() {
   fastEmbedR::opentsne(
     x,
-    labels = labels,
     n_neighbors = k,
     perplexity = perplexity,
     backend = "cpu",
@@ -217,7 +352,6 @@ if (run_metal) {
   run_one("fastEmbedR openTSNE Metal", "openTSNE", "metal", function() {
     fastEmbedR::opentsne(
       x,
-      labels = labels,
       n_neighbors = k,
       perplexity = perplexity,
       backend = "metal",
@@ -231,7 +365,6 @@ if (run_cuda) {
   run_one("fastEmbedR openTSNE CUDA", "openTSNE", "cuda", function() {
     fastEmbedR::opentsne(
       x,
-      labels = labels,
       n_neighbors = k,
       perplexity = perplexity,
       backend = "cuda",
@@ -250,7 +383,6 @@ if (run_refs && requireNamespace("Rtsne", quietly = TRUE)) {
 run_one("fastEmbedR UMAP CPU fuzzy", "UMAP", "cpu", function() {
   fastEmbedR::umap(
     x,
-    labels = labels,
     n_neighbors = k,
     backend = "cpu",
     graph_mode = "fuzzy",
@@ -263,7 +395,6 @@ if (run_metal) {
   run_one("fastEmbedR UMAP Metal fuzzy", "UMAP", "metal", function() {
     fastEmbedR::umap(
       x,
-      labels = labels,
       n_neighbors = k,
       backend = "metal",
       graph_mode = "fuzzy",
@@ -277,7 +408,6 @@ if (run_cuda) {
   run_one("fastEmbedR UMAP CUDA fuzzy", "UMAP", "cuda", function() {
     fastEmbedR::umap(
       x,
-      labels = labels,
       n_neighbors = k,
       backend = "cuda",
       graph_mode = "fuzzy",
@@ -304,4 +434,7 @@ if (run_refs && requireNamespace("uwot", quietly = TRUE)) {
 tab <- do.call(rbind, results)
 utils::write.csv(tab, file.path(out_dir, "mnist70k_github_benchmark.csv"), row.names = FALSE)
 plot_layouts(layouts, labels, tab, file.path(out_dir, "mnist70k_github_benchmark.png"), seed)
+plot_time_barplot(tab, file.path(out_dir, "mnist70k_github_benchmark_time_barplot.png"))
 print(tab)
+message("Machine specs: ", normalizePath(file.path(out_dir, "machine-specs.md"), mustWork = FALSE))
+message("Timing barplot: ", normalizePath(file.path(out_dir, "mnist70k_github_benchmark_time_barplot.png"), mustWork = FALSE))

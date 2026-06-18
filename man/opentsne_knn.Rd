@@ -15,7 +15,7 @@ opentsne_knn(
   Y_init = NULL,
   seed = 4L,
   verbose = FALSE,
-  backend = c("auto", "cpu", "gpu", "metal", "cuda"),
+  backend = c("cpu", "cuda", "metal"),
   n_threads = NULL,
   learning_rate = "auto",
   early_exaggeration_iter = NULL,
@@ -62,10 +62,10 @@ search or optimization.}
 
 \item{verbose}{Print optimizer progress.}
 
-\item{backend}{KNN/preprocessing backend and, when the matching native
-openTSNE symbols are compiled, a real GPU optimizer backend. Unsupported
-GPU requests fail clearly and are not relabelled CPU runs. `backend =
-"auto"` keeps the CPU optimizer.}
+\item{backend}{Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. For
+matrix input, KNN is selected internally: CPU and Metal use FAISS CPU
+IVF-Flat through `faissR`, while CUDA uses FAISS GPU IVF-Flat.
+Unsupported GPU requests fail clearly and are not relabelled CPU runs.}
 
 \item{n_threads}{Number of CPU worker threads used by CPU KNN and CPU
 openTSNE optimization. Native GPU optimizers ignore this argument.}

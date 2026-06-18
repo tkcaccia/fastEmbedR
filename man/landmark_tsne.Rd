@@ -6,7 +6,6 @@
 \usage{
 landmark_tsne(
   data,
-  labels = NULL,
   landmarks = TRUE,
   reference_method = c("opentsne"),
   n_neighbors = NULL,
@@ -15,16 +14,13 @@ landmark_tsne(
   standardize = TRUE,
   pca_dims = NULL,
   seed = 4L,
-  backend = "auto",
+  backend = c("cpu", "cuda", "metal"),
   transform_k = NULL,
   transform_perplexity = 5,
   transform_iter = 250L,
   transform_early_exaggeration_iter = 0L,
   transform_n_negatives = NULL,
   initialization = c("median", "weighted", "random"),
-  silhouette_sample = NULL,
-  preserve_sample = NULL,
-  preserve_k = NULL,
   keep_knn = FALSE,
   verbose = FALSE,
   n_threads = NULL,
@@ -33,8 +29,6 @@ landmark_tsne(
 }
 \arguments{
 \item{data}{Numeric matrix/data frame with observations in rows.}
-
-\item{labels}{Optional labels used only for metadata and optional scoring.}
 
 \item{landmarks}{`TRUE` for an automatic subset, a fraction such as `0.5`, a
 landmark count, or explicit row indices.}
@@ -56,9 +50,7 @@ accepted in the cleaned package API.}
 
 \item{seed}{Random seed.}
 
-\item{backend}{KNN backend. `"metal"` also runs the non-landmark transform
-optimizer in native Metal. CUDA transform is planned but unavailable and
-is not silently replaced by CPU.}
+\item{backend}{Execution backend: `"cpu"`, `"cuda"`, or `"metal"`.}
 
 \item{transform_k}{Number of landmark neighbors used to place non-landmarks.}
 
@@ -75,12 +67,6 @@ exaggeration iterations.}
 is native and experimental for large reference sets.}
 
 \item{initialization}{Initial placement for transformed observations.}
-
-\item{silhouette_sample}{Optional sample size for silhouette scoring.}
-
-\item{preserve_sample}{Optional sample size for neighborhood scoring.}
-
-\item{preserve_k}{Number of neighbors used for neighborhood scoring.}
 
 \item{keep_knn}{If `TRUE`, retain KNN matrices in the returned object.}
 

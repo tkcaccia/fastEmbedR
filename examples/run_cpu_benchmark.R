@@ -27,35 +27,26 @@ run_fit <- function(dataset_name, method, seed) {
     method,
     umap = umap(
       item$x,
-      labels = item$y,
       n_neighbors = 15L,
       seed = seed,
-      backend = "cpu",
-      silhouette_sample = min(1000L, nrow(item$x)),
-      preserve_sample = min(1000L, nrow(item$x)),
-      preserve_k = 15L
+      backend = "cpu"
     ),
-    tsne = tsne(
+    opentsne = opentsne(
       item$x,
-      labels = item$y,
       n_neighbors = 15L,
       seed = seed,
-      backend = "cpu",
-      silhouette_sample = min(1000L, nrow(item$x)),
-      preserve_sample = min(1000L, nrow(item$x)),
-      preserve_k = 15L
-    ),
-    pacmap = pacmap(
-      item$x,
-      labels = item$y,
-      n_neighbors = 15L,
-      seed = seed,
-      backend = "cpu",
-      silhouette_sample = min(1000L, nrow(item$x)),
-      preserve_sample = min(1000L, nrow(item$x)),
-      preserve_k = 15L
+      backend = "cpu"
     ),
     stop("unknown method")
+  )
+  quality <- evaluate_embedding(
+    item$x,
+    fit$layout,
+    labels = item$y,
+    k = 15L,
+    sample_size_for_global_metrics = min(1000L, nrow(item$x)),
+    sample_size_for_local_metrics = min(1000L, nrow(item$x)),
+    n_threads = 2L
   )
   data.frame(
     dataset = dataset_name,
@@ -64,14 +55,14 @@ run_fit <- function(dataset_name, method, seed) {
     n = nrow(item$x),
     p = ncol(item$x),
     elapsed_sec = fit$metrics$elapsed,
-    silhouette = fit$metrics$silhouette,
-    knn_preservation = fit$metrics$knn_preservation,
+    silhouette = quality$silhouette,
+    knn_preservation = quality$knn_preservation,
     stringsAsFactors = FALSE
   )
 }
 
 rows <- do.call(rbind, lapply(names(datasets), function(dataset_name) {
-  do.call(rbind, lapply(c("umap", "tsne", "pacmap"), function(method) {
+  do.call(rbind, lapply(c("umap", "opentsne"), function(method) {
     do.call(rbind, lapply(c(4L, 5L), function(seed) {
       run_fit(dataset_name, method, seed)
     }))

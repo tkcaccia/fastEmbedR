@@ -124,8 +124,6 @@ fit <- opentsne(
   early_exaggeration_iter = 2L,
   n_iter = 3L,
   backend = "cuda",
-  silhouette_sample = NULL,
-  preserve_sample = NULL,
   keep_knn = TRUE
 )
 stopifnot(inherits(fit, "fastEmbedR_embedding"))
@@ -160,8 +158,6 @@ land <- landmark_tsne(
   transform_perplexity = 2,
   backend = "cuda",
   standardize = FALSE,
-  silhouette_sample = NULL,
-  preserve_sample = NULL,
   keep_knn = TRUE
 )
 stopifnot(inherits(land, "fastEmbedR_embedding"))

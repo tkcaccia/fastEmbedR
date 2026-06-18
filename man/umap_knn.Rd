@@ -8,7 +8,7 @@ umap_knn(
   n_components = 2L,
   seed = 42L,
   verbose = FALSE,
-  backend = c("auto", "cpu", "gpu", "metal", "cuda"),
+  backend = c("cpu", "cuda", "metal"),
   n_threads = NULL,
   graph_mode = c("binary", "fuzzy")
 )
@@ -26,11 +26,11 @@ index matrix. A self-neighbour first column is removed automatically.}
 
 \item{verbose}{Print native optimizer progress.}
 
-\item{backend}{Execution backend. GPU requests must resolve to a real native
-backend; the package does not label CPU work as GPU.}
+\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or
+\code{"metal"}. GPU requests must resolve to a real native backend; the
+package does not label CPU work as GPU.}
 
-\item{n_threads}{Number of CPU worker threads for CPU UMAP, capped internally
-at four threads for the restored stable path.}
+\item{n_threads}{Number of CPU worker threads for CPU UMAP.}
 
 \item{graph_mode}{Graph weighting mode. \code{"binary"} uses a symmetric
 unit-weight graph. \code{"fuzzy"} uses standard UMAP fuzzy graph weights.}

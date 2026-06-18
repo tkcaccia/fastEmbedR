@@ -26,8 +26,14 @@ package API. The kept path is:
 
 CPU-capable public functions expose `n_threads`, for example
 `n_threads = 2` for a fixed two-core run. Native Apple GPU paths use
-`backend = "metal"`; `backend = "gpu"` is a convenience request for a real GPU
-path and is not silently relabelled when unavailable.
+`backend = "metal"`; CUDA paths use `backend = "cuda"`. GPU requests are not
+silently relabelled when unavailable.
+
+For one-call `umap()` and `opentsne()` runs, `backend` is deliberately limited
+to `"cpu"`, `"metal"`, or `"cuda"`. Matrix-input KNN is fixed internally: CPU
+and Metal use FAISS CPU IVF-Flat through `faissR`, and CUDA uses FAISS GPU
+IVF-Flat. To benchmark another KNN algorithm, compute it with `nn()` and pass
+the result to `umap_knn()` or `opentsne_knn()`.
 
 The package deliberately keeps the backend surface small. The local MPSGraph
 FFT experiment did not improve the Metal openTSNE benchmark, so it is not
@@ -70,16 +76,23 @@ inside a GPU-labelled benchmark.
 ```{r}
 fit <- umap(
   x,
-  labels = labels,
   n_neighbors = 30,
   n_threads = 2,
-  seed = 4,
-  silhouette_sample = NULL,
-  preserve_sample = NULL
+  seed = 4
 )
 
 fit
 plot(fit)
+
+evaluate_embedding(
+  x,
+  fit$layout,
+  labels = labels,
+  k = 15,
+  sample_size_for_global_metrics = nrow(x),
+  sample_size_for_local_metrics = nrow(x),
+  n_threads = 2
+)
 ```
 
 When `keep_knn = TRUE`, the non-self KNN graph used by the embedding is stored
@@ -136,16 +149,13 @@ projections.
 ```{r, eval = FALSE}
 landmark_fit <- landmark_tsne(
   x,
-  labels = labels,
   landmarks = 0.5,
   n_neighbors = 30,
   perplexity = 10,
   early_exaggeration_iter = 100,
   n_iter = 250,
   transform_iter = 100,
-  seed = 4,
-  silhouette_sample = NULL,
-  preserve_sample = NULL
+  seed = 4
 )
 
 plot(landmark_fit)
@@ -156,12 +166,9 @@ UMAP supports the same landmark pattern:
 ```{r, eval = FALSE}
 landmark_umap_fit <- landmark_umap(
   x,
-  labels = labels,
   landmarks = 0.5,
   n_neighbors = 30,
-  seed = 4,
-  silhouette_sample = NULL,
-  preserve_sample = NULL
+  seed = 4
 )
 
 plot(landmark_umap_fit)
@@ -180,9 +187,7 @@ ref_fit <- opentsne(
   early_exaggeration_iter = 100,
   n_iter = 250,
   standardize = FALSE,
-  seed = 5,
-  silhouette_sample = NULL,
-  preserve_sample = NULL
+  seed = 5
 )
 
 query_knn <- fastEmbedR::nn(reference, query, k = 15)

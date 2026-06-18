@@ -24,16 +24,30 @@ seed <- 13L
 
 run_one <- function(name, ...) {
   gc(FALSE)
-  fit <- umap(
+  fit <- if (identical(name, "full")) {
+    umap(
+      x,
+      n_neighbors = n_neighbors,
+      seed = seed,
+      backend = "cpu"
+    )
+  } else {
+    landmark_umap(
+      x,
+      n_neighbors = n_neighbors,
+      seed = seed,
+      backend = "cpu",
+      ...
+    )
+  }
+  quality <- evaluate_embedding(
     x,
+    fit$layout,
     labels = labels,
-    n_neighbors = n_neighbors,
-    seed = seed,
-    backend = "cpu",
-    silhouette_sample = min(1000L, nrow(x)),
-    preserve_sample = min(1000L, nrow(x)),
-    preserve_k = n_neighbors,
-    ...
+    k = n_neighbors,
+    sample_size_for_global_metrics = min(1000L, nrow(x)),
+    sample_size_for_local_metrics = min(1000L, nrow(x)),
+    n_threads = 2L
   )
   row <- data.frame(
     dataset = dataset$name,
@@ -41,10 +55,9 @@ run_one <- function(name, ...) {
     p = ncol(x),
     mode = name,
     elapsed_sec = fit$metrics$elapsed,
-    n_landmarks = fit$metrics$n_landmarks,
-    refinement = if (is.null(fit$landmarks)) NA_character_ else fit$landmarks$refinement,
-    silhouette = fit$metrics$silhouette,
-    knn_preservation = fit$metrics$knn_preservation,
+    n_landmarks = if ("n_landmarks" %in% names(fit$metrics)) fit$metrics$n_landmarks else nrow(x),
+    silhouette = quality$silhouette,
+    knn_preservation = quality$knn_preservation,
     stringsAsFactors = FALSE
   )
   list(fit = fit, row = row)
@@ -52,9 +65,8 @@ run_one <- function(name, ...) {
 
 runs <- list(
   full = run_one("full"),
-  fast = run_one("fast", mode = "fast"),
-  balanced = run_one("balanced", mode = "balanced"),
-  accurate_landmark = run_one("accurate_landmark", mode = "accurate", landmarks = TRUE)
+  landmark_50 = run_one("landmark_50", landmarks = 0.5),
+  landmark_25 = run_one("landmark_25", landmarks = 0.25)
 )
 
 metrics <- do.call(rbind, lapply(runs, `[[`, "row"))
@@ -74,8 +86,7 @@ for (name in names(runs)) {
   title <- paste0(
     name,
     "\n",
-    round(fit$metrics$elapsed, 3), " sec, kNN ",
-    round(fit$metrics$knn_preservation, 3)
+    round(fit$metrics$elapsed, 3), " sec"
   )
   plot(fit, main = title)
 }

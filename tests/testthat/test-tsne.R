@@ -146,13 +146,10 @@ test_that("opentsne has direct KNN input functions", {
 
   fit <- opentsne(
     knn,
-    labels = labels,
     n_neighbors = 12L,
     perplexity = 3,
     early_exaggeration_iter = 2L,
     n_iter = 3L,
-    silhouette_sample = NULL,
-    preserve_sample = NULL,
     seed = 322L
   )
   expect_s3_class(fit, "fastEmbedR_embedding")
@@ -262,39 +259,18 @@ test_that("openTSNE GPU optimizers are native and fail clearly when unavailable"
   }
 })
 
-test_that("opentsne can use cuVS for KNN without labelling the optimizer as GPU", {
+test_that("opentsne rejects low-level KNN backend names", {
   set.seed(313)
   x <- matrix(rnorm(36L * 4L), 36L, 4L)
-
-  if (isTRUE(faissR::cuvs_available())) {
-    fit <- opentsne(
+  expect_error(
+    opentsne(
       x,
       n_neighbors = 6L,
       perplexity = 2,
       early_exaggeration_iter = 2L,
       n_iter = 3L,
-      backend = "cuda_cuvs_bruteforce",
-      silhouette_sample = NULL,
-      preserve_sample = NULL,
-      keep_knn = TRUE
-    )
-    expect_equal(fit$parameters$method, "opentsne")
-    expect_equal(fit$parameters$backend, "cpu")
-    expect_equal(fit$parameters$nn_backend, "cuda_cuvs_bruteforce")
-    expect_equal(dim(fit$knn$indices), c(nrow(x), 6L))
-  } else {
-    expect_error(
-      opentsne(
-        x,
-        n_neighbors = 6L,
-        perplexity = 2,
-        early_exaggeration_iter = 2L,
-        n_iter = 3L,
-        backend = "cuda_cuvs_bruteforce",
-        silhouette_sample = NULL,
-        preserve_sample = NULL
-      ),
-      "cuVS"
-    )
-  }
+      backend = "cuda_cuvs_bruteforce"
+    ),
+    "should be one of"
+  )
 })

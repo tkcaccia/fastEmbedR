@@ -24,6 +24,11 @@ The intended workflow is:
    `fastEmbedR::umap_knn()`;
 3. evaluate or plot the embedding.
 
+For the one-call functions `opentsne()` and `umap()`, the embedding backend is
+deliberately limited to `backend = "cpu"`, `"metal"`, or `"cuda"`. Internal
+KNN is fixed for reproducibility: CPU and Metal use FAISS CPU IVF-Flat through
+`faissR`, while CUDA uses FAISS GPU IVF-Flat.
+
 ## Quick Start
 
 ```r
@@ -80,30 +85,9 @@ system-library details.
 
 ## MNIST 70k Examples
 
-The benchmark examples use flattened 28x28 MNIST images. They compare:
-
-- `fastEmbedR::opentsne()` with CPU, Metal, and CUDA backends;
-- `Rtsne::Rtsne()` as the full Rtsne baseline using its own neighbour search;
-- `fastEmbedR::umap(..., graph_mode = "fuzzy")` with CPU, Metal, and CUDA
-  backends;
-- `uwot::umap(..., fast_sgd = TRUE)` as the full uwot baseline using its own
-  neighbour search.
-
-`graph_mode = "binary"` is not shown in the GitHub benchmark summary.
-
-See [Examples](docs/examples.md) and [Benchmarks](docs/benchmarks.md).
-
-## Gallery
-
-### openTSNE CPU / Metal / CUDA
-
-![MNIST 70k openTSNE CPU Metal CUDA](docs/assets/mnist70k-opentsne-pca-embeddings-cpu-metal-cuda.png)
-
-### UMAP Fuzzy Graph Only
-
-| fastEmbedR CPU fuzzy | fastEmbedR Metal fuzzy | fastEmbedR CUDA fuzzy | uwot fast_sgd |
-| --- | --- | --- | --- |
-| ![fastEmbedR CPU fuzzy](docs/assets/mnist70k-umap-fastembedr-cpu-fuzzy.png) | ![fastEmbedR Metal fuzzy](docs/assets/mnist70k-umap-fastembedr-metal-fuzzy.png) | ![fastEmbedR CUDA fuzzy](docs/assets/mnist70k-umap-fastembedr-cuda-fuzzy.png) | ![uwot fast_sgd](docs/assets/mnist70k-umap-uwot-fast-sgd.png) |
+The full MNIST 70k example, including the current CUDA run, machine
+specification, computational-time bar plot, embedding plot, and source CSV, is
+kept on the [Examples](docs/examples.md) page.
 
 ## Implementation And References
 

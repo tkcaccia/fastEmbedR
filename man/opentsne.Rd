@@ -6,7 +6,6 @@
 \usage{
 opentsne(
   data,
-  labels = NULL,
   n_neighbors = NULL,
   perplexity = NULL,
   n_components = 2L,
@@ -17,12 +16,7 @@ opentsne(
   pca_dims = NULL,
   nn = NULL,
   seed = 4L,
-  backend = c("auto", "cpu", "gpu", "metal", "cuda", "cuvs", "gpu_cuvs", "cuda_cuvs",
-    "cuda_cuvs_cagra", "cuda_cuvs_bruteforce", "cuda_cuvs_exact", "cuda_cuvs_nndescent",
-    "cuvs_bruteforce", "cuvs_nndescent"),
-  silhouette_sample = NULL,
-  preserve_sample = NULL,
-  preserve_k = NULL,
+  backend = c("cpu", "cuda", "metal"),
   keep_knn = FALSE,
   verbose = FALSE,
   n_threads = NULL,
@@ -43,8 +37,6 @@ opentsne(
 \arguments{
 \item{data}{Numeric matrix/data frame with observations in rows, or a KNN
 object returned by [faissR::nn()].}
-
-\item{labels}{Optional labels used only for scoring and plotting metadata.}
 
 \item{n_neighbors}{Number of non-self neighbors. If `NULL`, the package uses
 `3 * perplexity`, matching the usual t-SNE neighbour convention.}
@@ -74,16 +66,10 @@ compute PCA initialization when `data` is a precomputed KNN object.}
 
 \item{seed}{Random seed.}
 
-\item{backend}{KNN/preprocessing backend and, when the matching native
-openTSNE symbols are compiled, a real GPU optimizer backend. Unsupported
-GPU requests fail clearly and are not relabelled CPU runs. `backend =
-"auto"` keeps the CPU optimizer.}
-
-\item{silhouette_sample}{Optional sample size for silhouette scoring.}
-
-\item{preserve_sample}{Optional sample size for neighborhood scoring.}
-
-\item{preserve_k}{Number of neighbors used for neighborhood scoring.}
+\item{backend}{Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. For
+matrix input, KNN is selected internally: CPU and Metal use FAISS CPU
+IVF-Flat through `faissR`, while CUDA uses FAISS GPU IVF-Flat.
+Unsupported GPU requests fail clearly and are not relabelled CPU runs.}
 
 \item{keep_knn}{If `TRUE`, retain KNN matrices in the returned object.}
 

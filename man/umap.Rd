@@ -4,29 +4,21 @@
 \usage{
 umap(
   data,
-  labels = NULL,
   n_neighbors = NULL,
   n_components = 2L,
   standardize = TRUE,
   pca_dims = NULL,
   nn = NULL,
   seed = 4L,
-  backend = c("auto", "cpu", "gpu", "metal", "cuda"),
+  backend = c("cpu", "cuda", "metal"),
   n_threads = NULL,
-  silhouette_sample = NULL,
-  preserve_sample = NULL,
-  preserve_k = NULL,
   keep_knn = FALSE,
   graph_mode = c("binary", "fuzzy"),
   verbose = FALSE
 )
 }
 \arguments{
-\item{data}{Numeric matrix/data frame with observations in rows, or a KNN
-object returned by \code{\link{nn}}.}
-
-\item{labels}{Optional labels stored in the returned object and used for
-optional scoring.}
+\item{data}{Numeric matrix/data frame, or a KNN object returned by \code{\link[faissR:nn]{faissR::nn()}}.}
 
 \item{n_neighbors}{Number of non-self neighbours. \code{NULL} chooses the
 package default for the data size.}
@@ -42,17 +34,9 @@ matrix.}
 
 \item{seed}{Random seed.}
 
-\item{backend}{Execution backend. GPU requests must resolve to a real native
-backend; the package does not label CPU work as GPU.}
+\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. KNN is selected internally: CPU and Metal use FAISS CPU IVF-Flat through \code{faissR}, while CUDA uses FAISS GPU IVF-Flat. GPU requests must resolve to a real native backend; the package does not relabel CPU work as GPU.}
 
-\item{n_threads}{Number of CPU worker threads for KNN and CPU UMAP, capped
-internally at four threads for the restored stable UMAP path.}
-
-\item{silhouette_sample}{Optional sample size for silhouette scoring.}
-
-\item{preserve_sample}{Optional sample size for local-structure scoring.}
-
-\item{preserve_k}{Number of neighbours used for local-structure scoring.}
+\item{n_threads}{Number of CPU worker threads for KNN and CPU UMAP.}
 
 \item{keep_knn}{If \code{TRUE}, retain KNN matrices in the returned object.}
 
@@ -66,11 +50,11 @@ A \code{fastEmbedR_embedding} object.
 }
 \description{
 \code{umap()} computes or reuses a nearest-neighbour graph and then calls
-\code{\link{umap_knn}}. For strict benchmarking, compute KNN once with
-\code{\link{nn}} and pass it to \code{umap_knn()}.
+\code{\link{umap_knn}}. Quality metrics are computed explicitly with
+\code{\link{evaluate_embedding}} rather than inside the embedding call.
 }
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))
-fit <- umap(x, labels = iris$Species, n_neighbors = 15, seed = 1)
+fit <- umap(x, n_neighbors = 15, seed = 1)
 plot(fit)
 }

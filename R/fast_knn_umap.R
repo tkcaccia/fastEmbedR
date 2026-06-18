@@ -9,10 +9,7 @@
 #' @param n_components Output dimensionality.
 #' @param seed Integer random seed.
 #' @param verbose Print progress from C++.
-#' @param backend Execution backend. `"auto"` uses the accuracy-tested CPU
-#'   embedding path; `"gpu"` explicitly requests a native GPU optimizer,
-#'   preferring CUDA and then Metal when available. `"metal"` and `"cuda"` use
-#'   those native GPU optimizers directly for two-dimensional output.
+#' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`.
 #' @param graph_mode Graph weighting mode. `"binary"` uses a symmetric
 #'   unit-weight graph. `"fuzzy"` uses standard UMAP fuzzy graph weights.
 #' @return A numeric matrix with `nrow(indices)` rows and `n_components` columns.
@@ -26,7 +23,7 @@ fast_knn_umap <- function(indices,
                           n_components = 2L,
                           seed = 42L,
                           verbose = FALSE,
-                          backend = c("auto", "cpu", "gpu", "metal", "cuda"),
+                          backend = c("cpu", "cuda", "metal"),
                           n_threads = NULL,
                           graph_mode = c("binary", "fuzzy")) {
   fast_knn_umap_core(
@@ -46,12 +43,12 @@ fast_knn_umap_core <- function(indices,
                                n_components = 2L,
                                seed = 42L,
                                verbose = FALSE,
-                               backend = c("auto", "cpu", "gpu", "metal", "cuda"),
+                               backend = c("cpu", "cuda", "metal"),
                                n_threads = NULL,
                                n_epochs = NULL,
                                config_override = NULL,
                                graph_mode = c("binary", "fuzzy")) {
-  backend <- match.arg(backend)
+  backend <- resolve_embedding_backend(backend)
   graph_mode <- match.arg(graph_mode)
   n_components <- validate_n_components(n_components)
   knn <- coerce_knn_input(indices, distances)

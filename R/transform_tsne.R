@@ -819,7 +819,6 @@ resident_projection_result <- function(backend, k) {
 #' transform.
 #'
 #' @param data Numeric matrix/data frame with observations in rows.
-#' @param labels Optional labels used only for metadata and optional scoring.
 #' @param landmarks `TRUE` for an automatic subset, a fraction such as `0.5`, a
 #'   landmark count, or explicit row indices.
 #' @param reference_method Kept for compatibility. Only `"opentsne"` is
@@ -835,15 +834,12 @@ resident_projection_result <- function(backend, k) {
 #'   `transform_tsne()` on large landmark sets. GPU sampled transform repulsion
 #'   is native and experimental for large reference sets.
 #' @param initialization Initial placement for transformed observations.
-#' @param backend KNN backend. `"metal"` also runs the non-landmark transform
-#'   optimizer in native Metal. CUDA transform is planned but unavailable and
-#'   is not silently replaced by CPU.
+#' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`.
 #' @param n_threads Number of CPU worker threads used by CPU KNN and CPU
 #'   transform optimization. Native GPU stages ignore this argument.
 #' @return A `fastEmbedR_embedding` object.
 #' @export
 landmark_tsne <- function(data,
-                          labels = NULL,
                           landmarks = TRUE,
                           reference_method = c("opentsne"),
                           n_neighbors = NULL,
@@ -852,16 +848,13 @@ landmark_tsne <- function(data,
                           standardize = TRUE,
                           pca_dims = NULL,
                           seed = 4L,
-                          backend = "auto",
+                          backend = c("cpu", "cuda", "metal"),
                           transform_k = NULL,
                           transform_perplexity = 5,
                           transform_iter = 250L,
                           transform_early_exaggeration_iter = 0L,
                           transform_n_negatives = NULL,
                           initialization = c("median", "weighted", "random"),
-                          silhouette_sample = NULL,
-                          preserve_sample = NULL,
-                          preserve_k = NULL,
                           keep_knn = FALSE,
                           verbose = FALSE,
                           n_threads = NULL,
@@ -869,7 +862,7 @@ landmark_tsne <- function(data,
   dots <- list(...)
   reference_method <- match.arg(reference_method)
   initialization <- match.arg(initialization)
-  backend <- as.character(backend)[1L]
+  backend <- resolve_embedding_backend(backend)
   preprocess_time <- system.time({
     prepared <- prepare_embedding_data(
       data,
@@ -881,9 +874,6 @@ landmark_tsne <- function(data,
   })
   x <- prepared$data
   n <- nrow(x)
-  if (!is.null(labels) && length(labels) != n) {
-    stop("`labels` must have one entry per row of `data`.", call. = FALSE)
-  }
   if (is.null(n_neighbors)) {
     n_neighbors <- auto_tsne_k(n, perplexity)
   } else {
@@ -897,7 +887,6 @@ landmark_tsne <- function(data,
   if (is.null(landmark_indices)) {
     return(opentsne(
       x,
-      labels = labels,
       n_neighbors = n_neighbors,
       perplexity = perplexity,
       n_components = n_components,
@@ -905,9 +894,6 @@ landmark_tsne <- function(data,
       pca_dims = NULL,
       seed = seed,
       backend = backend,
-      silhouette_sample = silhouette_sample,
-      preserve_sample = preserve_sample,
-      preserve_k = preserve_k,
       keep_knn = keep_knn,
       verbose = verbose,
       n_threads = n_threads,
@@ -918,11 +904,9 @@ landmark_tsne <- function(data,
   x_landmarks <- x[landmark_indices, , drop = FALSE]
   n_landmarks <- nrow(x_landmarks)
   landmark_neighbors <- min(n_neighbors, n_landmarks - 1L)
-  landmark_labels <- if (is.null(labels)) NULL else labels[landmark_indices]
   reference_time <- system.time({
     reference_fit <- opentsne(
       x_landmarks,
-      labels = landmark_labels,
       n_neighbors = landmark_neighbors,
       perplexity = perplexity,
       n_components = n_components,
@@ -930,8 +914,6 @@ landmark_tsne <- function(data,
       pca_dims = NULL,
       seed = seed,
       backend = backend,
-      silhouette_sample = NULL,
-      preserve_sample = NULL,
       keep_knn = keep_knn,
       verbose = verbose,
       n_threads = n_threads,
@@ -1150,41 +1132,11 @@ landmark_tsne <- function(data,
   layout[non_landmarks, ] <- projected
   colnames(layout) <- colnames(reference_fit$layout)
 
-  scoring_time <- structure(rep(0, 5), names = names(system.time({})))
-  score_preserve_k <- if (is.null(preserve_k)) min(auto_k(n), n - 1L) else {
-    min(as.integer(preserve_k), n - 1L)
-  }
-  preserve_keep <- sample_indices(n, preserve_sample, seed)
-  score_indices <- matrix(integer(0L), nrow = 0L, ncol = score_preserve_k)
-  if (length(preserve_keep) > 0L) {
-    scoring_time <- system.time({
-      score_indices <- sampled_score_indices(
-        x,
-        preserve_keep,
-        score_preserve_k,
-        backend,
-        n_threads = n_threads
-      )
-    })
-  }
-  scores <- embedding_scores(
-    layout,
-    labels,
-    score_indices,
-    silhouette_sample,
-    preserve_sample,
-    score_preserve_k,
-    seed,
-    preserve_keep = preserve_keep,
-    backend = "cpu"
-  )
-
   timings <- rbind(
     preprocess = preprocess_time,
     reference_embedding = reference_time,
     landmark_projection_knn = projection_time,
-    transform = transform_time,
-    scoring_knn = scoring_time
+    transform = transform_time
   )
   transform_cfg <- attr(projected, "fastEmbedR_config")
   reference_params <- reference_fit$parameters
@@ -1228,12 +1180,10 @@ landmark_tsne <- function(data,
     reference_optimizer_elapsed = reference_optimizer_elapsed,
     landmark_projection_knn_elapsed = projection_time["elapsed"],
     transform_elapsed = transform_time["elapsed"],
-    scoring_knn_elapsed = scoring_time["elapsed"],
     landmark = TRUE,
     n_landmarks = n_landmarks,
     landmark_fraction = n_landmarks / n,
     transform_k = transform_k,
-    scores,
     stringsAsFactors = FALSE
   )
   parameters <- c(
@@ -1273,7 +1223,7 @@ landmark_tsne <- function(data,
   )
   out <- list(
     layout = layout,
-    labels = labels,
+    labels = NULL,
     method = "landmark_tsne",
     metrics = metrics,
     parameters = parameters,

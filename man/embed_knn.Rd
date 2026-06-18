@@ -11,7 +11,7 @@ embed_knn(
   n_components = 2L,
   seed = 4L,
   verbose = FALSE,
-  backend = c("auto", "cpu", "gpu", "metal", "cuda"),
+  backend = c("cpu", "cuda", "metal"),
   n_threads = NULL,
   ...
 )
@@ -32,8 +32,7 @@ automatically.}
 
 \item{verbose}{Print native optimizer progress.}
 
-\item{backend}{Execution backend. `"gpu"` explicitly requests a real native
-GPU backend and errors if CUDA or Metal is unavailable.}
+\item{backend}{Execution backend: `"cpu"`, `"cuda"`, or `"metal"`.}
 
 \item{n_threads}{Number of CPU worker threads used by the CPU optimizer.
 Native GPU optimizers ignore this argument.}

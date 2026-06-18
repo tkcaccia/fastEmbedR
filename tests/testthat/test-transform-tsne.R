@@ -10,9 +10,7 @@ test_that("transform_tsne places query rows from supplied reference neighbours",
     perplexity = 5,
     early_exaggeration_iter = 2L,
     n_iter = 3L,
-    standardize = FALSE,
-    preserve_sample = NULL,
-    silhouette_sample = NULL
+    standardize = FALSE
   )
   query_knn <- faissR::nn(ref, qry, k = 15L, backend = "cpu")
   layout <- transform_tsne(
@@ -141,9 +139,7 @@ test_that("transform_tsne reports GPU transform backends honestly", {
     perplexity = 4,
     early_exaggeration_iter = 2L,
     n_iter = 3L,
-    standardize = FALSE,
-    preserve_sample = NULL,
-    silhouette_sample = NULL
+    standardize = FALSE
   )
   query_knn <- faissR::nn(ref, qry, k = 12L, backend = "cpu")
 
@@ -209,7 +205,6 @@ test_that("landmark_tsne returns a compact full embedding object", {
 
   fit <- landmark_tsne(
     x,
-    labels = labels,
     landmarks = 20L,
     reference_method = "opentsne",
     n_neighbors = 12L,
@@ -219,8 +214,6 @@ test_that("landmark_tsne returns a compact full embedding object", {
     transform_iter = 5L,
     transform_n_negatives = 8L,
     standardize = FALSE,
-    preserve_sample = NULL,
-    silhouette_sample = NULL,
     keep_knn = TRUE
   )
 
@@ -334,8 +327,6 @@ test_that("landmark_tsne can use projection-specific approximate KNN", {
     transform_iter = 3L,
     transform_n_negatives = 8L,
     standardize = FALSE,
-    preserve_sample = NULL,
-    silhouette_sample = NULL,
     keep_knn = TRUE,
     backend = "cpu",
     n_threads = 2L
@@ -379,8 +370,6 @@ test_that("landmark_tsne uses fused Metal projection when requested", {
     transform_iter = 1L,
     transform_n_negatives = 8L,
     standardize = FALSE,
-    preserve_sample = NULL,
-    silhouette_sample = NULL,
     keep_knn = TRUE,
     backend = "metal",
     n_threads = 2L,
@@ -416,8 +405,6 @@ test_that("landmark_tsne keeps Metal projection and transform native when interm
     transform_iter = 1L,
     transform_n_negatives = 8L,
     standardize = FALSE,
-    preserve_sample = NULL,
-    silhouette_sample = NULL,
     keep_knn = FALSE,
     backend = "metal",
     n_threads = 2L,

@@ -495,36 +495,22 @@ fast_knn_opentsne_materialized <- function(indices,
                                            n_threads = NULL,
                                            seed = 42L,
                                            verbose = FALSE,
-                                           backend = c("auto", "cpu", "gpu", "metal", "cuda"),
+                                           backend = c("cpu", "cuda", "metal"),
                                            auto_config = TRUE,
                                            input_had_self = FALSE,
                                            input_backend = NA_character_) {
-  backend <- match.arg(backend)
-  optimizer_backend <- if (backend %in% c("auto", "cpu")) {
+  backend <- resolve_embedding_backend(backend)
+  optimizer_backend <- if (identical(backend, "cpu")) {
     "cpu"
-  } else if (backend %in% c("gpu", "metal")) {
-    resolved_gpu <- if (identical(backend, "gpu")) {
-      resolve_backend_request("gpu", need_embedding = TRUE)
-    } else {
-      "metal"
-    }
-    if (identical(resolved_gpu, "metal") &&
-        (!embedding_metal_available_cpp() || !metal_opentsne_native_available())) {
+  } else if (identical(backend, "metal")) {
+    if (!embedding_metal_available_cpp() || !metal_opentsne_native_available()) {
       stop(
         "Native Metal openTSNE optimizer was requested, but it is not available in this build. ",
-        "No CPU fallback is used for GPU-labelled runs.",
+        "No CPU fallback is used for Metal-labelled runs.",
         call. = FALSE
       )
     }
-    if (identical(resolved_gpu, "cuda") &&
-        (!embedding_cuda_available_cpp() || !cuda_opentsne_native_available())) {
-      stop(
-        "Native CUDA openTSNE optimizer was requested, but it is not available in this build. ",
-        "No CPU fallback is used for GPU-labelled runs.",
-        call. = FALSE
-      )
-    }
-    resolved_gpu
+    "metal"
   } else if (identical(backend, "cuda")) {
     if (!embedding_cuda_available_cpp() || !cuda_opentsne_native_available()) {
       stop(
@@ -819,9 +805,9 @@ fast_knn_opentsne_core <- function(indices,
                                    n_threads = NULL,
                                    seed = 42L,
                                    verbose = FALSE,
-                                   backend = c("auto", "cpu", "gpu", "metal", "cuda"),
+                                   backend = c("cpu", "cuda", "metal"),
                                    auto_config = TRUE) {
-  backend <- match.arg(backend)
+  backend <- resolve_embedding_backend(backend)
   knn <- normalize_opentsne_knn_input(indices, distances)
   Y_init <- resolve_opentsne_y_init(Y_init, knn$n, n_components)
   fast_knn_opentsne_materialized(
@@ -895,7 +881,7 @@ opentsne_knn <- function(indices,
                          Y_init = NULL,
                          seed = 4L,
                          verbose = FALSE,
-                         backend = c("auto", "cpu", "gpu", "metal", "cuda"),
+                         backend = c("cpu", "cuda", "metal"),
                           n_threads = NULL,
                           learning_rate = "auto",
                           early_exaggeration_iter = NULL,
@@ -909,7 +895,7 @@ opentsne_knn <- function(indices,
                           record_costs = FALSE,
                           auto_config = TRUE,
                           ...) {
-  backend <- match.arg(backend)
+  backend <- resolve_embedding_backend(backend)
   init <- match.arg(init)
   knn <- normalize_opentsne_knn_input(indices, distances, n_neighbors)
   Y_init <- resolve_opentsne_y_init(Y_init, knn$n, n_components)
@@ -964,7 +950,6 @@ opentsne_knn <- function(indices,
 #'
 #' @param data Numeric matrix/data frame with observations in rows, or a KNN
 #'   object returned by [faissR::nn()].
-#' @param labels Optional labels used only for scoring and plotting metadata.
 #' @param n_neighbors Number of non-self neighbors. If `NULL`, the package uses
 #'   `3 * perplexity`, matching the usual t-SNE neighbour convention.
 #' @param perplexity t-SNE perplexity. If `NULL`, uses
@@ -983,13 +968,10 @@ opentsne_knn <- function(indices,
 #' @param pca_dims Optional PCA dimension before KNN.
 #' @param nn Optional precomputed KNN output when `data` is a data matrix.
 #' @param seed Random seed.
-#' @param backend KNN/preprocessing backend and, when the matching native
-#'   openTSNE symbols are compiled, a real GPU optimizer backend. Unsupported
-#'   GPU requests fail clearly and are not relabelled CPU runs. `backend =
-#'   "auto"` keeps the CPU optimizer.
-#' @param silhouette_sample Optional sample size for silhouette scoring.
-#' @param preserve_sample Optional sample size for neighborhood scoring.
-#' @param preserve_k Number of neighbors used for neighborhood scoring.
+#' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. For
+#'   matrix input, KNN is selected internally: CPU and Metal use FAISS CPU
+#'   IVF-Flat through `faissR`, while CUDA uses FAISS GPU IVF-Flat.
+#'   Unsupported GPU requests fail clearly and are not relabelled CPU runs.
 #' @param keep_knn If `TRUE`, retain KNN matrices in the returned object.
 #' @param verbose Print optimizer progress.
 #' @param n_threads Number of CPU worker threads used by CPU KNN and CPU
@@ -1022,7 +1004,6 @@ opentsne_knn <- function(indices,
 #' @return A `fastEmbedR_embedding` object.
 #' @export
 opentsne <- function(data,
-                     labels = NULL,
                      n_neighbors = NULL,
                      perplexity = NULL,
                      n_components = 2L,
@@ -1033,14 +1014,7 @@ opentsne <- function(data,
                      pca_dims = NULL,
                      nn = NULL,
                      seed = 4L,
-                     backend = c("auto", "cpu", "gpu", "metal", "cuda",
-                                 "cuvs", "gpu_cuvs", "cuda_cuvs",
-                                 "cuda_cuvs_cagra", "cuda_cuvs_bruteforce",
-                                 "cuda_cuvs_exact", "cuda_cuvs_nndescent",
-                                 "cuvs_bruteforce", "cuvs_nndescent"),
-                     silhouette_sample = NULL,
-                     preserve_sample = NULL,
-                     preserve_k = NULL,
+                     backend = c("cpu", "cuda", "metal"),
                      keep_knn = FALSE,
                      verbose = FALSE,
                       n_threads = NULL,
@@ -1056,35 +1030,16 @@ opentsne <- function(data,
                       record_costs = FALSE,
                       auto_config = TRUE,
                       ...) {
-  backend <- match.arg(backend)
+  backend <- resolve_embedding_backend(backend)
   init <- match.arg(init)
-  optimizer_backend <- if (identical(backend, "gpu")) {
-    resolve_backend_request("gpu", need_embedding = TRUE)
-  } else if (backend %in% c("metal", "cuda")) {
-    backend
-  } else {
-    "cpu"
-  }
+  optimizer_backend <- backend
   if (is_knn_input(data)) {
     if (!is.null(nn)) {
       stop("When `data` is a KNN object, do not also pass `nn`.", call. = FALSE)
     }
-    if (backend %in% c("cuvs", "gpu_cuvs", "cuda_cuvs",
-                       "cuda_cuvs_cagra", "cuda_cuvs_bruteforce",
-                       "cuda_cuvs_exact", "cuda_cuvs_nndescent",
-                       "cuvs_bruteforce", "cuvs_nndescent")) {
-      stop(
-        "cuVS backends are KNN backends, not OpenTSNE optimizer backends. ",
-        "Pass a plain KNN object with `backend = \"cuda\"` for native CUDA optimization.",
-        call. = FALSE
-      )
-    }
     knn_result <- normalize_opentsne_knn_input(data, NULL, n_neighbors)
     n <- knn_result$n
     Y_init <- resolve_opentsne_y_init(Y_init, n, n_components)
-    if (!is.null(labels) && length(labels) != n) {
-      stop("`labels` must have one entry per KNN row.", call. = FALSE)
-    }
     if (is.null(Y_init) && identical(init, "pca") && !is.null(init_data)) {
       init_backend <- if (optimizer_backend %in% c("metal", "cuda")) optimizer_backend else "cpu"
       Y_init <- make_opentsne_pca_init_from_data(
@@ -1128,20 +1083,6 @@ opentsne <- function(data,
       )
     })
     cfg <- attr(layout, "fastEmbedR_config")
-    score_backend <- if (cfg$backend %in% c("metal", "cuda")) cfg$backend else "cpu"
-    score_preserve_k <- if (is.null(preserve_k)) ncol(knn_result$indices) else {
-      min(as.integer(preserve_k), ncol(knn_result$indices))
-    }
-    scores <- embedding_scores(
-      layout,
-      labels,
-      knn_result$indices,
-      silhouette_sample,
-      preserve_sample,
-      score_preserve_k,
-      seed,
-      backend = score_backend
-    )
     zero_time <- embedding_time
     zero_time[] <- 0
     timings <- rbind(
@@ -1161,7 +1102,6 @@ opentsne <- function(data,
       preprocess_elapsed = 0,
       knn_elapsed = 0,
       embedding_elapsed = embedding_time["elapsed"],
-      scores,
       stringsAsFactors = FALSE
     )
     parameters <- c(
@@ -1182,7 +1122,7 @@ opentsne <- function(data,
     )
     out <- list(
       layout = layout,
-      labels = labels,
+      labels = NULL,
       method = "opentsne",
       metrics = metrics,
       parameters = parameters,
@@ -1214,9 +1154,6 @@ opentsne <- function(data,
   })
   x <- prepared$data
   n <- nrow(x)
-  if (!is.null(labels) && length(labels) != n) {
-    stop("`labels` must have one entry per row of `data`.", call. = FALSE)
-  }
   if (is.null(n_neighbors)) {
     n_neighbors <- auto_tsne_k(n, perplexity)
   } else {
@@ -1228,11 +1165,10 @@ opentsne <- function(data,
 
   knn_time <- system.time({
     if (is.null(nn)) {
-      knn_backend <- if (identical(backend, "metal")) "cpu" else backend
       raw_knn <- nn_without_self(
         x,
         k = n_neighbors,
-        backend = knn_backend,
+        backend = fixed_embedding_knn_backend(backend),
         n_threads = n_threads
       )
       knn_result <- normalize_supplied_knn(raw_knn, n, n_neighbors)
@@ -1295,20 +1231,6 @@ opentsne <- function(data,
     )
   })
   cfg <- attr(layout, "fastEmbedR_config")
-  score_backend <- if (cfg$backend %in% c("metal", "cuda")) cfg$backend else "cpu"
-  score_preserve_k <- if (is.null(preserve_k)) ncol(knn_result$indices) else {
-    min(as.integer(preserve_k), ncol(knn_result$indices))
-  }
-  scores <- embedding_scores(
-    layout,
-    labels,
-    knn_result$indices,
-    silhouette_sample,
-    preserve_sample,
-    score_preserve_k,
-    seed,
-    backend = score_backend
-  )
   timings <- rbind(
     preprocess = preprocess_time,
     knn = knn_time,
@@ -1324,7 +1246,6 @@ opentsne <- function(data,
     preprocess_elapsed = preprocess_time["elapsed"],
     knn_elapsed = knn_time["elapsed"],
     embedding_elapsed = embedding_time["elapsed"],
-    scores,
     stringsAsFactors = FALSE
   )
   parameters <- c(
@@ -1345,7 +1266,7 @@ opentsne <- function(data,
   )
   out <- list(
     layout = layout,
-    labels = labels,
+    labels = NULL,
     method = "opentsne",
     metrics = metrics,
     parameters = parameters,

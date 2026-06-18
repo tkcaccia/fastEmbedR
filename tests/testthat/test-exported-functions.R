@@ -2,7 +2,7 @@ make_cluster_data <- function(n = 18L, p = 5L) {
   labels <- rep(seq_len(3L), length.out = n)
   x <- matrix(rnorm(n * p, sd = 0.25), nrow = n, ncol = p)
   x <- x + labels
-  list(x = x, labels = labels)
+  list(x = x)
 }
 
 expect_embedding <- function(layout, n) {
@@ -82,9 +82,8 @@ test_that("core exported functions have tiny openTSNE smoke tests", {
   expect_embedding(layout_knn, n)
   expect_equal(attr(layout_knn, "fastEmbedR_config")$method, "opentsne")
 
-  fit <- opentsne(x, labels = labels, n_neighbors = 4L, perplexity = 1,
+  fit <- opentsne(x, n_neighbors = 4L, perplexity = 1,
     early_exaggeration_iter = 2L, n_iter = 3L,
-    silhouette_sample = NULL, preserve_sample = NULL,
     n_threads = 2L)
   expect_s3_class(fit, "fastEmbedR_embedding")
   expect_embedding(fit$layout, n)
@@ -92,9 +91,8 @@ test_that("core exported functions have tiny openTSNE smoke tests", {
   expect_equal(fit$parameters$n_threads, 2L)
   expect_null(fit$knn)
 
-  fit_knn <- opentsne(knn, labels = labels, perplexity = 1,
-    early_exaggeration_iter = 2L, n_iter = 3L,
-    silhouette_sample = NULL, preserve_sample = NULL)
+  fit_knn <- opentsne(knn, perplexity = 1,
+    early_exaggeration_iter = 2L, n_iter = 3L)
   expect_s3_class(fit_knn, "fastEmbedR_embedding")
   expect_embedding(fit_knn$layout, n)
   expect_equal(fit_knn$parameters$input, "knn")
@@ -103,7 +101,6 @@ test_that("core exported functions have tiny openTSNE smoke tests", {
   scores <- evaluate_embedding(
     x,
     fit$layout,
-    labels = labels,
     k = c(4L, 5L),
     sample_size_for_global_metrics = n,
     sample_size_for_local_metrics = n,
@@ -120,7 +117,6 @@ test_that("core exported functions have tiny openTSNE smoke tests", {
   gpu_scores <- evaluate_embedding(
     x,
     fit$layout,
-    labels = labels,
     k = c(4L, 5L),
     sample_size_for_global_metrics = n,
     sample_size_for_local_metrics = n,

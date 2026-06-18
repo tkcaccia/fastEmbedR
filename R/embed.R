@@ -696,11 +696,13 @@ print.fastEmbedR_embedding <- function(x, ...) {
   cat("  embedding backend: ", x$parameters$backend, "\n", sep = "")
   cat("  KNN backend: ", x$parameters$nn_backend, "\n", sep = "")
   cat("  elapsed: ", format(round(x$metrics$elapsed, 3L), nsmall = 3L), " sec\n", sep = "")
-  if (is.finite(x$metrics$silhouette)) {
-    cat("  silhouette: ", format(round(x$metrics$silhouette, 4L), nsmall = 4L), "\n", sep = "")
+  silhouette <- if ("silhouette" %in% names(x$metrics)) x$metrics$silhouette[[1L]] else NA_real_
+  if (length(silhouette) == 1L && is.finite(silhouette)) {
+    cat("  silhouette: ", format(round(silhouette, 4L), nsmall = 4L), "\n", sep = "")
   }
-  if (is.finite(x$metrics$knn_preservation)) {
-    cat("  KNN preservation: ", format(round(x$metrics$knn_preservation, 4L), nsmall = 4L), "\n", sep = "")
+  knn_preservation <- if ("knn_preservation" %in% names(x$metrics)) x$metrics$knn_preservation[[1L]] else NA_real_
+  if (length(knn_preservation) == 1L && is.finite(knn_preservation)) {
+    cat("  KNN preservation: ", format(round(knn_preservation, 4L), nsmall = 4L), "\n", sep = "")
   }
   invisible(x)
 }
