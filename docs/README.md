@@ -10,8 +10,8 @@
 
 ## Main Pages
 
-- [Installation](installation.md): R packages, FAISS, cuVS, CUDA, Metal, and
-  backend rules.
+- [Installation](installation.md): `fastEmbedR` CPU, Metal, and CUDA embedding
+  builds. FAISS/cuVS KNN setup lives in the companion `faissR` project.
 - [Implementation](implementation.md): how UMAP and openTSNE are implemented
   across CPU, Metal, and CUDA.
 - [Examples](examples.md): iris examples plus the MNIST70k benchmark command,

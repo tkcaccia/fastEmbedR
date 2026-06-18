@@ -80,8 +80,9 @@ remotes::install_github("tkcaccia/faissR")
 remotes::install_github("tkcaccia/fastEmbedR")
 ```
 
-See [Installation](docs/installation.md) for FAISS, cuVS, CUDA, Metal, and
-system-library details.
+See [Installation](docs/installation.md) for `fastEmbedR` CPU, Metal, and CUDA
+embedding builds. FAISS/cuVS nearest-neighbour installation is documented in
+the companion [`faissR`](https://github.com/tkcaccia/faissR) project.
 
 ## MNIST 70k Examples
 

@@ -43,53 +43,23 @@ required by the core `fastEmbedR` embedding functions.
 - macOS Metal framework for native Metal embedding kernels on Apple Silicon;
 - CUDA toolkit for optional native CUDA embedding kernels.
 
-`faissR` needs:
+`faissR` owns FAISS/cuVS KNN installation. Install and validate `faissR` first
+using the instructions in the [`faissR` GitHub project](https://github.com/tkcaccia/faissR),
+then install `fastEmbedR`.
 
-- FAISS for CPU KNN;
-- CUDA and RAPIDS cuVS for optional CUDA KNN;
-- a C++17 compiler compatible with the installed FAISS/cuVS libraries.
+## CUDA Embedding Build
 
-## CPU And FAISS
-
-`fastEmbedR` calls `faissR::nn()` internally for one-call embeddings. On CPU,
-FAISS should be
-available through `faissR`.
-
-Example conda-forge FAISS CPU setup:
+CUDA KNN is provided by `faissR`. `fastEmbedR` only needs CUDA when compiling
+native CUDA embedding kernels for UMAP/openTSNE.
 
 ```sh
-conda create -n fastembedr-faiss -c conda-forge faiss-cpu r-base r-rcpp
-conda activate fastembedr-faiss
-
-FAISS_HOME="$CONDA_PREFIX" FAISSR_USE_FAISS=1 \
-  R CMD INSTALL /path/to/faissR
-
-R CMD INSTALL /path/to/fastEmbedR
-```
-
-## CUDA / cuVS
-
-CUDA KNN is owned by `faissR`. The preferred CUDA graph backend is RAPIDS cuVS
-where available. `fastEmbedR` consumes the KNN object and runs native CUDA
-embedding kernels for UMAP and openTSNE when compiled.
-
-Example:
-
-```sh
-CUDA_HOME=/usr/local/cuda \
-CUVS_HOME=/path/to/cuvs \
-FAISSR_USE_FAISS=1 \
-FAISSR_USE_CUDA=1 \
-FAISSR_USE_CUVS=1 \
-R CMD INSTALL /path/to/faissR
-
 CUDA_HOME=/usr/local/cuda \
 FASTEMBEDR_USE_CUDA=1 \
 R CMD INSTALL /path/to/fastEmbedR
 ```
 
-If CUDA/cuVS is requested explicitly and unavailable, the functions fail
-clearly. They do not run on CPU while reporting CUDA.
+If CUDA is requested explicitly and unavailable, the embedding function fails
+clearly. It does not run on CPU while reporting CUDA.
 
 ## Apple Metal
 
@@ -110,10 +80,7 @@ After installation:
 ```r
 library(fastEmbedR)
 faissR::backend_info()
-faissR::faiss_available()
-faissR::cuda_available()
-faissR::cuvs_available()
-faissR::metal_available()
+fastEmbedR::metal_available()
 ```
 
 ## Backend Rule
