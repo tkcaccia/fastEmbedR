@@ -199,24 +199,24 @@ The benchmark intentionally does not show `graph_mode = "binary"`.
 
 ### MNIST 70k Results
 
-![MNIST 70k computational time](assets/mnist70k_cuda_codex_20260621/mnist70k_github_benchmark_time_barplot.png)
+![MNIST 70k computational time](assets/mnist70k_cuda_codex_20260621_rebuilt/mnist70k_github_benchmark_time_barplot.png)
 
 | method | backend | KNN backend | NN sec | embedding sec | total sec | trust | label KNN acc |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| fastEmbedR openTSNE CPU | CPU | faiss_ivf | 29.612 | 24.995 | 55.419 | 0.332 | 0.968 |
-| fastEmbedR openTSNE CUDA | CUDA | faiss_gpu_ivf_flat | 6.772 | 1.605 | 9.134 | 0.332 | 0.970 |
-| Rtsne full | CPU | internal | internal | 97.427 | 97.427 | 0.324 | 0.973 |
-| fastEmbedR UMAP CPU fuzzy | CPU | faiss_ivf | 29.731 | 5.706 | 36.102 | 0.279 | 0.972 |
-| fastEmbedR UMAP CUDA fuzzy | CUDA | faiss_gpu_ivf_flat | 6.459 | 0.565 | 7.705 | 0.274 | 0.973 |
-| uwot UMAP fast_sgd full | CPU | internal | internal | 37.211 | 37.211 | 0.277 | 0.971 |
+| fastEmbedR openTSNE CPU | CPU | faiss_ivf | 81.665 | 49.103 | 132.623 | 0.332 | 0.968 |
+| fastEmbedR openTSNE CUDA | CUDA | faiss_gpu_ivf_flat | 6.038 | 0.813 | 9.354 | 0.334 | 0.969 |
+| Rtsne full | CPU | internal | internal | 240.524 | 240.524 | 0.324 | 0.973 |
+| fastEmbedR UMAP CPU fuzzy | CPU | faiss_ivf | 63.440 | 6.597 | 71.416 | 0.279 | 0.972 |
+| fastEmbedR UMAP CUDA fuzzy | CUDA | faiss_gpu_ivf_flat | 4.744 | 0.612 | 6.689 | 0.276 | 0.972 |
+| uwot UMAP fast_sgd full | CPU | internal | internal | 68.040 | 68.040 | 0.277 | 0.971 |
 
 The `KNN backend` column records the concrete faissR backend selected during
 that run. The reference methods use their own internal neighbour search, so the
 table reports their full runtime as embedding/runtime.
 
-![MNIST 70k embeddings](assets/mnist70k_cuda_codex_20260621/mnist70k_github_benchmark.png)
+![MNIST 70k embeddings](assets/mnist70k_cuda_codex_20260621_rebuilt/mnist70k_github_benchmark.png)
 
 Source files:
 
-- [mnist70k_github_benchmark.csv](assets/mnist70k_cuda_codex_20260621/mnist70k_github_benchmark.csv)
-- [machine-specs.md](assets/mnist70k_cuda_codex_20260621/machine-specs.md)
+- [mnist70k_github_benchmark.csv](assets/mnist70k_cuda_codex_20260621_rebuilt/mnist70k_github_benchmark.csv)
+- [machine-specs.md](assets/mnist70k_cuda_codex_20260621_rebuilt/machine-specs.md)
