@@ -103,6 +103,42 @@ time_it <- function(expr) {
   list(value = value, sec = proc.time()[["elapsed"]] - t0)
 }
 
+stage_sec <- function(obj, stage) {
+  fit <- obj$value
+  if (!is.list(fit) || is.null(fit$timings)) return(NA_real_)
+  timings <- fit$timings
+  if (!stage %in% rownames(timings) || !"elapsed" %in% colnames(timings)) {
+    return(NA_real_)
+  }
+  as.numeric(timings[stage, "elapsed"])
+}
+
+timing_row <- function(method, backend, obj, nn_backend = NA_character_) {
+  nn_sec <- stage_sec(obj, "knn")
+  embedding_sec <- stage_sec(obj, "embedding")
+  if (!is.finite(embedding_sec)) embedding_sec <- obj$sec
+  staged <- sum(c(nn_sec, embedding_sec), na.rm = TRUE)
+  other_sec <- max(0, obj$sec - staged)
+  data.frame(
+    method = method,
+    backend = backend,
+    nn_backend = nn_backend,
+    nn_sec = nn_sec,
+    embedding_sec = embedding_sec,
+    other_sec = other_sec,
+    total_sec = obj$sec,
+    stringsAsFactors = FALSE
+  )
+}
+
+nn_backend_of <- function(obj) {
+  fit <- obj$value
+  if (is.list(fit) && !is.null(fit$parameters) && !is.null(fit$parameters$nn_backend)) {
+    return(as.character(fit$parameters$nn_backend))
+  }
+  NA_character_
+}
+
 set.seed(seed)
 opentsne_cpu <- time_it(
   fastEmbedR::opentsne(x, perplexity = perplexity, backend = "cpu",
@@ -155,10 +191,20 @@ layouts <- list(
   "uwot UMAP fast_sgd full" = layout_of(uwot_fast)
 )
 
-timing <- data.frame(
-  method = names(layouts),
-  total_sec = c(opentsne_cpu$sec, opentsne_cuda$sec, rtsne_full$sec,
-                umap_cpu$sec, umap_cuda$sec, uwot_fast$sec)
+timing <- do.call(
+  rbind,
+  list(
+    timing_row("fastEmbedR openTSNE CPU", "cpu", opentsne_cpu,
+               nn_backend_of(opentsne_cpu)),
+    timing_row("fastEmbedR openTSNE CUDA", "cuda", opentsne_cuda,
+               nn_backend_of(opentsne_cuda)),
+    timing_row("Rtsne full", "cpu", rtsne_full, "internal"),
+    timing_row("fastEmbedR UMAP CPU fuzzy", "cpu", umap_cpu,
+               nn_backend_of(umap_cpu)),
+    timing_row("fastEmbedR UMAP CUDA fuzzy", "cuda", umap_cuda,
+               nn_backend_of(umap_cuda)),
+    timing_row("uwot UMAP fast_sgd full", "cpu", uwot_fast, "internal")
+  )
 )
 
 print(timing)
@@ -172,6 +218,13 @@ for (nm in names(layouts)) {
   box(col = "grey70")
 }
 ```
+
+For fastEmbedR rows, `nn_sec` is the time reported by the internal faissR KNN
+stage and `embedding_sec` is the low-dimensional optimization stage. `other_sec`
+is the remaining measured time, mainly setup, initialization, and result
+assembly. For full reference methods such as `Rtsne` and `uwot`, their internal
+KNN is not separately timed, so the example reports their full runtime as
+`embedding_sec`.
 
 The example compares:
 
