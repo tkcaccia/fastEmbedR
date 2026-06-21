@@ -75,7 +75,7 @@ object.
 
 The example below uses the full 70,000 MNIST observations as flattened 28x28
 images stored in a prepared `.RData` object with `data` and `labels` fields.
-CPU paths are requested with 4 threads for KNN search and embedding.
+CPU paths are requested with 4 threads.
 
 ```r
 library(fastEmbedR)
@@ -201,18 +201,14 @@ The benchmark intentionally does not show `graph_mode = "binary"`.
 
 ![MNIST 70k computational time](assets/mnist70k_cuda_codex_20260621_4threads/mnist70k_github_benchmark_time_barplot.png)
 
-| method | backend | KNN backend | NN sec | embedding sec | total sec | trust | label KNN acc |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| fastEmbedR openTSNE CPU | CPU | faiss_ivf | 29.991 | 24.577 | 55.437 | 0.332 | 0.968 |
-| fastEmbedR openTSNE CUDA | CUDA | faiss_gpu_ivf_flat | 3.846 | 0.805 | 5.415 | 0.335 | 0.969 |
-| Rtsne full | CPU | internal | internal | 98.179 | 98.179 | 0.324 | 0.973 |
-| fastEmbedR UMAP CPU fuzzy | CPU | faiss_ivf | 29.773 | 5.695 | 36.184 | 0.279 | 0.971 |
-| fastEmbedR UMAP CUDA fuzzy | CUDA | faiss_gpu_ivf_flat | 3.477 | 0.518 | 4.693 | 0.276 | 0.972 |
-| uwot UMAP fast_sgd full | CPU | internal | internal | 37.417 | 37.417 | 0.277 | 0.970 |
-
-The `KNN backend` column records the concrete faissR backend selected during
-that run. The reference methods use their own internal neighbour search, so the
-table reports their full runtime as embedding/runtime.
+| method | backend | total sec | trust | label KNN acc |
+| --- | --- | ---: | ---: | ---: |
+| fastEmbedR openTSNE CPU | CPU | 55.437 | 0.332 | 0.968 |
+| fastEmbedR openTSNE CUDA | CUDA | 5.415 | 0.335 | 0.969 |
+| Rtsne full | CPU | 98.179 | 0.324 | 0.973 |
+| fastEmbedR UMAP CPU fuzzy | CPU | 36.184 | 0.279 | 0.971 |
+| fastEmbedR UMAP CUDA fuzzy | CUDA | 4.693 | 0.276 | 0.972 |
+| uwot UMAP fast_sgd full | CPU | 37.417 | 0.277 | 0.970 |
 
 ![MNIST 70k embeddings](assets/mnist70k_cuda_codex_20260621_4threads/mnist70k_github_benchmark.png)
 

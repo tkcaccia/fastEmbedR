@@ -106,31 +106,23 @@ plot_time_barplot <- function(results, path) {
   labels <- gsub(" UMAP fast_sgd full$", "\nfast_sgd full", labels)
   labels <- gsub(" UMAP ", "\nUMAP ", labels)
   labels <- gsub(" openTSNE ", "\nopenTSNE ", labels)
-  nn <- ifelse(is.finite(ok$nn_sec), ok$nn_sec, 0)
-  embed <- ifelse(is.finite(ok$embed_sec), ok$embed_sec, ok$total_sec)
-  other <- pmax(0, ok$total_sec - nn - embed)
-  values <- rbind(
-    `NN search` = nn,
-    Embedding = embed,
-    Other = other
-  )
   png(path, width = 1700, height = 1050, res = 150)
   on.exit(dev.off(), add = TRUE)
   old <- par(no.readonly = TRUE)
   on.exit(par(old), add = TRUE)
   par(mar = c(8.8, 4.8, 4.2, 1.2))
-  cols <- c("#4C78A8", "#F58518", "#54A24B")
+  cols <- ifelse(ok$backend == "cuda", "#4C78A8", "#F58518")
   bp <- barplot(
-    values,
+    ok$total_sec,
     names.arg = labels,
     las = 2,
     col = cols,
     border = NA,
     ylab = "Seconds",
-    main = "MNIST 70k computational time",
+    main = "MNIST 70k total runtime",
     ylim = c(0, max(ok$total_sec, na.rm = TRUE) * 1.18)
   )
-  legend("topright", fill = cols, legend = rownames(values), bty = "n")
+  legend("topright", fill = c("#F58518", "#4C78A8"), legend = c("CPU", "CUDA"), bty = "n")
   text(bp, ok$total_sec, labels = sprintf("%.2fs", ok$total_sec), pos = 3, cex = 0.85)
   invisible(TRUE)
 }
@@ -303,11 +295,8 @@ results <- list()
 add_row <- function(method,
                     family,
                     backend,
-                    nn_sec,
-                    embed_sec,
                     total_sec,
                     layout,
-                    nn_backend = NA_character_,
                     status = "success",
                     error = NA_character_) {
   metrics <- if (!is.null(layout)) score(x, layout, labels, seed, n_threads) else NULL
@@ -322,9 +311,6 @@ add_row <- function(method,
     machine = specs$machine,
     cpu = specs$cpu,
     requested_threads = n_threads,
-    nn_backend = nn_backend,
-    nn_sec = nn_sec,
-    embed_sec = embed_sec,
     total_sec = total_sec,
     trustworthiness = if (is.null(metrics)) NA_real_ else metrics$trustworthiness[[1L]],
     label_knn_accuracy = if (is.null(metrics)) NA_real_ else metrics$label_knn_accuracy[[1L]],
@@ -335,31 +321,13 @@ add_row <- function(method,
   if (!is.null(layout)) layouts[[method]] <<- layout
 }
 
-extract_stage_time <- function(fit, stage) {
-  if (!is.list(fit) || is.null(fit$timings)) return(NA_real_)
-  timings <- fit$timings
-  if (!is.matrix(timings) && !is.data.frame(timings)) return(NA_real_)
-  if (!stage %in% rownames(timings) || !"elapsed" %in% colnames(timings)) return(NA_real_)
-  as.numeric(timings[stage, "elapsed"])
-}
-
-extract_nn_backend <- function(fit) {
-  if (is.list(fit) && !is.null(fit$parameters) && !is.null(fit$parameters$nn_backend)) {
-    return(as.character(fit$parameters$nn_backend))
-  }
-  NA_character_
-}
-
 run_one <- function(method, family, backend, expr) {
   tryCatch({
     t <- timed(expr())
     y <- layout_matrix(t$value)
-    nn_sec <- extract_stage_time(t$value, "knn")
-    embed_sec <- extract_stage_time(t$value, "embedding")
-    if (!is.finite(embed_sec)) embed_sec <- t$sec
-    add_row(method, family, backend, nn_sec, embed_sec, t$sec, y, extract_nn_backend(t$value))
+    add_row(method, family, backend, t$sec, y)
   }, error = function(e) {
-    add_row(method, family, backend, NA_real_, NA_real_, NA_real_, NULL, NA_character_, "failed", conditionMessage(e))
+    add_row(method, family, backend, NA_real_, NULL, "failed", conditionMessage(e))
   })
 }
 
