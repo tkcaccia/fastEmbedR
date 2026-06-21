@@ -1,7 +1,0 @@
-"method","family","backend","n","p","k","perplexity","machine","cpu","requested_threads","nn_backend","nn_sec","embed_sec","total_sec","trustworthiness","label_knn_accuracy","status","error_message"
-"fastEmbedR openTSNE CPU","openTSNE","cpu",70000,784,15,15,"icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,"faiss_ivf",81.665,49.103,132.623,0.332466666666668,0.9676,"success",NA
-"fastEmbedR openTSNE CUDA","openTSNE","cuda",70000,784,15,15,"icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,"faiss_gpu_ivf_flat",6.03799999999998,0.812999999999988,9.35400000000001,0.333777777777779,0.9694,"success",NA
-"Rtsne full","Rtsne","cpu",70000,784,15,15,"icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,NA,NA,240.524,240.524,0.324066666666667,0.973,"success",NA
-"fastEmbedR UMAP CPU fuzzy","UMAP","cpu",70000,784,15,15,"icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,"faiss_ivf",63.44,6.59699999999998,71.416,0.279066666666667,0.9718,"success",NA
-"fastEmbedR UMAP CUDA fuzzy","UMAP","cuda",70000,784,15,15,"icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,"faiss_gpu_ivf_flat",4.74400000000003,0.612000000000023,6.68899999999996,0.276066666666667,0.972,"success",NA
-"uwot UMAP fast_sgd full","UMAP","cpu",70000,784,15,15,"icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,NA,NA,68.04,68.04,0.27708888888889,0.971,"success",NA
