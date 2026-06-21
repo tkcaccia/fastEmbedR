@@ -34,10 +34,12 @@ The public package surface is deliberately small:
 the one-call embedding functions call `faissR` internally. The neighbour layer
 uses FAISS/cuVS concepts for high-throughput vector search [8-9].
 
-For reproducibility, the one-call API fixes the internal KNN policy:
+For reproducibility, the one-call API fixes only the requested KNN device class:
 
-- CPU and Metal one-call embedding use FAISS CPU IVF-Flat through `faissR`.
-- CUDA one-call embedding uses FAISS GPU IVF-Flat through `faissR`.
+- CPU and Metal one-call embedding request the faissR CPU backend.
+- CUDA one-call embedding requests the faissR CUDA backend.
+- Within the requested CPU/CUDA backend, `faissR::nn_without_self()` chooses the
+  concrete KNN method and tuning automatically.
 - KNN-input functions accept the index and distance matrices as already
   measured data and do not repeat neighbour search.
 

@@ -33,7 +33,7 @@ and openTSNE runs.
 ```{r, eval = FALSE}
 library(fastEmbedR)
 
-knn <- faissR::nn(x, k = 50, backend = "faiss_ivf_flat", n_threads = 4)
+knn <- faissR::nn(x, k = 50, backend = "cpu", method = "auto", n_threads = 4)
 y_umap <- umap_knn(knn, backend = "cpu", seed = 1)
 y_tsne <- opentsne_knn(knn, init_data = x, backend = "cpu", seed = 1)
 ```
@@ -106,11 +106,12 @@ CUDA support. The cleaned public path is the pure atomic CUDA optimizer. Older
 CUDA hybrid and deterministic variants were removed.
 
 CUDA KNN is not implemented in `fastEmbedR`; it comes from `faissR`. The
-one-call embedding API uses FAISS GPU IVF-Flat on CUDA. KNN-first workflows can
-use other explicit `faissR::nn()` backends for benchmarking.
+one-call embedding API requests the faissR CUDA backend on CUDA, and faissR
+selects the concrete method automatically. KNN-first workflows can use other
+explicit `faissR::nn()` settings for benchmarking.
 
 ```{r, eval = FALSE}
-knn_cuda <- faissR::nn(x, k = 50, backend = "faiss_gpu_ivf_flat", n_threads = 4)
+knn_cuda <- faissR::nn(x, k = 50, backend = "cuda", method = "auto", n_threads = 4)
 y_cuda <- umap_knn(knn_cuda, backend = "cuda", seed = 1)
 ```
 

@@ -35,7 +35,7 @@ from the supplied matrix.}
 
 \item{seed}{Random seed.}
 
-\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. KNN is selected internally: CPU and Metal use FAISS CPU IVF-Flat through \code{faissR}, while CUDA uses FAISS GPU IVF-Flat. GPU requests must resolve to a real native backend; the package does not relabel CPU work as GPU.}
+\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. KNN is delegated to \code{faissR::nn_without_self()} with automatic method and tuning selection. CPU and Metal request the faissR CPU backend, while CUDA requests the faissR CUDA backend. GPU requests must resolve to a real native backend; the package does not relabel CPU work as GPU.}
 
 \item{n_threads}{Number of CPU worker threads for KNN and CPU UMAP.}
 

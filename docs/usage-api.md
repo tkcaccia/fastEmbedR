@@ -27,10 +27,11 @@ benchmarks easier to interpret.
 
 The one-call functions intentionally hide the KNN algorithm choice. For
 `opentsne()` and `umap()`, `backend` accepts only `"cpu"`, `"metal"`, or
-`"cuda"`. Matrix-input KNN is fixed: CPU and Metal use FAISS CPU IVF-Flat
-through `faissR`; CUDA uses FAISS GPU IVF-Flat. To benchmark another KNN
-algorithm, compute it explicitly with `faissR::nn()` and pass the result
-to `opentsne_knn()` or `umap_knn()`.
+`"cuda"`. Matrix-input KNN is delegated to `faissR::nn_without_self()`:
+CPU and Metal request the faissR CPU backend, while CUDA requests the faissR
+CUDA backend. faissR then chooses the concrete KNN method and tuning
+automatically. To benchmark another KNN algorithm, compute it explicitly with
+`faissR::nn()` and pass the result to `opentsne_knn()` or `umap_knn()`.
 
 ## Distance Metrics In `faissR::nn()`
 

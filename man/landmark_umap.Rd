@@ -31,10 +31,10 @@ observations by KNN interpolation against the fixed landmark embedding.
 \item{pca_dims}{Optional PCA dimension before KNN.}
 \item{seed}{Random seed.}
 \item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or
-\code{"metal"}. KNN is selected internally: CPU and Metal use FAISS CPU
-IVF-Flat through \code{faissR}, while CUDA uses FAISS GPU IVF-Flat. GPU
-requests must use a real native backend and are not silently relabelled as
-CPU.}
+\code{"metal"}. KNN is delegated to \code{faissR::nn_without_self()} with
+automatic method and tuning selection. CPU and Metal request the faissR CPU
+backend, while CUDA requests the faissR CUDA backend. GPU requests must use a
+real native backend and are not silently relabelled as CPU.}
 \item{transform_k}{Number of landmark neighbours used to project
 non-landmark observations. Defaults to \code{n_neighbors}.}
 \item{n_threads}{Number of CPU worker threads.}

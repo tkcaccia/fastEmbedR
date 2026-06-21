@@ -15,9 +15,10 @@
 #' @param nn Optional precomputed KNN result when `data` is a matrix.
 #' @param seed Random seed.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. KNN is
-#'   selected internally: CPU and Metal use FAISS CPU IVF-Flat through
-#'   `faissR`, while CUDA uses FAISS GPU IVF-Flat. GPU requests must resolve to
-#'   a real native backend; the package does not relabel CPU work as GPU.
+#'   delegated to `faissR::nn_without_self()` with `method = "auto"` and
+#'   `tuning = "auto"`: CPU and Metal request the faissR CPU backend, while
+#'   CUDA requests the faissR CUDA backend. GPU requests must resolve to a real
+#'   native backend; the package does not relabel CPU work as GPU.
 #' @param n_threads Number of CPU worker threads for KNN and CPU UMAP.
 #' @param keep_knn Keep KNN matrices in the returned object.
 #' @param graph_mode Graph weighting mode. `"binary"` uses a symmetric
@@ -117,7 +118,7 @@ umap <- function(data,
       faissR::nn_without_self(
         x,
         k = as.integer(n_neighbors),
-        backend = fixed_embedding_knn_backend(backend),
+        backend = embedding_knn_backend(backend),
         n_threads = n_threads
       )
     } else {
@@ -264,7 +265,7 @@ landmark_umap <- function(data,
       x_landmarks,
       x[non_landmarks, , drop = FALSE],
       k = transform_k,
-      backend = fixed_embedding_knn_backend(backend),
+      backend = embedding_knn_backend(backend),
       seed = seed + 503L,
       n_threads = n_threads,
       landmark_layout = reference_fit$layout,

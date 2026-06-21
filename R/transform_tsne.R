@@ -544,15 +544,7 @@ landmark_projection_knn <- function(x_landmarks,
     n_features = ncol(x_landmarks),
     k = k
   )) {
-    projection_backend <- if (isTRUE(faissR::cuda_available()) && isTRUE(faissR::cuvs_available())) {
-      "cuda_cuvs_cagra"
-    } else if (isTRUE(faissR::cuda_available()) && isTRUE(faissR::faiss_available())) {
-      "faiss_gpu_ivf_flat"
-    } else if (isTRUE(faissR::faiss_available())) {
-      "faiss_hnsw"
-    } else {
-      stop("Landmark projection KNN requires FAISS/cuVS through faissR.", call. = FALSE)
-    }
+    projection_backend <- embedding_knn_backend(backend)
     result <- faissR::nn(
       x_landmarks,
       x_query,
@@ -913,7 +905,7 @@ landmark_tsne <- function(data,
     reference_knn <- faissR::nn_without_self(
       x_landmarks,
       k = landmark_neighbors,
-      backend = fixed_embedding_knn_backend(backend),
+      backend = embedding_knn_backend(backend),
       n_threads = n_threads
     )
     reference_layout <- opentsne_knn(

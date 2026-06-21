@@ -59,9 +59,10 @@ so one-call results match a KNN object computed from the supplied matrix.}
 \item{seed}{Random seed.}
 
 \item{backend}{Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. For
-matrix input, KNN is selected internally: CPU and Metal use FAISS CPU
-IVF-Flat through `faissR`, while CUDA uses FAISS GPU IVF-Flat.
-Unsupported GPU requests fail clearly and are not relabelled CPU runs.}
+matrix input, KNN is delegated to `faissR::nn_without_self()` with automatic
+method and tuning selection. CPU and Metal request the faissR CPU backend,
+while CUDA requests the faissR CUDA backend. Unsupported GPU requests fail
+clearly and are not relabelled CPU runs.}
 
 \item{keep_knn}{If `TRUE`, retain KNN matrices in the returned object.}
 

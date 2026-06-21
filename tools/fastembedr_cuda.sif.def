@@ -54,6 +54,7 @@ From: mambaorg/micromamba:2.3.3
       r-rcpp \
       r-jsonlite \
       r-data.table \
+      r-codetools \
       r-matrix \
       r-igraph \
       r-leidenbase \
@@ -105,7 +106,8 @@ From: mambaorg/micromamba:2.3.3
     export CUDAHOSTCXX=/opt/conda/bin/g++
 
     Rscript -e "options(repos = c(CRAN = 'https://cloud.r-project.org')); install.packages(c('remotes', 'BiocManager'), Ncpus = 4)"
-    Rscript -e "options(repos = c(CRAN = 'https://cloud.r-project.org')); install.packages(c('uwot', 'umap', 'Rtsne', 'tsne', 'FNN', 'RANN', 'RcppAnnoy', 'ggplot2', 'data.table', 'jsonlite'), Ncpus = 4)"
+    Rscript -e "options(repos = c(CRAN = 'https://cloud.r-project.org')); install.packages(c('uwot', 'umap', 'Rtsne', 'tsne', 'FNN', 'RANN', 'RcppAnnoy', 'RcppHNSW', 'Rnanoflann', 'codetools', 'ggplot2', 'data.table', 'jsonlite'), Ncpus = 4)"
+    Rscript -e "BiocManager::install('BiocNeighbors', ask = FALSE, update = FALSE, Ncpus = 4)"
 
     # KlugerLab/FIt-SNE command-line implementation for benchmark comparison.
     git clone --depth 1 https://github.com/KlugerLab/FIt-SNE /opt/fit-sne-src
@@ -123,10 +125,10 @@ From: mambaorg/micromamba:2.3.3
     Rscript -e "remotes::install_github('tkcaccia/faissR', upgrade = 'never', dependencies = TRUE)"
     Rscript -e "remotes::install_github('tkcaccia/fastEmbedR', upgrade = 'never', dependencies = TRUE)"
 
-    Rscript -e ".libPaths('/opt/conda/lib/R/library'); library(faissR); library(fastEmbedR); print(faissR::backend_info()); print(fastEmbedR::backend_info())"
+    Rscript -e ".libPaths('/opt/conda/lib/R/library'); pkgs <- c('Rnanoflann','RcppAnnoy','BiocNeighbors','RANN','RcppHNSW','uwot','umap','Rtsne','tsne','FNN','faissR','fastEmbedR'); missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop('Missing R packages: ', paste(missing, collapse = ', ')); library(faissR); library(fastEmbedR); print(faissR::backend_info()); print(fastEmbedR::backend_info())"
 
 %runscript
     exec "$@"
 
 %test
-    Rscript -e ".libPaths('/opt/conda/lib/R/library'); library(faissR); library(fastEmbedR); stopifnot(faissR::faiss_available()); print(faissR::backend_info()); print(fastEmbedR::backend_info())"
+    Rscript -e ".libPaths('/opt/conda/lib/R/library'); pkgs <- c('Rnanoflann','RcppAnnoy','BiocNeighbors','RANN','RcppHNSW','uwot','umap','Rtsne','tsne','FNN','faissR','fastEmbedR'); missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop('Missing R packages: ', paste(missing, collapse = ', ')); library(faissR); library(fastEmbedR); stopifnot(faissR::faiss_available()); print(faissR::backend_info()); print(fastEmbedR::backend_info())"

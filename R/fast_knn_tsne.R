@@ -1000,8 +1000,9 @@ opentsne_knn <- function(indices,
 #' @param nn Optional precomputed KNN output when `data` is a data matrix.
 #' @param seed Random seed.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. For
-#'   matrix input, KNN is selected internally: CPU and Metal use FAISS CPU
-#'   IVF-Flat through `faissR`, while CUDA uses FAISS GPU IVF-Flat.
+#'   matrix input, KNN is delegated to `faissR::nn_without_self()` with
+#'   automatic method/tuning selection. CPU and Metal request the faissR CPU
+#'   backend; CUDA requests the faissR CUDA backend.
 #'   Unsupported GPU requests fail clearly and are not relabelled CPU runs.
 #' @param keep_knn If `TRUE`, retain KNN matrices in the returned object.
 #' @param verbose Print optimizer progress.
@@ -1212,7 +1213,7 @@ opentsne <- function(data,
       raw_knn <- faissR::nn_without_self(
         x,
         k = n_neighbors,
-        backend = fixed_embedding_knn_backend(backend),
+        backend = embedding_knn_backend(backend),
         n_threads = n_threads
       )
       knn_result <- normalize_supplied_knn(raw_knn, n, n_neighbors)

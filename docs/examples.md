@@ -42,9 +42,10 @@ fit$metrics
 
 Use `backend = "metal"` on Apple Silicon or `backend = "cuda"` on a CUDA build.
 Explicit GPU requests fail clearly if the backend is unavailable.
-For matrix input, the KNN search is fixed inside `opentsne()`: CPU and Metal
-use FAISS CPU IVF-Flat, while CUDA uses FAISS GPU IVF-Flat. The internal
-non-self KNN width is `ceiling(perplexity)`. Use
+For matrix input, the KNN search is delegated to `faissR::nn_without_self()`:
+CPU and Metal request the faissR CPU backend, while CUDA requests the faissR
+CUDA backend. faissR then selects the concrete KNN method and tuning
+automatically. The internal non-self KNN width is `ceiling(perplexity)`. Use
 `opentsne_knn()` with an explicit `faissR::nn()` result when benchmarking alternative
 KNN algorithms.
 
@@ -137,9 +138,9 @@ The benchmark intentionally does not show `graph_mode = "binary"`.
 | fastEmbedR UMAP CUDA fuzzy | CUDA | faiss_gpu_ivf_flat | 3.760 | 0.532 | 5.049 | 0.274 | 0.971 |
 | uwot UMAP fast_sgd full | CPU | internal | internal | 39.008 | 39.008 | 0.277 | 0.970 |
 
-For fastEmbedR matrix-input runs, CPU KNN used `faiss_ivf` and CUDA KNN used
-`faiss_gpu_ivf_flat`. The reference methods use their own internal neighbour
-search, so the table reports their full runtime as embedding/runtime.
+The `KNN backend` column records the concrete faissR backend selected during
+that run. The reference methods use their own internal neighbour search, so the
+table reports their full runtime as embedding/runtime.
 
 ![MNIST 70k embeddings](assets/mnist70k_cuda_codex_20260618/mnist70k_github_benchmark.png)
 

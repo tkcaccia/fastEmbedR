@@ -58,9 +58,10 @@ precompute and reuse a PCA initialization.}
 \item{verbose}{Print optimizer progress.}
 
 \item{backend}{Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. For
-matrix input, KNN is selected internally: CPU and Metal use FAISS CPU
-IVF-Flat through `faissR`, while CUDA uses FAISS GPU IVF-Flat.
-Unsupported GPU requests fail clearly and are not relabelled CPU runs.}
+matrix input, KNN is delegated to `faissR::nn_without_self()` with automatic
+method and tuning selection. CPU and Metal request the faissR CPU backend,
+while CUDA requests the faissR CUDA backend. Unsupported GPU requests fail
+clearly and are not relabelled CPU runs.}
 
 \item{n_threads}{Number of CPU worker threads used by CPU KNN and CPU
 openTSNE optimization. Native GPU optimizers ignore this argument.}

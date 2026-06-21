@@ -119,13 +119,17 @@ resolve_embedding_backend <- function(backend) {
   backend
 }
 
-fixed_embedding_knn_backend <- function(backend) {
+embedding_knn_backend <- function(backend) {
   backend <- resolve_embedding_backend(backend)
   if (identical(backend, "cuda")) {
-    "faiss_gpu_ivf_flat"
+    "cuda"
   } else {
-    "faiss_ivf_flat"
+    "cpu"
   }
+}
+
+fixed_embedding_knn_backend <- function(backend) {
+  embedding_knn_backend(backend)
 }
 
 cpu_summary <- function() {
