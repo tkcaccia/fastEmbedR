@@ -73,34 +73,107 @@ object.
 
 ## MNIST 70k Benchmark Example
 
-The benchmark script uses the full 70,000 MNIST observations as flattened
-28x28 images. It can either download the public IDX files or load a prepared
-`.RData` object with `data` and `labels` fields.
+The example below uses the full 70,000 MNIST observations as flattened 28x28
+images stored in a prepared `.RData` object with `data` and `labels` fields.
+CPU paths are requested with 4 threads for KNN search and embedding.
 
-The CUDA result below was produced on 2026-06-21 using a prepared MNIST
-`.RData` file. CPU paths were requested with 4 threads for KNN search and
-embedding. Replace `MNIST.RData` with the path to your own prepared MNIST file,
-or omit `--mnist-rdata` to let the script download the public IDX files:
+```r
+library(fastEmbedR)
+library(Rtsne)
+library(uwot)
 
-```sh
-export OMP_NUM_THREADS=4
-export OPENBLAS_NUM_THREADS=4
-export MKL_NUM_THREADS=4
-export RCPP_PARALLEL_NUM_THREADS=4
+Sys.setenv(
+  OMP_NUM_THREADS = "4",
+  OPENBLAS_NUM_THREADS = "4",
+  MKL_NUM_THREADS = "4",
+  RCPP_PARALLEL_NUM_THREADS = "4"
+)
 
-Rscript tools/benchmark_github_mnist70k.R \
-  --mnist-rdata=/path/to/MNIST.RData \
-  --n=70000 \
-  --k=15 \
-  --perplexity=15 \
-  --threads=4 \
-  --run-metal=false \
-  --run-cuda=true \
-  --run-references=true \
-  --out-dir=results/github_mnist70k_cuda_current
+load("/path/to/MNIST.RData")  # object named dataset with $data and $labels
+x <- as.matrix(dataset$data)
+labels <- as.factor(dataset$labels)
+
+k <- 15
+perplexity <- 15
+seed <- 4
+
+time_it <- function(expr) {
+  t0 <- proc.time()[["elapsed"]]
+  value <- force(expr)
+  list(value = value, sec = proc.time()[["elapsed"]] - t0)
+}
+
+set.seed(seed)
+opentsne_cpu <- time_it(
+  fastEmbedR::opentsne(x, perplexity = perplexity, backend = "cpu",
+                       n_threads = 4, seed = seed)
+)
+
+set.seed(seed)
+opentsne_cuda <- time_it(
+  fastEmbedR::opentsne(x, perplexity = perplexity, backend = "cuda",
+                       n_threads = 4, seed = seed)
+)
+
+set.seed(seed)
+rtsne_full <- time_it(
+  Rtsne::Rtsne(x, perplexity = perplexity, check_duplicates = FALSE,
+               pca = TRUE, num_threads = 4)
+)
+
+set.seed(seed)
+umap_cpu <- time_it(
+  fastEmbedR::umap(x, n_neighbors = k, backend = "cpu",
+                   graph_mode = "fuzzy", n_threads = 4, seed = seed)
+)
+
+set.seed(seed)
+umap_cuda <- time_it(
+  fastEmbedR::umap(x, n_neighbors = k, backend = "cuda",
+                   graph_mode = "fuzzy", n_threads = 4, seed = seed)
+)
+
+set.seed(seed)
+uwot_fast <- time_it(
+  uwot::umap(x, n_neighbors = k, fast_sgd = TRUE,
+             n_threads = 4, n_sgd_threads = 4, verbose = FALSE)
+)
+
+layout_of <- function(obj) {
+  y <- obj$value
+  if (is.list(y) && !is.null(y$layout)) y <- y$layout
+  if (is.list(y) && !is.null(y$Y)) y <- y$Y
+  as.matrix(y)
+}
+
+layouts <- list(
+  "fastEmbedR openTSNE CPU" = layout_of(opentsne_cpu),
+  "fastEmbedR openTSNE CUDA" = layout_of(opentsne_cuda),
+  "Rtsne full" = layout_of(rtsne_full),
+  "fastEmbedR UMAP CPU fuzzy" = layout_of(umap_cpu),
+  "fastEmbedR UMAP CUDA fuzzy" = layout_of(umap_cuda),
+  "uwot UMAP fast_sgd full" = layout_of(uwot_fast)
+)
+
+timing <- data.frame(
+  method = names(layouts),
+  total_sec = c(opentsne_cpu$sec, opentsne_cuda$sec, rtsne_full$sec,
+                umap_cpu$sec, umap_cuda$sec, uwot_fast$sec)
+)
+
+print(timing)
+
+cols <- as.integer(labels)
+par(mfrow = c(2, 3), mar = c(1, 1, 3, 1))
+for (nm in names(layouts)) {
+  y <- layouts[[nm]]
+  plot(y[, 1], y[, 2], pch = 16, cex = 0.22, col = cols,
+       axes = FALSE, xlab = "", ylab = "", main = nm)
+  box(col = "grey70")
+}
 ```
 
-The script compares:
+The example compares:
 
 - `fastEmbedR::opentsne()` on CPU, Metal, and/or CUDA;
 - `Rtsne::Rtsne()` as the full Rtsne baseline with its own internal KNN;

@@ -18,13 +18,7 @@ The current public benchmark is MNIST70k from flattened 28 x 28 images. The
 results, machine specification, runtime bar plot, embedding plot, and source
 CSV are shown on the [Examples](examples.md) page.
 
-The benchmark command is:
-
-```sh
-Rscript tools/benchmark_github_mnist70k.R --n=70000 --k=15 --perplexity=15 --threads=4
-```
-
-The script can compare:
+The example R code compares:
 
 - `fastEmbedR::opentsne()`;
 - `Rtsne::Rtsne()`;
