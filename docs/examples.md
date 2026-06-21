@@ -203,12 +203,12 @@ The benchmark intentionally does not show `graph_mode = "binary"`.
 
 | method | backend | total sec | trust | label KNN acc |
 | --- | --- | ---: | ---: | ---: |
-| fastEmbedR openTSNE CPU | CPU | 55.437 | 0.332 | 0.968 |
-| fastEmbedR openTSNE CUDA | CUDA | 5.415 | 0.335 | 0.969 |
-| Rtsne full | CPU | 98.179 | 0.324 | 0.973 |
-| fastEmbedR UMAP CPU fuzzy | CPU | 36.184 | 0.279 | 0.971 |
-| fastEmbedR UMAP CUDA fuzzy | CUDA | 4.693 | 0.276 | 0.972 |
-| uwot UMAP fast_sgd full | CPU | 37.417 | 0.277 | 0.970 |
+| fastEmbedR openTSNE CPU | CPU | 55.611 | 0.332 | 0.968 |
+| fastEmbedR openTSNE CUDA | CUDA | 5.341 | 0.333 | 0.969 |
+| Rtsne full | CPU | 97.337 | 0.324 | 0.973 |
+| fastEmbedR UMAP CPU fuzzy | CPU | 36.272 | 0.278 | 0.972 |
+| fastEmbedR UMAP CUDA fuzzy | CUDA | 4.687 | 0.276 | 0.971 |
+| uwot UMAP fast_sgd full | CPU | 37.397 | 0.276 | 0.970 |
 
 ![MNIST 70k embeddings](assets/mnist70k_cuda_codex_20260621_4threads/mnist70k_github_benchmark.png)
 

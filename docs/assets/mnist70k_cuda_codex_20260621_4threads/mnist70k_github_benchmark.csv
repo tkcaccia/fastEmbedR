@@ -1,7 +1,7 @@
-"method","family","backend","n","p","k","perplexity","machine","requested_threads","total_sec","trustworthiness","label_knn_accuracy","status","error_message"
-"fastEmbedR openTSNE CPU","openTSNE","cpu",70000,784,15,15,"icgeb-bioinformatics-unit",4,55.437,0.332466666666668,0.9676,"success",NA
-"fastEmbedR openTSNE CUDA","openTSNE","cuda",70000,784,15,15,"icgeb-bioinformatics-unit",4,5.41500000000001,0.335311111111112,0.9688,"success",NA
-"Rtsne full","Rtsne","cpu",70000,784,15,15,"icgeb-bioinformatics-unit",4,98.179,0.324066666666667,0.973,"success",NA
-"fastEmbedR UMAP CPU fuzzy","UMAP","cpu",70000,784,15,15,"icgeb-bioinformatics-unit",4,36.184,0.27868888888889,0.9714,"success",NA
-"fastEmbedR UMAP CUDA fuzzy","UMAP","cuda",70000,784,15,15,"icgeb-bioinformatics-unit",4,4.69299999999998,0.276355555555556,0.9722,"success",NA
-"uwot UMAP fast_sgd full","UMAP","cpu",70000,784,15,15,"icgeb-bioinformatics-unit",4,37.417,0.276955555555556,0.9698,"success",NA
+"method","family","backend","n","p","k","perplexity","machine","cpu","requested_threads","total_sec","trustworthiness","label_knn_accuracy","status","error_message"
+"fastEmbedR openTSNE CPU","openTSNE","cpu",70000,784,15,15,"icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,55.611,0.332466666666668,0.9676,"success",NA
+"fastEmbedR openTSNE CUDA","openTSNE","cuda",70000,784,15,15,"icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,5.34099999999999,0.33308888888889,0.9692,"success",NA
+"Rtsne full","Rtsne","cpu",70000,784,15,15,"icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,97.337,0.324066666666667,0.973,"success",NA
+"fastEmbedR UMAP CPU fuzzy","UMAP","cpu",70000,784,15,15,"icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,36.272,0.277822222222223,0.9718,"success",NA
+"fastEmbedR UMAP CUDA fuzzy","UMAP","cuda",70000,784,15,15,"icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,4.68700000000001,0.275933333333334,0.9714,"success",NA
+"uwot UMAP fast_sgd full","UMAP","cpu",70000,784,15,15,"icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,37.397,0.276244444444445,0.9696,"success",NA

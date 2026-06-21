@@ -449,12 +449,14 @@ fast_knn_umap_core <- function(indices,
   cfg$graph_cuda_like_width <- graph$cuda_like_width
   cfg$graph_builder <- graph$graph_builder
   cfg$init_backend <- attr(init, "backend")
-  cfg$optimizer_mode <- "clean_linear_atomic"
-  cfg$optimizer_schedule <- "clean_edge_probability_linear_decay"
-  layout <- fast_knn_umap_csr_clean_atomic_cpp(
-    graph$offsets,
-    graph$neighbors,
+  cfg$optimizer_mode <- "cpu_cuda_style_atomic_coo"
+  cfg$optimizer_schedule <- "coo_epochs_per_sample"
+  coo <- umap_csr_to_coo(graph)
+  layout <- fast_knn_umap_coo_replay_cpp(
+    coo$heads,
+    coo$tails,
     graph$weights,
+    graph$epochs_per_sample,
     init,
     as.integer(cfg$n_epochs),
     cfg$min_dist,
@@ -463,7 +465,7 @@ fast_knn_umap_core <- function(indices,
     cfg$repulsion_strength,
     as.integer(cfg$n_threads),
     as.integer(seed),
-    0L,
+    FALSE,
     isTRUE(verbose)
   )
   layout <- set_embedding_colnames(layout, "UMAP")
