@@ -77,9 +77,10 @@ The benchmark script uses the full 70,000 MNIST observations as flattened
 28x28 images. It can either download the public IDX files or load a prepared
 `.RData` object with `data` and `labels` fields.
 
-The CUDA run below was executed on `chiamaka` on 2026-06-21 using the prepared
-dataset at `/mnt/sata_ssd/fastEmbedR/Data/MNIST/MNIST.RData`. CPU paths were
-requested with 4 threads for KNN search and embedding:
+The CUDA result below was produced on 2026-06-21 using a prepared MNIST
+`.RData` file. CPU paths were requested with 4 threads for KNN search and
+embedding. Replace `MNIST.RData` with the path to your own prepared MNIST file,
+or omit `--mnist-rdata` to let the script download the public IDX files:
 
 ```sh
 export OMP_NUM_THREADS=4
@@ -87,10 +88,8 @@ export OPENBLAS_NUM_THREADS=4
 export MKL_NUM_THREADS=4
 export RCPP_PARALLEL_NUM_THREADS=4
 
-singularity exec --nv -B /mnt/sata_ssd:/mnt/sata_ssd \
-  /mnt/sata_ssd/fastEmbedR/singularity/fastembedr_cuda.sif \
-  /opt/conda/bin/Rscript /mnt/sata_ssd/fastEmbedR/tools/benchmark_github_mnist70k.R \
-  --mnist-rdata=/mnt/sata_ssd/fastEmbedR/Data/MNIST/MNIST.RData \
+Rscript tools/benchmark_github_mnist70k.R \
+  --mnist-rdata=/path/to/MNIST.RData \
   --n=70000 \
   --k=15 \
   --perplexity=15 \
@@ -98,7 +97,7 @@ singularity exec --nv -B /mnt/sata_ssd:/mnt/sata_ssd \
   --run-metal=false \
   --run-cuda=true \
   --run-references=true \
-  --out-dir=/mnt/sata_ssd/fastEmbedR/results/github_mnist70k_cuda_current_20260621_103202
+  --out-dir=results/github_mnist70k_cuda_current
 ```
 
 The script compares:
