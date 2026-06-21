@@ -85,33 +85,6 @@ See [Installation](docs/installation.md) for `fastEmbedR` CPU, Metal, and CUDA
 embedding builds. FAISS/cuVS nearest-neighbour installation is documented in
 the companion [`faissR`](https://github.com/tkcaccia/faissR) project.
 
-## MNIST 70k Examples
-
-The full MNIST 70k example, including the current CUDA run, machine
-specification, computational-time bar plot, embedding plot, and source CSV, is
-kept on the [Examples](docs/examples.md) page.
-
-## Implementation And References
-
-The implementation details and acknowledgements are split across:
-
-- [Implementation](docs/implementation.md)
-- [AACR-style references](docs/references.md)
-- [Installed NOTICE](inst/NOTICE)
-- [Algorithmic references](inst/ALGORITHMIC_REFERENCES.md)
-
-In short:
-
-- UMAP is implemented in package-native C++ with Metal and CUDA kernels for
-  selected GPU paths.
-- openTSNE-style t-SNE uses sparse KNN affinities and FFT-grid/FIt-SNE-style
-  negative-gradient approximation, with native Metal and CUDA paths where
-  compiled.
-- `faissR` owns FAISS/cuVS KNN, graph building, kNN prediction, and k-means.
-- `uwot`, `Rtsne`, FIt-SNE, openTSNE, FAISS, RAPIDS cuVS, AppleSiliconFFT,
-  and related papers are acknowledged as references or optional benchmark
-  tools according to their licenses.
-
 ## License
 
 `fastEmbedR` is distributed under the MIT license. GPL packages such as `uwot`
