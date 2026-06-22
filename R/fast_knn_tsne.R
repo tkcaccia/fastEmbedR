@@ -507,13 +507,23 @@ normalize_opentsne_knn_input <- function(indices, distances = NULL, n_neighbors 
     knn$col_start,
     n_neighbors
   )
+  distance_type <- knn$distance_type
+  if (is_float32_matrix(materialized$distances)) {
+    materialized$distances <- matrix(
+      as.numeric(materialized$distances),
+      nrow = nrow(materialized$indices),
+      ncol = ncol(materialized$indices)
+    )
+    distance_type <- "double_materialized_from_float32_for_opentsne_cpu"
+  }
   list(
     indices = materialized$indices,
     distances = materialized$distances,
     n = n,
     n_neighbors = as.integer(n_neighbors),
     has_self = isTRUE(knn$has_self),
-    input_backend = knn$input_backend
+    input_backend = knn$input_backend,
+    distance_type = distance_type
   )
 }
 
@@ -1210,10 +1220,13 @@ opentsne <- function(data,
 
   knn_time <- system.time({
     if (is.null(nn)) {
+      knn_backend <- embedding_knn_backend(backend)
       raw_knn <- faissR::nn_without_self(
         x,
         k = n_neighbors,
-        backend = embedding_knn_backend(backend),
+        backend = knn_backend,
+        method = fastembedr_faiss_method_for_float(x, knn_backend),
+        output = "double",
         n_threads = n_threads
       )
       knn_result <- normalize_supplied_knn(raw_knn, n, n_neighbors)

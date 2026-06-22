@@ -590,6 +590,18 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// strip_self_neighbors_float_cpp
+List strip_self_neighbors_float_cpp(IntegerMatrix indices, SEXP distances);
+RcppExport SEXP _fastEmbedR_strip_self_neighbors_float_cpp(SEXP indicesSEXP, SEXP distancesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type distances(distancesSEXP);
+    rcpp_result_gen = Rcpp::wrap(strip_self_neighbors_float_cpp(indices, distances));
+    return rcpp_result_gen;
+END_RCPP
+}
 // validate_projection_knn_cpp
 List validate_projection_knn_cpp(IntegerMatrix indices, NumericMatrix distances, int n_reference, int k);
 RcppExport SEXP _fastEmbedR_validate_projection_knn_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP n_referenceSEXP, SEXP kSEXP) {
@@ -815,6 +827,22 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type edge_budget(edge_budgetSEXP);
     Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
     rcpp_result_gen = Rcpp::wrap(umap_graph_csr_cpp(indices, distances, col_start, n_cols, edge_budget, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
+// umap_graph_csr_float_cpp
+Rcpp::List umap_graph_csr_float_cpp(IntegerMatrix indices, SEXP distances, int col_start, int n_cols, int edge_budget, int n_threads);
+RcppExport SEXP _fastEmbedR_umap_graph_csr_float_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP col_startSEXP, SEXP n_colsSEXP, SEXP edge_budgetSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type col_start(col_startSEXP);
+    Rcpp::traits::input_parameter< int >::type n_cols(n_colsSEXP);
+    Rcpp::traits::input_parameter< int >::type edge_budget(edge_budgetSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(umap_graph_csr_float_cpp(indices, distances, col_start, n_cols, edge_budget, n_threads));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1269,6 +1297,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_metal_mpsgraph_convolution_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_metal_mpsgraph_convolution_diagnostic_cpp, 3},
     {"_fastEmbedR_standardize_cpu_cpp", (DL_FUNC) &_fastEmbedR_standardize_cpu_cpp, 1},
     {"_fastEmbedR_strip_self_neighbors_cpp", (DL_FUNC) &_fastEmbedR_strip_self_neighbors_cpp, 2},
+    {"_fastEmbedR_strip_self_neighbors_float_cpp", (DL_FUNC) &_fastEmbedR_strip_self_neighbors_float_cpp, 2},
     {"_fastEmbedR_validate_projection_knn_cpp", (DL_FUNC) &_fastEmbedR_validate_projection_knn_cpp, 4},
     {"_fastEmbedR_mean_neighbor_rank_error_cpp", (DL_FUNC) &_fastEmbedR_mean_neighbor_rank_error_cpp, 3},
     {"_fastEmbedR_knn_recall_cpp", (DL_FUNC) &_fastEmbedR_knn_recall_cpp, 3},
@@ -1285,6 +1314,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_knn_connectivity_range_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_range_cpp, 3},
     {"_fastEmbedR_knn_connectivity_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_cpp, 1},
     {"_fastEmbedR_umap_graph_csr_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_cpp, 6},
+    {"_fastEmbedR_umap_graph_csr_float_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_float_cpp, 6},
     {"_fastEmbedR_umap_graph_csr_cuda_like_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_cuda_like_cpp, 6},
     {"_fastEmbedR_umap_graph_csr_binary_union_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_binary_union_cpp, 4},
     {"_fastEmbedR_fast_knn_umap_range_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_range_cpp, 15},

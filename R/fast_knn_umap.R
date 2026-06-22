@@ -67,6 +67,9 @@ fast_knn_umap_core <- function(indices,
 	      } else {
 	        distances
 	      }
+	      if (is_float32_matrix(policy_distances)) {
+	        stop("float32 KNN auto-policy uses default parameters", call. = FALSE)
+	      }
 	      umap_auto_parameters_cpp(
 	        policy_distances,
 	        as.integer(knn$n_neighbors),
@@ -194,9 +197,18 @@ fast_knn_umap_core <- function(indices,
       cfg$init_backend <- "cuda_fused_spectral"
       cfg$init_backend_reason <- "CUDA fused UMAP uploads KNN once, computes spectral initialization on device, keeps graph/layout on device, and returns only the final layout."
     } else if (!identical(graph_mode, "binary")) {
+      init_distances <- if (is_float32_matrix(distances)) {
+        matrix(
+          as.numeric(distances),
+          nrow = nrow(indices),
+          ncol = ncol(indices)
+        )
+      } else {
+        distances
+      }
       init <- spectral_knn_init(
         indices,
-        distances,
+        init_distances,
         n_components = 2L,
         min_dist = cfg$min_dist,
         spectral_n_iter = cfg$spectral_n_iter,
@@ -491,14 +503,25 @@ umap_build_csr_graph <- function(indices,
     graph$graph_mode <- "binary"
     return(graph)
   }
-  graph <- umap_graph_csr_cpp(
-    indices,
-    distances,
-    as.integer(col_start),
-    as.integer(n_cols),
-    as.integer(edge_budget),
-    as.integer(n_threads)
-  )
+  graph <- if (is_float32_matrix(distances)) {
+    umap_graph_csr_float_cpp(
+      indices,
+      distances,
+      as.integer(col_start),
+      as.integer(n_cols),
+      as.integer(edge_budget),
+      as.integer(n_threads)
+    )
+  } else {
+    umap_graph_csr_cpp(
+      indices,
+      distances,
+      as.integer(col_start),
+      as.integer(n_cols),
+      as.integer(edge_budget),
+      as.integer(n_threads)
+    )
+  }
   graph$graph_mode <- "fuzzy"
   graph
 }
@@ -830,6 +853,30 @@ apply_fast_knn_umap_distance_profile_rule <- function(cfg, distances) {
 }
 
 fast_knn_umap_distance_profile <- function(distances) {
+  if (is_float32_matrix(distances)) {
+    cols <- pmin(c(15L, 30L, 50L), ncol(distances))
+    sampled <- as.numeric(distances[, unique(cols), drop = FALSE])
+    finite <- is.finite(sampled)
+    if (!any(finite)) {
+      return(list(cv = NA_real_, ratio_50_15 = NA_real_, ratio_30_15 = NA_real_))
+    }
+    col_at <- function(rank) {
+      as.numeric(distances[, min(as.integer(rank), ncol(distances)), drop = TRUE])
+    }
+    d15 <- col_at(15L)
+    d30 <- col_at(30L)
+    d50 <- col_at(50L)
+    mean_d <- mean(sampled[finite])
+    cv <- if (is.finite(mean_d) && mean_d > 0) stats::sd(sampled[finite]) / mean_d else NA_real_
+    med15 <- stats::median(d15[is.finite(d15)])
+    med30 <- stats::median(d30[is.finite(d30)])
+    med50 <- stats::median(d50[is.finite(d50)])
+    return(list(
+      cv = cv,
+      ratio_50_15 = if (is.finite(med15) && med15 > 0) med50 / med15 else NA_real_,
+      ratio_30_15 = if (is.finite(med15) && med15 > 0) med30 / med15 else NA_real_
+    ))
+  }
   d <- as.matrix(distances)
   if (!identical(typeof(d), "double")) storage.mode(d) <- "double"
   finite <- is.finite(d)

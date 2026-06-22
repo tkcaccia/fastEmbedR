@@ -15,10 +15,13 @@ coerce_knn_input <- function(indices,
     indices <- indices$indices
   }
 
+  distance_is_float32 <- is_float32_matrix(distances)
   if (!is.matrix(indices)) indices <- as.matrix(indices)
-  if (!is.matrix(distances)) distances <- as.matrix(distances)
+  if (!distance_is_float32 && !is.matrix(distances)) distances <- as.matrix(distances)
   if (!is.integer(indices)) storage.mode(indices) <- "integer"
-  if (!identical(typeof(distances), "double")) storage.mode(distances) <- "double"
+  if (!distance_is_float32 && !identical(typeof(distances), "double")) {
+    storage.mode(distances) <- "double"
+  }
 
   if (!identical(dim(indices), dim(distances))) {
     stop("KNN `indices` and `distances` must have the same dimensions.", call. = FALSE)
@@ -27,7 +30,11 @@ coerce_knn_input <- function(indices,
     stop("KNN input must have at least two rows and one neighbor column.", call. = FALSE)
   }
 
-  stripped <- strip_self_neighbors_cpp(indices, distances)
+  stripped <- if (distance_is_float32) {
+    strip_self_neighbors_float_cpp(indices, distances)
+  } else {
+    strip_self_neighbors_cpp(indices, distances)
+  }
   indices <- stripped$indices
   distances <- stripped$distances
   has_self <- isTRUE(stripped$has_self)
@@ -44,12 +51,34 @@ coerce_knn_input <- function(indices,
     col_start = as.integer(col_start),
     n_neighbors = as.integer(n_neighbors),
     materialized = isTRUE(stripped$materialized),
-    input_backend = if (is.null(input_backend)) NA_character_ else input_backend
+    input_backend = if (is.null(input_backend)) NA_character_ else input_backend,
+    distance_type = stripped$distance_type %||%
+      if (distance_is_float32) "float32" else "double"
   )
 }
 
 is_knn_input <- function(x) {
   is.list(x) && all(c("indices", "distances") %in% names(x))
+}
+
+is_float32_matrix <- function(x) {
+  inherits(x, "float32")
+}
+
+fastembedr_faiss_float_output <- function(data, backend) {
+  if (!requireNamespace("float", quietly = TRUE)) return("double")
+  if (is_float32_matrix(data)) return("float")
+  if (identical(backend, "cpu")) return("float")
+  "double"
+}
+
+fastembedr_faiss_method_for_float <- function(data, backend) {
+  if (identical(fastembedr_faiss_float_output(data, backend), "float") &&
+      is_float32_matrix(data) &&
+      identical(backend, "cpu")) {
+    return("flat")
+  }
+  "auto"
 }
 
 knn_index_base <- function(indices, n = nrow(indices)) {

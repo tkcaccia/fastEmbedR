@@ -115,10 +115,17 @@ umap <- function(data,
 
   knn_time <- system.time({
     knn_result <- if (is.null(nn)) {
+      knn_backend <- embedding_knn_backend(backend)
       faissR::nn_without_self(
         x,
         k = as.integer(n_neighbors),
-        backend = embedding_knn_backend(backend),
+        backend = knn_backend,
+        method = fastembedr_faiss_method_for_float(x, knn_backend),
+        output = if (identical(backend, "cpu")) {
+          fastembedr_faiss_float_output(x, backend)
+        } else {
+          "double"
+        },
         n_threads = n_threads
       )
     } else {

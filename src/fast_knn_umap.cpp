@@ -313,6 +313,79 @@ std::vector<float> copy_distances_float(const NumericMatrix& distances,
   return out;
 }
 
+bool is_float32_s4(SEXP x) {
+  if (!Rf_isS4(x)) return false;
+  Rcpp::S4 obj(x);
+  return obj.is("float32");
+}
+
+IntegerMatrix float32_data_slot(SEXP x) {
+  Rcpp::S4 obj(x);
+  SEXP data = obj.slot("Data");
+  if (TYPEOF(data) != INTSXP || Rf_isNull(Rf_getAttrib(data, R_DimSymbol))) {
+    Rcpp::stop("float32 distance object has an invalid payload");
+  }
+  return IntegerMatrix(data);
+}
+
+float int_bits_to_float(const int value) {
+  float out;
+  static_assert(sizeof(out) == sizeof(value), "float32 payload must use 32-bit storage");
+  std::memcpy(&out, &value, sizeof(float));
+  return out;
+}
+
+std::pair<int, int> distance_sexp_dims(SEXP distances) {
+  if (is_float32_s4(distances)) {
+    IntegerMatrix payload = float32_data_slot(distances);
+    return {payload.nrow(), payload.ncol()};
+  }
+  if (Rf_isMatrix(distances) && TYPEOF(distances) == REALSXP) {
+    NumericMatrix matrix(distances);
+    return {matrix.nrow(), matrix.ncol()};
+  }
+  Rcpp::stop("KNN distances must be a numeric matrix or float::float32 matrix");
+}
+
+std::vector<float> copy_distances_float_sexp(SEXP distances,
+                                             const int n_threads,
+                                             const int col_start = 0,
+                                             int n_cols = -1) {
+  if (!is_float32_s4(distances)) {
+    NumericMatrix matrix(distances);
+    return copy_distances_float(matrix, n_threads, col_start, n_cols);
+  }
+  IntegerMatrix payload = float32_data_slot(distances);
+  const int n = payload.nrow();
+  const int matrix_k = payload.ncol();
+  if (n_cols < 0) n_cols = matrix_k - col_start;
+  if (col_start < 0 || n_cols < 0 || col_start + n_cols > matrix_k) {
+    Rcpp::stop("invalid KNN distance column range");
+  }
+  const int k = n_cols;
+  std::vector<float> out(static_cast<std::size_t>(n) * static_cast<std::size_t>(k));
+  const int* src = INTEGER(payload);
+  const int threads = effective_cpu_threads(n_threads, n);
+  auto worker = [&](const int begin, const int end, const int) {
+    for (int row = begin; row < end; ++row) {
+      float* dst = out.data() + static_cast<std::size_t>(row) * static_cast<std::size_t>(k);
+      for (int col = 0; col < k; ++col) {
+        const int src_col = col + col_start;
+        dst[col] = int_bits_to_float(
+          src[static_cast<std::size_t>(src_col) * static_cast<std::size_t>(n) +
+              static_cast<std::size_t>(row)]
+        );
+      }
+    }
+  };
+  if (threads == 1 || n < 2048) {
+    worker(0, n, 0);
+    return out;
+  }
+  parallel_for_chunks(n, threads, worker);
+  return out;
+}
+
 std::pair<double, double> find_ab_params(const double spread, const double min_dist) {
   if (std::abs(spread - 1.0) < 1e-12 && std::abs(min_dist - 0.01) < 1e-12) {
     return {1.895605865596314, 0.8006377738365004};
@@ -1437,18 +1510,17 @@ int compact_directed_rows_inplace_unit_weight(const std::vector<int>& raw_offset
   return graph;
 }
 
-CsrGraphNative build_graph_csr_native_direct(const IntegerMatrix& indices,
-                                             const NumericMatrix& distances,
-                                             const int edge_budget,
-                                             const int n_threads,
-                                             const int index_offset,
-                                             const int col_start,
-                                             const int n_cols) {
+CsrGraphNative build_graph_csr_native_direct_values(const IntegerMatrix& indices,
+                                                    const std::vector<float>& distance_values,
+                                                    const int edge_budget,
+                                                    const int n_threads,
+                                                    const int index_offset,
+                                                    const int col_start,
+                                                    const int n_cols) {
   const int n = indices.nrow();
   const int k = n_cols;
   const int kept_k = std::min(k, std::max(1, edge_budget));
 
-  std::vector<float> distance_values = copy_distances_float(distances, n_threads, col_start, k);
   const FloatDistanceView distance_view{distance_values.data(), n, k, k};
   std::vector<float> sigmas;
   std::vector<float> rhos;
@@ -1517,7 +1589,6 @@ CsrGraphNative build_graph_csr_native_direct(const IntegerMatrix& indices,
   const int write = compact_directed_rows_inplace(
     raw_offsets, cursor, directed_neighbors, directed_weights, directed_offsets, n_threads
   );
-  release_vector(distance_values);
   release_vector(sigmas);
   release_vector(rhos);
   release_vector(cursor);
@@ -1657,6 +1728,19 @@ CsrGraphNative build_graph_csr_native_direct(const IntegerMatrix& indices,
 
   attach_csr_epoch_schedule(graph);
   return graph;
+}
+
+CsrGraphNative build_graph_csr_native_direct(const IntegerMatrix& indices,
+                                             const NumericMatrix& distances,
+                                             const int edge_budget,
+                                             const int n_threads,
+                                             const int index_offset,
+                                             const int col_start,
+                                             const int n_cols) {
+  std::vector<float> distance_values = copy_distances_float(distances, n_threads, col_start, n_cols);
+  return build_graph_csr_native_direct_values(
+    indices, distance_values, edge_budget, n_threads, index_offset, col_start, n_cols
+  );
 }
 
 CsrGraphNative build_graph_csr_native(const IntegerMatrix& indices,
@@ -3867,6 +3951,64 @@ Rcpp::List umap_graph_csr_cpp(IntegerMatrix indices,
     Rcpp::Named("max_weight") = graph.max_weight,
     Rcpp::Named("n") = indices.nrow(),
     Rcpp::Named("nnz") = static_cast<int>(graph.neighbors.size())
+  );
+}
+
+// [[Rcpp::export]]
+Rcpp::List umap_graph_csr_float_cpp(IntegerMatrix indices,
+                                    SEXP distances,
+                                    int col_start,
+                                    int n_cols,
+                                    int edge_budget,
+                                    int n_threads) {
+  const auto dims = distance_sexp_dims(distances);
+  if (indices.nrow() != dims.first || indices.ncol() != dims.second) {
+    Rcpp::stop("indices and distances must have the same dimensions");
+  }
+  if (col_start < 0 || n_cols < 1 || col_start + n_cols > indices.ncol()) {
+    Rcpp::stop("invalid KNN column range");
+  }
+  if (edge_budget < 1) Rcpp::stop("edge_budget must be positive");
+  if (n_threads < 1) Rcpp::stop("n_threads must be positive");
+
+  const int n = indices.nrow();
+  const int matrix_k = indices.ncol();
+  int min_idx = std::numeric_limits<int>::max();
+  int max_idx = std::numeric_limits<int>::min();
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < n_cols; ++j) {
+      const int idx = indices(i, j + col_start);
+      min_idx = std::min(min_idx, idx);
+      max_idx = std::max(max_idx, idx);
+    }
+  }
+  const int index_offset = (min_idx >= 1 && max_idx <= n) ? 1 : 0;
+  const int kept_k = std::min(n_cols, std::max(1, edge_budget));
+  const std::vector<int> graph_scales = multiscale_graph_scales(kept_k);
+  const std::vector<int> mid_cols = mid_near_columns(kept_k);
+  if (!(graph_scales.size() == 1u &&
+        graph_scales[0] == kept_k &&
+        mid_cols.empty() &&
+        adaptive_prune_fraction(kept_k) <= 0.0)) {
+    Rcpp::stop("float32 UMAP graph currently supports the default fuzzy graph only");
+  }
+  (void) matrix_k;
+  std::vector<float> distance_values = copy_distances_float_sexp(
+    distances, n_threads, col_start, n_cols
+  );
+  CsrGraphNative graph = build_graph_csr_native_direct_values(
+    indices, distance_values, edge_budget, n_threads, index_offset, col_start, n_cols
+  );
+
+  return Rcpp::List::create(
+    Rcpp::Named("offsets") = Rcpp::wrap(graph.offsets),
+    Rcpp::Named("neighbors") = Rcpp::wrap(graph.neighbors),
+    Rcpp::Named("weights") = Rcpp::wrap(graph.weights),
+    Rcpp::Named("epochs_per_sample") = Rcpp::wrap(graph.epochs_per_sample),
+    Rcpp::Named("max_weight") = graph.max_weight,
+    Rcpp::Named("n") = indices.nrow(),
+    Rcpp::Named("nnz") = static_cast<int>(graph.neighbors.size()),
+    Rcpp::Named("distance_type") = is_float32_s4(distances) ? "float32" : "double"
   );
 }
 

@@ -145,6 +145,10 @@ strip_self_neighbors_cpp <- function(indices, distances) {
     .Call(`_fastEmbedR_strip_self_neighbors_cpp`, indices, distances)
 }
 
+strip_self_neighbors_float_cpp <- function(indices, distances) {
+    .Call(`_fastEmbedR_strip_self_neighbors_float_cpp`, indices, distances)
+}
+
 validate_projection_knn_cpp <- function(indices, distances, n_reference, k) {
     .Call(`_fastEmbedR_validate_projection_knn_cpp`, indices, distances, n_reference, k)
 }
@@ -207,6 +211,10 @@ knn_connectivity_cpp <- function(indices) {
 
 umap_graph_csr_cpp <- function(indices, distances, col_start, n_cols, edge_budget, n_threads) {
     .Call(`_fastEmbedR_umap_graph_csr_cpp`, indices, distances, col_start, n_cols, edge_budget, n_threads)
+}
+
+umap_graph_csr_float_cpp <- function(indices, distances, col_start, n_cols, edge_budget, n_threads) {
+    .Call(`_fastEmbedR_umap_graph_csr_float_cpp`, indices, distances, col_start, n_cols, edge_budget, n_threads)
 }
 
 umap_graph_csr_cuda_like_cpp <- function(indices, distances, col_start, n_cols, edge_budget, n_threads) {

@@ -1,6 +1,7 @@
 #include <Rcpp.h>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <thread>
 #include <utility>
@@ -13,6 +14,27 @@ using Rcpp::NumericMatrix;
 using Rcpp::NumericVector;
 
 namespace {
+
+bool is_float32_s4(SEXP x) {
+  if (!Rf_isS4(x)) return false;
+  Rcpp::S4 obj(x);
+  return obj.is("float32");
+}
+
+IntegerMatrix float32_data_slot(SEXP x) {
+  Rcpp::S4 obj(x);
+  SEXP data = obj.slot("Data");
+  if (TYPEOF(data) != INTSXP || Rf_isNull(Rf_getAttrib(data, R_DimSymbol))) {
+    Rcpp::stop("float32 distance object has an invalid payload");
+  }
+  return IntegerMatrix(data);
+}
+
+float int_bits_to_float(const int value) {
+  float out;
+  std::memcpy(&out, &value, sizeof(float));
+  return out;
+}
 
 double layout_distance_sq(const NumericMatrix& layout, const int i, const int j) {
   if (layout.ncol() == 2) {
@@ -370,6 +392,103 @@ List strip_self_neighbors_cpp(IntegerMatrix indices, NumericMatrix distances) {
     Rcpp::Named("n_neighbors") = k - 1,
     Rcpp::Named("materialized") = true
   );
+}
+
+// [[Rcpp::export]]
+List strip_self_neighbors_float_cpp(IntegerMatrix indices, SEXP distances) {
+  if (!is_float32_s4(distances)) {
+    NumericMatrix numeric_distances(distances);
+    return strip_self_neighbors_cpp(indices, numeric_distances);
+  }
+  IntegerMatrix payload = float32_data_slot(distances);
+  const int n = indices.nrow();
+  const int k = indices.ncol();
+  if (payload.nrow() != n || payload.ncol() != k) {
+    Rcpp::stop("KNN indices and distances must have the same dimensions");
+  }
+  if (k < 1) {
+    return List::create(
+      Rcpp::Named("indices") = indices,
+      Rcpp::Named("distances") = distances,
+      Rcpp::Named("has_self") = false,
+      Rcpp::Named("col_start") = 0,
+      Rcpp::Named("n_neighbors") = 0,
+      Rcpp::Named("materialized") = false,
+      Rcpp::Named("distance_type") = "float32"
+    );
+  }
+
+  int min_idx = std::numeric_limits<int>::max();
+  int max_idx = std::numeric_limits<int>::min();
+  const float tolerance = std::max(std::sqrt(std::numeric_limits<float>::epsilon()), 1.0e-6f);
+  for (int col = 0; col < k; ++col) {
+    for (int row = 0; row < n; ++row) {
+      const int idx = indices(row, col);
+      const float dist = int_bits_to_float(payload(row, col));
+      if (idx == NA_INTEGER) Rcpp::stop("KNN indices must not contain NA values");
+      if (!std::isfinite(dist) || dist < 0.0f) {
+        Rcpp::stop("KNN distances must be finite and non-negative");
+      }
+      min_idx = std::min(min_idx, idx);
+      max_idx = std::max(max_idx, idx);
+    }
+  }
+  const bool one_based = min_idx >= 1 && max_idx <= n;
+  const int offset = one_based ? 1 : 0;
+
+  bool first_self = true;
+  for (int row = 0; row < n; ++row) {
+    const int expected = row + offset;
+    if (indices(row, 0) != expected ||
+        int_bits_to_float(payload(row, 0)) > tolerance) {
+      first_self = false;
+      break;
+    }
+  }
+  if (first_self) {
+    return List::create(
+      Rcpp::Named("indices") = indices,
+      Rcpp::Named("distances") = distances,
+      Rcpp::Named("has_self") = true,
+      Rcpp::Named("col_start") = 1,
+      Rcpp::Named("n_neighbors") = k - 1,
+      Rcpp::Named("materialized") = false,
+      Rcpp::Named("distance_type") = "float32"
+    );
+  }
+
+  bool has_self_elsewhere = false;
+  for (int row = 0; row < n && !has_self_elsewhere; ++row) {
+    const int expected = row + offset;
+    for (int col = 1; col < k; ++col) {
+      if (indices(row, col) == expected &&
+          int_bits_to_float(payload(row, col)) <= tolerance) {
+        has_self_elsewhere = true;
+        break;
+      }
+    }
+  }
+  if (!has_self_elsewhere) {
+    return List::create(
+      Rcpp::Named("indices") = indices,
+      Rcpp::Named("distances") = distances,
+      Rcpp::Named("has_self") = false,
+      Rcpp::Named("col_start") = 0,
+      Rcpp::Named("n_neighbors") = k,
+      Rcpp::Named("materialized") = false,
+      Rcpp::Named("distance_type") = "float32"
+    );
+  }
+
+  NumericMatrix numeric_distances(n, k);
+  for (int col = 0; col < k; ++col) {
+    for (int row = 0; row < n; ++row) {
+      numeric_distances(row, col) = static_cast<double>(int_bits_to_float(payload(row, col)));
+    }
+  }
+  List out = strip_self_neighbors_cpp(indices, numeric_distances);
+  out["distance_type"] = "double_materialized_from_float32";
+  return out;
 }
 
 // [[Rcpp::export]]
