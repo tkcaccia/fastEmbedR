@@ -277,6 +277,7 @@ k <- arg_int("k", 15L)
 perplexity <- arg_int("perplexity", 15L)
 n_threads <- arg_int("threads", 4L)
 cache_dir <- arg_value("cache-dir", file.path("results", "dataset_cache"))
+data_root <- arg_value("data-root", "")
 mnist_rdata <- arg_value("mnist-rdata", "")
 mnist_float_rdata <- arg_value("mnist-float-rdata", "")
 out_dir <- arg_value("out-dir", file.path("results", paste0("github_mnist70k_", format(Sys.time(), "%Y%m%d_%H%M%S"))))
@@ -296,7 +297,15 @@ dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 specs <- machine_specs(n_threads)
 write_machine_specs(specs, out_dir)
 
-default_data_root <- "/Users/stefano/Documents/fastEmbedR/Data/MNIST"
+default_data_roots <- c(
+  data_root,
+  "/Users/stefano/Documents/fastEmbedR/Data/MNIST",
+  "/mnt/sata_ssd/fastEmbedR/Data/MNIST",
+  "/mnt/sata_ssd/fastEmbedR_Data/MNIST"
+)
+default_data_roots <- default_data_roots[nzchar(default_data_roots)]
+default_data_root <- default_data_roots[file.exists(default_data_roots)][1L]
+if (is.na(default_data_root)) default_data_root <- default_data_roots[1L]
 default_mnist_rdata <- file.path(default_data_root, "MNIST.RData")
 default_mnist_float_rdata <- file.path(default_data_root, "MNIST_float32.RData")
 if (!nzchar(mnist_rdata) && file.exists(default_mnist_rdata)) {
