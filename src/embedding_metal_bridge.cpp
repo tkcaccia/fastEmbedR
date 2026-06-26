@@ -59,7 +59,7 @@ NumericMatrix knn_embed_metal_impl(IntegerMatrix indices,
                                    int seed);
 NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
                                        IntegerVector neighbors,
-                                       NumericVector weights,
+                                       SEXP weights,
                                        NumericMatrix init,
                                        int n_epochs,
                                        int negative_sample_rate,
@@ -120,16 +120,6 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
                                   std::string negative_gradient_method,
                                   int seed,
                                   bool record_costs);
-List metal_fft512_stockham_diagnostic_impl(int seed,
-                                           bool inverse,
-                                           int n_checks);
-List metal_mpsgraph_fft_diagnostic_impl(int fft_size,
-                                        int seed,
-                                        int n_repeats);
-List metal_mpsgraph_convolution_diagnostic_impl(int fft_size,
-                                                int seed,
-                                                int n_repeats);
-
 // [[Rcpp::export]]
 bool embedding_metal_available_cpp() {
   return embedding_metal_available_impl();
@@ -264,7 +254,7 @@ NumericMatrix knn_embed_metal_cpp(IntegerMatrix indices,
 // [[Rcpp::export]]
 NumericMatrix knn_embed_metal_csr_cpp(IntegerVector offsets,
                                       IntegerVector neighbors,
-                                      NumericVector weights,
+                                      SEXP weights,
                                       NumericMatrix init,
                                       int n_epochs,
                                       int negative_sample_rate,
@@ -397,25 +387,4 @@ List knn_tsne_opentsne_metal_cpp(IntegerMatrix indices,
     seed,
     record_costs
   );
-}
-
-// [[Rcpp::export]]
-List metal_fft512_stockham_diagnostic_cpp(int seed = 1,
-                                          bool inverse = false,
-                                          int n_checks = 8) {
-  return metal_fft512_stockham_diagnostic_impl(seed, inverse, n_checks);
-}
-
-// [[Rcpp::export]]
-List metal_mpsgraph_fft_diagnostic_cpp(int fft_size = 512,
-                                       int seed = 1,
-                                       int n_repeats = 5) {
-  return metal_mpsgraph_fft_diagnostic_impl(fft_size, seed, n_repeats);
-}
-
-// [[Rcpp::export]]
-List metal_mpsgraph_convolution_diagnostic_cpp(int fft_size = 512,
-                                               int seed = 1,
-                                               int n_repeats = 5) {
-  return metal_mpsgraph_convolution_diagnostic_impl(fft_size, seed, n_repeats);
 }

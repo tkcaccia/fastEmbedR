@@ -16,7 +16,7 @@ library(fastEmbedR)
 x <- scale(as.matrix(iris[, 1:4]))
 labels <- iris$Species
 
-knn <- faissR::nn(x, k = 15, backend = "auto", n_threads = 4)
+knn <- faissR::nn(x, k = 15, exclude_self = TRUE, backend = "auto", n_threads = 4)
 
 y_tsne <- fastEmbedR::opentsne_knn(knn, init_data = x, backend = "cpu", seed = 1)
 y_umap <- fastEmbedR::umap_knn(knn, backend = "cpu", graph_mode = "fuzzy", seed = 1)
@@ -42,10 +42,9 @@ fit$metrics
 
 Use `backend = "metal"` on Apple Silicon or `backend = "cuda"` on a CUDA build.
 Explicit GPU requests fail clearly if the backend is unavailable.
-For matrix input, the KNN search is delegated to `faissR::nn_without_self()`:
-CPU and Metal request the faissR CPU backend, while CUDA requests the faissR
-CUDA backend. faissR then selects the concrete KNN method and tuning
-automatically. The internal non-self KNN width is `ceiling(perplexity)`. Use
+For matrix input, the KNN search is delegated to faissR through fastEmbedR's internal bridge:
+CPU and Metal use faissR CPU HNSW with `target_recall = 0.99`, while CUDA uses
+faissR's CUDA policy. The internal non-self KNN width is `ceiling(perplexity)`. Use
 `opentsne_knn()` with an explicit `faissR::nn()` result when benchmarking alternative
 KNN algorithms.
 
@@ -74,7 +73,8 @@ object.
 ## MNIST 70k Benchmark Example
 
 The example below uses the full 70,000 MNIST observations as flattened 28x28
-images stored in a prepared `.RData` object with `data` and `labels` fields.
+images. `fastEmbedR` uses the float32 MNIST file to exercise the low-memory
+path, while `Rtsne` and `uwot` use the classic `.RData` matrix.
 CPU paths are requested with 4 threads.
 
 ```r
@@ -89,9 +89,12 @@ Sys.setenv(
   RCPP_PARALLEL_NUM_THREADS = "4"
 )
 
-load("/path/to/MNIST.RData")  # object named dataset with $data and $labels
-x <- as.matrix(dataset$data)
+load("/path/to/MNIST.RData")          # classic object named dataset
+x_ref <- as.matrix(dataset$data)
 labels <- as.factor(dataset$labels)
+
+load("/path/to/MNIST_float32.RData")  # float32 object named dataset
+x_fast <- dataset$data
 
 k <- 15
 perplexity <- 15
@@ -105,37 +108,37 @@ time_it <- function(expr) {
 
 set.seed(seed)
 opentsne_cpu <- time_it(
-  fastEmbedR::opentsne(x, perplexity = perplexity, backend = "cpu",
+  fastEmbedR::opentsne(x_fast, perplexity = perplexity, backend = "cpu",
                        n_threads = 4, seed = seed)
 )
 
 set.seed(seed)
 opentsne_cuda <- time_it(
-  fastEmbedR::opentsne(x, perplexity = perplexity, backend = "cuda",
+  fastEmbedR::opentsne(x_fast, perplexity = perplexity, backend = "cuda",
                        n_threads = 4, seed = seed)
 )
 
 set.seed(seed)
 rtsne_full <- time_it(
-  Rtsne::Rtsne(x, perplexity = perplexity, check_duplicates = FALSE,
+  Rtsne::Rtsne(x_ref, perplexity = perplexity, check_duplicates = FALSE,
                pca = TRUE, num_threads = 4)
 )
 
 set.seed(seed)
 umap_cpu <- time_it(
-  fastEmbedR::umap(x, n_neighbors = k, backend = "cpu",
+  fastEmbedR::umap(x_fast, n_neighbors = k, backend = "cpu",
                    graph_mode = "fuzzy", n_threads = 4, seed = seed)
 )
 
 set.seed(seed)
 umap_cuda <- time_it(
-  fastEmbedR::umap(x, n_neighbors = k, backend = "cuda",
+  fastEmbedR::umap(x_fast, n_neighbors = k, backend = "cuda",
                    graph_mode = "fuzzy", n_threads = 4, seed = seed)
 )
 
 set.seed(seed)
 uwot_fast <- time_it(
-  uwot::umap(x, n_neighbors = k, fast_sgd = TRUE,
+  uwot::umap(x_ref, n_neighbors = k, fast_sgd = TRUE,
              n_threads = 4, n_sgd_threads = 4, verbose = FALSE)
 )
 

@@ -8,6 +8,7 @@ umap(
   n_components = 2L,
   standardize = FALSE,
   pca_dims = NULL,
+  metric = c("euclidean", "cosine"),
   nn = NULL,
   seed = 4L,
   backend = c("cpu", "cuda", "metal"),
@@ -31,11 +32,13 @@ from the supplied matrix.}
 
 \item{pca_dims}{Optional PCA dimension before KNN.}
 
+\item{metric}{KNN distance metric for one-call matrix input.}
+
 \item{nn}{Optional precomputed KNN result when \code{data} is a matrix.}
 
 \item{seed}{Random seed.}
 
-\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. KNN is delegated to \code{faissR::nn_without_self()} with automatic method and tuning selection. CPU and Metal request the faissR CPU backend, while CUDA requests the faissR CUDA backend. GPU requests must resolve to a real native backend; the package does not relabel CPU work as GPU.}
+\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. KNN is delegated to faissR with automatic method and tuning selection through an internal bridge. CPU and Metal request faissR CPU HNSW with \code{target_recall = 0.99}, while CUDA requests the faissR CUDA backend. GPU requests must resolve to a real native backend; the package does not relabel CPU work as GPU.}
 
 \item{n_threads}{Number of CPU worker threads for KNN and CPU UMAP.}
 

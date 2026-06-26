@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <utility>
@@ -90,6 +91,27 @@ int fastembedr_cuda_opentsne_fft_from_knn(const int* indices,
                                           unsigned int seed,
                                           int index_offset,
                                           float* out);
+int fastembedr_cuda_opentsne_fft_from_knn_float(const int* indices,
+                                                const float* distances,
+                                                const float* init,
+                                                int has_init,
+                                                int n,
+                                                int k,
+                                                int n_components,
+                                                float perplexity,
+                                                int early_exaggeration_iter,
+                                                int n_iter,
+                                                float early_exaggeration,
+                                                float exaggeration,
+                                                float learning_rate,
+                                                int learning_rate_auto,
+                                                float initial_momentum,
+                                                float final_momentum,
+                                                float min_gain,
+                                                float max_step_norm,
+                                                unsigned int seed,
+                                                int index_offset,
+                                                float* out);
 int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
                                            const double* distances,
                                            int n,
@@ -105,6 +127,21 @@ int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
                                            int index_offset,
                                            int optimizer_mode,
                                            float* out);
+int fastembedr_cuda_umap_from_knn_spectral_float(const int* indices,
+                                                 const float* distances,
+                                                 int n,
+                                                 int k,
+                                                 int n_epochs,
+                                                 int negative_sample_rate,
+                                                 float learning_rate,
+                                                 float a,
+                                                 float b,
+                                                 float repulsion_strength,
+                                                 int spectral_n_iter,
+                                                 unsigned int seed,
+                                                 int index_offset,
+                                                 int optimizer_mode,
+                                                 float* out);
 int fastembedr_cuda_umap_graph_dump_from_knn(const int* indices,
                                              const double* distances,
                                              int n,
@@ -595,6 +632,79 @@ std::vector<float> init_to_float_2d(const NumericMatrix& init) {
   for (int i = 0; i < n; ++i) {
     out[static_cast<std::size_t>(i) * 2u] = static_cast<float>(init(i, 0));
     out[static_cast<std::size_t>(i) * 2u + 1u] = static_cast<float>(init(i, 1));
+  }
+  return out;
+}
+
+bool cuda_is_float32_s4(SEXP x) {
+  if (!Rf_isS4(x)) return false;
+  Rcpp::S4 obj(x);
+  return obj.is("float32");
+}
+
+IntegerMatrix cuda_float32_data_slot(SEXP x) {
+  Rcpp::S4 obj(x);
+  SEXP data = obj.slot("Data");
+  if (TYPEOF(data) != INTSXP || Rf_isNull(Rf_getAttrib(data, R_DimSymbol))) {
+    Rcpp::stop("float32 distance object has an invalid payload");
+  }
+  return IntegerMatrix(data);
+}
+
+IntegerVector cuda_float32_payload_slot(SEXP x) {
+  Rcpp::S4 obj(x);
+  SEXP data = obj.slot("Data");
+  if (TYPEOF(data) != INTSXP) {
+    Rcpp::stop("float32 object has an invalid payload");
+  }
+  return IntegerVector(data);
+}
+
+float cuda_int_bits_to_float(const int value) {
+  float out;
+  static_assert(sizeof(out) == sizeof(value), "float32 payload must use 32-bit storage");
+  std::memcpy(&out, &value, sizeof(float));
+  return out;
+}
+
+std::vector<float> cuda_copy_float32_payload(SEXP distances,
+                                             const int expected_n,
+                                             const int expected_k) {
+  if (!cuda_is_float32_s4(distances)) {
+    Rcpp::stop("expected a float::float32 distance matrix");
+  }
+  IntegerMatrix payload = cuda_float32_data_slot(distances);
+  if (payload.nrow() != expected_n || payload.ncol() != expected_k) {
+    Rcpp::stop("indices and distances must have the same dimensions");
+  }
+  const std::size_t total =
+    static_cast<std::size_t>(expected_n) * static_cast<std::size_t>(expected_k);
+  std::vector<float> out(total);
+  const int* src = INTEGER(payload);
+  for (std::size_t i = 0; i < total; ++i) {
+    out[i] = cuda_int_bits_to_float(src[i]);
+  }
+  return out;
+}
+
+std::vector<float> cuda_copy_float_vector(SEXP values,
+                                          const char* name) {
+  if (cuda_is_float32_s4(values)) {
+    IntegerVector payload = cuda_float32_payload_slot(values);
+    std::vector<float> out(static_cast<std::size_t>(payload.size()));
+    const int* src = INTEGER(payload);
+    for (R_xlen_t i = 0; i < payload.size(); ++i) {
+      out[static_cast<std::size_t>(i)] = cuda_int_bits_to_float(src[i]);
+    }
+    return out;
+  }
+  if (TYPEOF(values) != REALSXP) {
+    Rcpp::stop("%s must be a numeric vector or float::float32 vector", name);
+  }
+  NumericVector numeric(values);
+  std::vector<float> out(static_cast<std::size_t>(numeric.size()));
+  for (R_xlen_t i = 0; i < numeric.size(); ++i) {
+    out[static_cast<std::size_t>(i)] = static_cast<float>(numeric[i]);
   }
   return out;
 }
@@ -1122,6 +1232,63 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix indices,
   return result;
 }
 
+NumericMatrix knn_umap_cuda_fused_float_impl(IntegerMatrix indices,
+                                             SEXP distances,
+                                             int n_epochs,
+                                             int negative_sample_rate,
+                                             double learning_rate,
+                                             double min_dist,
+                                             double repulsion_strength,
+                                             int spectral_n_iter,
+                                             int seed,
+                                             int optimizer_mode) {
+  if (!cuda_is_float32_s4(distances)) {
+    Rcpp::stop("CUDA float32 UMAP requires float::float32 KNN distances.");
+  }
+  const int n = indices.nrow();
+  const int k = indices.ncol();
+  if (k > kMaxCudaNeighbors) {
+    Rcpp::stop("CUDA fused UMAP currently supports at most %d neighbors.", kMaxCudaNeighbors);
+  }
+  if (n_epochs < 1) Rcpp::stop("n_epochs must be positive");
+  if (negative_sample_rate < 0) Rcpp::stop("negative_sample_rate must be non-negative");
+  if (learning_rate <= 0.0) Rcpp::stop("learning_rate must be positive");
+  if (min_dist < 0.0) Rcpp::stop("min_dist must be non-negative");
+  if (repulsion_strength <= 0.0) Rcpp::stop("repulsion_strength must be positive");
+  if (spectral_n_iter < 1) Rcpp::stop("spectral_n_iter must be positive");
+  if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
+
+  std::vector<float> distance_float = cuda_copy_float32_payload(distances, n, k);
+  std::vector<float> out(static_cast<std::size_t>(n) * 2u);
+  const auto ab = find_ab_params(1.0, min_dist);
+  const int status = fastembedr_cuda_umap_from_knn_spectral_float(
+    indices.begin(),
+    distance_float.data(),
+    n,
+    k,
+    n_epochs,
+    negative_sample_rate,
+    static_cast<float>(learning_rate),
+    static_cast<float>(ab.first),
+    static_cast<float>(ab.second),
+    static_cast<float>(repulsion_strength),
+    spectral_n_iter,
+    static_cast<unsigned int>(seed),
+    knn_index_offset(indices),
+    optimizer_mode,
+    out.data()
+  );
+  if (status != 0) {
+    Rcpp::stop("CUDA fused UMAP failed: %s", cuda_embedding_error_message());
+  }
+  NumericMatrix result(n, 2);
+  for (int i = 0; i < n; ++i) {
+    result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);
+    result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
+  }
+  return result;
+}
+
 NumericMatrix knn_tsne_exact_cuda_impl(IntegerMatrix indices,
                                        NumericMatrix distances,
                                        NumericMatrix init,
@@ -1252,8 +1419,8 @@ List umap_cuda_graph_dump_impl(IntegerMatrix indices,
 
 NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector heads,
                                           IntegerVector tails,
-                                          NumericVector weights,
-                                          NumericVector epochs_per_sample,
+                                          SEXP weights,
+                                          SEXP epochs_per_sample,
                                           NumericMatrix init,
                                           int n_epochs,
                                           int negative_sample_rate,
@@ -1262,9 +1429,11 @@ NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector heads,
                                           double repulsion_strength,
                                           int seed,
                                           int optimizer_mode) {
+  std::vector<float> w = cuda_copy_float_vector(weights, "COO weights");
+  std::vector<float> eps = cuda_copy_float_vector(epochs_per_sample, "COO epochs_per_sample");
   if (heads.size() != tails.size() ||
-      heads.size() != weights.size() ||
-      heads.size() != epochs_per_sample.size()) {
+      static_cast<std::size_t>(heads.size()) != w.size() ||
+      static_cast<std::size_t>(heads.size()) != eps.size()) {
     Rcpp::stop("COO heads, tails, weights, and epochs_per_sample must have the same length");
   }
   if (init.ncol() != 2) Rcpp::stop("CUDA COO UMAP optimizer requires a two-dimensional initialization");
@@ -1277,12 +1446,6 @@ NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector heads,
 
   const int n = init.nrow();
   const int n_edges = heads.size();
-  std::vector<float> w(static_cast<std::size_t>(n_edges));
-  std::vector<float> eps(static_cast<std::size_t>(n_edges));
-  for (int i = 0; i < n_edges; ++i) {
-    w[static_cast<std::size_t>(i)] = static_cast<float>(weights[i]);
-    eps[static_cast<std::size_t>(i)] = static_cast<float>(epochs_per_sample[i]);
-  }
   std::vector<float> init_float = init_to_float_2d(init);
   std::vector<float> out(init_float.size());
   const auto ab = find_ab_params(1.0, min_dist);
@@ -1423,7 +1586,6 @@ List knn_tsne_opentsne_cuda_impl(IntegerMatrix indices,
       Rcpp::Named("repulsion") = "fft_grid_cuda_cufft",
       Rcpp::Named("probabilities") = "symmetric_sparse_knn_cuda",
       Rcpp::Named("n_negatives") = NA_INTEGER,
-      Rcpp::Named("repulsion_block_size") = NA_INTEGER,
       Rcpp::Named("n_threads") = NA_INTEGER,
       Rcpp::Named("learning_rate_early") = learning_rate_auto ?
         static_cast<double>(n) / static_cast<double>(early_exaggeration) :
@@ -1442,5 +1604,137 @@ List knn_tsne_opentsne_cuda_impl(IntegerMatrix indices,
   Rcpp::stop(
     "CUDA openTSNE supports `negative_gradient_method = \"fft\"` only. "
     "Use the FFT/FIt-SNE path for CUDA; exact CUDA t-SNE is kept separate and is not labelled as openTSNE."
+  );
+}
+
+List knn_tsne_opentsne_cuda_float_impl(IntegerMatrix indices,
+                                       SEXP distances,
+                                       NumericMatrix y_init,
+                                       bool init,
+                                       int n_components,
+                                       double perplexity,
+                                       int early_exaggeration_iter,
+                                       int n_iter,
+                                       double early_exaggeration,
+                                       double exaggeration,
+                                       double learning_rate,
+                                       bool learning_rate_auto,
+                                       double initial_momentum,
+                                       double final_momentum,
+                                       double min_gain,
+                                       double max_step_norm,
+                                       std::string negative_gradient_method,
+                                       int seed,
+                                       bool record_costs) {
+  (void)record_costs;
+  std::transform(
+    negative_gradient_method.begin(),
+    negative_gradient_method.end(),
+    negative_gradient_method.begin(),
+    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); }
+  );
+  if (!(negative_gradient_method == "fft" ||
+        negative_gradient_method == "fitsne" ||
+        negative_gradient_method == "fit_sne" ||
+        negative_gradient_method == "interpolation" ||
+        negative_gradient_method == "auto")) {
+    Rcpp::stop(
+      "CUDA openTSNE supports `negative_gradient_method = \"fft\"` only. "
+      "Use the FFT/FIt-SNE path for CUDA; exact CUDA t-SNE is kept separate and is not labelled as openTSNE."
+    );
+  }
+  if (!cuda_is_float32_s4(distances)) {
+    Rcpp::stop("CUDA float32 openTSNE requires float::float32 KNN distances.");
+  }
+  if (n_components != 2) {
+    Rcpp::stop("CUDA openTSNE FFT-grid currently supports exactly two output components.");
+  }
+  if (init && (y_init.nrow() != indices.nrow() || y_init.ncol() != 2)) {
+    Rcpp::stop("CUDA openTSNE FFT-grid requires a two-dimensional initialization.");
+  }
+  if (indices.ncol() > kMaxCudaNeighbors) {
+    Rcpp::stop("CUDA openTSNE FFT-grid currently supports at most %d neighbors.", kMaxCudaNeighbors);
+  }
+  if (perplexity <= 0.0) Rcpp::stop("perplexity must be positive");
+  if (early_exaggeration_iter < 0 || n_iter < 0 || early_exaggeration_iter + n_iter < 1) {
+    Rcpp::stop("CUDA openTSNE FFT-grid requires at least one optimization iteration.");
+  }
+  if (early_exaggeration <= 0.0 || exaggeration <= 0.0) {
+    Rcpp::stop("CUDA openTSNE FFT-grid exaggeration values must be positive.");
+  }
+  if (learning_rate <= 0.0 && !learning_rate_auto) {
+    Rcpp::stop("CUDA openTSNE FFT-grid learning rate must be positive.");
+  }
+  if (initial_momentum < 0.0 || final_momentum < 0.0) {
+    Rcpp::stop("CUDA openTSNE FFT-grid momentum values must be non-negative.");
+  }
+  if (min_gain <= 0.0) Rcpp::stop("CUDA openTSNE FFT-grid min_gain must be positive.");
+  if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
+
+  const int n = indices.nrow();
+  const int k = indices.ncol();
+  std::vector<float> distance_float = cuda_copy_float32_payload(distances, n, k);
+  std::vector<float> init_float;
+  if (init) {
+    init_float = init_to_float_2d(y_init);
+  } else {
+    init_float.assign(static_cast<std::size_t>(n) * 2u, 0.0f);
+  }
+  std::vector<float> out(init_float.size());
+  const int status = fastembedr_cuda_opentsne_fft_from_knn_float(
+    indices.begin(),
+    distance_float.data(),
+    init_float.data(),
+    init ? 1 : 0,
+    n,
+    k,
+    n_components,
+    static_cast<float>(perplexity),
+    early_exaggeration_iter,
+    n_iter,
+    static_cast<float>(early_exaggeration),
+    static_cast<float>(exaggeration),
+    static_cast<float>(learning_rate),
+    learning_rate_auto ? 1 : 0,
+    static_cast<float>(initial_momentum),
+    static_cast<float>(final_momentum),
+    static_cast<float>(min_gain),
+    static_cast<float>(max_step_norm),
+    static_cast<unsigned int>(seed),
+    knn_index_offset(indices),
+    out.data()
+  );
+  if (status != 0) {
+    Rcpp::stop("CUDA openTSNE FFT-grid failed: %s", cuda_embedding_error_message());
+  }
+
+  NumericMatrix result(n, 2);
+  for (int i = 0; i < n; ++i) {
+    result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);
+    result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
+  }
+  return List::create(
+    Rcpp::Named("Y") = result,
+    Rcpp::Named("costs") = NumericVector::create(),
+    Rcpp::Named("itercosts") = NumericVector::create(),
+    Rcpp::Named("itercost_iterations") = IntegerVector::create(),
+    Rcpp::Named("optimizer") = "opentsne_fitsne_fft_grid_native_cuda",
+    Rcpp::Named("repulsion") = "fft_grid_cuda_cufft",
+    Rcpp::Named("probabilities") = "symmetric_sparse_knn_cuda_float32",
+    Rcpp::Named("precision") = "float32",
+    Rcpp::Named("n_negatives") = NA_INTEGER,
+    Rcpp::Named("n_threads") = NA_INTEGER,
+    Rcpp::Named("learning_rate_early") = learning_rate_auto ?
+      static_cast<double>(n) / static_cast<double>(early_exaggeration) :
+      static_cast<double>(learning_rate),
+    Rcpp::Named("learning_rate_normal") = learning_rate_auto ?
+      static_cast<double>(n) / static_cast<double>(std::max(exaggeration, 1.0)) :
+      static_cast<double>(learning_rate),
+    Rcpp::Named("early_exaggeration_iter_actual") = early_exaggeration_iter,
+    Rcpp::Named("n_iter_actual") = n_iter,
+    Rcpp::Named("max_iter_actual") = early_exaggeration_iter + n_iter,
+    Rcpp::Named("auto_kld_stop") = false,
+    Rcpp::Named("auto_stop_reason") = "cuda_fft_no_host_kld_monitor",
+    Rcpp::Named("auto_iter_end") = NA_REAL
   );
 }

@@ -508,14 +508,6 @@ normalize_opentsne_knn_input <- function(indices, distances = NULL, n_neighbors 
     n_neighbors
   )
   distance_type <- knn$distance_type
-  if (is_float32_matrix(materialized$distances)) {
-    materialized$distances <- matrix(
-      as.numeric(materialized$distances),
-      nrow = nrow(materialized$indices),
-      ncol = ncol(materialized$indices)
-    )
-    distance_type <- "double_materialized_from_float32_for_opentsne_cpu"
-  }
   list(
     indices = materialized$indices,
     distances = materialized$distances,
@@ -689,9 +681,18 @@ fast_knn_opentsne_materialized <- function(indices,
   }
 
   out <- if (identical(optimizer_backend, "metal")) {
+    gpu_distances <- if (is_float32_matrix(distances)) {
+      matrix(
+        as.numeric(distances),
+        nrow = nrow(indices),
+        ncol = ncol(indices)
+      )
+    } else {
+      distances
+    }
     knn_tsne_opentsne_metal_cpp(
       indices,
-      distances,
+      gpu_distances,
       args$Y_init,
       args$init,
       args$n_components,
@@ -711,62 +712,117 @@ fast_knn_opentsne_materialized <- function(indices,
       record_costs
     )
   } else if (identical(optimizer_backend, "cuda")) {
-    knn_tsne_opentsne_cuda_cpp(
-      indices,
-      distances,
-      args$Y_init,
-      args$init,
-      args$n_components,
-      args$perplexity,
-      early_exaggeration_iter,
-      n_iter,
-      ex$early,
-      ex$normal,
-      lr$value,
-      lr$auto,
-      args$momentum,
-      args$final_momentum,
-      min_gain,
-      max_step_norm,
-      negative_gradient_method,
-      as.integer(seed),
-      record_costs
-    )
+    if (is_float32_matrix(distances)) {
+      knn_tsne_opentsne_cuda_float_cpp(
+        indices,
+        distances,
+        args$Y_init,
+        args$init,
+        args$n_components,
+        args$perplexity,
+        early_exaggeration_iter,
+        n_iter,
+        ex$early,
+        ex$normal,
+        lr$value,
+        lr$auto,
+        args$momentum,
+        args$final_momentum,
+        min_gain,
+        max_step_norm,
+        negative_gradient_method,
+        as.integer(seed),
+        record_costs
+      )
+    } else {
+      knn_tsne_opentsne_cuda_cpp(
+        indices,
+        distances,
+        args$Y_init,
+        args$init,
+        args$n_components,
+        args$perplexity,
+        early_exaggeration_iter,
+        n_iter,
+        ex$early,
+        ex$normal,
+        lr$value,
+        lr$auto,
+        args$momentum,
+        args$final_momentum,
+        min_gain,
+        max_step_norm,
+        negative_gradient_method,
+        as.integer(seed),
+        record_costs
+      )
+    }
   } else {
-    knn_tsne_opentsne_cpp(
-      indices,
-      distances,
-      args$Y_init,
-      args$init,
-      args$n_components,
-      args$perplexity,
-      args$theta,
-      early_exaggeration_iter,
-      n_iter,
-      ex$early,
-      ex$normal,
-      lr$value,
-      lr$auto,
-      args$momentum,
-      args$final_momentum,
-      min_gain,
-      max_step_norm,
-      negative_gradient_method,
-      as.integer(n_threads),
-      as.integer(seed),
-      args$verbose,
-      record_costs,
-      isTRUE(auto_params$auto_kld_stop),
-      auto_params$auto_iter_end
-    )
+    if (is_float32_matrix(distances)) {
+      knn_tsne_opentsne_float_cpp(
+        indices,
+        distances,
+        args$Y_init,
+        args$init,
+        args$n_components,
+        args$perplexity,
+        args$theta,
+        early_exaggeration_iter,
+        n_iter,
+        ex$early,
+        ex$normal,
+        lr$value,
+        lr$auto,
+        args$momentum,
+        args$final_momentum,
+        min_gain,
+        max_step_norm,
+        negative_gradient_method,
+        as.integer(n_threads),
+        as.integer(seed),
+        args$verbose,
+        record_costs,
+        isTRUE(auto_params$auto_kld_stop),
+        auto_params$auto_iter_end
+      )
+    } else {
+      knn_tsne_opentsne_cpp(
+        indices,
+        distances,
+        args$Y_init,
+        args$init,
+        args$n_components,
+        args$perplexity,
+        args$theta,
+        early_exaggeration_iter,
+        n_iter,
+        ex$early,
+        ex$normal,
+        lr$value,
+        lr$auto,
+        args$momentum,
+        args$final_momentum,
+        min_gain,
+        max_step_norm,
+        negative_gradient_method,
+        as.integer(n_threads),
+        as.integer(seed),
+        args$verbose,
+        record_costs,
+        isTRUE(auto_params$auto_kld_stop),
+        auto_params$auto_iter_end
+      )
+    }
   }
-  layout <- set_embedding_colnames(out$Y, "openTSNE")
+  layout <- finalize_embedding_layout(
+    out$Y,
+    "openTSNE",
+    return_float32 = is_float32_matrix(distances)
+  )
   probabilities <- out$probabilities
   if (is.null(probabilities)) probabilities <- "symmetric_sparse_knn_cpu"
   n_negatives <- out$n_negatives
   if (is.null(n_negatives)) n_negatives <- NA_integer_
-  repulsion_block_size <- out$repulsion_block_size
-  if (is.null(repulsion_block_size)) repulsion_block_size <- NA_integer_
   cfg <- list(
     method = "opentsne",
     backend = optimizer_backend,
@@ -808,9 +864,9 @@ fast_knn_opentsne_materialized <- function(indices,
     record_costs = record_costs,
     optimizer = out$optimizer,
     repulsion = out$repulsion,
+    precision = out$precision %||% if (is_float32_matrix(distances) && identical(optimizer_backend, "cpu")) "float32" else "double",
     probabilities = probabilities,
     n_negatives = n_negatives,
-    repulsion_block_size = repulsion_block_size,
     n_threads = out$n_threads,
     input_had_self = isTRUE(input_had_self),
     knn_backend = input_backend,
@@ -860,7 +916,14 @@ fast_knn_opentsne_core <- function(indices,
                                    backend = c("cpu", "cuda", "metal"),
                                    auto_config = TRUE) {
   backend <- resolve_embedding_backend(backend)
-  knn <- normalize_opentsne_knn_input(indices, distances)
+  if (inherits(indices, "fastEmbedR_opentsne_prepared")) {
+    if (!is.null(distances)) {
+      stop("Do not pass `distances` when `indices` is a prepared openTSNE object.", call. = FALSE)
+    }
+    knn <- indices$knn
+  } else {
+    knn <- normalize_opentsne_knn_input(indices, distances)
+  }
   Y_init <- resolve_opentsne_y_init(Y_init, knn$n, n_components)
   fast_knn_opentsne_materialized(
     knn$indices,
@@ -890,6 +953,46 @@ fast_knn_opentsne_core <- function(indices,
   )
 }
 
+#' Precompute reusable openTSNE KNN state
+#'
+#' `prepare_opentsne_knn()` strips self-neighbours, trims to the requested
+#' non-self width, and stores compact KNN matrices once. Pass the returned
+#' object to [opentsne_knn()] for repeated seeds or backend comparisons without
+#' repeating KNN normalization/materialization.
+#'
+#' @inheritParams opentsne_knn
+#' @return A prepared openTSNE KNN object.
+#' @examples
+#' x <- scale(as.matrix(iris[, 1:4]))
+#' knn <- faissR::nn(x, k = 15, exclude_self = TRUE)
+#' prep <- prepare_opentsne_knn(knn, perplexity = 10)
+#' y1 <- opentsne_knn(prep, seed = 1, early_exaggeration_iter = 50, n_iter = 100)
+#' y2 <- opentsne_knn(prep, seed = 2, early_exaggeration_iter = 50, n_iter = 100)
+#' @export
+prepare_opentsne_knn <- function(indices,
+                                 distances = NULL,
+                                 n_neighbors = NULL,
+                                 perplexity = NULL) {
+  knn0 <- coerce_knn_input(indices, distances)
+  policy <- opentsne_neighbor_policy(
+    nrow(knn0$indices),
+    perplexity = perplexity,
+    available = knn0$n_neighbors
+  )
+  if (is.null(n_neighbors)) {
+    n_neighbors <- policy$n_neighbors
+  }
+  knn <- normalize_opentsne_knn_input(indices, distances, n_neighbors)
+  out <- list(
+    knn = knn,
+    perplexity = policy$perplexity,
+    n_neighbors = as.integer(n_neighbors),
+    affinity_state = "knn_materialized_affinity_builder_internal"
+  )
+  class(out) <- c("fastEmbedR_opentsne_prepared", "list")
+  out
+}
+
 #' Run native openTSNE-style t-SNE from precomputed KNN
 #'
 #' `opentsne_knn()` is the direct KNN-input entry point for the native
@@ -915,7 +1018,7 @@ fast_knn_opentsne_core <- function(indices,
 #'   `attr(layout, "fastEmbedR_config")`.
 #' @examples
 #' x <- scale(as.matrix(iris[, 1:4]))
-#' knn <- faissR::nn(x, k = 31)
+#' knn <- faissR::nn(x, k = 31, exclude_self = TRUE)
 #' layout <- opentsne_knn(knn, init_data = x, perplexity = 10,
 #'   early_exaggeration_iter = 100, n_iter = 250)
 #' if (all(is.finite(layout))) {
@@ -946,7 +1049,15 @@ opentsne_knn <- function(indices,
                           auto_config = TRUE,
                           ...) {
   backend <- resolve_embedding_backend(backend)
-  knn <- normalize_opentsne_knn_input(indices, distances, n_neighbors)
+  if (inherits(indices, "fastEmbedR_opentsne_prepared")) {
+    if (!is.null(distances)) {
+      stop("Do not pass `distances` when `indices` is a prepared openTSNE object.", call. = FALSE)
+    }
+    knn <- indices$knn
+    if (is.null(perplexity)) perplexity <- indices$perplexity
+  } else {
+    knn <- normalize_opentsne_knn_input(indices, distances, n_neighbors)
+  }
   Y_init <- resolve_opentsne_y_init(Y_init, knn$n, n_components)
   if (is.null(Y_init) && !is.null(init_data)) {
     init_backend <- if (backend %in% c("metal", "cuda")) backend else "cpu"
@@ -1007,12 +1118,13 @@ opentsne_knn <- function(indices,
 #' @param standardize Center and scale columns before KNN. Defaults to `FALSE`
 #'   so one-call results match a KNN object computed from the supplied matrix.
 #' @param pca_dims Optional PCA dimension before KNN.
+#' @param metric KNN distance metric for one-call matrix input.
 #' @param nn Optional precomputed KNN output when `data` is a data matrix.
 #' @param seed Random seed.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. For
-#'   matrix input, KNN is delegated to `faissR::nn_without_self()` with
-#'   automatic method/tuning selection. CPU and Metal request the faissR CPU
-#'   backend; CUDA requests the faissR CUDA backend.
+#'   matrix input, KNN is delegated to faissR with automatic method/tuning
+#'   selection through an internal bridge. CPU and Metal request faissR CPU
+#'   HNSW with `target_recall = 0.99`; CUDA requests the faissR CUDA backend.
 #'   Unsupported GPU requests fail clearly and are not relabelled CPU runs.
 #' @param keep_knn If `TRUE`, retain KNN matrices in the returned object.
 #' @param verbose Print optimizer progress.
@@ -1052,6 +1164,7 @@ opentsne <- function(data,
                      Y_init = NULL,
                      standardize = FALSE,
                      pca_dims = NULL,
+                     metric = c("euclidean", "cosine"),
                      nn = NULL,
                      seed = 4L,
                      backend = c("cpu", "cuda", "metal"),
@@ -1071,6 +1184,7 @@ opentsne <- function(data,
                       auto_config = TRUE,
                       ...) {
   backend <- resolve_embedding_backend(backend)
+  input_is_float32 <- is_float32_matrix(data)
   dots <- list(...)
   if ("init" %in% names(dots)) {
     stop(
@@ -1213,6 +1327,7 @@ opentsne <- function(data,
     )
   })
   x <- prepared$data
+  metric <- resolve_embedding_metric(metric, x)
   n <- nrow(x)
   neighbour_policy <- opentsne_neighbor_policy(n, perplexity = perplexity)
   perplexity <- neighbour_policy$perplexity
@@ -1220,14 +1335,17 @@ opentsne <- function(data,
 
   knn_time <- system.time({
     if (is.null(nn)) {
-      knn_backend <- embedding_knn_backend(backend)
-      raw_knn <- faissR::nn_without_self(
+      knn_policy <- fastembedr_embedding_nn_policy(backend)
+      raw_knn <- fastembedr_nn_without_self(
         x,
         k = n_neighbors,
-        backend = knn_backend,
-        method = fastembedr_faiss_method_for_float(x, knn_backend),
-        output = "double",
-        n_threads = n_threads
+        backend = knn_policy$backend,
+        method = knn_policy$method,
+        metric = metric,
+        output = fastembedr_faiss_float_output(x, knn_policy$backend),
+        n_threads = n_threads,
+        tuning = knn_policy$tuning,
+        target_recall = knn_policy$target_recall
       )
       knn_result <- normalize_supplied_knn(raw_knn, n, n_neighbors)
       knn_result$nn_backend <- attr(raw_knn, "backend")
@@ -1295,6 +1413,11 @@ opentsne <- function(data,
       ...
     )
   })
+  layout <- finalize_embedding_layout(
+    layout,
+    "openTSNE",
+    return_float32 = input_is_float32 && is_float32_matrix(x)
+  )
   cfg <- attr(layout, "fastEmbedR_config")
   timings <- rbind(
     preprocess = preprocess_time,
@@ -1323,6 +1446,7 @@ opentsne <- function(data,
       n_components = as.integer(n_components),
       seed = as.integer(seed),
       nn_backend = knn_result$nn_backend,
+      metric = metric,
       keep_knn = keep_knn
     ),
     cfg,

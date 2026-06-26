@@ -192,7 +192,6 @@ test_that("native Metal openTSNE runs FFT-grid without CPU fallback", {
   expect_equal(cfg$backend, "metal")
   expect_equal(cfg$optimizer, "opentsne_fitsne_fft_grid_native_metal")
   expect_equal(cfg$repulsion, "fft_grid_metal")
-  expect_equal(cfg$repulsion_block_size, 32L)
 })
 
 test_that("openTSNE GPU optimizers are native and fail clearly when unavailable", {

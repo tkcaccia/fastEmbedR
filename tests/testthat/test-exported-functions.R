@@ -14,7 +14,8 @@ test_that("public API is KNN and openTSNE focused", {
   exports <- getNamespaceExports("fastEmbedR")
   expect_true(all(c(
     "umap", "umap_knn", "opentsne", "opentsne_knn", "embed_knn",
-    "evaluate_embedding", "transform_tsne", "landmark_tsne"
+    "evaluate_embedding", "transform_tsne", "landmark_tsne",
+    "prepare_umap_knn", "prepare_opentsne_knn"
   ) %in% exports))
   expect_false(any(c(
     "supervised_umap", "tsne", "infotsne", "pacmap", "trimap",
@@ -55,7 +56,7 @@ test_that("core exported functions have tiny openTSNE smoke tests", {
   expect_true(isTRUE(info$available[info$backend == "cpu"]))
 
   knn <- faissR::nn(x, backend = "cpu")
-  expect_s3_class(knn, "fastEmbedR_nn")
+  expect_s3_class(knn, "faissR_nn")
   expect_equal(dim(knn$indices), c(n, fastEmbedR:::auto_k(x, include_self = TRUE)))
   expect_equal(dim(knn$distances), c(n, fastEmbedR:::auto_k(x, include_self = TRUE)))
   expect_equal(attr(knn, "backend"), "cpu")
@@ -78,6 +79,20 @@ test_that("core exported functions have tiny openTSNE smoke tests", {
   layout_knn <- opentsne_knn(knn, perplexity = 1, early_exaggeration_iter = 2L, n_iter = 3L)
   expect_embedding(layout_knn, n)
   expect_equal(attr(layout_knn, "fastEmbedR_config")$method, "opentsne")
+
+  prep_tsne <- prepare_opentsne_knn(knn, perplexity = 1)
+  expect_s3_class(prep_tsne, "fastEmbedR_opentsne_prepared")
+  layout_prepared_tsne <- opentsne_knn(prep_tsne,
+    early_exaggeration_iter = 2L, n_iter = 3L)
+  expect_embedding(layout_prepared_tsne, n)
+  expect_equal(attr(layout_prepared_tsne, "fastEmbedR_config")$method, "opentsne")
+
+  prep_umap <- prepare_umap_knn(knn, graph_mode = "binary")
+  expect_s3_class(prep_umap, "fastEmbedR_umap_prepared")
+  expect_true(all(c("offsets", "neighbors", "weights", "epochs_per_sample") %in% names(prep_umap$graph)))
+  layout_prepared_umap <- umap_knn(prep_umap)
+  expect_embedding(layout_prepared_umap, n)
+  expect_true(isTRUE(attr(layout_prepared_umap, "fastEmbedR_config")$prepared_reuse_hit))
 
   fit <- opentsne(x, perplexity = 1,
     early_exaggeration_iter = 2L, n_iter = 3L,

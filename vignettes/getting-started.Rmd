@@ -30,8 +30,8 @@ CPU-capable public functions expose `n_threads`, for example
 silently relabelled when unavailable.
 
 For one-call `umap()` and `opentsne()` runs, `backend` is deliberately limited
-to `"cpu"`, `"metal"`, or `"cuda"`. Matrix-input KNN is delegated to
-`faissR::nn_without_self()`: CPU and Metal request the faissR CPU backend, while
+to `"cpu"`, `"metal"`, or `"cuda"`. Matrix-input KNN is delegated to faissR through fastEmbedR's internal bridge:
+CPU and Metal request the faissR CPU backend, while
 CUDA requests the faissR CUDA backend. faissR then chooses the concrete KNN
 method and tuning automatically. To benchmark another KNN algorithm, compute it
 with `faissR::nn()` and pass the result to `umap_knn()` or `opentsne_knn()`.
@@ -49,7 +49,7 @@ library(fastEmbedR)
 x <- scale(as.matrix(iris[, 1:4]))
 labels <- iris$Species
 
-knn <- faissR::nn(x, k = 31, n_threads = 2)
+knn <- faissR::nn(x, k = 31, exclude_self = TRUE, n_threads = 2)
 layout <- umap_knn(knn, n_threads = 2, seed = 4)
 
 plot(layout, pch = 21, bg = labels)

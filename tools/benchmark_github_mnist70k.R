@@ -183,7 +183,7 @@ load_mnist <- function(cache_dir) {
   out
 }
 
-load_mnist_rdata <- function(path) {
+load_mnist_rdata <- function(path, preserve_float = FALSE) {
   env <- new.env(parent = emptyenv())
   load(path, envir = env)
   objects <- mget(ls(env), env, inherits = FALSE)
@@ -197,10 +197,16 @@ load_mnist_rdata <- function(path) {
   if (is.na(data_name) || is.na(label_name)) {
     stop("Could not find MNIST data and labels in ", path, call. = FALSE)
   }
-  list(
-    data = as.matrix(objects[[data_name]]),
-    labels = factor(objects[[label_name]])
-  )
+  data <- objects[[data_name]]
+  if (preserve_float && inherits(data, "float32")) {
+    if (!requireNamespace("float", quietly = TRUE)) {
+      stop("The MNIST float32 file requires the float package.", call. = FALSE)
+    }
+    suppressPackageStartupMessages(library(float))
+  } else {
+    data <- as.matrix(data)
+  }
+  list(data = data, labels = factor(objects[[label_name]]))
 }
 
 sample_rows <- function(labels, n, seed) {
@@ -218,7 +224,12 @@ sample_rows <- function(labels, n, seed) {
 layout_matrix <- function(x) {
   if (is.list(x) && !is.null(x$layout)) x <- x$layout
   if (is.list(x) && !is.null(x$Y)) x <- x$Y
-  as.matrix(x)[, 1:2, drop = FALSE]
+  if (inherits(x, "float32")) {
+    x <- matrix(as.numeric(x), nrow = nrow(x), ncol = ncol(x))
+  } else {
+    x <- as.matrix(x)
+  }
+  x[, 1:2, drop = FALSE]
 }
 
 score <- function(x, layout, labels, seed, n_threads) {
@@ -267,6 +278,7 @@ perplexity <- arg_int("perplexity", 15L)
 n_threads <- arg_int("threads", 4L)
 cache_dir <- arg_value("cache-dir", file.path("results", "dataset_cache"))
 mnist_rdata <- arg_value("mnist-rdata", "")
+mnist_float_rdata <- arg_value("mnist-float-rdata", "")
 out_dir <- arg_value("out-dir", file.path("results", paste0("github_mnist70k_", format(Sys.time(), "%Y%m%d_%H%M%S"))))
 run_metal <- arg_flag("run-metal", TRUE)
 run_cuda <- arg_flag("run-cuda", FALSE)
@@ -284,13 +296,41 @@ dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 specs <- machine_specs(n_threads)
 write_machine_specs(specs, out_dir)
 
-mnist <- if (nzchar(mnist_rdata)) load_mnist_rdata(mnist_rdata) else load_mnist(cache_dir)
-rows <- sample_rows(mnist$labels, min(n, nrow(mnist$data)), seed)
-x <- mnist$data[rows, , drop = FALSE]
-labels <- droplevels(mnist$labels[rows])
+default_data_root <- "/Users/stefano/Documents/fastEmbedR/Data/MNIST"
+default_mnist_rdata <- file.path(default_data_root, "MNIST.RData")
+default_mnist_float_rdata <- file.path(default_data_root, "MNIST_float32.RData")
+if (!nzchar(mnist_rdata) && file.exists(default_mnist_rdata)) {
+  mnist_rdata <- default_mnist_rdata
+}
+if (!nzchar(mnist_float_rdata) && file.exists(default_mnist_float_rdata)) {
+  mnist_float_rdata <- default_mnist_float_rdata
+}
+
+mnist_ref <- if (nzchar(mnist_rdata)) load_mnist_rdata(mnist_rdata) else load_mnist(cache_dir)
+mnist_fast <- if (nzchar(mnist_float_rdata)) {
+  load_mnist_rdata(mnist_float_rdata, preserve_float = TRUE)
+} else {
+  mnist_ref
+}
+rows <- sample_rows(mnist_ref$labels, min(n, nrow(mnist_ref$data)), seed)
+x_ref <- mnist_ref$data[rows, , drop = FALSE]
+x_fast <- mnist_fast$data[rows, , drop = FALSE]
+labels <- droplevels(mnist_ref$labels[rows])
+if (!identical(as.character(labels), as.character(mnist_fast$labels[rows]))) {
+  stop("Classic and float32 MNIST label vectors do not match.", call. = FALSE)
+}
 
 layouts <- list()
 results <- list()
+
+flush_outputs <- function() {
+  if (!length(results)) return(invisible(FALSE))
+  tab <- do.call(rbind, results)
+  utils::write.csv(tab, file.path(out_dir, "mnist70k_github_benchmark.csv"), row.names = FALSE)
+  plot_layouts(layouts, labels, tab, file.path(out_dir, "mnist70k_github_benchmark.png"), seed)
+  plot_time_barplot(tab, file.path(out_dir, "mnist70k_github_benchmark_time_barplot.png"))
+  invisible(TRUE)
+}
 
 add_row <- function(method,
                     family,
@@ -299,15 +339,17 @@ add_row <- function(method,
                     layout,
                     status = "success",
                     error = NA_character_) {
-  metrics <- if (!is.null(layout)) score(x, layout, labels, seed, n_threads) else NULL
+  metrics <- if (!is.null(layout)) score(x_ref, layout, labels, seed, n_threads) else NULL
   results[[length(results) + 1L]] <<- data.frame(
     method = method,
     family = family,
     backend = backend,
-    n = nrow(x),
-    p = ncol(x),
+    n = nrow(x_ref),
+    p = ncol(x_ref),
     k = k,
     perplexity = perplexity,
+    fastEmbedR_input_class = paste(class(x_fast), collapse = "/"),
+    reference_input_class = paste(class(x_ref), collapse = "/"),
     machine = specs$machine,
     cpu = specs$cpu,
     requested_threads = n_threads,
@@ -319,6 +361,7 @@ add_row <- function(method,
     stringsAsFactors = FALSE
   )
   if (!is.null(layout)) layouts[[method]] <<- layout
+  flush_outputs()
 }
 
 run_one <- function(method, family, backend, expr) {
@@ -333,7 +376,7 @@ run_one <- function(method, family, backend, expr) {
 
 run_one("fastEmbedR openTSNE CPU", "openTSNE", "cpu", function() {
   fastEmbedR::opentsne(
-    x,
+    x_fast,
     perplexity = perplexity,
     backend = "cpu",
     n_threads = n_threads,
@@ -344,7 +387,7 @@ run_one("fastEmbedR openTSNE CPU", "openTSNE", "cpu", function() {
 if (run_metal) {
   run_one("fastEmbedR openTSNE Metal", "openTSNE", "metal", function() {
     fastEmbedR::opentsne(
-      x,
+      x_fast,
       perplexity = perplexity,
       backend = "metal",
       n_threads = n_threads,
@@ -356,7 +399,7 @@ if (run_metal) {
 if (run_cuda) {
   run_one("fastEmbedR openTSNE CUDA", "openTSNE", "cuda", function() {
     fastEmbedR::opentsne(
-      x,
+      x_fast,
       perplexity = perplexity,
       backend = "cuda",
       n_threads = n_threads,
@@ -365,21 +408,9 @@ if (run_cuda) {
   })
 }
 
-if (run_refs && requireNamespace("Rtsne", quietly = TRUE)) {
-  run_one("Rtsne full", "Rtsne", "cpu", function() {
-    Rtsne::Rtsne(
-      x,
-      perplexity = perplexity,
-      check_duplicates = FALSE,
-      pca = TRUE,
-      num_threads = n_threads
-    )
-  })
-}
-
 run_one("fastEmbedR UMAP CPU fuzzy", "UMAP", "cpu", function() {
   fastEmbedR::umap(
-    x,
+    x_fast,
     n_neighbors = k,
     backend = "cpu",
     graph_mode = "fuzzy",
@@ -391,7 +422,7 @@ run_one("fastEmbedR UMAP CPU fuzzy", "UMAP", "cpu", function() {
 if (run_metal) {
   run_one("fastEmbedR UMAP Metal fuzzy", "UMAP", "metal", function() {
     fastEmbedR::umap(
-      x,
+      x_fast,
       n_neighbors = k,
       backend = "metal",
       graph_mode = "fuzzy",
@@ -404,7 +435,7 @@ if (run_metal) {
 if (run_cuda) {
   run_one("fastEmbedR UMAP CUDA fuzzy", "UMAP", "cuda", function() {
     fastEmbedR::umap(
-      x,
+      x_fast,
       n_neighbors = k,
       backend = "cuda",
       graph_mode = "fuzzy",
@@ -417,13 +448,25 @@ if (run_cuda) {
 if (run_refs && requireNamespace("uwot", quietly = TRUE)) {
   run_one("uwot UMAP fast_sgd full", "UMAP", "cpu", function() {
     uwot::umap(
-      x,
+      x_ref,
       n_neighbors = k,
       fast_sgd = TRUE,
       n_threads = n_threads,
       n_sgd_threads = n_threads,
       ret_model = FALSE,
       verbose = FALSE
+    )
+  })
+}
+
+if (run_refs && requireNamespace("Rtsne", quietly = TRUE)) {
+  run_one("Rtsne full", "Rtsne", "cpu", function() {
+    Rtsne::Rtsne(
+      x_ref,
+      perplexity = perplexity,
+      check_duplicates = FALSE,
+      pca = TRUE,
+      num_threads = n_threads
     )
   })
 }

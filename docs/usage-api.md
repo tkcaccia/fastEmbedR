@@ -17,7 +17,7 @@ This page gives the main KNN-first workflows and the public API.
 The recommended workflow is KNN first:
 
 ```r
-knn <- faissR::nn(x, k = 50, backend = "auto", n_threads = 4)
+knn <- faissR::nn(x, k = 50, exclude_self = TRUE, backend = "auto", n_threads = 4)
 layout_umap <- umap_knn(knn, seed = 1)
 layout_tsne <- opentsne_knn(knn, init_data = x, seed = 1)
 ```
@@ -27,10 +27,9 @@ benchmarks easier to interpret.
 
 The one-call functions intentionally hide the KNN algorithm choice. For
 `opentsne()` and `umap()`, `backend` accepts only `"cpu"`, `"metal"`, or
-`"cuda"`. Matrix-input KNN is delegated to `faissR::nn_without_self()`:
-CPU and Metal request the faissR CPU backend, while CUDA requests the faissR
-CUDA backend. faissR then chooses the concrete KNN method and tuning
-automatically. To benchmark another KNN algorithm, compute it explicitly with
+`"cuda"`. Matrix-input KNN is delegated to faissR through fastEmbedR's internal bridge:
+CPU and Metal use faissR CPU HNSW with `target_recall = 0.99`, while CUDA uses
+faissR's CUDA policy. To benchmark another KNN algorithm, compute it explicitly with
 `faissR::nn()` and pass the result to `opentsne_knn()` or `umap_knn()`.
 
 ## Distance Metrics In `faissR::nn()`
@@ -38,13 +37,13 @@ automatically. To benchmark another KNN algorithm, compute it explicitly with
 The default distance is Euclidean:
 
 ```r
-knn <- faissR::nn(x, k = 50, metric = "euclidean", backend = "auto", n_threads = 4)
+knn <- faissR::nn(x, k = 50, exclude_self = TRUE, metric = "euclidean", backend = "auto", n_threads = 4)
 ```
 
 Cosine distance is available through exact CPU KNN:
 
 ```r
-knn_cosine <- faissR::nn(x, k = 50, metric = "cosine", backend = "cpu", n_threads = 4)
+knn_cosine <- faissR::nn(x, k = 50, exclude_self = TRUE, metric = "cosine", backend = "cpu", n_threads = 4)
 layout <- umap_knn(knn_cosine, seed = 1)
 ```
 
@@ -64,7 +63,7 @@ set.seed(1)
 x <- scale(as.matrix(iris[, 1:4]))
 labels <- iris$Species
 
-knn <- faissR::nn(x, k = 31)
+knn <- faissR::nn(x, k = 31, exclude_self = TRUE)
 layout <- umap_knn(knn)
 
 plot(layout, pch = 21, bg = labels)
@@ -104,7 +103,7 @@ GPU use is explicit. A request for Metal or CUDA must run that backend or fail
 clearly.
 
 ```r
-knn <- faissR::nn(x, k = 50, backend = "metal")
+knn <- faissR::nn(x, k = 50, exclude_self = TRUE, backend = "metal")
 layout <- opentsne_knn(knn, init_data = x, backend = "metal", seed = 1)
 ```
 

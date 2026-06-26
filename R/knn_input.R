@@ -68,7 +68,7 @@ is_float32_matrix <- function(x) {
 fastembedr_faiss_float_output <- function(data, backend) {
   if (!requireNamespace("float", quietly = TRUE)) return("double")
   if (is_float32_matrix(data)) return("float")
-  if (identical(backend, "cpu")) return("float")
+  if (backend %in% c("cpu", "cuda")) return("float")
   "double"
 }
 
@@ -171,8 +171,28 @@ knn_has_self_column <- function(indices, distances) {
 }
 
 set_embedding_colnames <- function(layout, prefix) {
-  if (!is.matrix(layout)) layout <- as.matrix(layout)
-  colnames(layout) <- paste0(prefix, seq_len(ncol(layout)))
+  if (!is.matrix(layout) && !is_float32_matrix(layout)) layout <- as.matrix(layout)
+  dimnames(layout)[[2L]] <- paste0(prefix, seq_len(ncol(layout)))
+  layout
+}
+
+finalize_embedding_layout <- function(layout, prefix, return_float32 = FALSE) {
+  attrs <- attributes(layout)
+  layout <- if (isTRUE(return_float32) && requireNamespace("float", quietly = TRUE)) {
+    if (is_float32_matrix(layout)) layout else float::fl(as.matrix(layout))
+  } else {
+    if (is_float32_matrix(layout)) {
+      matrix(as.numeric(layout), nrow = nrow(layout), ncol = ncol(layout))
+    } else {
+      if (!is.matrix(layout)) as.matrix(layout) else layout
+    }
+  }
+  layout <- set_embedding_colnames(layout, prefix)
+  keep <- setdiff(names(attrs), c("dim", "dimnames", "names", "class", "Data"))
+  for (name in keep) {
+    attr(layout, name) <- attrs[[name]]
+  }
+  attr(layout, "precision") <- if (is_float32_matrix(layout)) "float32" else "double"
   layout
 }
 

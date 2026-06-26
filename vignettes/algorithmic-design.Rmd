@@ -33,7 +33,7 @@ and openTSNE runs.
 ```{r, eval = FALSE}
 library(fastEmbedR)
 
-knn <- faissR::nn(x, k = 50, backend = "cpu", method = "auto", n_threads = 4)
+knn <- faissR::nn(x, k = 50, exclude_self = TRUE, backend = "cpu", method = "auto", n_threads = 4)
 y_umap <- umap_knn(knn, backend = "cpu", seed = 1)
 y_tsne <- opentsne_knn(knn, init_data = x, backend = "cpu", seed = 1)
 ```
@@ -111,7 +111,7 @@ selects the concrete method automatically. KNN-first workflows can use other
 explicit `faissR::nn()` settings for benchmarking.
 
 ```{r, eval = FALSE}
-knn_cuda <- faissR::nn(x, k = 50, backend = "cuda", method = "auto", n_threads = 4)
+knn_cuda <- faissR::nn(x, k = 50, exclude_self = TRUE, backend = "cuda", method = "auto", n_threads = 4)
 y_cuda <- umap_knn(knn_cuda, backend = "cuda", seed = 1)
 ```
 
@@ -170,8 +170,9 @@ The Metal openTSNE backend is package-native Objective-C++/Metal:
 - sparse attractive force kernels;
 - gain, momentum, update, and centering kernels.
 
-MPSGraph FFT was tested as a diagnostic alternative. It remains diagnostic-only
-because it did not provide enough improvement over the package-native FFT path.
+MPSGraph FFT was tested as a diagnostic alternative and the standalone
+diagnostic helpers were removed because they did not improve enough over the
+package-native FFT path.
 
 ```{r, eval = FALSE}
 y_tsne_metal <- opentsne_knn(

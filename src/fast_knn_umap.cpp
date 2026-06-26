@@ -319,6 +319,15 @@ bool is_float32_s4(SEXP x) {
   return obj.is("float32");
 }
 
+IntegerVector float32_payload_slot(SEXP x) {
+  Rcpp::S4 obj(x);
+  SEXP data = obj.slot("Data");
+  if (TYPEOF(data) != INTSXP) {
+    Rcpp::stop("float32 object has an invalid payload");
+  }
+  return IntegerVector(data);
+}
+
 IntegerMatrix float32_data_slot(SEXP x) {
   Rcpp::S4 obj(x);
   SEXP data = obj.slot("Data");
@@ -383,6 +392,36 @@ std::vector<float> copy_distances_float_sexp(SEXP distances,
     return out;
   }
   parallel_for_chunks(n, threads, worker);
+  return out;
+}
+
+std::vector<float> copy_float_vector_sexp(SEXP values,
+                                          const char* name) {
+  if (is_float32_s4(values)) {
+    IntegerVector payload = float32_payload_slot(values);
+    const R_xlen_t n = payload.size();
+    if (n > static_cast<R_xlen_t>(std::numeric_limits<int>::max())) {
+      Rcpp::stop("%s is too large", name);
+    }
+    std::vector<float> out(static_cast<std::size_t>(n));
+    const int* src = INTEGER(payload);
+    for (R_xlen_t i = 0; i < n; ++i) {
+      out[static_cast<std::size_t>(i)] = int_bits_to_float(src[i]);
+    }
+    return out;
+  }
+  if (TYPEOF(values) != REALSXP) {
+    Rcpp::stop("%s must be a numeric vector or float::float32 vector", name);
+  }
+  NumericVector numeric(values);
+  const R_xlen_t n = numeric.size();
+  if (n > static_cast<R_xlen_t>(std::numeric_limits<int>::max())) {
+    Rcpp::stop("%s is too large", name);
+  }
+  std::vector<float> out(static_cast<std::size_t>(n));
+  for (R_xlen_t i = 0; i < n; ++i) {
+    out[static_cast<std::size_t>(i)] = static_cast<float>(numeric[i]);
+  }
   return out;
 }
 
@@ -695,11 +734,12 @@ int infer_csr_index_offset(const int n, const IntegerVector& neighbors) {
   return (min_neighbor >= 1 && max_neighbor <= n) ? 1 : 0;
 }
 
+template <typename WeightVec>
 int validate_csr_inputs(const IntegerVector& offsets,
                         const IntegerVector& neighbors,
-                        const NumericVector& weights) {
+                        const WeightVec& weights) {
   if (offsets.size() < 2) Rcpp::stop("CSR offsets must have length at least two");
-  if (neighbors.size() != weights.size()) {
+  if (static_cast<std::size_t>(neighbors.size()) != weights.size()) {
     Rcpp::stop("CSR neighbors and weights must have the same length");
   }
 
@@ -725,7 +765,7 @@ int validate_csr_inputs(const IntegerVector& offsets,
       if (nb == row) Rcpp::stop("CSR graph must not contain self-neighbors");
       if (nb < last) Rcpp::stop("CSR neighbors must be sorted within each row");
       last = nb;
-      const double w = weights[pos];
+      const double w = static_cast<double>(weights[static_cast<std::size_t>(pos)]);
       if (!std::isfinite(w) || w <= 0.0) {
         Rcpp::stop("CSR weights must be positive and finite");
       }
@@ -2759,7 +2799,7 @@ void scale_embedding_max_abs_and_jitter(NumericMatrix& embedding,
   double* emb_y = emb + n;
 
   const int threads = effective_cpu_threads(n_threads, static_cast<int>(edges.size()));
-  if (n_components == 2 && threads > 1 && n >= 10000) {
+  if (n_components == 2) {
     auto run_worker = [&](const int t) {
       const std::size_t begin = edges.size() * static_cast<std::size_t>(t) / threads;
       const std::size_t end = edges.size() * static_cast<std::size_t>(t + 1) / threads;
@@ -4486,28 +4526,29 @@ NumericMatrix fast_knn_umap_cpp(IntegerMatrix indices,
 // [[Rcpp::export]]
 NumericMatrix umap_cuda_diffusion_init_csr_cpp(IntegerVector offsets,
                                                IntegerVector neighbors,
-                                               NumericVector weights,
+                                               SEXP weights,
                                                int spectral_n_iter,
                                                int n_threads,
                                                int seed) {
   if (offsets.size() < 2) Rcpp::stop("CSR offsets must have length at least two");
-  if (neighbors.size() != weights.size()) {
+  std::vector<float> weights_f = copy_float_vector_sexp(weights, "CSR weights");
+  if (static_cast<std::size_t>(neighbors.size()) != weights_f.size()) {
     Rcpp::stop("CSR neighbors and weights must have the same length");
   }
   if (spectral_n_iter < 1) Rcpp::stop("spectral_n_iter must be positive");
   if (n_threads < 1) Rcpp::stop("n_threads must be positive");
 
   const int n = offsets.size() - 1;
-  const int index_offset = validate_csr_inputs(offsets, neighbors, weights);
+  const int index_offset = validate_csr_inputs(offsets, neighbors, weights_f);
   return initialize_layout_csr_cuda_diffusion(
-    n, offsets, neighbors, weights, index_offset, spectral_n_iter, n_threads, seed
+    n, offsets, neighbors, weights_f, index_offset, spectral_n_iter, n_threads, seed
   );
 }
 
 // [[Rcpp::export]]
 NumericMatrix fast_knn_umap_csr_init_cpp(IntegerVector offsets,
                                          IntegerVector neighbors,
-                                         NumericVector weights,
+                                         SEXP weights,
                                          NumericMatrix init_embedding,
                                          int n_epochs,
                                          double min_dist,
@@ -4518,7 +4559,8 @@ NumericMatrix fast_knn_umap_csr_init_cpp(IntegerVector offsets,
                                          int seed,
                                          bool verbose) {
   if (offsets.size() < 2) Rcpp::stop("CSR offsets must have length at least two");
-  if (neighbors.size() != weights.size()) {
+  std::vector<float> weights_f = copy_float_vector_sexp(weights, "CSR weights");
+  if (static_cast<std::size_t>(neighbors.size()) != weights_f.size()) {
     Rcpp::stop("CSR neighbors and weights must have the same length");
   }
   if (init_embedding.ncol() < 1) Rcpp::stop("init_embedding must have at least one column");
@@ -4533,9 +4575,9 @@ NumericMatrix fast_knn_umap_csr_init_cpp(IntegerVector offsets,
   if (init_embedding.nrow() != n) {
     Rcpp::stop("init_embedding row count must match CSR graph");
   }
-  const int index_offset = validate_csr_inputs(offsets, neighbors, weights);
+  const int index_offset = validate_csr_inputs(offsets, neighbors, weights_f);
   return optimize_layout_csr(
-    n, init_embedding.ncol(), offsets, neighbors, weights, index_offset, n_epochs, min_dist,
+    n, init_embedding.ncol(), offsets, neighbors, weights_f, index_offset, n_epochs, min_dist,
     negative_sample_rate, learning_rate, repulsion_strength, 1,
     n_threads, R_NaReal, seed, verbose, init_embedding, true
   );
@@ -4544,7 +4586,7 @@ NumericMatrix fast_knn_umap_csr_init_cpp(IntegerVector offsets,
 // [[Rcpp::export]]
 NumericMatrix fast_knn_umap_csr_atomic_cpp(IntegerVector offsets,
                                            IntegerVector neighbors,
-                                           NumericVector weights,
+                                           SEXP weights,
                                            NumericMatrix init_embedding,
                                            int n_epochs,
                                            double min_dist,
@@ -4555,7 +4597,8 @@ NumericMatrix fast_knn_umap_csr_atomic_cpp(IntegerVector offsets,
                                            int seed,
                                            bool verbose) {
   if (offsets.size() < 2) Rcpp::stop("CSR offsets must have length at least two");
-  if (neighbors.size() != weights.size()) {
+  std::vector<float> weights_f = copy_float_vector_sexp(weights, "CSR weights");
+  if (static_cast<std::size_t>(neighbors.size()) != weights_f.size()) {
     Rcpp::stop("CSR neighbors and weights must have the same length");
   }
   if (init_embedding.ncol() != 2) {
@@ -4572,7 +4615,7 @@ NumericMatrix fast_knn_umap_csr_atomic_cpp(IntegerVector offsets,
   if (init_embedding.nrow() != n) {
     Rcpp::stop("init_embedding row count must match CSR graph");
   }
-  const int index_offset = validate_csr_inputs(offsets, neighbors, weights);
+  const int index_offset = validate_csr_inputs(offsets, neighbors, weights_f);
 
   std::vector<int> heads;
   std::vector<int> tails;
@@ -4586,7 +4629,7 @@ NumericMatrix fast_knn_umap_csr_atomic_cpp(IntegerVector offsets,
     const int end = offsets[row + 1];
     for (int pos = begin; pos < end; ++pos) {
       const int nb = neighbors[pos] - index_offset;
-      const float w = static_cast<float>(weights[pos]);
+      const float w = weights_f[static_cast<std::size_t>(pos)];
       if (nb < 0 || nb >= n || nb == row || !std::isfinite(w) || w <= 0.0f) continue;
       heads.push_back(row);
       tails.push_back(nb);
@@ -4695,7 +4738,7 @@ NumericMatrix fast_knn_umap_csr_atomic_cpp(IntegerVector offsets,
 // [[Rcpp::export]]
 NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets,
                                                  IntegerVector neighbors,
-                                                 NumericVector weights,
+                                                 SEXP weights,
                                                  NumericMatrix init_embedding,
                                                  int n_epochs,
                                                  double min_dist,
@@ -4707,7 +4750,8 @@ NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets,
                                                  int decay_mode,
                                                  bool verbose) {
   if (offsets.size() < 2) Rcpp::stop("CSR offsets must have length at least two");
-  if (neighbors.size() != weights.size()) {
+  std::vector<float> weights_f = copy_float_vector_sexp(weights, "CSR weights");
+  if (static_cast<std::size_t>(neighbors.size()) != weights_f.size()) {
     Rcpp::stop("CSR neighbors and weights must have the same length");
   }
   if (init_embedding.ncol() != 2) {
@@ -4724,7 +4768,7 @@ NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets,
   if (init_embedding.nrow() != n) {
     Rcpp::stop("init_embedding row count must match CSR graph");
   }
-  const int index_offset = validate_csr_inputs(offsets, neighbors, weights);
+  const int index_offset = validate_csr_inputs(offsets, neighbors, weights_f);
 
   std::vector<int> heads;
   std::vector<int> tails;
@@ -4738,7 +4782,7 @@ NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets,
     const int end = offsets[row + 1];
     for (int pos = begin; pos < end; ++pos) {
       const int nb = neighbors[pos] - index_offset;
-      const float w = static_cast<float>(weights[pos]);
+      const float w = weights_f[static_cast<std::size_t>(pos)];
       if (nb < 0 || nb >= n || nb == row || !std::isfinite(w) || w <= 0.0f) continue;
       heads.push_back(row);
       tails.push_back(nb);
@@ -4864,8 +4908,8 @@ NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets,
 // [[Rcpp::export]]
 NumericMatrix fast_knn_umap_coo_replay_cpp(IntegerVector heads,
                                            IntegerVector tails,
-                                           NumericVector weights,
-                                           NumericVector epochs_per_sample,
+                                           SEXP weights,
+                                           SEXP epochs_per_sample,
                                            NumericMatrix init_embedding,
                                            int n_epochs,
                                            double min_dist,
@@ -4876,9 +4920,11 @@ NumericMatrix fast_knn_umap_coo_replay_cpp(IntegerVector heads,
                                            int seed,
                                            bool sanitize_each_epoch,
                                            bool verbose) {
+  std::vector<float> weights_f = copy_float_vector_sexp(weights, "COO weights");
+  std::vector<float> epochs_f = copy_float_vector_sexp(epochs_per_sample, "COO epochs_per_sample");
   if (heads.size() != tails.size() ||
-      heads.size() != weights.size() ||
-      heads.size() != epochs_per_sample.size()) {
+      static_cast<std::size_t>(heads.size()) != weights_f.size() ||
+      static_cast<std::size_t>(heads.size()) != epochs_f.size()) {
     Rcpp::stop("COO heads, tails, weights, and epochs_per_sample must have the same length");
   }
   if (init_embedding.ncol() != 2) {
@@ -4911,8 +4957,8 @@ NumericMatrix fast_knn_umap_coo_replay_cpp(IntegerVector heads,
   for (int i = 0; i < capacity; ++i) {
     h[static_cast<std::size_t>(i)] = heads[i];
     t[static_cast<std::size_t>(i)] = tails[i];
-    w[static_cast<std::size_t>(i)] = static_cast<float>(weights[i]);
-    period[static_cast<std::size_t>(i)] = static_cast<float>(epochs_per_sample[i]);
+    w[static_cast<std::size_t>(i)] = weights_f[static_cast<std::size_t>(i)];
+    period[static_cast<std::size_t>(i)] = epochs_f[static_cast<std::size_t>(i)];
   }
 
   std::vector<std::atomic<float>> layout(static_cast<std::size_t>(n) * 2u);
@@ -5237,7 +5283,7 @@ NumericMatrix knn_umap_refine_rows_cpp(IntegerMatrix indices,
 // [[Rcpp::export]]
 NumericMatrix fast_knn_umap_csr_cpp(IntegerVector offsets,
                                     IntegerVector neighbors,
-                                    NumericVector weights,
+                                    SEXP weights,
                                     int n_components,
                                     int n_epochs,
                                     double min_dist,
@@ -5250,7 +5296,8 @@ NumericMatrix fast_knn_umap_csr_cpp(IntegerVector offsets,
                                     int seed,
                                     bool verbose) {
   if (offsets.size() < 2) Rcpp::stop("CSR offsets must have length at least two");
-  if (neighbors.size() != weights.size()) {
+  std::vector<float> weights_f = copy_float_vector_sexp(weights, "CSR weights");
+  if (static_cast<std::size_t>(neighbors.size()) != weights_f.size()) {
     Rcpp::stop("CSR neighbors and weights must have the same length");
   }
   if (n_components < 1) Rcpp::stop("n_components must be positive");
@@ -5263,9 +5310,9 @@ NumericMatrix fast_knn_umap_csr_cpp(IntegerVector offsets,
   if (n_threads < 1) Rcpp::stop("n_threads must be positive");
 
   const int n = offsets.size() - 1;
-  const int index_offset = validate_csr_inputs(offsets, neighbors, weights);
+  const int index_offset = validate_csr_inputs(offsets, neighbors, weights_f);
   return optimize_layout_csr(
-    n, n_components, offsets, neighbors, weights, index_offset, n_epochs, min_dist,
+    n, n_components, offsets, neighbors, weights_f, index_offset, n_epochs, min_dist,
     negative_sample_rate, learning_rate, repulsion_strength, spectral_n_iter,
     n_threads, init_scale, seed, verbose
   );

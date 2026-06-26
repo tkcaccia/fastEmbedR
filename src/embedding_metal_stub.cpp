@@ -92,7 +92,7 @@ NumericMatrix knn_embed_metal_impl(IntegerMatrix,
 
 NumericMatrix knn_embed_metal_csr_impl(IntegerVector,
                                        IntegerVector,
-                                       NumericVector,
+                                       SEXP,
                                        NumericMatrix,
                                        int,
                                        int,
@@ -166,22 +166,4 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix,
                                   int,
                                   bool) {
   Rcpp::stop("Metal openTSNE optimizer is only available on macOS with Metal support.");
-}
-
-List metal_fft512_stockham_diagnostic_impl(int,
-                                           bool,
-                                           int) {
-  Rcpp::stop("Metal FFT diagnostics are only available on macOS with Metal support.");
-}
-
-List metal_mpsgraph_fft_diagnostic_impl(int,
-                                        int,
-                                        int) {
-  Rcpp::stop("MPSGraph FFT diagnostics are only available on macOS with Metal support.");
-}
-
-List metal_mpsgraph_convolution_diagnostic_impl(int,
-                                                int,
-                                                int) {
-  Rcpp::stop("MPSGraph convolution diagnostics are only available on macOS with Metal support.");
 }

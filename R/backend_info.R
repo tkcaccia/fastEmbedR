@@ -21,7 +21,27 @@ backend_info <- function() {
   )
 
   backends <- c("cpu", "faiss", "cuvs", "cuda", "metal")
+  nn_info$backend <- as.character(nn_info$backend)
+  missing_backends <- setdiff(backends, nn_info$backend)
+  if (length(missing_backends)) {
+    template <- nn_info[rep(1L, length(missing_backends)), , drop = FALSE]
+    template[] <- NA
+    template$backend <- missing_backends
+    if ("available" %in% names(template)) template$available <- FALSE
+    if ("knn_available" %in% names(template)) template$knn_available <- FALSE
+    if ("device" %in% names(template)) template$device <- NA_character_
+    if ("runtime" %in% names(template)) template$runtime <- NA_character_
+    if ("note" %in% names(template)) template$note <- paste0(
+      missing_backends,
+      " backend was not reported by faissR."
+    )
+    nn_info <- rbind(nn_info, template)
+  }
   nn_info <- nn_info[match(backends, nn_info$backend), , drop = FALSE]
+  if ("knn_available" %in% names(nn_info)) {
+    nn_info$knn_available[nn_info$backend == "cpu"] <- TRUE
+    nn_info$knn_available[nn_info$backend == "metal"] <- TRUE
+  }
   embedding_available <- c(
     TRUE,
     FALSE,
@@ -90,7 +110,7 @@ available_native_gpu_backend <- function(need_knn = FALSE,
     (!isTRUE(need_embedding) || backend_flag(embedding_cuda_available_cpp))
   if (cuda_ok) return("cuda")
 
-  metal_ok <- (!isTRUE(need_knn) || backend_flag(faissR::metal_available)) &&
+  metal_ok <- (!isTRUE(need_knn) || TRUE) &&
     (!isTRUE(need_embedding) || backend_flag(embedding_metal_available_cpp))
   if (metal_ok) return("metal")
 

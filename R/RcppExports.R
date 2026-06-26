@@ -17,6 +17,10 @@ knn_umap_cuda_fused_cpp <- function(indices, distances, n_epochs, negative_sampl
     .Call(`_fastEmbedR_knn_umap_cuda_fused_cpp`, indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode)
 }
 
+knn_umap_cuda_fused_float_cpp <- function(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode) {
+    .Call(`_fastEmbedR_knn_umap_cuda_fused_float_cpp`, indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode)
+}
+
 umap_cuda_graph_dump_cpp <- function(indices, distances) {
     .Call(`_fastEmbedR_umap_cuda_graph_dump_cpp`, indices, distances)
 }
@@ -25,12 +29,20 @@ umap_cuda_optimize_coo_cpp <- function(heads, tails, weights, epochs_per_sample,
     .Call(`_fastEmbedR_umap_cuda_optimize_coo_cpp`, heads, tails, weights, epochs_per_sample, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, optimizer_mode)
 }
 
+umap_cuda_optimize_csr_cpp <- function(offsets, neighbors, weights, epochs_per_sample, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, optimizer_mode) {
+    .Call(`_fastEmbedR_umap_cuda_optimize_csr_cpp`, offsets, neighbors, weights, epochs_per_sample, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, optimizer_mode)
+}
+
 knn_tsne_exact_cuda_cpp <- function(indices, distances, init, n_epochs, perplexity, learning_rate, stop_lying_iter, mom_switch_iter, momentum, final_momentum, exaggeration_factor, seed) {
     .Call(`_fastEmbedR_knn_tsne_exact_cuda_cpp`, indices, distances, init, n_epochs, perplexity, learning_rate, stop_lying_iter, mom_switch_iter, momentum, final_momentum, exaggeration_factor, seed)
 }
 
 knn_tsne_opentsne_cuda_cpp <- function(indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs) {
     .Call(`_fastEmbedR_knn_tsne_opentsne_cuda_cpp`, indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs)
+}
+
+knn_tsne_opentsne_cuda_float_cpp <- function(indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs) {
+    .Call(`_fastEmbedR_knn_tsne_opentsne_cuda_float_cpp`, indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs)
 }
 
 standardize_cuda_cpp <- function(data) {
@@ -123,18 +135,6 @@ transform_tsne_metal_cpp <- function(reference_layout, indices, distances, y_ini
 
 knn_tsne_opentsne_metal_cpp <- function(indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs) {
     .Call(`_fastEmbedR_knn_tsne_opentsne_metal_cpp`, indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs)
-}
-
-metal_fft512_stockham_diagnostic_cpp <- function(seed = 1L, inverse = FALSE, n_checks = 8L) {
-    .Call(`_fastEmbedR_metal_fft512_stockham_diagnostic_cpp`, seed, inverse, n_checks)
-}
-
-metal_mpsgraph_fft_diagnostic_cpp <- function(fft_size = 512L, seed = 1L, n_repeats = 5L) {
-    .Call(`_fastEmbedR_metal_mpsgraph_fft_diagnostic_cpp`, fft_size, seed, n_repeats)
-}
-
-metal_mpsgraph_convolution_diagnostic_cpp <- function(fft_size = 512L, seed = 1L, n_repeats = 5L) {
-    .Call(`_fastEmbedR_metal_mpsgraph_convolution_diagnostic_cpp`, fft_size, seed, n_repeats)
 }
 
 standardize_cpu_cpp <- function(data) {
@@ -285,8 +285,8 @@ knn_tsne_opentsne_cpp <- function(indices, distances, y_init, init, n_components
     .Call(`_fastEmbedR_knn_tsne_opentsne_cpp`, indices, distances, y_init, init, n_components, perplexity, theta, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, n_threads, seed, verbose, record_costs, auto_config, auto_iter_end)
 }
 
-opentsne_cpu_trace_cpp <- function(indices, distances, y_init, perplexity, n_iter, early_exaggeration, learning_rate, learning_rate_auto, momentum, min_gain, max_step_norm, n_threads) {
-    .Call(`_fastEmbedR_opentsne_cpu_trace_cpp`, indices, distances, y_init, perplexity, n_iter, early_exaggeration, learning_rate, learning_rate_auto, momentum, min_gain, max_step_norm, n_threads)
+knn_tsne_opentsne_float_cpp <- function(indices, distances, y_init, init, n_components, perplexity, theta, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, n_threads, seed, verbose, record_costs, auto_config, auto_iter_end) {
+    .Call(`_fastEmbedR_knn_tsne_opentsne_float_cpp`, indices, distances, y_init, init, n_components, perplexity, theta, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, n_threads, seed, verbose, record_costs, auto_config, auto_iter_end)
 }
 
 transform_tsne_cpp <- function(reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, n_threads, seed, verbose) {

@@ -31,12 +31,22 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix indices,
                                        int spectral_n_iter,
                                        int seed,
                                        int optimizer_mode);
+NumericMatrix knn_umap_cuda_fused_float_impl(IntegerMatrix indices,
+                                             SEXP distances,
+                                             int n_epochs,
+                                             int negative_sample_rate,
+                                             double learning_rate,
+                                             double min_dist,
+                                             double repulsion_strength,
+                                             int spectral_n_iter,
+                                             int seed,
+                                             int optimizer_mode);
 List umap_cuda_graph_dump_impl(IntegerMatrix indices,
                                NumericMatrix distances);
 NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector heads,
                                           IntegerVector tails,
-                                          NumericVector weights,
-                                          NumericVector epochs_per_sample,
+                                          SEXP weights,
+                                          SEXP epochs_per_sample,
                                           NumericMatrix init,
                                           int n_epochs,
                                           int negative_sample_rate,
@@ -76,6 +86,25 @@ List knn_tsne_opentsne_cuda_impl(IntegerMatrix indices,
                                  std::string negative_gradient_method,
                                  int seed,
                                  bool record_costs);
+List knn_tsne_opentsne_cuda_float_impl(IntegerMatrix indices,
+                                       SEXP distances,
+                                       NumericMatrix y_init,
+                                       bool init,
+                                       int n_components,
+                                       double perplexity,
+                                       int early_exaggeration_iter,
+                                       int n_iter,
+                                       double early_exaggeration,
+                                       double exaggeration,
+                                       double learning_rate,
+                                       bool learning_rate_auto,
+                                       double initial_momentum,
+                                       double final_momentum,
+                                       double min_gain,
+                                       double max_step_norm,
+                                       std::string negative_gradient_method,
+                                       int seed,
+                                       bool record_costs);
 List standardize_cuda_impl(NumericMatrix data);
 NumericMatrix project_embedding_knn_cuda_impl(NumericMatrix reference_layout,
                                               IntegerMatrix projection_indices,
@@ -161,6 +190,31 @@ NumericMatrix knn_umap_cuda_fused_cpp(IntegerMatrix indices,
 }
 
 // [[Rcpp::export]]
+NumericMatrix knn_umap_cuda_fused_float_cpp(IntegerMatrix indices,
+                                            SEXP distances,
+                                            int n_epochs,
+                                            int negative_sample_rate,
+                                            double learning_rate,
+                                            double min_dist,
+                                            double repulsion_strength,
+                                            int spectral_n_iter,
+                                            int seed,
+                                            int optimizer_mode) {
+  return knn_umap_cuda_fused_float_impl(
+    indices,
+    distances,
+    n_epochs,
+    negative_sample_rate,
+    learning_rate,
+    min_dist,
+    repulsion_strength,
+    spectral_n_iter,
+    seed,
+    optimizer_mode
+  );
+}
+
+// [[Rcpp::export]]
 List umap_cuda_graph_dump_cpp(IntegerMatrix indices,
                               NumericMatrix distances) {
   return umap_cuda_graph_dump_impl(indices, distances);
@@ -169,8 +223,8 @@ List umap_cuda_graph_dump_cpp(IntegerMatrix indices,
 // [[Rcpp::export]]
 NumericMatrix umap_cuda_optimize_coo_cpp(IntegerVector heads,
                                          IntegerVector tails,
-                                         NumericVector weights,
-                                         NumericVector epochs_per_sample,
+                                         SEXP weights,
+                                         SEXP epochs_per_sample,
                                          NumericMatrix init,
                                          int n_epochs,
                                          int negative_sample_rate,
@@ -181,6 +235,41 @@ NumericMatrix umap_cuda_optimize_coo_cpp(IntegerVector heads,
                                          int optimizer_mode) {
   return umap_cuda_optimize_coo_impl(
     heads, tails, weights, epochs_per_sample, init, n_epochs,
+    negative_sample_rate, learning_rate, min_dist, repulsion_strength,
+    seed, optimizer_mode
+  );
+}
+
+// [[Rcpp::export]]
+NumericMatrix umap_cuda_optimize_csr_cpp(IntegerVector offsets,
+                                         IntegerVector neighbors,
+                                         SEXP weights,
+                                         SEXP epochs_per_sample,
+                                         NumericMatrix init,
+                                         int n_epochs,
+                                         int negative_sample_rate,
+                                         double learning_rate,
+                                         double min_dist,
+                                         double repulsion_strength,
+                                         int seed,
+                                         int optimizer_mode) {
+  if (offsets.size() < 2) Rcpp::stop("CSR offsets must have length at least two");
+  const int n = offsets.size() - 1;
+  if (init.nrow() != n) Rcpp::stop("init row count must match CSR graph");
+  const int nnz = neighbors.size();
+  IntegerVector heads(nnz);
+  for (int row = 0; row < n; ++row) {
+    const int begin = offsets[row];
+    const int end = offsets[row + 1];
+    if (begin < 0 || end < begin || end > nnz) {
+      Rcpp::stop("CSR offsets are not monotone or exceed edge count");
+    }
+    for (int pos = begin; pos < end; ++pos) {
+      heads[pos] = row;
+    }
+  }
+  return umap_cuda_optimize_coo_impl(
+    heads, neighbors, weights, epochs_per_sample, init, n_epochs,
     negative_sample_rate, learning_rate, min_dist, repulsion_strength,
     seed, optimizer_mode
   );
@@ -236,6 +325,49 @@ List knn_tsne_opentsne_cuda_cpp(IntegerMatrix indices,
                                 int seed,
                                 bool record_costs) {
   return knn_tsne_opentsne_cuda_impl(
+    indices,
+    distances,
+    y_init,
+    init,
+    n_components,
+    perplexity,
+    early_exaggeration_iter,
+    n_iter,
+    early_exaggeration,
+    exaggeration,
+    learning_rate,
+    learning_rate_auto,
+    initial_momentum,
+    final_momentum,
+    min_gain,
+    max_step_norm,
+    negative_gradient_method,
+    seed,
+    record_costs
+  );
+}
+
+// [[Rcpp::export]]
+List knn_tsne_opentsne_cuda_float_cpp(IntegerMatrix indices,
+                                      SEXP distances,
+                                      NumericMatrix y_init,
+                                      bool init,
+                                      int n_components,
+                                      double perplexity,
+                                      int early_exaggeration_iter,
+                                      int n_iter,
+                                      double early_exaggeration,
+                                      double exaggeration,
+                                      double learning_rate,
+                                      bool learning_rate_auto,
+                                      double initial_momentum,
+                                      double final_momentum,
+                                      double min_gain,
+                                      double max_step_norm,
+                                      std::string negative_gradient_method,
+                                      int seed,
+                                      bool record_costs) {
+  return knn_tsne_opentsne_cuda_float_impl(
     indices,
     distances,
     y_init,

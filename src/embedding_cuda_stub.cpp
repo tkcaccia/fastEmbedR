@@ -43,6 +43,19 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix,
   Rcpp::stop("CUDA fused UMAP is available only when the package is built with CUDA support.");
 }
 
+NumericMatrix knn_umap_cuda_fused_float_impl(IntegerMatrix,
+                                             SEXP,
+                                             int,
+                                             int,
+                                             double,
+                                             double,
+                                             double,
+                                             int,
+                                             int,
+                                             int) {
+  Rcpp::stop("CUDA float32 fused UMAP is available only when the package is built with CUDA support.");
+}
+
 List umap_cuda_graph_dump_impl(IntegerMatrix,
                                NumericMatrix) {
   Rcpp::stop("CUDA UMAP graph dump is available only when the package is built with CUDA support.");
@@ -50,8 +63,8 @@ List umap_cuda_graph_dump_impl(IntegerMatrix,
 
 NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector,
                                           IntegerVector,
-                                          NumericVector,
-                                          NumericVector,
+                                          SEXP,
+                                          SEXP,
                                           NumericMatrix,
                                           int,
                                           int,
@@ -98,6 +111,28 @@ List knn_tsne_opentsne_cuda_impl(IntegerMatrix,
                                  int,
                                  bool) {
   Rcpp::stop("CUDA openTSNE FFT-grid is available only when the package is built with the native CUDA openTSNE backend.");
+}
+
+List knn_tsne_opentsne_cuda_float_impl(IntegerMatrix,
+                                       SEXP,
+                                       NumericMatrix,
+                                       bool,
+                                       int,
+                                       double,
+                                       int,
+                                       int,
+                                       double,
+                                       double,
+                                       double,
+                                       bool,
+                                       double,
+                                       double,
+                                       double,
+                                       double,
+                                       std::string,
+                                       int,
+                                       bool) {
+  Rcpp::stop("CUDA float32 openTSNE FFT-grid is available only when the package is built with the native CUDA openTSNE backend.");
 }
 
 List standardize_cuda_impl(NumericMatrix) {

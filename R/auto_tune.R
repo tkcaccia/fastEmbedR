@@ -198,7 +198,7 @@ auto_umap_pilot_tune <- function(x,
 
   max_k <- max(c(base_k, alternate_k_candidates))
   pilot_backend <- auto_umap_pilot_knn_backend(knn_backend, pilot_n, ncol(x_pilot), max_k)
-  raw_knn <- faissR::nn_without_self(
+  raw_knn <- fastembedr_nn_without_self(
     x_pilot,
     k = max_k,
     backend = pilot_backend

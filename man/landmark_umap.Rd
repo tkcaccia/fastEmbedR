@@ -31,7 +31,7 @@ observations by KNN interpolation against the fixed landmark embedding.
 \item{pca_dims}{Optional PCA dimension before KNN.}
 \item{seed}{Random seed.}
 \item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or
-\code{"metal"}. KNN is delegated to \code{faissR::nn_without_self()} with
+\code{"metal"}. KNN is delegated to faissR with
 automatic method and tuning selection. CPU and Metal request the faissR CPU
 backend, while CUDA requests the faissR CUDA backend. GPU requests must use a
 real native backend and are not silently relabelled as CPU.}

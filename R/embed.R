@@ -35,13 +35,25 @@ auto_embedding_k <- function(x, method = "opentsne", include_self = FALSE) {
   auto_k(n, include_self = include_self)
 }
 
+resolve_embedding_metric <- function(metric, data = NULL) {
+  match.arg(metric, c("euclidean", "cosine"))
+}
+
 prepare_embedding_data <- function(data,
                                    standardize,
                                    pca_dims,
                                    seed,
                                    backend = "cpu") {
-  x <- as.matrix(data)
-  storage.mode(x) <- "double"
+  keep_float32 <- is_float32_matrix(data) &&
+    !isTRUE(standardize) &&
+    is.null(pca_dims)
+  x <- if (keep_float32) {
+    data
+  } else {
+    x <- as.matrix(data)
+    storage.mode(x) <- "double"
+    x
+  }
   if (nrow(x) < 2L || ncol(x) < 1L) {
     stop("`data` must have at least two rows and one column.", call. = FALSE)
   }
@@ -59,7 +71,7 @@ prepare_embedding_data <- function(data,
     pca_power = NA_integer_,
     pca_backend_reason = NA_character_,
     preprocess_backend = if (isTRUE(standardize)) "cpu" else "none",
-    preprocess_backend_reason = NA_character_
+    preprocess_backend_reason = if (keep_float32) "float32_input_preserved_without_preprocessing" else NA_character_
   )
   if (isTRUE(standardize)) {
     used_native <- FALSE
@@ -359,9 +371,12 @@ normalize_supplied_knn <- function(nn, n, n_neighbors = NULL, keep_self = FALSE)
   indices <- nn$indices
   distances <- nn$distances
   if (!is.matrix(indices)) indices <- as.matrix(indices)
-  if (!is.matrix(distances)) distances <- as.matrix(distances)
+  distance_is_float32 <- is_float32_matrix(distances)
+  if (!distance_is_float32 && !is.matrix(distances)) distances <- as.matrix(distances)
   if (!is.integer(indices)) storage.mode(indices) <- "integer"
-  if (!identical(typeof(distances), "double")) storage.mode(distances) <- "double"
+  if (!distance_is_float32 && !identical(typeof(distances), "double")) {
+    storage.mode(distances) <- "double"
+  }
   if (!identical(dim(indices), dim(distances))) {
     stop("KNN `indices` and `distances` must have the same dimensions.", call. = FALSE)
   }
@@ -371,11 +386,15 @@ normalize_supplied_knn <- function(nn, n, n_neighbors = NULL, keep_self = FALSE)
   if (ncol(indices) < 1L) {
     stop("KNN matrices must have at least one neighbor column.", call. = FALSE)
   }
-  if (any(!is.finite(distances)) || any(distances < 0)) {
+  if (!distance_is_float32 && (any(!is.finite(distances)) || any(distances < 0))) {
     stop("KNN `distances` must be finite and non-negative.", call. = FALSE)
   }
 
-  stripped <- strip_self_neighbors(indices, distances)
+  stripped <- if (distance_is_float32) {
+    strip_self_neighbors_float_cpp(indices, distances)
+  } else {
+    strip_self_neighbors(indices, distances)
+  }
   has_self <- stripped$has_self
   knn_with_self <- if (isTRUE(keep_self) && has_self) {
     list(indices = indices, distances = distances)

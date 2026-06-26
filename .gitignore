@@ -18,6 +18,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+.r-lib/
 
 # Downloaded data and generated outputs
 data/
@@ -55,3 +56,12 @@ unit_schedule_fastpath/
 
 # Local credentials
 *.key
+.codex_chiamaka_ed25519*
+
+# Local remote-build scratch
+singularity/
+hpc_faissR_corrected/
+hpc_faissR_method_scripts/
+tools/chiamaka_singularity/
+fastembedr_cuda_current.def
+Rplots.pdf

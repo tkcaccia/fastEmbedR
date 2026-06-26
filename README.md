@@ -26,9 +26,8 @@ The intended workflow is:
 
 For the one-call functions `opentsne()` and `umap()`, the embedding backend is
 deliberately limited to `backend = "cpu"`, `"metal"`, or `"cuda"`. Internal
-KNN is delegated to `faissR`: CPU and Metal request the faissR CPU backend,
-while CUDA requests the faissR CUDA backend. Within that requested backend,
-`faissR` selects the KNN method and tuning automatically.
+KNN is delegated to `faissR`: CPU and Metal use faissR CPU HNSW with
+`target_recall = 0.99`, while CUDA uses faissR's CUDA policy.
 
 ## Quick Start
 

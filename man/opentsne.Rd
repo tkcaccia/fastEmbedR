@@ -12,6 +12,7 @@ opentsne(
   Y_init = NULL,
   standardize = FALSE,
   pca_dims = NULL,
+  metric = c("euclidean", "cosine"),
   nn = NULL,
   seed = 4L,
   backend = c("cpu", "cuda", "metal"),
@@ -54,15 +55,16 @@ so one-call results match a KNN object computed from the supplied matrix.}
 
 \item{pca_dims}{Optional PCA dimension before KNN.}
 
+\item{metric}{KNN distance metric for one-call matrix input.}
+
 \item{nn}{Optional precomputed KNN output when `data` is a data matrix.}
 
 \item{seed}{Random seed.}
 
 \item{backend}{Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. For
-matrix input, KNN is delegated to `faissR::nn_without_self()` with automatic
-method and tuning selection. CPU and Metal request the faissR CPU backend,
-while CUDA requests the faissR CUDA backend. Unsupported GPU requests fail
-clearly and are not relabelled CPU runs.}
+matrix input, KNN is delegated to faissR with
+automatic method/tuning selection through an internal bridge. CPU and Metal request faissR CPU HNSW with \code{target_recall = 0.99}; CUDA requests the faissR CUDA backend.
+Unsupported GPU requests fail clearly and are not relabelled CPU runs.}
 
 \item{keep_knn}{If `TRUE`, retain KNN matrices in the returned object.}
 

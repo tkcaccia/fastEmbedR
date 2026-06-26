@@ -58,10 +58,9 @@ precompute and reuse a PCA initialization.}
 \item{verbose}{Print optimizer progress.}
 
 \item{backend}{Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. For
-matrix input, KNN is delegated to `faissR::nn_without_self()` with automatic
-method and tuning selection. CPU and Metal request the faissR CPU backend,
-while CUDA requests the faissR CUDA backend. Unsupported GPU requests fail
-clearly and are not relabelled CPU runs.}
+matrix input, KNN is delegated to faissR with
+automatic method/tuning selection through an internal bridge. CPU and Metal request faissR CPU HNSW with \code{target_recall = 0.99}; CUDA requests the faissR CUDA backend.
+Unsupported GPU requests fail clearly and are not relabelled CPU runs.}
 
 \item{n_threads}{Number of CPU worker threads used by CPU KNN and CPU
 openTSNE optimization. Native GPU optimizers ignore this argument.}
@@ -116,7 +115,7 @@ PCA is done inside this function.
 }
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))
-knn <- faissR::nn(x, k = 31)
+knn <- faissR::nn(x, k = 31, exclude_self = TRUE)
 layout <- opentsne_knn(knn, init_data = x, perplexity = 10,
   early_exaggeration_iter = 100, n_iter = 250)
 if (all(is.finite(layout))) {

@@ -305,8 +305,9 @@ __device__ int negative_samples_this_epoch_period(float period, const EmbedParam
   return samples > 0 ? samples : 0;
 }
 
+template <typename DistanceT>
 __global__ void prepare_directed_knn_kernel(const int* indices,
-                                            const double* distances,
+                                            const DistanceT* distances,
                                             int* neighbors,
                                             float* weights,
                                             KnnPrepParams p) {
@@ -315,8 +316,7 @@ __global__ void prepare_directed_knn_kernel(const int* indices,
 
   float rho = kCudaFloatInf;
   for (int j = 0; j < p.k; ++j) {
-    const double d0 = distances[static_cast<std::size_t>(j) * p.n + row];
-    const float d = static_cast<float>(d0);
+    const float d = static_cast<float>(distances[static_cast<std::size_t>(j) * p.n + row]);
     if (d > 0.0f && d < rho) rho = d;
   }
   if (!isfinite(rho)) rho = 0.0f;
@@ -1480,8 +1480,9 @@ __global__ void tsne_center_kernel(float* current,
   current[base + 1u] -= static_cast<float>(stats[1]);
 }
 
+template <typename DistanceT>
 __global__ void opentsne_affinity_sparse_kernel(const int* indices,
-                                                const double* distances,
+                                                const DistanceT* distances,
                                                 float* probabilities,
                                                 int n,
                                                 int k,
@@ -2363,8 +2364,9 @@ __global__ void umap_sanitize_layout_kernel(float* layout,
   layout[base + 1u] = y;
 }
 
+template <typename DistanceT>
 int prepare_device_knn_graph(const int* d_indices,
-                             const double* d_distances,
+                             const DistanceT* d_distances,
                              int* d_neighbors,
                              float* d_weights,
                              int* d_counts,
@@ -3137,8 +3139,9 @@ extern "C" int fastembedr_cuda_silhouette_score(const double* layout,
   return 0;
 }
 
-extern "C" int fastembedr_cuda_spectral_init_from_knn(const int* indices,
-                                                      const double* distances,
+template <typename DistanceT>
+int fastembedr_cuda_spectral_init_from_knn_impl(const int* indices,
+                                                      const DistanceT* distances,
                                                       int n,
                                                        int k,
                                                        int spectral_n_iter,
@@ -3163,7 +3166,7 @@ extern "C" int fastembedr_cuda_spectral_init_from_knn(const int* indices,
   const int blocks = (n + threads - 1) / threads;
   const int stat_blocks = std::max(1, std::min(1024, blocks));
   const std::size_t required_bytes =
-    input_items * (sizeof(int) + sizeof(double)) +
+    input_items * (sizeof(int) + sizeof(DistanceT)) +
     graph_items * (sizeof(int) + sizeof(float)) +
     static_cast<std::size_t>(n) * sizeof(int) +
     2u * embed_bytes +
@@ -3171,7 +3174,7 @@ extern "C" int fastembedr_cuda_spectral_init_from_knn(const int* indices,
     5u * sizeof(double);
 
   int* d_indices = nullptr;
-  double* d_distances = nullptr;
+  DistanceT* d_distances = nullptr;
   int* d_neighbors = nullptr;
   float* d_weights = nullptr;
   int* d_counts = nullptr;
@@ -3199,7 +3202,7 @@ extern "C" int fastembedr_cuda_spectral_init_from_knn(const int* indices,
     cleanup();
     return 1;
   }
-  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_distances), input_items * sizeof(double)), "cudaMalloc(spectral distances)")) {
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_distances), input_items * sizeof(DistanceT)), "cudaMalloc(spectral distances)")) {
     cleanup();
     return 1;
   }
@@ -3235,7 +3238,7 @@ extern "C" int fastembedr_cuda_spectral_init_from_knn(const int* indices,
     cleanup();
     return 1;
   }
-  if (check_cuda(cudaMemcpy(d_distances, distances, input_items * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy(spectral distances H2D)")) {
+  if (check_cuda(cudaMemcpy(d_distances, distances, input_items * sizeof(DistanceT), cudaMemcpyHostToDevice), "cudaMemcpy(spectral distances H2D)")) {
     cleanup();
     return 1;
   }
@@ -3283,8 +3286,22 @@ extern "C" int fastembedr_cuda_spectral_init_from_knn(const int* indices,
   return 0;
 }
 
-extern "C" int fastembedr_cuda_umap_graph_dump_from_knn(const int* indices,
-                                                        const double* distances,
+extern "C" int fastembedr_cuda_spectral_init_from_knn(const int* indices,
+                                                      const double* distances,
+                                                      int n,
+                                                      int k,
+                                                      int spectral_n_iter,
+                                                      unsigned int seed,
+                                                      int index_offset,
+                                                      float* out) {
+  return fastembedr_cuda_spectral_init_from_knn_impl<double>(
+    indices, distances, n, k, spectral_n_iter, seed, index_offset, out
+  );
+}
+
+template <typename DistanceT>
+int fastembedr_cuda_umap_graph_dump_from_knn_impl(const int* indices,
+                                                        const DistanceT* distances,
                                                         int n,
                                                         int k,
                                                         int index_offset,
@@ -3314,12 +3331,12 @@ extern "C" int fastembedr_cuda_umap_graph_dump_from_knn(const int* indices,
   const int threads = 256;
   const int blocks = (n + threads - 1) / threads;
   const std::size_t required_bytes =
-    input_items * (sizeof(int) + sizeof(double)) +
+    input_items * (sizeof(int) + sizeof(DistanceT)) +
     graph_items * (2u * sizeof(int) + 4u * sizeof(float)) +
     2u * (static_cast<std::size_t>(n) + 1u) * sizeof(int);
 
   int* d_indices = nullptr;
-  double* d_distances = nullptr;
+  DistanceT* d_distances = nullptr;
   int* d_neighbors = nullptr;
   float* d_weights = nullptr;
   int* d_counts = nullptr;
@@ -3346,7 +3363,7 @@ extern "C" int fastembedr_cuda_umap_graph_dump_from_knn(const int* indices,
 
   if (check_embedding_memory_available(required_bytes, "CUDA UMAP graph dump allocation preflight")) return 1;
   if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_indices), input_items * sizeof(int)), "cudaMalloc(umap dump indices)") ||
-      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_distances), input_items * sizeof(double)), "cudaMalloc(umap dump distances)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_distances), input_items * sizeof(DistanceT)), "cudaMalloc(umap dump distances)") ||
       check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_neighbors), graph_items * sizeof(int)), "cudaMalloc(umap dump neighbors)") ||
       check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_weights), graph_items * sizeof(float)), "cudaMalloc(umap dump weights)") ||
       check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_counts), static_cast<std::size_t>(n) * sizeof(int)), "cudaMalloc(umap dump row counts)")) {
@@ -3354,7 +3371,7 @@ extern "C" int fastembedr_cuda_umap_graph_dump_from_knn(const int* indices,
     return 1;
   }
   if (check_cuda(cudaMemcpy(d_indices, indices, input_items * sizeof(int), cudaMemcpyHostToDevice), "cudaMemcpy(umap dump indices H2D)") ||
-      check_cuda(cudaMemcpy(d_distances, distances, input_items * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy(umap dump distances H2D)")) {
+      check_cuda(cudaMemcpy(d_distances, distances, input_items * sizeof(DistanceT), cudaMemcpyHostToDevice), "cudaMemcpy(umap dump distances H2D)")) {
     cleanup();
     return 1;
   }
@@ -3441,8 +3458,26 @@ extern "C" int fastembedr_cuda_umap_graph_dump_from_knn(const int* indices,
   return 0;
 }
 
-extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
-                                                       const double* distances,
+extern "C" int fastembedr_cuda_umap_graph_dump_from_knn(const int* indices,
+                                                        const double* distances,
+                                                        int n,
+                                                        int k,
+                                                        int index_offset,
+                                                        int* out_heads,
+                                                        int* out_tails,
+                                                        float* out_weights,
+                                                        float* out_epochs_per_sample,
+                                                        int* out_width,
+                                                        int* out_capacity) {
+  return fastembedr_cuda_umap_graph_dump_from_knn_impl<double>(
+    indices, distances, n, k, index_offset, out_heads, out_tails, out_weights,
+    out_epochs_per_sample, out_width, out_capacity
+  );
+}
+
+template <typename DistanceT>
+int fastembedr_cuda_umap_from_knn_spectral_impl(const int* indices,
+                                                       const DistanceT* distances,
                                                        int n,
                                                        int k,
                                                        int n_epochs,
@@ -3476,7 +3511,7 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
   const int blocks = (n + threads - 1) / threads;
   const int stat_blocks = std::max(1, std::min(1024, blocks));
   const std::size_t required_bytes =
-    input_items * (sizeof(int) + sizeof(double)) +
+    input_items * (sizeof(int) + sizeof(DistanceT)) +
     graph_items * (2u * sizeof(int) + 4u * sizeof(float)) +
     2u * (static_cast<std::size_t>(n) + 1u) * sizeof(int) +
     (optimizer_mode == 1 ? 3u : 2u) * embed_bytes +
@@ -3485,7 +3520,7 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
     5u * sizeof(double);
 
   int* d_indices = nullptr;
-  double* d_distances = nullptr;
+  DistanceT* d_distances = nullptr;
   int* d_neighbors = nullptr;
   float* d_weights = nullptr;
   int* d_counts = nullptr;
@@ -3522,7 +3557,7 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
 
   if (check_embedding_memory_available(required_bytes, "CUDA fused UMAP allocation preflight")) return 1;
   if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_indices), input_items * sizeof(int)), "cudaMalloc(fused umap indices)") ||
-      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_distances), input_items * sizeof(double)), "cudaMalloc(fused umap distances)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_distances), input_items * sizeof(DistanceT)), "cudaMalloc(fused umap distances)") ||
       check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_neighbors), graph_items * sizeof(int)), "cudaMalloc(fused umap neighbors)") ||
       check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_weights), graph_items * sizeof(float)), "cudaMalloc(fused umap weights)") ||
       check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_counts), static_cast<std::size_t>(n) * sizeof(int)), "cudaMalloc(fused umap row counts)") ||
@@ -3539,7 +3574,7 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
     return 1;
   }
   if (check_cuda(cudaMemcpy(d_indices, indices, input_items * sizeof(int), cudaMemcpyHostToDevice), "cudaMemcpy(fused umap indices H2D)") ||
-      check_cuda(cudaMemcpy(d_distances, distances, input_items * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy(fused umap distances H2D)")) {
+      check_cuda(cudaMemcpy(d_distances, distances, input_items * sizeof(DistanceT), cudaMemcpyHostToDevice), "cudaMemcpy(fused umap distances H2D)")) {
     cleanup();
     return 1;
   }
@@ -3696,6 +3731,50 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
   return 0;
 }
 
+extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
+                                                       const double* distances,
+                                                       int n,
+                                                       int k,
+                                                       int n_epochs,
+                                                       int negative_sample_rate,
+                                                       float learning_rate,
+                                                       float a,
+                                                       float b,
+                                                       float repulsion_strength,
+                                                       int spectral_n_iter,
+                                                       unsigned int seed,
+                                                       int index_offset,
+                                                       int optimizer_mode,
+                                                       float* out) {
+  return fastembedr_cuda_umap_from_knn_spectral_impl<double>(
+    indices, distances, n, k, n_epochs, negative_sample_rate, learning_rate,
+    a, b, repulsion_strength, spectral_n_iter, seed, index_offset,
+    optimizer_mode, out
+  );
+}
+
+extern "C" int fastembedr_cuda_umap_from_knn_spectral_float(const int* indices,
+                                                             const float* distances,
+                                                             int n,
+                                                             int k,
+                                                             int n_epochs,
+                                                             int negative_sample_rate,
+                                                             float learning_rate,
+                                                             float a,
+                                                             float b,
+                                                             float repulsion_strength,
+                                                             int spectral_n_iter,
+                                                             unsigned int seed,
+                                                             int index_offset,
+                                                             int optimizer_mode,
+                                                             float* out) {
+  return fastembedr_cuda_umap_from_knn_spectral_impl<float>(
+    indices, distances, n, k, n_epochs, negative_sample_rate, learning_rate,
+    a, b, repulsion_strength, spectral_n_iter, seed, index_offset,
+    optimizer_mode, out
+  );
+}
+
 extern "C" int fastembedr_cuda_umap_optimize_coo(const int* heads,
                                                   const int* tails,
                                                   const float* weights,
@@ -3823,8 +3902,9 @@ extern "C" int fastembedr_cuda_umap_optimize_coo(const int* heads,
   return 0;
 }
 
-extern "C" int fastembedr_cuda_opentsne_fft_from_knn(const int* indices,
-                                                       const double* distances,
+template <typename DistanceT>
+int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
+                                                       const DistanceT* distances,
                                                        const float* init,
                                                        int has_init,
                                                        int n,
@@ -3884,7 +3964,7 @@ extern "C" int fastembedr_cuda_opentsne_fft_from_knn(const int* indices,
   );
   const std::size_t complex_items = static_cast<std::size_t>(fft_total);
   const std::size_t required_bytes =
-    input_items * (sizeof(int) + sizeof(double) + sizeof(float)) +
+    input_items * (sizeof(int) + sizeof(DistanceT) + sizeof(float)) +
     embed_items * 4u * sizeof(float) +
     static_cast<std::size_t>(n) * sizeof(float2) +
     complex_items * 9u * sizeof(cufftComplex) +
@@ -3892,7 +3972,7 @@ extern "C" int fastembedr_cuda_opentsne_fft_from_knn(const int* indices,
     6u * sizeof(double);
 
   int* d_indices = nullptr;
-  double* d_distances = nullptr;
+  DistanceT* d_distances = nullptr;
   float* d_probabilities = nullptr;
   float* d_current = nullptr;
   float* d_grad = nullptr;
@@ -3937,7 +4017,7 @@ extern "C" int fastembedr_cuda_opentsne_fft_from_knn(const int* indices,
 
   if (check_embedding_memory_available(required_bytes, "CUDA openTSNE FFT-grid allocation preflight")) return 1;
   if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_indices), input_items * sizeof(int)), "cudaMalloc(opentsne indices)") ||
-      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_distances), input_items * sizeof(double)), "cudaMalloc(opentsne distances)") ||
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_distances), input_items * sizeof(DistanceT)), "cudaMalloc(opentsne distances)") ||
       check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_probabilities), input_items * sizeof(float)), "cudaMalloc(opentsne probabilities)") ||
       check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_current), embed_bytes), "cudaMalloc(opentsne current)") ||
       check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_grad), embed_bytes), "cudaMalloc(opentsne gradient)") ||
@@ -3960,7 +4040,7 @@ extern "C" int fastembedr_cuda_opentsne_fft_from_knn(const int* indices,
   }
 
   if (check_cuda(cudaMemcpy(d_indices, indices, input_items * sizeof(int), cudaMemcpyHostToDevice), "cudaMemcpy(opentsne indices H2D)") ||
-      check_cuda(cudaMemcpy(d_distances, distances, input_items * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy(opentsne distances H2D)")) {
+      check_cuda(cudaMemcpy(d_distances, distances, input_items * sizeof(DistanceT), cudaMemcpyHostToDevice), "cudaMemcpy(opentsne distances H2D)")) {
     cleanup();
     return 1;
   }
@@ -4147,8 +4227,67 @@ extern "C" int fastembedr_cuda_opentsne_fft_from_knn(const int* indices,
   return 0;
 }
 
-extern "C" int fastembedr_cuda_exact_tsne_from_knn(const int* indices,
-                                                   const double* distances,
+extern "C" int fastembedr_cuda_opentsne_fft_from_knn(const int* indices,
+                                                       const double* distances,
+                                                       const float* init,
+                                                       int has_init,
+                                                       int n,
+                                                       int k,
+                                                       int n_components,
+                                                       float perplexity,
+                                                       int early_exaggeration_iter,
+                                                       int n_iter,
+                                                       float early_exaggeration,
+                                                       float exaggeration,
+                                                       float learning_rate,
+                                                       int learning_rate_auto,
+                                                       float initial_momentum,
+                                                       float final_momentum,
+                                                       float min_gain,
+                                                       float max_step_norm,
+                                                       unsigned int seed,
+                                                       int index_offset,
+                                                       float* out) {
+  return fastembedr_cuda_opentsne_fft_from_knn_impl<double>(
+    indices, distances, init, has_init, n, k, n_components, perplexity,
+    early_exaggeration_iter, n_iter, early_exaggeration, exaggeration,
+    learning_rate, learning_rate_auto, initial_momentum, final_momentum,
+    min_gain, max_step_norm, seed, index_offset, out
+  );
+}
+
+extern "C" int fastembedr_cuda_opentsne_fft_from_knn_float(const int* indices,
+                                                            const float* distances,
+                                                            const float* init,
+                                                            int has_init,
+                                                            int n,
+                                                            int k,
+                                                            int n_components,
+                                                            float perplexity,
+                                                            int early_exaggeration_iter,
+                                                            int n_iter,
+                                                            float early_exaggeration,
+                                                            float exaggeration,
+                                                            float learning_rate,
+                                                            int learning_rate_auto,
+                                                            float initial_momentum,
+                                                            float final_momentum,
+                                                            float min_gain,
+                                                            float max_step_norm,
+                                                            unsigned int seed,
+                                                            int index_offset,
+                                                            float* out) {
+  return fastembedr_cuda_opentsne_fft_from_knn_impl<float>(
+    indices, distances, init, has_init, n, k, n_components, perplexity,
+    early_exaggeration_iter, n_iter, early_exaggeration, exaggeration,
+    learning_rate, learning_rate_auto, initial_momentum, final_momentum,
+    min_gain, max_step_norm, seed, index_offset, out
+  );
+}
+
+template <typename DistanceT>
+int fastembedr_cuda_exact_tsne_from_knn_impl(const int* indices,
+                                                   const DistanceT* distances,
                                                    const float* init,
                                                    int n,
                                                    int k,
@@ -4185,14 +4324,14 @@ extern "C" int fastembedr_cuda_exact_tsne_from_knn(const int* indices,
   const int blocks = (n + threads - 1) / threads;
   const std::size_t partial_items = static_cast<std::size_t>(blocks) * 4u;
   const std::size_t required_bytes =
-    input_items * (sizeof(int) + sizeof(double)) +
+    input_items * (sizeof(int) + sizeof(DistanceT)) +
     dense_items * sizeof(float) +
     embed_items * 4u * sizeof(float) +
     partial_items * sizeof(double) +
     4u * sizeof(double);
 
   int* d_indices = nullptr;
-  double* d_distances = nullptr;
+  DistanceT* d_distances = nullptr;
   float* d_affinities = nullptr;
   float* d_current = nullptr;
   float* d_grad = nullptr;
@@ -4218,7 +4357,7 @@ extern "C" int fastembedr_cuda_exact_tsne_from_knn(const int* indices,
     cleanup();
     return 1;
   }
-  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_distances), input_items * sizeof(double)), "cudaMalloc(exact tsne distances)")) {
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_distances), input_items * sizeof(DistanceT)), "cudaMalloc(exact tsne distances)")) {
     cleanup();
     return 1;
   }
@@ -4255,7 +4394,7 @@ extern "C" int fastembedr_cuda_exact_tsne_from_knn(const int* indices,
     cleanup();
     return 1;
   }
-  if (check_cuda(cudaMemcpy(d_distances, distances, input_items * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy(exact tsne distances H2D)")) {
+  if (check_cuda(cudaMemcpy(d_distances, distances, input_items * sizeof(DistanceT), cudaMemcpyHostToDevice), "cudaMemcpy(exact tsne distances H2D)")) {
     cleanup();
     return 1;
   }
@@ -4361,6 +4500,29 @@ extern "C" int fastembedr_cuda_exact_tsne_from_knn(const int* indices,
 
   cleanup();
   return 0;
+}
+
+extern "C" int fastembedr_cuda_exact_tsne_from_knn(const int* indices,
+                                                   const double* distances,
+                                                   const float* init,
+                                                   int n,
+                                                   int k,
+                                                   int n_epochs,
+                                                   float perplexity,
+                                                   float learning_rate,
+                                                   int stop_lying_iter,
+                                                   int mom_switch_iter,
+                                                   float momentum,
+                                                   float final_momentum,
+                                                   float exaggeration_factor,
+                                                   unsigned int seed,
+                                                   int index_offset,
+                                                   float* out) {
+  return fastembedr_cuda_exact_tsne_from_knn_impl<double>(
+    indices, distances, init, n, k, n_epochs, perplexity, learning_rate,
+    stop_lying_iter, mom_switch_iter, momentum, final_momentum,
+    exaggeration_factor, seed, index_offset, out
+  );
 }
 
 extern "C" int fastembedr_cuda_embed(const int* neighbors,
@@ -4471,8 +4633,9 @@ extern "C" int fastembedr_cuda_embed(const int* neighbors,
   return 0;
 }
 
-extern "C" int fastembedr_cuda_embed_from_knn(const int* indices,
-                                               const double* distances,
+template <typename DistanceT>
+int fastembedr_cuda_embed_from_knn_impl(const int* indices,
+                                               const DistanceT* distances,
                                                const float* init,
                                                int n,
                                                int k,
@@ -4499,13 +4662,13 @@ extern "C" int fastembedr_cuda_embed_from_knn(const int* indices,
   const std::size_t graph_items = static_cast<std::size_t>(n) * width;
   const std::size_t embed_bytes = static_cast<std::size_t>(n) * 2u * sizeof(float);
   const std::size_t required_bytes =
-    input_items * (sizeof(int) + sizeof(double)) +
+    input_items * (sizeof(int) + sizeof(DistanceT)) +
     graph_items * (sizeof(int) + sizeof(float)) +
     (objective == 0 ? static_cast<std::size_t>(n) * sizeof(int) : 0u) +
     2u * embed_bytes;
 
   int* d_indices = nullptr;
-  double* d_distances = nullptr;
+  DistanceT* d_distances = nullptr;
   int* d_neighbors = nullptr;
   float* d_weights = nullptr;
   int* d_counts = nullptr;
@@ -4528,7 +4691,7 @@ extern "C" int fastembedr_cuda_embed_from_knn(const int* indices,
     cleanup();
     return 1;
   }
-  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_distances), input_items * sizeof(double)), "cudaMalloc(knn distances)")) {
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_distances), input_items * sizeof(DistanceT)), "cudaMalloc(knn distances)")) {
     cleanup();
     return 1;
   }
@@ -4557,7 +4720,7 @@ extern "C" int fastembedr_cuda_embed_from_knn(const int* indices,
     cleanup();
     return 1;
   }
-  if (check_cuda(cudaMemcpy(d_distances, distances, input_items * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy(distances H2D)")) {
+  if (check_cuda(cudaMemcpy(d_distances, distances, input_items * sizeof(DistanceT), cudaMemcpyHostToDevice), "cudaMemcpy(distances H2D)")) {
     cleanup();
     return 1;
   }
@@ -4614,6 +4777,26 @@ extern "C" int fastembedr_cuda_embed_from_knn(const int* indices,
 
   cleanup();
   return 0;
+}
+
+extern "C" int fastembedr_cuda_embed_from_knn(const int* indices,
+                                               const double* distances,
+                                               const float* init,
+                                               int n,
+                                               int k,
+                                               int objective,
+                                               int n_epochs,
+                                               int negative_sample_rate,
+                                               float learning_rate,
+                                               float a,
+                                               float b,
+                                               unsigned int seed,
+                                               int index_offset,
+                                               float* out) {
+  return fastembedr_cuda_embed_from_knn_impl<double>(
+    indices, distances, init, n, k, objective, n_epochs,
+    negative_sample_rate, learning_rate, a, b, seed, index_offset, out
+  );
 }
 
 extern "C" int fastembedr_cuda_matrix_multiply(const double* left,

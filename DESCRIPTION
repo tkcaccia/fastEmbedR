@@ -22,6 +22,7 @@ Imports:
     faissR,
     Rcpp
 Suggests:
+    float,
     igraph,
     jsonlite,
     knitr,

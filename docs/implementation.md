@@ -36,10 +36,9 @@ uses FAISS/cuVS concepts for high-throughput vector search [8-9].
 
 For reproducibility, the one-call API fixes only the requested KNN device class:
 
-- CPU and Metal one-call embedding request the faissR CPU backend.
+- CPU and Metal one-call embedding request faissR CPU HNSW with `target_recall = 0.99`.
 - CUDA one-call embedding requests the faissR CUDA backend.
-- Within the requested CPU/CUDA backend, `faissR::nn_without_self()` chooses the
-  concrete KNN method and tuning automatically.
+- CPU/Metal use faissR HNSW at `target_recall = 0.99`; CUDA uses faissR CUDA method/tuning policy.
 - KNN-input functions accept the index and distance matrices as already
   measured data and do not repeat neighbour search.
 
@@ -160,9 +159,9 @@ for tree-based t-SNE acceleration [2].
 | Metal | Objective-C++/Metal scatter, FFT-grid convolution, gather, attractive-force, update, and centering kernels [3,12]. |
 | CUDA | CUDA kernels with cuFFT for the FFT-grid convolution and device-side optimizer updates [3,5]. |
 
-The Metal implementation includes package-native FFT kernels. MPSGraph FFT was
-tested diagnostically, but it is not a public option because it did not provide
-enough benefit to justify another user-facing backend.
+The Metal implementation includes package-native FFT kernels. Standalone
+MPSGraph FFT diagnostics were tested and then removed because they did not
+provide enough benefit to justify another user-facing backend.
 
 ## Landmarking
 

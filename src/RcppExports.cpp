@@ -74,6 +74,26 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// knn_umap_cuda_fused_float_cpp
+NumericMatrix knn_umap_cuda_fused_float_cpp(IntegerMatrix indices, SEXP distances, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int spectral_n_iter, int seed, int optimizer_mode);
+RcppExport SEXP _fastEmbedR_knn_umap_cuda_fused_float_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP spectral_n_iterSEXP, SEXP seedSEXP, SEXP optimizer_modeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
+    Rcpp::traits::input_parameter< int >::type spectral_n_iter(spectral_n_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< int >::type optimizer_mode(optimizer_modeSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_umap_cuda_fused_float_cpp(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode));
+    return rcpp_result_gen;
+END_RCPP
+}
 // umap_cuda_graph_dump_cpp
 List umap_cuda_graph_dump_cpp(IntegerMatrix indices, NumericMatrix distances);
 RcppExport SEXP _fastEmbedR_umap_cuda_graph_dump_cpp(SEXP indicesSEXP, SEXP distancesSEXP) {
@@ -87,15 +107,15 @@ BEGIN_RCPP
 END_RCPP
 }
 // umap_cuda_optimize_coo_cpp
-NumericMatrix umap_cuda_optimize_coo_cpp(IntegerVector heads, IntegerVector tails, NumericVector weights, NumericVector epochs_per_sample, NumericMatrix init, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, int optimizer_mode);
+NumericMatrix umap_cuda_optimize_coo_cpp(IntegerVector heads, IntegerVector tails, SEXP weights, SEXP epochs_per_sample, NumericMatrix init, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, int optimizer_mode);
 RcppExport SEXP _fastEmbedR_umap_cuda_optimize_coo_cpp(SEXP headsSEXP, SEXP tailsSEXP, SEXP weightsSEXP, SEXP epochs_per_sampleSEXP, SEXP initSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP optimizer_modeSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< IntegerVector >::type heads(headsSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type tails(tailsSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type weights(weightsSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type epochs_per_sample(epochs_per_sampleSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type epochs_per_sample(epochs_per_sampleSEXP);
     Rcpp::traits::input_parameter< NumericMatrix >::type init(initSEXP);
     Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
     Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
@@ -105,6 +125,28 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< int >::type optimizer_mode(optimizer_modeSEXP);
     rcpp_result_gen = Rcpp::wrap(umap_cuda_optimize_coo_cpp(heads, tails, weights, epochs_per_sample, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, optimizer_mode));
+    return rcpp_result_gen;
+END_RCPP
+}
+// umap_cuda_optimize_csr_cpp
+NumericMatrix umap_cuda_optimize_csr_cpp(IntegerVector offsets, IntegerVector neighbors, SEXP weights, SEXP epochs_per_sample, NumericMatrix init, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, int optimizer_mode);
+RcppExport SEXP _fastEmbedR_umap_cuda_optimize_csr_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP epochs_per_sampleSEXP, SEXP initSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP optimizer_modeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type epochs_per_sample(epochs_per_sampleSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type init(initSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< int >::type optimizer_mode(optimizer_modeSEXP);
+    rcpp_result_gen = Rcpp::wrap(umap_cuda_optimize_csr_cpp(offsets, neighbors, weights, epochs_per_sample, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, optimizer_mode));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -156,6 +198,35 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< bool >::type record_costs(record_costsSEXP);
     rcpp_result_gen = Rcpp::wrap(knn_tsne_opentsne_cuda_cpp(indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs));
+    return rcpp_result_gen;
+END_RCPP
+}
+// knn_tsne_opentsne_cuda_float_cpp
+List knn_tsne_opentsne_cuda_float_cpp(IntegerMatrix indices, SEXP distances, NumericMatrix y_init, bool init, int n_components, double perplexity, int early_exaggeration_iter, int n_iter, double early_exaggeration, double exaggeration, double learning_rate, bool learning_rate_auto, double initial_momentum, double final_momentum, double min_gain, double max_step_norm, std::string negative_gradient_method, int seed, bool record_costs);
+RcppExport SEXP _fastEmbedR_knn_tsne_opentsne_cuda_float_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP initSEXP, SEXP n_componentsSEXP, SEXP perplexitySEXP, SEXP early_exaggeration_iterSEXP, SEXP n_iterSEXP, SEXP early_exaggerationSEXP, SEXP exaggerationSEXP, SEXP learning_rateSEXP, SEXP learning_rate_autoSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP min_gainSEXP, SEXP max_step_normSEXP, SEXP negative_gradient_methodSEXP, SEXP seedSEXP, SEXP record_costsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type y_init(y_initSEXP);
+    Rcpp::traits::input_parameter< bool >::type init(initSEXP);
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    Rcpp::traits::input_parameter< double >::type perplexity(perplexitySEXP);
+    Rcpp::traits::input_parameter< int >::type early_exaggeration_iter(early_exaggeration_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type n_iter(n_iterSEXP);
+    Rcpp::traits::input_parameter< double >::type early_exaggeration(early_exaggerationSEXP);
+    Rcpp::traits::input_parameter< double >::type exaggeration(exaggerationSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< bool >::type learning_rate_auto(learning_rate_autoSEXP);
+    Rcpp::traits::input_parameter< double >::type initial_momentum(initial_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type final_momentum(final_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type min_gain(min_gainSEXP);
+    Rcpp::traits::input_parameter< double >::type max_step_norm(max_step_normSEXP);
+    Rcpp::traits::input_parameter< std::string >::type negative_gradient_method(negative_gradient_methodSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type record_costs(record_costsSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_tsne_opentsne_cuda_float_cpp(indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -416,14 +487,14 @@ BEGIN_RCPP
 END_RCPP
 }
 // knn_embed_metal_csr_cpp
-NumericMatrix knn_embed_metal_csr_cpp(IntegerVector offsets, IntegerVector neighbors, NumericVector weights, NumericMatrix init, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double max_weight, double repulsion_strength, int seed, int sampler_mode);
+NumericMatrix knn_embed_metal_csr_cpp(IntegerVector offsets, IntegerVector neighbors, SEXP weights, NumericMatrix init, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double max_weight, double repulsion_strength, int seed, int sampler_mode);
 RcppExport SEXP _fastEmbedR_knn_embed_metal_csr_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP initSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP max_weightSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP sampler_modeSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< IntegerVector >::type offsets(offsetsSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type weights(weightsSEXP);
     Rcpp::traits::input_parameter< NumericMatrix >::type init(initSEXP);
     Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
     Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
@@ -525,45 +596,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< bool >::type record_costs(record_costsSEXP);
     rcpp_result_gen = Rcpp::wrap(knn_tsne_opentsne_metal_cpp(indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs));
-    return rcpp_result_gen;
-END_RCPP
-}
-// metal_fft512_stockham_diagnostic_cpp
-List metal_fft512_stockham_diagnostic_cpp(int seed, bool inverse, int n_checks);
-RcppExport SEXP _fastEmbedR_metal_fft512_stockham_diagnostic_cpp(SEXP seedSEXP, SEXP inverseSEXP, SEXP n_checksSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
-    Rcpp::traits::input_parameter< bool >::type inverse(inverseSEXP);
-    Rcpp::traits::input_parameter< int >::type n_checks(n_checksSEXP);
-    rcpp_result_gen = Rcpp::wrap(metal_fft512_stockham_diagnostic_cpp(seed, inverse, n_checks));
-    return rcpp_result_gen;
-END_RCPP
-}
-// metal_mpsgraph_fft_diagnostic_cpp
-List metal_mpsgraph_fft_diagnostic_cpp(int fft_size, int seed, int n_repeats);
-RcppExport SEXP _fastEmbedR_metal_mpsgraph_fft_diagnostic_cpp(SEXP fft_sizeSEXP, SEXP seedSEXP, SEXP n_repeatsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< int >::type fft_size(fft_sizeSEXP);
-    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
-    Rcpp::traits::input_parameter< int >::type n_repeats(n_repeatsSEXP);
-    rcpp_result_gen = Rcpp::wrap(metal_mpsgraph_fft_diagnostic_cpp(fft_size, seed, n_repeats));
-    return rcpp_result_gen;
-END_RCPP
-}
-// metal_mpsgraph_convolution_diagnostic_cpp
-List metal_mpsgraph_convolution_diagnostic_cpp(int fft_size, int seed, int n_repeats);
-RcppExport SEXP _fastEmbedR_metal_mpsgraph_convolution_diagnostic_cpp(SEXP fft_sizeSEXP, SEXP seedSEXP, SEXP n_repeatsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< int >::type fft_size(fft_sizeSEXP);
-    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
-    Rcpp::traits::input_parameter< int >::type n_repeats(n_repeatsSEXP);
-    rcpp_result_gen = Rcpp::wrap(metal_mpsgraph_convolution_diagnostic_cpp(fft_size, seed, n_repeats));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -925,14 +957,14 @@ BEGIN_RCPP
 END_RCPP
 }
 // umap_cuda_diffusion_init_csr_cpp
-NumericMatrix umap_cuda_diffusion_init_csr_cpp(IntegerVector offsets, IntegerVector neighbors, NumericVector weights, int spectral_n_iter, int n_threads, int seed);
+NumericMatrix umap_cuda_diffusion_init_csr_cpp(IntegerVector offsets, IntegerVector neighbors, SEXP weights, int spectral_n_iter, int n_threads, int seed);
 RcppExport SEXP _fastEmbedR_umap_cuda_diffusion_init_csr_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP spectral_n_iterSEXP, SEXP n_threadsSEXP, SEXP seedSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< IntegerVector >::type offsets(offsetsSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type weights(weightsSEXP);
     Rcpp::traits::input_parameter< int >::type spectral_n_iter(spectral_n_iterSEXP);
     Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
@@ -941,14 +973,14 @@ BEGIN_RCPP
 END_RCPP
 }
 // fast_knn_umap_csr_init_cpp
-NumericMatrix fast_knn_umap_csr_init_cpp(IntegerVector offsets, IntegerVector neighbors, NumericVector weights, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, bool verbose);
+NumericMatrix fast_knn_umap_csr_init_cpp(IntegerVector offsets, IntegerVector neighbors, SEXP weights, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, bool verbose);
 RcppExport SEXP _fastEmbedR_fast_knn_umap_csr_init_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP init_embeddingSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< IntegerVector >::type offsets(offsetsSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type weights(weightsSEXP);
     Rcpp::traits::input_parameter< NumericMatrix >::type init_embedding(init_embeddingSEXP);
     Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
     Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
@@ -963,14 +995,14 @@ BEGIN_RCPP
 END_RCPP
 }
 // fast_knn_umap_csr_atomic_cpp
-NumericMatrix fast_knn_umap_csr_atomic_cpp(IntegerVector offsets, IntegerVector neighbors, NumericVector weights, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, bool verbose);
+NumericMatrix fast_knn_umap_csr_atomic_cpp(IntegerVector offsets, IntegerVector neighbors, SEXP weights, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, bool verbose);
 RcppExport SEXP _fastEmbedR_fast_knn_umap_csr_atomic_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP init_embeddingSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< IntegerVector >::type offsets(offsetsSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type weights(weightsSEXP);
     Rcpp::traits::input_parameter< NumericMatrix >::type init_embedding(init_embeddingSEXP);
     Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
     Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
@@ -985,14 +1017,14 @@ BEGIN_RCPP
 END_RCPP
 }
 // fast_knn_umap_csr_clean_atomic_cpp
-NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets, IntegerVector neighbors, NumericVector weights, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, int decay_mode, bool verbose);
+NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets, IntegerVector neighbors, SEXP weights, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, int decay_mode, bool verbose);
 RcppExport SEXP _fastEmbedR_fast_knn_umap_csr_clean_atomic_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP init_embeddingSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP decay_modeSEXP, SEXP verboseSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< IntegerVector >::type offsets(offsetsSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type weights(weightsSEXP);
     Rcpp::traits::input_parameter< NumericMatrix >::type init_embedding(init_embeddingSEXP);
     Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
     Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
@@ -1008,15 +1040,15 @@ BEGIN_RCPP
 END_RCPP
 }
 // fast_knn_umap_coo_replay_cpp
-NumericMatrix fast_knn_umap_coo_replay_cpp(IntegerVector heads, IntegerVector tails, NumericVector weights, NumericVector epochs_per_sample, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, bool sanitize_each_epoch, bool verbose);
+NumericMatrix fast_knn_umap_coo_replay_cpp(IntegerVector heads, IntegerVector tails, SEXP weights, SEXP epochs_per_sample, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, bool sanitize_each_epoch, bool verbose);
 RcppExport SEXP _fastEmbedR_fast_knn_umap_coo_replay_cpp(SEXP headsSEXP, SEXP tailsSEXP, SEXP weightsSEXP, SEXP epochs_per_sampleSEXP, SEXP init_embeddingSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP sanitize_each_epochSEXP, SEXP verboseSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< IntegerVector >::type heads(headsSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type tails(tailsSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type weights(weightsSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type epochs_per_sample(epochs_per_sampleSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type epochs_per_sample(epochs_per_sampleSEXP);
     Rcpp::traits::input_parameter< NumericMatrix >::type init_embedding(init_embeddingSEXP);
     Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
     Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
@@ -1120,14 +1152,14 @@ BEGIN_RCPP
 END_RCPP
 }
 // fast_knn_umap_csr_cpp
-NumericMatrix fast_knn_umap_csr_cpp(IntegerVector offsets, IntegerVector neighbors, NumericVector weights, int n_components, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int spectral_n_iter, int n_threads, double init_scale, int seed, bool verbose);
+NumericMatrix fast_knn_umap_csr_cpp(IntegerVector offsets, IntegerVector neighbors, SEXP weights, int n_components, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int spectral_n_iter, int n_threads, double init_scale, int seed, bool verbose);
 RcppExport SEXP _fastEmbedR_fast_knn_umap_csr_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP n_componentsSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP spectral_n_iterSEXP, SEXP n_threadsSEXP, SEXP init_scaleSEXP, SEXP seedSEXP, SEXP verboseSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< IntegerVector >::type offsets(offsetsSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type weights(weightsSEXP);
     Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
     Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
     Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
@@ -1206,25 +1238,37 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// opentsne_cpu_trace_cpp
-List opentsne_cpu_trace_cpp(IntegerMatrix indices, NumericMatrix distances, NumericMatrix y_init, double perplexity, int n_iter, double early_exaggeration, double learning_rate, bool learning_rate_auto, double momentum, double min_gain, double max_step_norm, int n_threads);
-RcppExport SEXP _fastEmbedR_opentsne_cpu_trace_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP perplexitySEXP, SEXP n_iterSEXP, SEXP early_exaggerationSEXP, SEXP learning_rateSEXP, SEXP learning_rate_autoSEXP, SEXP momentumSEXP, SEXP min_gainSEXP, SEXP max_step_normSEXP, SEXP n_threadsSEXP) {
+// knn_tsne_opentsne_float_cpp
+List knn_tsne_opentsne_float_cpp(IntegerMatrix indices, SEXP distances, NumericMatrix y_init, bool init, int n_components, double perplexity, double theta, int early_exaggeration_iter, int n_iter, double early_exaggeration, double exaggeration, double learning_rate, bool learning_rate_auto, double initial_momentum, double final_momentum, double min_gain, double max_step_norm, std::string negative_gradient_method, int n_threads, int seed, bool verbose, bool record_costs, bool auto_config, double auto_iter_end);
+RcppExport SEXP _fastEmbedR_knn_tsne_opentsne_float_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP initSEXP, SEXP n_componentsSEXP, SEXP perplexitySEXP, SEXP thetaSEXP, SEXP early_exaggeration_iterSEXP, SEXP n_iterSEXP, SEXP early_exaggerationSEXP, SEXP exaggerationSEXP, SEXP learning_rateSEXP, SEXP learning_rate_autoSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP min_gainSEXP, SEXP max_step_normSEXP, SEXP negative_gradient_methodSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP verboseSEXP, SEXP record_costsSEXP, SEXP auto_configSEXP, SEXP auto_iter_endSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
-    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type distances(distancesSEXP);
     Rcpp::traits::input_parameter< NumericMatrix >::type y_init(y_initSEXP);
+    Rcpp::traits::input_parameter< bool >::type init(initSEXP);
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
     Rcpp::traits::input_parameter< double >::type perplexity(perplexitySEXP);
+    Rcpp::traits::input_parameter< double >::type theta(thetaSEXP);
+    Rcpp::traits::input_parameter< int >::type early_exaggeration_iter(early_exaggeration_iterSEXP);
     Rcpp::traits::input_parameter< int >::type n_iter(n_iterSEXP);
     Rcpp::traits::input_parameter< double >::type early_exaggeration(early_exaggerationSEXP);
+    Rcpp::traits::input_parameter< double >::type exaggeration(exaggerationSEXP);
     Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
     Rcpp::traits::input_parameter< bool >::type learning_rate_auto(learning_rate_autoSEXP);
-    Rcpp::traits::input_parameter< double >::type momentum(momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type initial_momentum(initial_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type final_momentum(final_momentumSEXP);
     Rcpp::traits::input_parameter< double >::type min_gain(min_gainSEXP);
     Rcpp::traits::input_parameter< double >::type max_step_norm(max_step_normSEXP);
+    Rcpp::traits::input_parameter< std::string >::type negative_gradient_method(negative_gradient_methodSEXP);
     Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
-    rcpp_result_gen = Rcpp::wrap(opentsne_cpu_trace_cpp(indices, distances, y_init, perplexity, n_iter, early_exaggeration, learning_rate, learning_rate_auto, momentum, min_gain, max_step_norm, n_threads));
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
+    Rcpp::traits::input_parameter< bool >::type record_costs(record_costsSEXP);
+    Rcpp::traits::input_parameter< bool >::type auto_config(auto_configSEXP);
+    Rcpp::traits::input_parameter< double >::type auto_iter_end(auto_iter_endSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_tsne_opentsne_float_cpp(indices, distances, y_init, init, n_components, perplexity, theta, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, n_threads, seed, verbose, record_costs, auto_config, auto_iter_end));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1265,10 +1309,13 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_spectral_knn_init_cuda_cpp", (DL_FUNC) &_fastEmbedR_spectral_knn_init_cuda_cpp, 5},
     {"_fastEmbedR_knn_embed_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_cuda_cpp, 9},
     {"_fastEmbedR_knn_umap_cuda_fused_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_cuda_fused_cpp, 10},
+    {"_fastEmbedR_knn_umap_cuda_fused_float_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_cuda_fused_float_cpp, 10},
     {"_fastEmbedR_umap_cuda_graph_dump_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_graph_dump_cpp, 2},
     {"_fastEmbedR_umap_cuda_optimize_coo_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_optimize_coo_cpp, 12},
+    {"_fastEmbedR_umap_cuda_optimize_csr_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_optimize_csr_cpp, 12},
     {"_fastEmbedR_knn_tsne_exact_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_exact_cuda_cpp, 12},
     {"_fastEmbedR_knn_tsne_opentsne_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cuda_cpp, 19},
+    {"_fastEmbedR_knn_tsne_opentsne_cuda_float_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cuda_float_cpp, 19},
     {"_fastEmbedR_standardize_cuda_cpp", (DL_FUNC) &_fastEmbedR_standardize_cuda_cpp, 1},
     {"_fastEmbedR_project_embedding_knn_cuda_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_knn_cuda_cpp, 3},
     {"_fastEmbedR_interpolate_landmark_layout_cuda_cpp", (DL_FUNC) &_fastEmbedR_interpolate_landmark_layout_cuda_cpp, 5},
@@ -1292,9 +1339,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_rsvd_multiply_metal_cpp", (DL_FUNC) &_fastEmbedR_rsvd_multiply_metal_cpp, 3},
     {"_fastEmbedR_transform_tsne_metal_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_metal_cpp, 19},
     {"_fastEmbedR_knn_tsne_opentsne_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_metal_cpp, 19},
-    {"_fastEmbedR_metal_fft512_stockham_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_metal_fft512_stockham_diagnostic_cpp, 3},
-    {"_fastEmbedR_metal_mpsgraph_fft_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_metal_mpsgraph_fft_diagnostic_cpp, 3},
-    {"_fastEmbedR_metal_mpsgraph_convolution_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_metal_mpsgraph_convolution_diagnostic_cpp, 3},
     {"_fastEmbedR_standardize_cpu_cpp", (DL_FUNC) &_fastEmbedR_standardize_cpu_cpp, 1},
     {"_fastEmbedR_strip_self_neighbors_cpp", (DL_FUNC) &_fastEmbedR_strip_self_neighbors_cpp, 2},
     {"_fastEmbedR_strip_self_neighbors_float_cpp", (DL_FUNC) &_fastEmbedR_strip_self_neighbors_float_cpp, 2},
@@ -1332,7 +1376,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_umap_auto_parameters_cpp", (DL_FUNC) &_fastEmbedR_umap_auto_parameters_cpp, 3},
     {"_fastEmbedR_tsne_auto_parameters_cpp", (DL_FUNC) &_fastEmbedR_tsne_auto_parameters_cpp, 6},
     {"_fastEmbedR_knn_tsne_opentsne_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cpp, 24},
-    {"_fastEmbedR_opentsne_cpu_trace_cpp", (DL_FUNC) &_fastEmbedR_opentsne_cpu_trace_cpp, 12},
+    {"_fastEmbedR_knn_tsne_opentsne_float_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_float_cpp, 24},
     {"_fastEmbedR_transform_tsne_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_cpp, 21},
     {NULL, NULL, 0}
 };

@@ -25,6 +25,46 @@ using Rcpp::NumericVector;
 
 namespace {
 
+bool metal_is_float32_s4(SEXP x) {
+  if (!Rf_isS4(x)) return false;
+  Rcpp::S4 obj(x);
+  return obj.is("float32");
+}
+
+float metal_int_bits_to_float(const int value) {
+  float out = 0.0f;
+  static_assert(sizeof(out) == sizeof(value), "float32 payload must use 32-bit storage");
+  std::memcpy(&out, &value, sizeof(float));
+  return out;
+}
+
+std::vector<float> metal_copy_float_vector(SEXP values,
+                                           const char* name) {
+  if (metal_is_float32_s4(values)) {
+    Rcpp::S4 obj(values);
+    SEXP data = obj.slot("Data");
+    if (TYPEOF(data) != INTSXP) {
+      Rcpp::stop("%s has an invalid float32 payload", name);
+    }
+    IntegerVector payload(data);
+    std::vector<float> out(static_cast<std::size_t>(payload.size()));
+    const int* src = INTEGER(payload);
+    for (R_xlen_t i = 0; i < payload.size(); ++i) {
+      out[static_cast<std::size_t>(i)] = metal_int_bits_to_float(src[i]);
+    }
+    return out;
+  }
+  if (TYPEOF(values) != REALSXP) {
+    Rcpp::stop("%s must be a numeric vector or float::float32 vector", name);
+  }
+  NumericVector numeric(values);
+  std::vector<float> out(static_cast<std::size_t>(numeric.size()));
+  for (R_xlen_t i = 0; i < numeric.size(); ++i) {
+    out[static_cast<std::size_t>(i)] = static_cast<float>(numeric[i]);
+  }
+  return out;
+}
+
 struct EmbedParams {
   std::uint32_t n;
   std::uint32_t k;
@@ -5685,7 +5725,6 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
         Rcpp::Named("repulsion") = use_mpsgraph_convolution ?
           "fft_grid_mpsgraph_metal" : "fft_grid_metal",
         Rcpp::Named("probabilities") = "symmetric_sparse_knn_cpu_prepared_for_metal",
-        Rcpp::Named("repulsion_block_size") = static_cast<int>(grid_n),
         Rcpp::Named("n_threads") = NA_INTEGER,
         Rcpp::Named("learning_rate") = learning_rate_auto ? NA_REAL : learning_rate,
         Rcpp::Named("learning_rate_early") = static_cast<double>(n) / std::max(early_exaggeration, std::numeric_limits<double>::min()),
@@ -5808,7 +5847,6 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
       Rcpp::Named("optimizer") = "opentsne_exact_sparse_native_metal",
       Rcpp::Named("repulsion") = "exact_metal",
       Rcpp::Named("probabilities") = "symmetric_sparse_knn_cpu_prepared_for_metal",
-      Rcpp::Named("repulsion_block_size") = NA_INTEGER,
       Rcpp::Named("n_threads") = NA_INTEGER,
       Rcpp::Named("learning_rate") = learning_rate_auto ? NA_REAL : learning_rate,
       Rcpp::Named("learning_rate_early") = static_cast<double>(n) / std::max(early_exaggeration, std::numeric_limits<double>::min()),
@@ -6536,7 +6574,7 @@ double silhouette_score_metal_impl(NumericMatrix layout,
 
 void pack_umap_csr_for_metal(const IntegerVector& offsets,
                              const IntegerVector& csr_neighbors,
-                             const NumericVector& csr_weights,
+                             const std::vector<float>& csr_weights,
                              const int n,
                              const int n_epochs,
                              const double max_weight_input,
@@ -6547,7 +6585,7 @@ void pack_umap_csr_for_metal(const IntegerVector& offsets,
   if (offsets.size() != n + 1) {
     Rcpp::stop("CSR offsets length must be n + 1.");
   }
-  if (csr_neighbors.size() != csr_weights.size()) {
+  if (static_cast<std::size_t>(csr_neighbors.size()) != csr_weights.size()) {
     Rcpp::stop("CSR neighbors and weights must have the same length.");
   }
   if (offsets[0] != 0) {
@@ -6567,7 +6605,7 @@ void pack_umap_csr_for_metal(const IntegerVector& offsets,
     0.0f;
   if (max_weight <= 0.0f) {
     for (int pos = 0; pos < nnz; ++pos) {
-      const double w = csr_weights[pos];
+      const double w = static_cast<double>(csr_weights[static_cast<std::size_t>(pos)]);
       if (std::isfinite(w) && w > 0.0) {
         max_weight = std::max(max_weight, static_cast<float>(w));
       }
@@ -6585,7 +6623,7 @@ void pack_umap_csr_for_metal(const IntegerVector& offsets,
     int count = 0;
     for (int pos = offsets[i]; pos < offsets[i + 1]; ++pos) {
       const int nb = csr_neighbors[pos];
-      const double w = csr_weights[pos];
+      const double w = static_cast<double>(csr_weights[static_cast<std::size_t>(pos)]);
       if (nb < 0 || nb >= n || nb == i || !std::isfinite(w) || w <= 0.0) continue;
       if (w < min_sample_weight) continue;
       ++count;
@@ -6609,7 +6647,7 @@ void pack_umap_csr_for_metal(const IntegerVector& offsets,
     row.reserve(static_cast<std::size_t>(std::min(count, kMaxMetalNeighbors)));
     for (int pos = offsets[i]; pos < offsets[i + 1]; ++pos) {
       const int nb = csr_neighbors[pos];
-      const double wd = csr_weights[pos];
+      const double wd = static_cast<double>(csr_weights[static_cast<std::size_t>(pos)]);
       if (nb < 0 || nb >= n || nb == i || !std::isfinite(wd) || wd <= 0.0) continue;
       if (wd < min_sample_weight) continue;
       row.push_back({nb, static_cast<float>(wd)});
@@ -6646,7 +6684,7 @@ void pack_umap_csr_for_metal(const IntegerVector& offsets,
 
 NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
                                        IntegerVector csr_neighbors,
-                                       NumericVector csr_weights,
+                                       SEXP csr_weights,
                                        NumericMatrix init,
                                        int n_epochs,
                                        int negative_sample_rate,
@@ -6670,13 +6708,14 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
     MetalEmbeddingState& state = metal_embedding_state();
 
     std::vector<std::int32_t> neighbors;
+    std::vector<float> csr_weight_values = metal_copy_float_vector(csr_weights, "CSR weights");
     std::vector<float> weights;
     float max_weight = 0.0f;
     int truncated_edges = 0;
     pack_umap_csr_for_metal(
       offsets,
       csr_neighbors,
-      csr_weights,
+      csr_weight_values,
       n,
       n_epochs,
       max_weight_input,
@@ -6792,462 +6831,6 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
     [epochs_buffer release];
     [params_buffer release];
     return out;
-  }
-}
-
-List metal_fft512_stockham_diagnostic_impl(int seed,
-                                           bool inverse,
-                                           int n_checks) {
-  constexpr std::uint32_t fft_size = 512u;
-  constexpr std::uint32_t log_fft = 9u;
-  constexpr std::uint32_t total = fft_size * fft_size;
-  const std::size_t floats = static_cast<std::size_t>(total) * 2u;
-  const std::size_t bytes = floats * sizeof(float);
-  n_checks = std::max(1, std::min<int>(n_checks, static_cast<int>(total)));
-
-  std::vector<float> input(floats);
-  std::mt19937 rng(static_cast<std::uint32_t>(seed == NA_INTEGER ? 5489 : seed));
-  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-  for (float& value : input) value = dist(rng);
-  std::vector<float> generic(input);
-  std::vector<float> stockham(input);
-  std::vector<float> scratch(floats, 0.0f);
-  std::vector<float> twiddles = make_fft_twiddles(fft_size, log_fft);
-  double generic_time_sec = NA_REAL;
-  double stockham_time_sec = NA_REAL;
-
-  @autoreleasepool {
-    MetalEmbeddingState& state = metal_embedding_state();
-    id<MTLBuffer> generic_buffer = [state.device newBufferWithBytes:generic.data()
-                                                             length:bytes
-                                                            options:MTLResourceStorageModeShared];
-    id<MTLBuffer> stockham_buffer = [state.device newBufferWithBytes:stockham.data()
-                                                              length:bytes
-                                                             options:MTLResourceStorageModeShared];
-    id<MTLBuffer> generic_scratch_buffer = [state.device newBufferWithBytes:scratch.data()
-                                                                      length:bytes
-                                                                     options:MTLResourceStorageModeShared];
-    id<MTLBuffer> stockham_scratch_buffer = [state.device newBufferWithBytes:scratch.data()
-                                                                       length:bytes
-                                                                      options:MTLResourceStorageModeShared];
-    id<MTLBuffer> twiddle_buffer = [state.device newBufferWithBytes:twiddles.data()
-                                                            length:twiddles.size() * sizeof(float)
-                                                           options:MTLResourceStorageModeShared];
-    if (generic_buffer == nil || stockham_buffer == nil ||
-        generic_scratch_buffer == nil || stockham_scratch_buffer == nil ||
-        twiddle_buffer == nil) {
-      Rcpp::stop("Failed to allocate Metal FFT diagnostic buffers.");
-    }
-
-    auto generic_start = std::chrono::steady_clock::now();
-    id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
-    encode_fft_2d_metal_generic(
-      state,
-      command_buffer,
-      generic_buffer,
-      generic_scratch_buffer,
-      twiddle_buffer,
-      fft_size,
-      log_fft,
-      inverse
-    );
-    wait_for_command(command_buffer, "FFT512 generic diagnostic");
-    auto generic_end = std::chrono::steady_clock::now();
-
-    auto stockham_start = std::chrono::steady_clock::now();
-    id<MTLCommandBuffer> stockham_command_buffer = [state.queue commandBuffer];
-    encode_fft_512_stockham_metal(
-      state,
-      stockham_command_buffer,
-      stockham_buffer,
-      stockham_scratch_buffer,
-      inverse
-    );
-    wait_for_command(stockham_command_buffer, "FFT512 Stockham diagnostic");
-    auto stockham_end = std::chrono::steady_clock::now();
-
-    generic_time_sec =
-      std::chrono::duration<double>(generic_end - generic_start).count();
-    stockham_time_sec =
-      std::chrono::duration<double>(stockham_end - stockham_start).count();
-
-    std::memcpy(generic.data(), [generic_buffer contents], bytes);
-    std::memcpy(stockham.data(), [stockham_buffer contents], bytes);
-    [generic_buffer release];
-    [stockham_buffer release];
-    [generic_scratch_buffer release];
-    [stockham_scratch_buffer release];
-    [twiddle_buffer release];
-  }
-
-  double max_abs = 0.0;
-  double sum_sq = 0.0;
-  double ref_sq = 0.0;
-  int max_index = 0;
-  for (std::uint32_t i = 0; i < total; ++i) {
-    const std::size_t base = static_cast<std::size_t>(i) * 2u;
-    const double gr = generic[base];
-    const double gi = generic[base + 1u];
-    const double dr = static_cast<double>(stockham[base]) - gr;
-    const double di = static_cast<double>(stockham[base + 1u]) - gi;
-    const double err = std::sqrt(dr * dr + di * di);
-    sum_sq += err * err;
-    ref_sq += gr * gr + gi * gi;
-    if (err > max_abs) {
-      max_abs = err;
-      max_index = static_cast<int>(i);
-    }
-  }
-  const double rms_abs = std::sqrt(sum_sq / static_cast<double>(total));
-  const double rms_rel = std::sqrt(sum_sq / std::max(ref_sq, std::numeric_limits<double>::min()));
-
-  const int check_count = std::min<int>(n_checks, 16);
-  NumericMatrix sample(check_count, 5);
-  Rcpp::colnames(sample) = Rcpp::CharacterVector::create(
-    "index", "generic_re", "generic_im", "stockham_re", "stockham_im"
-  );
-  for (int i = 0; i < check_count; ++i) {
-    const std::size_t base = static_cast<std::size_t>(i) * 2u;
-    sample(i, 0) = i;
-    sample(i, 1) = generic[base];
-    sample(i, 2) = generic[base + 1u];
-    sample(i, 3) = stockham[base];
-    sample(i, 4) = stockham[base + 1u];
-  }
-
-  return List::create(
-    Rcpp::Named("fft_size") = static_cast<int>(fft_size),
-    Rcpp::Named("inverse") = inverse,
-    Rcpp::Named("seed") = seed,
-    Rcpp::Named("max_abs_error") = max_abs,
-    Rcpp::Named("rms_abs_error") = rms_abs,
-    Rcpp::Named("rms_relative_error") = rms_rel,
-    Rcpp::Named("max_error_index") = max_index,
-    Rcpp::Named("sample") = sample,
-    Rcpp::Named("reference") = "generic_metal_cooley_tukey",
-    Rcpp::Named("candidate") = "diagnostic_stockham512",
-    Rcpp::Named("generic_time_sec") = generic_time_sec,
-    Rcpp::Named("stockham_time_sec") = stockham_time_sec
-  );
-}
-
-List metal_mpsgraph_fft_diagnostic_impl(int fft_size,
-                                        int seed,
-                                        int n_repeats) {
-  if (@available(macOS 14.0, *)) {
-    if (fft_size < 16 || fft_size > 2048) {
-      Rcpp::stop("MPSGraph FFT diagnostic requires fft_size between 16 and 2048.");
-    }
-    if ((fft_size & (fft_size - 1)) != 0) {
-      Rcpp::stop("MPSGraph FFT diagnostic requires a power-of-two fft_size.");
-    }
-    n_repeats = std::max(1, std::min(n_repeats, 20));
-    const std::uint32_t n = static_cast<std::uint32_t>(fft_size);
-    const std::size_t total = static_cast<std::size_t>(n) * n;
-    const std::size_t bytes = total * sizeof(float);
-
-    std::vector<float> input(total);
-    std::vector<float> output(total, 0.0f);
-    std::mt19937 rng(static_cast<std::uint32_t>(seed == NA_INTEGER ? 5489 : seed));
-    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-    for (float& value : input) value = dist(rng);
-
-    NumericVector run_times(n_repeats);
-    @autoreleasepool {
-      MetalEmbeddingState& state = metal_embedding_state();
-      MPSGraph* graph = [[[MPSGraph alloc] init] autorelease];
-      MPSShape* real_shape = @[ @(fft_size), @(fft_size) ];
-      MPSGraphTensor* input_tensor = [graph placeholderWithShape:real_shape
-                                                        dataType:MPSDataTypeFloat32
-                                                            name:@"input"];
-      MPSGraphFFTDescriptor* forward_desc = [MPSGraphFFTDescriptor descriptor];
-      forward_desc.inverse = NO;
-      forward_desc.scalingMode = MPSGraphFFTScalingModeNone;
-      MPSGraphTensor* spectrum = [graph realToHermiteanFFTWithTensor:input_tensor
-                                                                axes:@[@0, @1]
-                                                          descriptor:forward_desc
-                                                                name:@"rfft2"];
-      MPSGraphFFTDescriptor* inverse_desc = [MPSGraphFFTDescriptor descriptor];
-      inverse_desc.inverse = YES;
-      inverse_desc.scalingMode = MPSGraphFFTScalingModeSize;
-      MPSGraphTensor* recovered = [graph HermiteanToRealFFTWithTensor:spectrum
-                                                                 axes:@[@0, @1]
-                                                           descriptor:inverse_desc
-                                                                 name:@"irfft2"];
-
-      id<MTLBuffer> input_buffer = [state.device newBufferWithBytes:input.data()
-                                                             length:bytes
-                                                            options:MTLResourceStorageModeShared];
-      if (input_buffer == nil) Rcpp::stop("Failed to allocate MPSGraph FFT input buffer.");
-      MPSGraphTensorData* input_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:input_buffer
-                                                                                shape:real_shape
-                                                                             dataType:MPSDataTypeFloat32] autorelease];
-      MPSGraphTensorDataDictionary* feeds = @{ input_tensor: input_data };
-      for (int r = 0; r < n_repeats; ++r) {
-        auto start = std::chrono::steady_clock::now();
-        MPSGraphTensorDataDictionary* result =
-          [graph runWithMTLCommandQueue:state.queue
-                                  feeds:feeds
-                          targetTensors:@[ recovered ]
-                       targetOperations:nil];
-        auto end = std::chrono::steady_clock::now();
-        run_times[r] = std::chrono::duration<double>(end - start).count();
-        if (r == n_repeats - 1) {
-          MPSGraphTensorData* recovered_data = [result objectForKey:recovered];
-          if (recovered_data == nil) {
-            [input_buffer release];
-            Rcpp::stop("MPSGraph FFT diagnostic did not return recovered tensor.");
-          }
-          MPSNDArray* array = [recovered_data mpsndarray];
-          if (array == nil) {
-            [input_buffer release];
-            Rcpp::stop("MPSGraph FFT diagnostic did not expose an MPSNDArray.");
-          }
-          [array readBytes:output.data() strideBytes:nil];
-        }
-      }
-      [input_buffer release];
-    }
-
-    double max_abs = 0.0;
-    double sum_sq = 0.0;
-    double ref_sq = 0.0;
-    int max_index = 0;
-    for (std::size_t i = 0; i < total; ++i) {
-      const double err = static_cast<double>(output[i]) - static_cast<double>(input[i]);
-      const double abs_err = std::abs(err);
-      sum_sq += err * err;
-      ref_sq += static_cast<double>(input[i]) * static_cast<double>(input[i]);
-      if (abs_err > max_abs) {
-        max_abs = abs_err;
-        max_index = static_cast<int>(i);
-      }
-    }
-    const double rms_abs = std::sqrt(sum_sq / static_cast<double>(total));
-    const double rms_rel = std::sqrt(sum_sq / std::max(ref_sq, std::numeric_limits<double>::min()));
-    return List::create(
-      Rcpp::Named("available") = true,
-      Rcpp::Named("fft_size") = fft_size,
-      Rcpp::Named("seed") = seed,
-      Rcpp::Named("n_repeats") = n_repeats,
-      Rcpp::Named("run_times_sec") = run_times,
-      Rcpp::Named("median_time_sec") = Rcpp::median(run_times),
-      Rcpp::Named("first_time_sec") = run_times[0],
-      Rcpp::Named("max_abs_error") = max_abs,
-      Rcpp::Named("rms_abs_error") = rms_abs,
-      Rcpp::Named("rms_relative_error") = rms_rel,
-      Rcpp::Named("max_error_index") = max_index,
-      Rcpp::Named("method") = "MPSGraph realToHermiteanFFT + HermiteanToRealFFT roundtrip"
-    );
-  } else {
-    return List::create(
-      Rcpp::Named("available") = false,
-      Rcpp::Named("status") = "not_supported",
-      Rcpp::Named("error_message") = "MPSGraph FFT requires macOS 14.0 or newer."
-    );
-  }
-}
-
-List metal_mpsgraph_convolution_diagnostic_impl(int fft_size,
-                                                int seed,
-                                                int n_repeats) {
-  if (@available(macOS 14.0, *)) {
-    if (fft_size < 16 || fft_size > 2048) {
-      Rcpp::stop("MPSGraph convolution diagnostic requires fft_size between 16 and 2048.");
-    }
-    if ((fft_size & (fft_size - 1)) != 0) {
-      Rcpp::stop("MPSGraph convolution diagnostic requires a power-of-two fft_size.");
-    }
-    n_repeats = std::max(1, std::min(n_repeats, 20));
-    const std::uint32_t n = static_cast<std::uint32_t>(fft_size);
-    const std::uint32_t log_fft = log2_power_of_two(n);
-    const std::uint32_t total_u = n * n;
-    const std::size_t total = static_cast<std::size_t>(total_u);
-    const std::size_t real_bytes = total * sizeof(float);
-    const std::size_t complex_floats = total * 2u;
-    const std::size_t complex_bytes = complex_floats * sizeof(float);
-
-    std::vector<float> mass(total);
-    std::vector<float> kernel(total);
-    std::vector<float> current_complex(complex_floats, 0.0f);
-    std::vector<float> kernel_complex(complex_floats, 0.0f);
-    std::vector<float> current_out_complex(complex_floats, 0.0f);
-    std::vector<float> mpsgraph_out(total, 0.0f);
-    std::mt19937 rng(static_cast<std::uint32_t>(seed == NA_INTEGER ? 5489 : seed));
-    std::uniform_real_distribution<float> mass_dist(0.0f, 1.0f);
-    std::normal_distribution<float> kernel_dist(0.0f, 0.25f);
-    for (std::size_t i = 0; i < total; ++i) {
-      mass[i] = mass_dist(rng);
-      kernel[i] = kernel_dist(rng);
-      current_complex[i * 2u] = mass[i];
-      kernel_complex[i * 2u] = kernel[i];
-    }
-
-    double current_time_sec = NA_REAL;
-    NumericVector mpsgraph_times(n_repeats);
-    @autoreleasepool {
-      MetalEmbeddingState& state = metal_embedding_state();
-      std::vector<float> twiddles = make_fft_twiddles(n, log_fft);
-      std::vector<float> scratch(complex_floats, 0.0f);
-      id<MTLBuffer> mass_buffer = [state.device newBufferWithBytes:current_complex.data()
-                                                            length:complex_bytes
-                                                           options:MTLResourceStorageModeShared];
-      id<MTLBuffer> kernel_buffer = [state.device newBufferWithBytes:kernel_complex.data()
-                                                              length:complex_bytes
-                                                             options:MTLResourceStorageModeShared];
-      id<MTLBuffer> out_buffer = [state.device newBufferWithBytes:current_out_complex.data()
-                                                           length:complex_bytes
-                                                          options:MTLResourceStorageModeShared];
-      id<MTLBuffer> scratch_buffer = [state.device newBufferWithBytes:scratch.data()
-                                                               length:complex_bytes
-                                                              options:MTLResourceStorageModeShared];
-      id<MTLBuffer> twiddle_buffer = [state.device newBufferWithBytes:twiddles.data()
-                                                              length:twiddles.size() * sizeof(float)
-                                                             options:MTLResourceStorageModeShared];
-      if (mass_buffer == nil || kernel_buffer == nil || out_buffer == nil ||
-          scratch_buffer == nil || twiddle_buffer == nil) {
-        Rcpp::stop("Failed to allocate Metal convolution diagnostic buffers.");
-      }
-
-      auto current_start = std::chrono::steady_clock::now();
-      id<MTLCommandBuffer> current_command = [state.queue commandBuffer];
-      encode_fft_2d_metal(state, current_command, mass_buffer, scratch_buffer, twiddle_buffer, n, log_fft, false);
-      encode_fft_2d_metal(state, current_command, kernel_buffer, scratch_buffer, twiddle_buffer, n, log_fft, false);
-      {
-        id<MTLComputeCommandEncoder> encoder = [current_command computeCommandEncoder];
-        [encoder setComputePipelineState:state.opentsne_fft_multiply_pipeline];
-        [encoder setBuffer:mass_buffer offset:0 atIndex:0];
-        [encoder setBuffer:kernel_buffer offset:0 atIndex:1];
-        [encoder setBuffer:out_buffer offset:0 atIndex:2];
-        [encoder setBytes:&total_u length:sizeof(std::uint32_t) atIndex:3];
-        [encoder dispatchThreads:MTLSizeMake(static_cast<NSUInteger>(total_u), 1, 1)
-           threadsPerThreadgroup:MTLSizeMake(bounded_threads(state.opentsne_fft_multiply_pipeline), 1, 1)];
-        [encoder endEncoding];
-      }
-      encode_fft_2d_metal(state, current_command, out_buffer, scratch_buffer, twiddle_buffer, n, log_fft, true);
-      wait_for_command(current_command, "Metal FFT convolution diagnostic");
-      auto current_end = std::chrono::steady_clock::now();
-      current_time_sec = std::chrono::duration<double>(current_end - current_start).count();
-      std::memcpy(current_out_complex.data(), [out_buffer contents], complex_bytes);
-
-      MPSGraph* graph = [[[MPSGraph alloc] init] autorelease];
-      MPSShape* real_shape = @[ @(fft_size), @(fft_size) ];
-      MPSGraphTensor* mass_tensor = [graph placeholderWithShape:real_shape
-                                                       dataType:MPSDataTypeFloat32
-                                                           name:@"mass"];
-      MPSGraphTensor* kernel_tensor = [graph placeholderWithShape:real_shape
-                                                         dataType:MPSDataTypeFloat32
-                                                             name:@"kernel"];
-      MPSGraphFFTDescriptor* forward_desc = [MPSGraphFFTDescriptor descriptor];
-      forward_desc.inverse = NO;
-      forward_desc.scalingMode = MPSGraphFFTScalingModeNone;
-      MPSGraphTensor* mass_spectrum = [graph realToHermiteanFFTWithTensor:mass_tensor
-                                                                     axes:@[@0, @1]
-                                                               descriptor:forward_desc
-                                                                     name:@"mass_rfft2"];
-      MPSGraphTensor* kernel_spectrum = [graph realToHermiteanFFTWithTensor:kernel_tensor
-                                                                       axes:@[@0, @1]
-                                                                 descriptor:forward_desc
-                                                                       name:@"kernel_rfft2"];
-      MPSGraphTensor* product = [graph multiplicationWithPrimaryTensor:mass_spectrum
-                                                       secondaryTensor:kernel_spectrum
-                                                                  name:@"spectral_product"];
-      MPSGraphFFTDescriptor* inverse_desc = [MPSGraphFFTDescriptor descriptor];
-      inverse_desc.inverse = YES;
-      inverse_desc.scalingMode = MPSGraphFFTScalingModeSize;
-      MPSGraphTensor* convolved = [graph HermiteanToRealFFTWithTensor:product
-                                                                 axes:@[@0, @1]
-                                                           descriptor:inverse_desc
-                                                                 name:@"irfft2_convolution"];
-
-      id<MTLBuffer> mass_real_buffer = [state.device newBufferWithBytes:mass.data()
-                                                                 length:real_bytes
-                                                                options:MTLResourceStorageModeShared];
-      id<MTLBuffer> kernel_real_buffer = [state.device newBufferWithBytes:kernel.data()
-                                                                   length:real_bytes
-                                                                  options:MTLResourceStorageModeShared];
-      if (mass_real_buffer == nil || kernel_real_buffer == nil) {
-        Rcpp::stop("Failed to allocate MPSGraph convolution diagnostic input buffers.");
-      }
-      MPSGraphTensorData* mass_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:mass_real_buffer
-                                                                               shape:real_shape
-                                                                            dataType:MPSDataTypeFloat32] autorelease];
-      MPSGraphTensorData* kernel_data = [[[MPSGraphTensorData alloc] initWithMTLBuffer:kernel_real_buffer
-                                                                                 shape:real_shape
-                                                                              dataType:MPSDataTypeFloat32] autorelease];
-      MPSGraphTensorDataDictionary* feeds = @{ mass_tensor: mass_data, kernel_tensor: kernel_data };
-      for (int r = 0; r < n_repeats; ++r) {
-        auto start = std::chrono::steady_clock::now();
-        MPSGraphTensorDataDictionary* result =
-          [graph runWithMTLCommandQueue:state.queue
-                                  feeds:feeds
-                          targetTensors:@[ convolved ]
-                       targetOperations:nil];
-        auto end = std::chrono::steady_clock::now();
-        mpsgraph_times[r] = std::chrono::duration<double>(end - start).count();
-        if (r == n_repeats - 1) {
-          MPSGraphTensorData* convolved_data = [result objectForKey:convolved];
-          if (convolved_data == nil) {
-            Rcpp::stop("MPSGraph convolution diagnostic did not return output tensor.");
-          }
-          MPSNDArray* array = [convolved_data mpsndarray];
-          if (array == nil) {
-            Rcpp::stop("MPSGraph convolution diagnostic did not expose an MPSNDArray.");
-          }
-          [array readBytes:mpsgraph_out.data() strideBytes:nil];
-        }
-      }
-
-      [mass_buffer release];
-      [kernel_buffer release];
-      [out_buffer release];
-      [scratch_buffer release];
-      [twiddle_buffer release];
-      [mass_real_buffer release];
-      [kernel_real_buffer release];
-    }
-
-    double max_abs = 0.0;
-    double sum_sq = 0.0;
-    double ref_sq = 0.0;
-    int max_index = 0;
-    for (std::size_t i = 0; i < total; ++i) {
-      const double current_value = current_out_complex[i * 2u];
-      const double mps_value = mpsgraph_out[i];
-      const double err = mps_value - current_value;
-      const double abs_err = std::abs(err);
-      sum_sq += err * err;
-      ref_sq += current_value * current_value;
-      if (abs_err > max_abs) {
-        max_abs = abs_err;
-        max_index = static_cast<int>(i);
-      }
-    }
-    const double rms_abs = std::sqrt(sum_sq / static_cast<double>(total));
-    const double rms_rel = std::sqrt(sum_sq / std::max(ref_sq, std::numeric_limits<double>::min()));
-
-    return List::create(
-      Rcpp::Named("available") = true,
-      Rcpp::Named("fft_size") = fft_size,
-      Rcpp::Named("seed") = seed,
-      Rcpp::Named("n_repeats") = n_repeats,
-      Rcpp::Named("current_metal_time_sec") = current_time_sec,
-      Rcpp::Named("mpsgraph_run_times_sec") = mpsgraph_times,
-      Rcpp::Named("mpsgraph_median_time_sec") = Rcpp::median(mpsgraph_times),
-      Rcpp::Named("mpsgraph_first_time_sec") = mpsgraph_times[0],
-      Rcpp::Named("max_abs_error") = max_abs,
-      Rcpp::Named("rms_abs_error") = rms_abs,
-      Rcpp::Named("rms_relative_error") = rms_rel,
-      Rcpp::Named("max_error_index") = max_index,
-      Rcpp::Named("reference") = "current_metal_complex_fft_convolution",
-      Rcpp::Named("candidate") = "mpsgraph_real_fft_convolution"
-    );
-  } else {
-    return List::create(
-      Rcpp::Named("available") = false,
-      Rcpp::Named("status") = "not_supported",
-      Rcpp::Named("error_message") = "MPSGraph FFT requires macOS 14.0 or newer."
-    );
   }
 }
 

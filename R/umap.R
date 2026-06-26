@@ -12,13 +12,15 @@
 #'   matrix. Defaults to `FALSE` so one-call results match a KNN object computed
 #'   from the supplied matrix.
 #' @param pca_dims Optional PCA dimension before KNN.
+#' @param metric KNN distance metric for one-call matrix input.
 #' @param nn Optional precomputed KNN result when `data` is a matrix.
 #' @param seed Random seed.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. KNN is
-#'   delegated to `faissR::nn_without_self()` with `method = "auto"` and
-#'   `tuning = "auto"`: CPU and Metal request the faissR CPU backend, while
-#'   CUDA requests the faissR CUDA backend. GPU requests must resolve to a real
-#'   native backend; the package does not relabel CPU work as GPU.
+#'   delegated to faissR with automatic method/tuning selection through an
+#'   internal bridge: CPU and Metal request faissR CPU HNSW with
+#'   `target_recall = 0.99`, while CUDA requests the faissR CUDA backend.
+#'   GPU requests must resolve to a real native backend; the package does not
+#'   relabel CPU work as GPU.
 #' @param n_threads Number of CPU worker threads for KNN and CPU UMAP.
 #' @param keep_knn Keep KNN matrices in the returned object.
 #' @param graph_mode Graph weighting mode. `"binary"` uses a symmetric
@@ -35,6 +37,7 @@ umap <- function(data,
                  n_components = 2L,
                  standardize = FALSE,
                  pca_dims = NULL,
+                 metric = c("euclidean", "cosine"),
                  nn = NULL,
                  seed = 4L,
                  backend = c("cpu", "cuda", "metal"),
@@ -46,6 +49,7 @@ umap <- function(data,
   graph_mode <- match.arg(graph_mode)
   n_components <- validate_n_components(n_components)
   keep_knn <- isTRUE(keep_knn)
+  input_is_float32 <- is_float32_matrix(data)
 
   if (is_knn_input(data)) {
     if (!is.null(nn)) {
@@ -108,6 +112,7 @@ umap <- function(data,
     )
   })
   x <- prepared$data
+  metric <- resolve_embedding_metric(metric, x)
   n <- nrow(x)
   if (is.null(n_neighbors)) {
     n_neighbors <- auto_embedding_k(n, method = "umap", include_self = FALSE)
@@ -115,18 +120,17 @@ umap <- function(data,
 
   knn_time <- system.time({
     knn_result <- if (is.null(nn)) {
-      knn_backend <- embedding_knn_backend(backend)
-      faissR::nn_without_self(
+      knn_policy <- fastembedr_embedding_nn_policy(backend)
+      fastembedr_nn_without_self(
         x,
         k = as.integer(n_neighbors),
-        backend = knn_backend,
-        method = fastembedr_faiss_method_for_float(x, knn_backend),
-        output = if (identical(backend, "cpu")) {
-          fastembedr_faiss_float_output(x, backend)
-        } else {
-          "double"
-        },
-        n_threads = n_threads
+        backend = knn_policy$backend,
+        method = knn_policy$method,
+        metric = metric,
+        output = fastembedr_faiss_float_output(x, knn_policy$backend),
+        n_threads = n_threads,
+        tuning = knn_policy$tuning,
+        target_recall = knn_policy$target_recall
       )
     } else {
       coerce_knn_input(nn)
@@ -144,6 +148,11 @@ umap <- function(data,
       graph_mode = graph_mode
     )
   })
+  layout <- finalize_embedding_layout(
+    layout,
+    "UMAP",
+    return_float32 = input_is_float32 && is_float32_matrix(x)
+  )
   cfg <- attr(layout, "fastEmbedR_config")
   elapsed <- preprocess_time[["elapsed"]] + knn_time[["elapsed"]] + embedding_time[["elapsed"]]
   metrics <- data.frame(
@@ -164,6 +173,7 @@ umap <- function(data,
       pca_dims = prepared$preprocess$pca_dims,
       preprocess = prepared$preprocess,
       graph_mode = graph_mode,
+      metric = metric,
       nn_backend = if (is.null(attr(knn_result, "backend"))) "supplied" else attr(knn_result, "backend")
     )
   )

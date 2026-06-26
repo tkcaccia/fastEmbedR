@@ -10,9 +10,9 @@ rule is simple: if a function is requested with `backend = "metal"` or
 | --- | --- | --- | --- | --- |
 | `faissR::nn()` | `faissR` FAISS CPU search | not implemented in `fastEmbedR` | `faissR` optional RAPIDS cuVS / FAISS GPU search | KNN belongs to `faissR`; `fastEmbedR` consumes it but does not re-export it. |
 | `umap_knn()` | native C++ CSR graph and optimizer | native Metal `atomic_inplace` optimizer | native CUDA pure-atomic optimizer | Metal/CUDA optimizers use the supplied graph; unavailable GPU backends fail clearly. |
-| `umap()` | faissR CPU KNN auto-selection, then `umap_knn()` | faissR CPU KNN auto-selection, then native Metal UMAP where available | faissR CUDA KNN auto-selection, then CUDA UMAP where available | The one-call API delegates KNN method/tuning to faissR. |
+| `umap()` | faissR CPU HNSW (`target_recall = 0.99`), then `umap_knn()` | faissR CPU HNSW (`target_recall = 0.99`), then native Metal UMAP where available | faissR CUDA KNN auto-selection, then CUDA UMAP where available | The one-call API delegates KNN method/tuning to faissR. |
 | `opentsne_knn()` | native C++ FFT-grid optimizer | native Metal FFT-grid optimizer | native CUDA FFT-grid optimizer using cuFFT | Use `Y_init` or `init_data` for explicit PCA initialization. |
-| `opentsne()` | faissR CPU KNN auto-selection, then `opentsne_knn()` | faissR CPU KNN auto-selection, then Metal openTSNE where available | faissR CUDA KNN auto-selection, then CUDA openTSNE where available | The package does not call Python openTSNE in public functions. |
+| `opentsne()` | faissR CPU HNSW (`target_recall = 0.99`), then `opentsne_knn()` | faissR CPU HNSW (`target_recall = 0.99`), then Metal openTSNE where available | faissR CUDA KNN auto-selection, then CUDA openTSNE where available | The package does not call Python openTSNE in public functions. |
 | `transform_tsne()` | native fixed-reference transform | native Metal projection/transform kernels where available | native CUDA projection/transform kernels where built | Used by openTSNE landmarking. |
 | `landmark_umap()` | native landmark embed/project/refine | native Metal projection/refinement kernels where available | native CUDA projection/refinement kernels where built | Landmarking is an explicit approximation, not a replacement for full UMAP. |
 | `landmark_tsne()` | native landmark embed plus transform | native Metal projection/transform kernels where available | native CUDA projection/transform kernels where built | Projection quality is tracked separately in benchmark plots. |
@@ -62,8 +62,8 @@ The validated UMAP Metal path is `atomic_inplace`; other slower or distorted
 Metal UMAP optimizer experiments were removed from the public API.
 
 The validated openTSNE Metal path is the package-native FFT-grid path with PCA
-initialization. MPSGraph FFT remains diagnostic-only because local MNIST tests
-did not justify replacing the package-native implementation.
+initialization. Standalone MPSGraph FFT diagnostic helpers were removed after
+MNIST tests did not justify exposing them as package features.
 
 ## CUDA
 

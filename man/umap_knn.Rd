@@ -47,7 +47,7 @@ point used by \code{\link{embed_knn}} with \code{method = "umap"}.
 }
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))
-knn <- faissR::nn(x, k = 16)
+knn <- faissR::nn(x, k = 16, exclude_self = TRUE)
 layout <- umap_knn(knn, seed = 1)
 plot(layout, pch = 21, bg = iris$Species)
 }
