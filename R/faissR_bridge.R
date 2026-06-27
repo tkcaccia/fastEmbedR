@@ -52,7 +52,7 @@ fastembedr_embedding_nn_policy <- function(embedding_backend) {
   if (identical(embedding_backend, "cuda")) {
     return(list(
       backend = "cuda",
-      method = "auto",
+      method = "ivf",
       tuning = "auto",
       target_recall = NULL
     ))

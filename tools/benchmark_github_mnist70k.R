@@ -102,6 +102,19 @@ write_machine_specs <- function(specs, out_dir) {
 plot_time_barplot <- function(results, path) {
   ok <- results[results$status == "success" & is.finite(results$total_sec), , drop = FALSE]
   if (!nrow(ok)) return(invisible(FALSE))
+  family_rank <- ifelse(ok$family %in% c("openTSNE", "Rtsne", "t-SNE", "tsne"), 1L, 2L)
+  method_rank <- match(ok$method, c(
+    "fastEmbedR openTSNE CPU",
+    "fastEmbedR openTSNE Metal",
+    "fastEmbedR openTSNE CUDA",
+    "Rtsne full",
+    "fastEmbedR UMAP CPU fuzzy",
+    "fastEmbedR UMAP Metal fuzzy",
+    "fastEmbedR UMAP CUDA fuzzy",
+    "uwot UMAP fast_sgd full"
+  ))
+  method_rank[is.na(method_rank)] <- seq_along(method_rank)[is.na(method_rank)] + 100L
+  ok <- ok[order(family_rank, method_rank), , drop = FALSE]
   labels <- gsub("^fastEmbedR ", "", ok$method)
   labels <- gsub(" UMAP fast_sgd full$", "\nfast_sgd full", labels)
   labels <- gsub(" UMAP ", "\nUMAP ", labels)
@@ -250,21 +263,49 @@ score <- function(x, layout, labels, seed, n_threads) {
 plot_layouts <- function(layouts, labels, rows, path, seed) {
   ok <- names(layouts)[vapply(layouts, function(x) !is.null(x), logical(1L))]
   if (!length(ok)) return(invisible(FALSE))
+  row_info <- rows[match(ok, rows$method), , drop = FALSE]
+  tsne_methods <- ok[row_info$family %in% c("openTSNE", "Rtsne", "t-SNE", "tsne")]
+  umap_methods <- ok[row_info$family %in% c("UMAP", "umap")]
+  family_order <- c(
+    "fastEmbedR openTSNE CPU",
+    "fastEmbedR openTSNE Metal",
+    "fastEmbedR openTSNE CUDA",
+    "Rtsne full",
+    "fastEmbedR UMAP CPU fuzzy",
+    "fastEmbedR UMAP Metal fuzzy",
+    "fastEmbedR UMAP CUDA fuzzy",
+    "uwot UMAP fast_sgd full"
+  )
+  tsne_methods <- intersect(family_order, tsne_methods)
+  umap_methods <- intersect(family_order, umap_methods)
+  ok <- c(tsne_methods, umap_methods)
   keep <- sample_rows(labels, min(70000L, length(labels)), seed + 29L)
-  png(path, width = 1000 * min(3L, length(ok)), height = 780 * ceiling(length(ok) / 3), res = 150)
+  ncol_panel <- max(length(tsne_methods), length(umap_methods), 1L)
+  png(path, width = 920 * ncol_panel, height = 780 * 2L, res = 150)
   on.exit(dev.off(), add = TRUE)
   old <- par(no.readonly = TRUE)
   on.exit(par(old), add = TRUE)
-  par(mfrow = c(ceiling(length(ok) / 3), min(3L, length(ok))), mar = c(1.4, 1.4, 3.0, 0.6))
+  par(mfrow = c(2L, ncol_panel), mar = c(1.4, 1.4, 3.0, 0.6))
   pal <- grDevices::hcl.colors(nlevels(labels), "Dark 3")
   cols <- pal[as.integer(labels)]
-  for (nm in ok) {
+  draw_panel <- function(nm) {
+    if (is.na(nm) || !nzchar(nm) || is.null(layouts[[nm]])) {
+      plot.new()
+      return(invisible(FALSE))
+    }
     row <- rows[rows$method == nm, , drop = FALSE]
     main <- sprintf("%s\n%.2fs trust %.3f", nm, row$total_sec[[1L]], row$trustworthiness[[1L]])
     y <- layouts[[nm]]
     plot(y[keep, 1], y[keep, 2], pch = 16, cex = 0.22, col = cols[keep],
          axes = FALSE, xlab = "", ylab = "", main = main)
     box(col = "grey70")
+    invisible(TRUE)
+  }
+  for (nm in c(tsne_methods, rep(NA_character_, ncol_panel - length(tsne_methods)))) {
+    draw_panel(nm)
+  }
+  for (nm in c(umap_methods, rep(NA_character_, ncol_panel - length(umap_methods)))) {
+    draw_panel(nm)
   }
   invisible(TRUE)
 }
@@ -347,7 +388,8 @@ add_row <- function(method,
                     total_sec,
                     layout,
                     status = "success",
-                    error = NA_character_) {
+                    error = NA_character_,
+                    input_class = paste(class(x_fast), collapse = "/")) {
   metrics <- if (!is.null(layout)) score(x_ref, layout, labels, seed, n_threads) else NULL
   results[[length(results) + 1L]] <<- data.frame(
     method = method,
@@ -357,8 +399,7 @@ add_row <- function(method,
     p = ncol(x_ref),
     k = k,
     perplexity = perplexity,
-    fastEmbedR_input_class = paste(class(x_fast), collapse = "/"),
-    reference_input_class = paste(class(x_ref), collapse = "/"),
+    input_class = input_class,
     machine = specs$machine,
     cpu = specs$cpu,
     requested_threads = n_threads,
@@ -380,6 +421,33 @@ run_one <- function(method, family, backend, expr) {
     add_row(method, family, backend, t$sec, y)
   }, error = function(e) {
     add_row(method, family, backend, NA_real_, NULL, "failed", conditionMessage(e))
+  })
+}
+
+run_reference <- function(method, family, backend, expr) {
+  tryCatch({
+    set.seed(seed)
+    t <- timed(expr())
+    y <- layout_matrix(t$value)
+    add_row(
+      method,
+      family,
+      backend,
+      t$sec,
+      y,
+      input_class = paste(class(x_ref), collapse = "/")
+    )
+  }, error = function(e) {
+    add_row(
+      method,
+      family,
+      backend,
+      NA_real_,
+      NULL,
+      "failed",
+      conditionMessage(e),
+      input_class = paste(class(x_ref), collapse = "/")
+    )
   })
 }
 
@@ -455,7 +523,7 @@ if (run_cuda) {
 }
 
 if (run_refs && requireNamespace("uwot", quietly = TRUE)) {
-  run_one("uwot UMAP fast_sgd full", "UMAP", "cpu", function() {
+  run_reference("uwot UMAP fast_sgd full", "UMAP", "cpu", function() {
     uwot::umap(
       x_ref,
       n_neighbors = k,
@@ -469,7 +537,7 @@ if (run_refs && requireNamespace("uwot", quietly = TRUE)) {
 }
 
 if (run_refs && requireNamespace("Rtsne", quietly = TRUE)) {
-  run_one("Rtsne full", "Rtsne", "cpu", function() {
+  run_reference("Rtsne full", "Rtsne", "cpu", function() {
     Rtsne::Rtsne(
       x_ref,
       perplexity = perplexity,

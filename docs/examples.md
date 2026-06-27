@@ -73,9 +73,8 @@ object.
 ## MNIST 70k Benchmark Example
 
 The example below uses the full 70,000 MNIST observations as flattened 28x28
-images. `fastEmbedR` uses the float32 MNIST file to exercise the low-memory
-path, while `Rtsne` and `uwot` use the classic `.RData` matrix.
-CPU paths are requested with 4 threads.
+images. CPU paths are requested with 4 threads. The result figure places
+t-SNE/openTSNE methods on the first row and UMAP methods on the second row.
 
 ```r
 library(fastEmbedR)
@@ -93,10 +92,9 @@ load("/path/to/MNIST.RData")          # classic object named dataset
 x_ref <- as.matrix(dataset$data)
 labels <- as.factor(dataset$labels)
 
-load("/path/to/MNIST_float32.RData")  # float32 object named dataset
-x_fast <- dataset$data
+x_fast <- x_ref
 
-k <- 15
+k <- 30
 perplexity <- 15
 seed <- 4
 
@@ -206,12 +204,12 @@ The benchmark intentionally does not show `graph_mode = "binary"`.
 
 | method | backend | total sec | trust | label KNN acc |
 | --- | --- | ---: | ---: | ---: |
-| fastEmbedR openTSNE CPU | CPU | 55.611 | 0.332 | 0.968 |
-| fastEmbedR openTSNE CUDA | CUDA | 5.341 | 0.333 | 0.969 |
-| Rtsne full | CPU | 97.337 | 0.324 | 0.973 |
-| fastEmbedR UMAP CPU fuzzy | CPU | 36.272 | 0.278 | 0.972 |
-| fastEmbedR UMAP CUDA fuzzy | CUDA | 4.687 | 0.276 | 0.971 |
-| uwot UMAP fast_sgd full | CPU | 37.397 | 0.276 | 0.970 |
+| fastEmbedR openTSNE CPU | CPU | 44.174 | 0.331 | 0.970 |
+| fastEmbedR openTSNE CUDA | CUDA | 4.861 | 0.334 | 0.969 |
+| Rtsne full | CPU | 91.557 | 0.323 | 0.972 |
+| fastEmbedR UMAP CPU fuzzy | CPU | 25.562 | 0.281 | 0.972 |
+| fastEmbedR UMAP CUDA fuzzy | CUDA | 6.279 | 0.278 | 0.971 |
+| uwot UMAP fast_sgd full | CPU | 49.047 | 0.278 | 0.969 |
 
 ![MNIST 70k embeddings](assets/mnist70k_cuda_codex_20260621_4threads/mnist70k_github_benchmark.png)
 
