@@ -93,6 +93,8 @@ x_ref <- as.matrix(dataset$data)
 labels <- as.factor(dataset$labels)
 
 x_fast <- x_ref
+out_dir <- "mnist70k_fastembedr_example"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 k <- 30
 perplexity <- 15
@@ -104,42 +106,6 @@ time_it <- function(expr) {
   list(value = value, sec = proc.time()[["elapsed"]] - t0)
 }
 
-set.seed(seed)
-opentsne_cpu <- time_it(
-  fastEmbedR::opentsne(x_fast, perplexity = perplexity, backend = "cpu",
-                       n_threads = 4, seed = seed)
-)
-
-set.seed(seed)
-opentsne_cuda <- time_it(
-  fastEmbedR::opentsne(x_fast, perplexity = perplexity, backend = "cuda",
-                       n_threads = 4, seed = seed)
-)
-
-set.seed(seed)
-rtsne_full <- time_it(
-  Rtsne::Rtsne(x_ref, perplexity = perplexity, check_duplicates = FALSE,
-               pca = TRUE, num_threads = 4)
-)
-
-set.seed(seed)
-umap_cpu <- time_it(
-  fastEmbedR::umap(x_fast, n_neighbors = k, backend = "cpu",
-                   graph_mode = "fuzzy", n_threads = 4, seed = seed)
-)
-
-set.seed(seed)
-umap_cuda <- time_it(
-  fastEmbedR::umap(x_fast, n_neighbors = k, backend = "cuda",
-                   graph_mode = "fuzzy", n_threads = 4, seed = seed)
-)
-
-set.seed(seed)
-uwot_fast <- time_it(
-  uwot::umap(x_ref, n_neighbors = k, fast_sgd = TRUE,
-             n_threads = 4, n_sgd_threads = 4, verbose = FALSE)
-)
-
 layout_of <- function(obj) {
   y <- obj$value
   if (is.list(y) && !is.null(y$layout)) y <- y$layout
@@ -147,24 +113,77 @@ layout_of <- function(obj) {
   as.matrix(y)
 }
 
-layouts <- list(
-  "fastEmbedR openTSNE CPU" = layout_of(opentsne_cpu),
-  "fastEmbedR openTSNE CUDA" = layout_of(opentsne_cuda),
-  "Rtsne full" = layout_of(rtsne_full),
-  "fastEmbedR UMAP CPU fuzzy" = layout_of(umap_cpu),
-  "fastEmbedR UMAP CUDA fuzzy" = layout_of(umap_cuda),
-  "uwot UMAP fast_sgd full" = layout_of(uwot_fast)
+run_method <- function(method, backend, expr) {
+  set.seed(seed)
+  ans <- tryCatch(time_it(expr), error = function(e) e)
+  if (inherits(ans, "error")) {
+    data.frame(method = method, backend = backend, total_sec = NA_real_,
+               status = "failed", error_message = conditionMessage(ans))
+  } else {
+    layouts[[method]] <<- layout_of(ans)
+    data.frame(method = method, backend = backend, total_sec = ans$sec,
+               status = "success", error_message = NA_character_)
+  }
+}
+
+layouts <- list()
+results <- list()
+
+results[[length(results) + 1L]] <- run_method(
+  "fastEmbedR openTSNE CPU", "cpu",
+  fastEmbedR::opentsne(x_fast, perplexity = perplexity, backend = "cpu",
+                       n_threads = 4, seed = seed)
 )
 
-timing <- data.frame(
-  method = names(layouts),
-  total_sec = c(opentsne_cpu$sec, opentsne_cuda$sec, rtsne_full$sec,
-                umap_cpu$sec, umap_cuda$sec, uwot_fast$sec)
+if (fastEmbedR::cuda_available()) {
+  results[[length(results) + 1L]] <- run_method(
+    "fastEmbedR openTSNE CUDA", "cuda",
+    fastEmbedR::opentsne(x_fast, perplexity = perplexity, backend = "cuda",
+                         n_threads = 4, seed = seed)
+  )
+}
+
+results[[length(results) + 1L]] <- run_method(
+  "Rtsne full", "cpu",
+  Rtsne::Rtsne(x_ref, perplexity = perplexity, check_duplicates = FALSE,
+               pca = TRUE, num_threads = 4)
 )
+
+results[[length(results) + 1L]] <- run_method(
+  "fastEmbedR UMAP CPU fuzzy", "cpu",
+  fastEmbedR::umap(x_fast, n_neighbors = k, backend = "cpu",
+                   graph_mode = "fuzzy", n_threads = 4, seed = seed)
+)
+
+if (fastEmbedR::cuda_available()) {
+  results[[length(results) + 1L]] <- run_method(
+    "fastEmbedR UMAP CUDA fuzzy", "cuda",
+    fastEmbedR::umap(x_fast, n_neighbors = k, backend = "cuda",
+                     graph_mode = "fuzzy", n_threads = 4, seed = seed)
+  )
+}
+
+results[[length(results) + 1L]] <- run_method(
+  "uwot UMAP fast_sgd full", "cpu",
+  uwot::umap(x_ref, n_neighbors = k, fast_sgd = TRUE,
+             n_threads = 4, n_sgd_threads = 4, verbose = FALSE)
+)
+
+timing <- do.call(rbind, results)
+write.csv(timing, file.path(out_dir, "mnist70k_timing.csv"), row.names = FALSE)
 
 print(timing)
 
+ok <- timing$status == "success"
+png(file.path(out_dir, "mnist70k_time_barplot.png"), width = 1200, height = 700, res = 140)
+op <- par(mar = c(8, 4, 2, 1))
+barplot(timing$total_sec[ok], names.arg = timing$method[ok],
+        las = 2, ylab = "Total time (seconds)", col = "#4C78A8")
+par(op)
+dev.off()
+
 cols <- as.integer(labels)
+png(file.path(out_dir, "mnist70k_embeddings.png"), width = 2700, height = 1560, res = 150)
 par(mfrow = c(2, 3), mar = c(1, 1, 3, 1))
 for (nm in names(layouts)) {
   y <- layouts[[nm]]
@@ -172,6 +191,7 @@ for (nm in names(layouts)) {
        axes = FALSE, xlab = "", ylab = "", main = nm)
   box(col = "grey70")
 }
+dev.off()
 ```
 
 The example compares:
