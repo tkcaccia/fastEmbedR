@@ -1124,7 +1124,8 @@ opentsne_knn <- function(indices,
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. For
 #'   matrix input, KNN is delegated to faissR with automatic method/tuning
 #'   selection through an internal bridge. CPU and Metal request faissR CPU
-#'   HNSW with `target_recall = 0.99`; CUDA requests the faissR CUDA backend.
+#'   HNSW with `target_recall = 0.99`; CUDA requests faissR CUDA
+#'   `method = "auto"` with `target_recall = 0.99`.
 #'   Unsupported GPU requests fail clearly and are not relabelled CPU runs.
 #' @param keep_knn If `TRUE`, retain KNN matrices in the returned object.
 #' @param verbose Print optimizer progress.

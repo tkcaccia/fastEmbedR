@@ -18,7 +18,8 @@
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. KNN is
 #'   delegated to faissR with automatic method/tuning selection through an
 #'   internal bridge: CPU and Metal request faissR CPU HNSW with
-#'   `target_recall = 0.99`, while CUDA requests the faissR CUDA backend.
+#'   `target_recall = 0.99`, while CUDA requests faissR CUDA
+#'   `method = "auto"` with `target_recall = 0.99`.
 #'   GPU requests must resolve to a real native backend; the package does not
 #'   relabel CPU work as GPU.
 #' @param n_threads Number of CPU worker threads for KNN and CPU UMAP.

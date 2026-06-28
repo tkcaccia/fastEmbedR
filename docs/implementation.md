@@ -36,9 +36,8 @@ uses FAISS/cuVS concepts for high-throughput vector search [8-9].
 
 For reproducibility, the one-call API fixes only the requested KNN device class:
 
-- CPU and Metal one-call embedding request faissR CPU HNSW with `target_recall = 0.99`.
-- CUDA one-call embedding requests the faissR CUDA backend.
-- CPU/Metal use faissR HNSW at `target_recall = 0.99`; CUDA uses faissR CUDA method/tuning policy.
+- CPU/Metal one-call embedding requests faissR CPU HNSW tuned to `target_recall = 0.99`.
+- CUDA one-call embedding requests faissR CUDA `method = "auto"` tuned to `target_recall = 0.99`.
 - KNN-input functions accept the index and distance matrices as already
   measured data and do not repeat neighbour search.
 

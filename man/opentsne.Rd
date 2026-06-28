@@ -63,7 +63,7 @@ so one-call results match a KNN object computed from the supplied matrix.}
 
 \item{backend}{Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. For
 matrix input, KNN is delegated to faissR with
-automatic method/tuning selection through an internal bridge. CPU and Metal request faissR CPU HNSW with \code{target_recall = 0.99}; CUDA requests the faissR CUDA backend.
+automatic method/tuning selection through an internal bridge. CPU and Metal request faissR CPU HNSW with \code{target_recall = 0.99}; CUDA requests faissR CUDA \code{method = "auto"} with \code{target_recall = 0.99}.
 Unsupported GPU requests fail clearly and are not relabelled CPU runs.}
 
 \item{keep_knn}{If `TRUE`, retain KNN matrices in the returned object.}

@@ -44,7 +44,8 @@ Use `backend = "metal"` on Apple Silicon or `backend = "cuda"` on a CUDA build.
 Explicit GPU requests fail clearly if the backend is unavailable.
 For matrix input, the KNN search is delegated to faissR through fastEmbedR's internal bridge:
 CPU and Metal use faissR CPU HNSW with `target_recall = 0.99`, while CUDA uses
-faissR's CUDA policy. The internal non-self KNN width is `ceiling(perplexity)`. Use
+faissR CUDA `method = "auto"` with `target_recall = 0.99`. The internal
+non-self KNN width is `ceiling(perplexity)`. Use
 `opentsne_knn()` with an explicit `faissR::nn()` result when benchmarking alternative
 KNN algorithms.
 
@@ -224,12 +225,12 @@ The benchmark intentionally does not show `graph_mode = "binary"`.
 
 | method | backend | total sec | trust | label KNN acc |
 | --- | --- | ---: | ---: | ---: |
-| fastEmbedR openTSNE CPU | CPU | 44.174 | 0.331 | 0.970 |
-| fastEmbedR openTSNE CUDA | CUDA | 4.861 | 0.334 | 0.969 |
-| Rtsne full | CPU | 91.557 | 0.323 | 0.972 |
-| fastEmbedR UMAP CPU fuzzy | CPU | 25.562 | 0.281 | 0.972 |
-| fastEmbedR UMAP CUDA fuzzy | CUDA | 6.279 | 0.278 | 0.971 |
-| uwot UMAP fast_sgd full | CPU | 49.047 | 0.278 | 0.969 |
+| fastEmbedR openTSNE CPU | CPU | 46.640 | 0.330 | 0.969 |
+| fastEmbedR openTSNE CUDA | CUDA | 5.286 | 0.332 | 0.965 |
+| Rtsne full | CPU | 94.131 | 0.323 | 0.972 |
+| fastEmbedR UMAP CPU fuzzy | CPU | 26.507 | 0.281 | 0.971 |
+| fastEmbedR UMAP CUDA fuzzy | CUDA | 4.397 | 0.278 | 0.970 |
+| uwot UMAP fast_sgd full | CPU | 47.866 | 0.279 | 0.970 |
 
 ![MNIST 70k embeddings](assets/mnist70k_cuda_codex_20260621_4threads/mnist70k_github_benchmark.png)
 

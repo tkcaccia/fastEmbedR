@@ -1,7 +1,7 @@
 "method","family","backend","n","p","k","perplexity","input_class","machine","cpu","requested_threads","total_sec","trustworthiness","label_knn_accuracy","status","error_message"
-"fastEmbedR openTSNE CPU","openTSNE","cpu",70000,784,30,15,"matrix/array","icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,44.174,0.330511111111112,0.9698,"success",NA
-"fastEmbedR openTSNE CUDA","openTSNE","cuda",70000,784,30,15,"matrix/array","icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,4.861,0.334066666666668,0.9686,"success",NA
-"fastEmbedR UMAP CPU fuzzy","UMAP","cpu",70000,784,30,15,"matrix/array","icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,25.562,0.280577777777778,0.9722,"success",NA
-"fastEmbedR UMAP CUDA fuzzy","UMAP","cuda",70000,784,30,15,"matrix/array","icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,6.279,0.278311111111112,0.971,"success",NA
-"uwot UMAP fast_sgd full","UMAP","cpu",70000,784,30,15,"matrix/array","icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,49.047,0.278177777777778,0.9694,"success",NA
-"Rtsne full","Rtsne","cpu",70000,784,30,15,"matrix/array","icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,91.557,0.32328888888889,0.9722,"success",NA
+"fastEmbedR openTSNE CPU","openTSNE","cpu",70000,784,30,15,"matrix/array","icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,46.64,0.33048888888889,0.9694,"success",NA
+"fastEmbedR openTSNE CUDA","openTSNE","cuda",70000,784,30,15,"matrix/array","icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,5.286,0.332311111111112,0.9654,"success",NA
+"fastEmbedR UMAP CPU fuzzy","UMAP","cpu",70000,784,30,15,"matrix/array","icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,26.507,0.281066666666667,0.9708,"success",NA
+"fastEmbedR UMAP CUDA fuzzy","UMAP","cuda",70000,784,30,15,"matrix/array","icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,4.39700000000001,0.278133333333334,0.9702,"success",NA
+"uwot UMAP fast_sgd full","UMAP","cpu",70000,784,30,15,"matrix/array","icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,47.866,0.278911111111112,0.9704,"success",NA
+"Rtsne full","Rtsne","cpu",70000,784,30,15,"matrix/array","icgeb-bioinformatics-unit","13th Gen Intel(R) Core(TM) i7-13700",4,94.131,0.323244444444445,0.9722,"success",NA

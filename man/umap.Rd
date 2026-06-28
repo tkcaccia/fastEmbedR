@@ -38,7 +38,7 @@ from the supplied matrix.}
 
 \item{seed}{Random seed.}
 
-\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. KNN is delegated to faissR with automatic method and tuning selection through an internal bridge. CPU and Metal request faissR CPU HNSW with \code{target_recall = 0.99}, while CUDA requests the faissR CUDA backend. GPU requests must resolve to a real native backend; the package does not relabel CPU work as GPU.}
+\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. KNN is delegated to faissR with automatic method and tuning selection through an internal bridge. CPU and Metal request faissR CPU HNSW with \code{target_recall = 0.99}, while CUDA requests faissR CUDA \code{method = "auto"} with \code{target_recall = 0.99}. GPU requests must resolve to a real native backend; the package does not relabel CPU work as GPU.}
 
 \item{n_threads}{Number of CPU worker threads for KNN and CPU UMAP.}
 
