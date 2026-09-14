@@ -2,7 +2,6 @@
 
 **Home** |
 [Installation](docs/installation.md) |
-[Bioconductor](docs/bioconductor.md) |
 [Implementation](docs/implementation.md) |
 [Performance Engineering](docs/backend-performance-engineering.md) |
 [Examples](docs/examples.md) |
@@ -164,9 +163,8 @@ remotes::install_github(paste0("tkcaccia/fastEmbedR@", ref))
 
 See [Installation](docs/installation.md) for `fastEmbedR` CPU, Metal, and CUDA
 embedding builds, including direct FAISS GPU and RAPIDS cuVS linkage for CUDA KNN.
-See [Bioconductor](docs/bioconductor.md) for the dependency split used for
-submission: native CPU/Metal code in `fastEmbedR`, optional direct FAISS/cuVS CUDA
-KNN, and reference packages isolated in the separate benchmark environment.
+The portable CPU build requires R, Rcpp, and a C++17 compiler. Accelerator
+libraries are optional and are detected during source installation.
 
 ## License
 

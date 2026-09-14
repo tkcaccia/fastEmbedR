@@ -1,3 +1,12 @@
+# fastEmbedR 0.1
+
+- Prepare the package for CRAN submission with a portable CPU build and
+  optional Metal and CUDA capabilities.
+- Remove the `Biobase` dependency and its vignette-only expression-data
+  example. The package accepts ordinary matrices and does not require a
+  Bioconductor runtime package.
+- Remove Bioconductor-specific classification fields from `DESCRIPTION`.
+
 # fastEmbedR 0.99.17
 
 - Regenerate the complete reference manual from authoritative roxygen source

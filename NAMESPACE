@@ -1,6 +1,5 @@
 useDynLib(fastEmbedR, .registration = TRUE)
 importFrom(Rcpp, evalCpp)
-importFrom(Biobase, exprs, pData)
 importFrom(stats, dist)
 export(umap)
 export(fastEmbedR_backend)

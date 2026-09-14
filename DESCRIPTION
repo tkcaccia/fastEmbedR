@@ -1,7 +1,7 @@
 Package: fastEmbedR
 Type: Package
 Title: Native UMAP and Interpolation-Based t-SNE Embeddings
-Version: 0.99.17
+Version: 0.1
 Authors@R: person(
     given = "Stefano",
     family = "Cacciatore",
@@ -30,20 +30,8 @@ URL: https://github.com/tkcaccia/fastEmbedR,
     https://tkcaccia.github.io/fastEmbedR/,
     https://github.com/tkcaccia/fastEmbedR-benchmark
 BugReports: https://github.com/tkcaccia/fastEmbedR/issues
-biocViews:
-    Software,
-    Infrastructure,
-    Preprocessing,
-    DimensionReduction,
-    Visualization,
-    Clustering,
-    SingleCell,
-    FlowCytometry,
-    GeneExpression,
-    GPU
 Encoding: UTF-8
 Imports:
-    Biobase,
     methods,
     Rcpp,
     withr
