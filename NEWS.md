@@ -10,6 +10,9 @@
   This removes a Metal-only clipping policy that could impair long-run
   convergence, and adds an exact-objective regression test for sustained
   FFT-grid optimization.
+- Apply `FASTEMBEDR_CUDA_FLAGS` consistently to CUDA toolkit and RAPIDS RAFT
+  configure probes as well as package translation units. This supports custom
+  CCCL and CUDA toolchain include layouts without weakening strict detection.
 
 # fastEmbedR 0.99.17
 

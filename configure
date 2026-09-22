@@ -195,6 +195,7 @@ fi
 cuda_home=${CUDA_HOME:-${CUDA_PATH:-${CUDAToolkit_ROOT:-}}}
 nvcc=${NVCC:-}
 cuda_host_cxx=${CUDAHOSTCXX:-}
+cuda_extra_flags=${FASTEMBEDR_CUDA_FLAGS:-}
 
 if [ -z "$nvcc" ] && [ -n "$cuda_home" ] && \
    [ -x "$cuda_home/bin/nvcc" ]; then
@@ -352,7 +353,7 @@ EOF_CUDA
     print_probe_failure "CUDA compile/link" \
       "$configure_tmp/cuda-link.log"
   else
-    if "$nvcc" -std=c++17 $cuda_host_flags \
+    if "$nvcc" -std=c++17 $cuda_host_flags $cuda_extra_flags \
        $cuda_toolkit_include_flags \
        "$configure_tmp/cuda-link.cu" \
        $cuda_lib_flags -lcudart -lcufft -lcublas -lcusolver \
@@ -403,7 +404,6 @@ if [ "$cuda_probe_ok" = "1" ]; then
     esac
     cuda_arch_flags="$cuda_arch_flags -gencode=arch=compute_$arch,code=sm_$arch"
   done
-  cuda_extra_flags=${FASTEMBEDR_CUDA_FLAGS:-}
   cuda_objects="embedding_cuda_impl.o embedding_cuda_kernels.o"
   graph_cuda_object="graph_clustering_cuda_kernels.o"
   cppflags="$cppflags -DFASTEMBEDR_HAS_CUDA $cuda_include_flags"
@@ -618,6 +618,7 @@ int main() {
 EOF_RAFT
     if "$nvcc" -std=c++17 --extended-lambda \
        --expt-relaxed-constexpr $cuda_host_flags \
+       $cuda_extra_flags \
        $cuda_toolkit_include_flags $raft_include_flags \
        "$configure_tmp/raft-link.cu" \
        $cuda_lib_flags $raft_library_flags \

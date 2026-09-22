@@ -9,9 +9,15 @@ trap 'rm -rf "$TMP"' EXIT
 TOOLKIT="$TMP/cuda"
 INCLUDE="$TOOLKIT/targets/x86_64-linux/include"
 LIB="$TOOLKIT/targets/x86_64-linux/lib64"
+RAPIDS="$TMP/rapids"
+RAPIDS_INCLUDE="$RAPIDS/include/rapids"
+RAPIDS_LIB="$RAPIDS/lib"
+CUSTOM_CCCL="$TMP/custom-cccl"
 mkdir -p "$INCLUDE/cub" "$INCLUDE/thrust/iterator"
 mkdir -p "$INCLUDE/cuvs/core" "$INCLUDE/cuvs/neighbors"
 mkdir -p "$INCLUDE/cuvs/distance" "$INCLUDE/dlpack" "$LIB"
+mkdir -p "$RAPIDS_INCLUDE/raft/core" "$RAPIDS_INCLUDE/raft/linalg"
+mkdir -p "$RAPIDS_LIB" "$CUSTOM_CCCL"
 
 cat > "$INCLUDE/cuda_runtime.h" <<'EOF'
 #pragma once
@@ -62,6 +68,24 @@ printf '#pragma once\n' > "$INCLUDE/thrust/iterator/counting_iterator.h"
 printf '#pragma once\n' > "$INCLUDE/dlpack/dlpack.h"
 printf '#pragma once\n' > "$INCLUDE/cuvs/neighbors/brute_force.h"
 printf '#pragma once\n' > "$INCLUDE/cuvs/distance/distance.h"
+printf '#pragma once\n' > "$CUSTOM_CCCL/fastembedr_custom_cccl.hpp"
+cat > "$RAPIDS_INCLUDE/raft/core/handle.hpp" <<'EOF'
+#pragma once
+#include <fastembedr_custom_cccl.hpp>
+namespace raft {
+class handle_t {};
+}
+EOF
+cat > "$RAPIDS_INCLUDE/raft/linalg/tsvd.cuh" <<'EOF'
+#pragma once
+namespace raft {
+namespace linalg {
+struct paramsTSVD {
+  int n_iterations = 0;
+};
+}
+}
+EOF
 cat > "$INCLUDE/cuvs/core/c_api.h" <<'EOF'
 #pragma once
 #ifdef __cplusplus
@@ -129,6 +153,12 @@ cc -shared -fPIC "$TMP/cufft.c" -o "$LIB/libcufft.so"
 cc -shared -fPIC "$TMP/cusolver.c" -o "$LIB/libcusolver.so"
 cc -shared -fPIC "$TMP/cuvs.c" -o "$LIB/libcuvs_c.so"
 cc -shared -fPIC "$TMP/cuvs_cpp.c" -o "$LIB/libcuvs.so"
+for library in cublasLt cusparse curand; do
+  cc -shared -fPIC "$TMP/cuvs_cpp.c" -o "$LIB/lib${library}.so"
+done
+for library in raft rmm rapids_logger; do
+  cc -shared -fPIC "$TMP/cuvs_cpp.c" -o "$RAPIDS_LIB/lib${library}.so"
+done
 
 mkdir -p "$TOOLKIT/bin"
 cat > "$TOOLKIT/bin/nvcc" <<'EOF'
@@ -139,6 +169,8 @@ args=()
 for arg in "$@"; do
   case "$arg" in
     -ccbin=*) ;;
+    --extended-lambda) ;;
+    --expt-relaxed-constexpr) ;;
     -x) ;;
     cu) ;;
     *) args+=("$arg") ;;
@@ -159,9 +191,12 @@ if ! (
   NVCC_LOG="$TMP/nvcc.log" \
   CUDA_HOME="$TOOLKIT" \
   CUVS_HOME="$TOOLKIT" \
+  RAFT_HOME="$RAPIDS" \
   NVCC="$TOOLKIT/bin/nvcc" \
   PACKAGE_REQUIRE_CUDA=1 \
   FASTEMBEDR_USE_FAISS_GPU=0 \
+  FASTEMBEDR_USE_RAFT=1 \
+  FASTEMBEDR_CUDA_FLAGS="-I$CUSTOM_CCCL" \
   ./configure > "$TMP/good.log" 2>&1
 ); then
   cat "$TMP/good.log" >&2
@@ -173,6 +208,8 @@ grep -F -- "-L$LIB" "$GOOD/src/Makevars"
 grep -F -- "-Wl,-rpath,$LIB" "$GOOD/src/Makevars"
 grep -F -- "-DFASTEMBEDR_HAS_CUDA" "$GOOD/src/Makevars"
 grep -F -- "-DFASTEMBEDR_HAS_CUVS" "$GOOD/src/Makevars"
+grep -F -- "-DFASTEMBEDR_HAS_RAFT" "$GOOD/src/Makevars"
+grep -F -- "-I$CUSTOM_CCCL" "$GOOD/src/Makevars"
 grep -F -- "-DNDEBUG" "$GOOD/src/Makevars"
 grep -F -- 'all: $(SHLIB)' "$GOOD/src/Makevars"
 if grep -Fq -- ".DEFAULT_GOAL" "$GOOD/src/Makevars"; then
@@ -183,6 +220,8 @@ if [[ -x /usr/bin/g++ ]]; then
   grep -F -- "-ccbin=/usr/bin/g++" "$GOOD/src/Makevars"
   grep -F -- "-ccbin=/usr/bin/g++" "$TMP/nvcc.log"
 fi
+raft_probe=$(grep 'raft-link.cu' "$TMP/nvcc.log")
+printf '%s\n' "$raft_probe" | grep -F -- "-I$CUSTOM_CCCL"
 
 BROKEN="$TMP/broken"
 mkdir -p "$BROKEN/src" "$BROKEN/cuda/bin" "$BROKEN/cuda/include"

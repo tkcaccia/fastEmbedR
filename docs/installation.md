@@ -110,6 +110,10 @@ external prefixes. Configure records runtime search paths for detected CUDA,
 cuVS, RAFT/RMM, and optional FAISS libraries. A matching `LD_LIBRARY_PATH` may
 still be needed for transitive dependencies:
 
+`FASTEMBEDR_CUDA_FLAGS` is applied to both CUDA configure probes and package
+translation units. Custom CCCL or toolchain include flags are therefore
+validated before package compilation begins.
+
 ```sh
 export LD_LIBRARY_PATH=/opt/rapids/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}
 ```
