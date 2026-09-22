@@ -148,17 +148,11 @@ validate_opentsne_min_gain <- function(min_gain) {
     value
 }
 
-resolve_opentsne_max_step_norm <- function(max_step_norm,
-                                            optimizer_backend,
-                                            negative_gradient_method) {
+resolve_opentsne_max_step_norm <- function(max_step_norm) {
     is_auto <- is.character(max_step_norm) &&
         length(max_step_norm) == 1L &&
         identical(tolower(max_step_norm), "auto")
     if (is_auto) {
-        if (identical(optimizer_backend, "metal") &&
-            identical(negative_gradient_method, "fft")) {
-            return(0.5)
-        }
         return(5)
     }
     if (is.null(max_step_norm) ||
@@ -211,11 +205,7 @@ resolve_opentsne_controls <- function(
             exaggeration
         ),
         min_gain = validate_opentsne_min_gain(min_gain),
-        max_step_norm = resolve_opentsne_max_step_norm(
-            max_step_norm,
-            optimizer_backend,
-            negative_gradient_method
-        ),
+        max_step_norm = resolve_opentsne_max_step_norm(max_step_norm),
         record_costs = isTRUE(record_costs) || isTRUE(verbose)
     )
 }
@@ -254,7 +244,12 @@ run_opentsne_cuda_host_optimizer <- function(state, controls) {
     args <- controls$args
     lr <- controls$learning_rate
     ex <- controls$exaggeration
-    knn_tsne_opentsne_cuda_float_cpp(
+    optimizer <- if (is_float32_matrix(state$distances)) {
+        knn_tsne_opentsne_cuda_float_cpp
+    } else {
+        knn_tsne_opentsne_cuda_cpp
+    }
+    optimizer(
         state$indices, state$distances, args$Y_init, args$init,
         args$n_components, args$perplexity, state$early_iter,
         state$normal_iter, ex$early, ex$normal, lr$value, lr$auto,

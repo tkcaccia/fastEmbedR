@@ -5,23 +5,21 @@
 \title{Precompute native nearest neighbors}
 \usage{
 precompute_knn(
-    data,
-    k = 30L,
-    metric = c("euclidean", "cosine", "correlation", "inner_product"),
-    backend = NULL,
-    n.cores = NULL
+  data,
+  k = 30L,
+  metric = c("euclidean", "cosine", "correlation", "inner_product"),
+  backend = NULL,
+  n.cores = NULL
 )
 }
 \arguments{
-\item{data}{Numeric matrix, numeric data frame, or a \code{float::float32}
-    matrix
+\item{data}{Numeric matrix, numeric data frame, or a \code{float::float32} matrix
 with observations in rows.}
 
 \item{k}{Number of non-self nearest neighbors to return.}
 
 \item{metric}{Distance metric: \code{"euclidean"}, \code{"cosine"},
-\code{"correlation"}, or \code{"inner_product"}. Raw inner product is available
-only
+\code{"correlation"}, or \code{"inner_product"}. Raw inner product is available only
 in CUDA builds that support it.}
 
 \item{backend}{Search backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}.}
@@ -31,29 +29,26 @@ this argument.}
 }
 \value{
 A \code{fastEmbedR_knn} object. Host results contain \code{indices} and
-\code{distances}; CUDA results additionally inherit from
-\code{fastEmbedR_gpu_knn}
+\code{distances}; CUDA results additionally inherit from \code{fastEmbedR_gpu_knn}
 and own device-resident index and distance buffers.
 }
 \description{
 \code{precompute_knn()} exposes the same package-native nearest-neighbor search
-used internally by \code{\link[=umap]{umap()}} and \code{\link[=tsne]{tsne()}}.
-The search algorithm is chosen
+used internally by \code{\link[=umap]{umap()}} and \code{\link[=tsne]{tsne()}}. The search algorithm is chosen
 by fastEmbedR for the requested backend and is deliberately not a user
 parameter.
 }
 \details{
 CPU search uses the package-native recall-tuned HNSW implementation. Metal
 uses native exact search for small inputs and recall-tuned IVF-Flat for
-larger inputs. CUDA uses package-native direct FAISS GPU exact search below
-100,000 observations and direct RAPIDS cuVS IVF-Flat above that threshold.
-The internal recall target is 0.99.
+larger inputs. CUDA uses RAPIDS cuVS brute-force exact search below 100,000
+observations and cuVS IVF-Flat above that threshold. A build may explicitly
+enable FAISS GPU as an alternative exact-search provider, but FAISS is not
+required. The internal recall target is 0.99.
 
 The CUDA result remains on the GPU and can be passed directly to
-\code{\link[=umap_knn]{umap_knn()}} or \code{\link[=tsne_knn]{tsne_knn()}} with
-\code{backend = "cuda"}. CPU and Metal
-results contain one-based \code{indices} and \code{distances} matrices. Every
-result
+\code{\link[=umap_knn]{umap_knn()}} or \code{\link[=tsne_knn]{tsne_knn()}} with \code{backend = "cuda"}. CPU and Metal
+results contain one-based \code{indices} and \code{distances} matrices. Every result
 excludes the observation itself. An unavailable requested backend raises an
 error; no CPU fallback is reported as GPU work.
 }

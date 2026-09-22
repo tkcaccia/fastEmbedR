@@ -5,20 +5,19 @@
 \title{Embed from precomputed KNN}
 \usage{
 embed_knn(
-    indices,
-    distances = NULL,
-    method = "umap",
-    n_components = 2L,
-    seed = 4L,
-    verbose = FALSE,
-    backend = NULL,
-    n.cores = NULL,
-    ...
+  indices,
+  distances = NULL,
+  method = "umap",
+  n_components = 2L,
+  seed = 4L,
+  verbose = FALSE,
+  backend = NULL,
+  n.cores = NULL,
+  ...
 )
 }
 \arguments{
-\item{indices}{A list containing KNN \code{indices} and \code{distances}, or an
-    integer
+\item{indices}{A list containing KNN \code{indices} and \code{distances}, or an integer
 KNN index matrix. If a self-neighbor first column is present it is removed
 automatically.}
 
@@ -33,8 +32,7 @@ automatically.}
 
 \item{verbose}{Print native optimizer progress.}
 
-\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or
-    \code{"metal"}.}
+\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}.}
 
 \item{n.cores}{Number of CPU cores used by the CPU optimizer.
 Native GPU optimizers ignore this argument.}

@@ -56,8 +56,9 @@ benchmarks easier to interpret.
 The one-call functions and `precompute_knn()` intentionally hide the KNN
 algorithm choice. Their `backend` accepts only `"cpu"`, `"metal"`, or
 `"cuda"`. CPU KNN uses native HNSW; Metal uses native exact/IVF-Flat; CUDA
-uses direct FAISS GPU exact search or RAPIDS cuVS IVF-Flat and keeps its output
-resident on the device. A CUDA KNN object should therefore be reused with a
+uses RAPIDS cuVS exact or IVF-Flat search and keeps its output resident on the
+device. An explicitly enabled FAISS GPU build may provide exact search. A CUDA
+KNN object should therefore be reused with a
 CUDA embedding backend. A host KNN result from another tool may still be
 supplied as a plain list containing `indices` and `distances`; fastEmbedR never
 calls that tool itself.
@@ -162,10 +163,8 @@ plot(fit)
 
 ## t-SNE From The Same KNN
 
-The KNN must contain at least `ceiling(3 * perplexity)` non-self columns under
-the default `affinity_support = "standard"` policy. This avoids the
-maximum-entropy degeneracy that occurs when support equals perplexity. Use
-`affinity_support = "compact"` only for an explicitly labeled approximation.
+The KNN must contain at least `ceiling(perplexity)` non-self columns. t-SNE
+uses exactly that compact support width and ignores additional KNN columns.
 
 ```r
 Y_init <- tsne_pca_init(x, seed = 1)

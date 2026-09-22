@@ -25,15 +25,13 @@ primary contributions are:
 - float32 input/output support with float32 native optimizer buffers;
 - explicit backend reporting, with no silent CPU fallback labelled as GPU;
 - native CPU HNSW and Apple Metal exact/IVF-Flat KNN for one-call embeddings;
-- optional GPU-resident CUDA KNN through direct FAISS GPU and RAPIDS cuVS APIs.
+- optional GPU-resident CUDA KNN through RAPIDS cuVS, with FAISS GPU as an
+  explicit optional exact-search provider.
 
 The t-SNE implementation combines sparse perplexity affinities, two-phase
 optimization, interpolation/FFT repulsion, and fixed-reference transformation
-in native CPU, Metal, and CUDA kernels. The production default uses
-`affinity_support = "standard"`, corresponding to
-`ceiling(3 * perplexity)` non-self candidate neighbors. The older
-`"compact"` policy uses only `ceiling(perplexity)` and is exposed solely as an
-explicit speed/memory approximation.
+in native CPU, Metal, and CUDA kernels. The production default uses compact
+affinity support with `ceiling(perplexity)` non-self candidate neighbors.
 
 Publication benchmark scripts, dataset manifests, HPC launchers, and data
 acquisition instructions are maintained separately in
@@ -61,8 +59,8 @@ For the one-call functions `tsne()` and `umap()`, the embedding backend is
 deliberately limited to `backend = "cpu"`, `"metal"`, or `"cuda"`. Internal
 CPU one-call embeddings use the package-native float32 HNSW path. Metal uses
 native exact search for small inputs and recall-tuned IVF-Flat for larger
-inputs. CUDA uses direct FAISS GPU exact search below 100,000 rows and direct
-cuVS IVF-Flat above that threshold, then passes package-owned device pointers
+inputs. CUDA uses cuVS brute-force exact search below 100,000 rows and cuVS
+IVF-Flat above that threshold, then passes package-owned device pointers
 into UMAP or t-SNE. It does not call another R package for KNN. No
 unavailable GPU backend is silently relabelled as CPU.
 
@@ -155,14 +153,20 @@ For the development version:
 
 ```r
 install.packages("remotes")
-# Reproducible source installation: replace with the reviewed release tag or
-# full 40-character commit recorded by the release manifest.
-ref <- "REPLACE_WITH_FROZEN_TAG_OR_COMMIT"
-remotes::install_github(paste0("tkcaccia/fastEmbedR@", ref))
+remotes::install_github("tkcaccia/fastEmbedR")
+```
+
+For a reproducible analysis, install the versioned source archive recorded in
+the analysis manifest rather than the moving development branch:
+
+```sh
+FASTEMBEDR_USE_CUDA=0 \
+R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 ```
 
 See [Installation](docs/installation.md) for `fastEmbedR` CPU, Metal, and CUDA
-embedding builds, including direct FAISS GPU and RAPIDS cuVS linkage for CUDA KNN.
+embedding builds, including RAPIDS cuVS linkage for CUDA KNN. FAISS GPU is
+optional and disabled unless explicitly requested at configuration time.
 The portable CPU build requires R, Rcpp, and a C++17 compiler. Accelerator
 libraries are optional and are detected during source installation.
 
@@ -171,7 +175,8 @@ libraries are optional and are detected during source installation.
 `fastEmbedR` is distributed under the MIT license. GPL packages such as `uwot`
 are used only as optional external benchmark/reference tools, not as required
 runtime dependencies or vendored source. Native KNN derivatives and optional
-linked libraries retain the FAISS MIT, Faiss-mlx Apache-2.0, and RAPIDS cuVS
+adapted code and linked libraries retain the FAISS MIT, Faiss-mlx Apache-2.0,
+and RAPIDS cuVS
 Apache-2.0 notices under `inst/LICENSES/`.
 
 See [Source provenance and licensing](docs/provenance-and-licensing.md) for the

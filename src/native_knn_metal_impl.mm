@@ -45,9 +45,8 @@ namespace {
 constexpr int kMaxP = 1024;
 constexpr int kMaxGlobalP = 16384;
 constexpr int kMaxLists = 1024;
-// Standard sparse t-SNE support uses ceil(3 * perplexity). Keep enough local
-// top-k storage for the common perplexity-30 case (k = 90) without routing an
-// explicit Metal request through a host fallback.
+// Keep enough local top-k storage for compact t-SNE and UMAP neighborhoods
+// without routing an explicit Metal request through a host fallback.
 constexpr int kMaxK = 128;
 constexpr int kMaxProbe = 256;
 constexpr int kMaxShortlistPerGroup = 128;

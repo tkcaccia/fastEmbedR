@@ -220,6 +220,8 @@
 ^src/symbols[.]rds$
 ^results$
 ^results/
+^output$
+^output/
 ^examples$
 ^examples/
 ^tools$

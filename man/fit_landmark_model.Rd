@@ -5,30 +5,27 @@
 \title{Fit an embedding model on selected landmarks}
 \usage{
 fit_landmark_model(
-    data,
-    selection,
-    method = c("umap", "tsne"),
-    n_neighbors = NULL,
-    perplexity = NULL,
-    affinity_support = c("standard", "compact"),
-    n_components = 2L,
-    metric = c("euclidean", "cosine", "correlation", "inner_product"),
-    seed = 4L,
-    backend = NULL,
-    n.cores = NULL,
-    graph_mode = c("fuzzy", "binary"),
-    keep_knn = FALSE,
-    verbose = FALSE,
-    ...
+  data,
+  selection,
+  method = c("umap", "tsne"),
+  n_neighbors = NULL,
+  perplexity = NULL,
+  n_components = 2L,
+  metric = c("euclidean", "cosine", "correlation", "inner_product"),
+  seed = 4L,
+  backend = NULL,
+  n.cores = NULL,
+  graph_mode = c("fuzzy", "binary"),
+  keep_knn = FALSE,
+  verbose = FALSE,
+  ...
 )
 }
 \arguments{
 \item{data}{Data in the analysis space used for KNN. Preprocess once before
 calling this staged API when centering, scaling, or PCA is required.}
 
-\item{selection}{A result from
-    \code{\link[=select_landmarks]{select_landmarks()}} or explicit landmark
-    row
+\item{selection}{A result from \code{\link[=select_landmarks]{select_landmarks()}} or explicit landmark row
 indices.}
 
 \item{method}{\code{"umap"} or \code{"tsne"}.}
@@ -37,10 +34,6 @@ indices.}
 precomputed KNN support width; \code{NULL} derives it from \code{perplexity}.}
 
 \item{perplexity}{t-SNE perplexity.}
-
-\item{affinity_support}{t-SNE affinity support policy. \code{"standard"}
-uses \code{ceiling(3 * perplexity)} neighbors; \code{"compact"} is the explicit
-\code{ceiling(perplexity)} approximation.}
 
 \item{n_components}{Embedding dimensionality.}
 
@@ -52,25 +45,21 @@ uses \code{ceiling(3 * perplexity)} neighbors; \code{"compact"} is the explicit
 
 \item{n.cores}{Number of CPU cores.}
 
-\item{graph_mode}{UMAP graph mode, passed unchanged to
-    \code{\link[=umap]{umap()}}. The
+\item{graph_mode}{UMAP graph mode, passed unchanged to \code{\link[=umap]{umap()}}. The
 standard \code{"fuzzy"} graph is the default.}
 
 \item{keep_knn}{Retain reference KNN output.}
 
 \item{verbose}{Print optimizer progress.}
 
-\item{...}{Additional optimizer arguments passed to
-    \code{\link[=tsne]{tsne()}}.}
+\item{...}{Additional optimizer arguments passed to \code{\link[=tsne]{tsne()}}.}
 }
 \value{
 A \code{fastEmbedR_landmark_model}.
 }
 \description{
-\code{fit_landmark_model()} runs the ordinary production
-\code{\link[=umap]{umap()}} or
-\code{\link[=tsne]{tsne()}} implementation on the selected reference rows. The
-returned
+\code{fit_landmark_model()} runs the ordinary production \code{\link[=umap]{umap()}} or
+\code{\link[=tsne]{tsne()}} implementation on the selected reference rows. The returned
 object stores the reference data and embedding needed to project the
 complementary rows or genuinely new observations.
 }

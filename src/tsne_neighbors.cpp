@@ -368,7 +368,7 @@ std::string tsne_repulsion_mode(const int n,
   const std::string requested = lowercase(requested_method);
   if (requested == "bh" || requested == "barnes_hut" || requested == "barnes-hut") {
     Rcpp::stop(
-      "Barnes-Hut openTSNE has been removed from fastEmbedR. "
+      "Barnes-Hut t-SNE has been removed from fastEmbedR. "
       "Use `negative_gradient_method = \"fft\"` for the standard CPU path "
       "or `\"exact\"` for small reference runs."
     );
@@ -1827,7 +1827,7 @@ List tsne_auto_parameters_cpp(const int n,
   if (k < 1) Rcpp::stop("`k` must be positive.");
 
   const int max_perplexity_n = std::max(1, (n - 1) / 3);
-  const int max_perplexity_k = std::max(1, k / 3);
+  const int max_perplexity_k = std::max(1, k);
   double resolved_perplexity = perplexity_missing || !std::isfinite(perplexity) || perplexity <= 0.0 ?
     static_cast<double>(std::min(30, std::min(max_perplexity_n, max_perplexity_k))) :
     perplexity;
@@ -1842,7 +1842,7 @@ List tsne_auto_parameters_cpp(const int n,
   const double early_exaggeration = 12.0;
   const int needed_k = std::max(
     1,
-    std::min(n - 1, static_cast<int>(std::ceil(3.0 * resolved_perplexity)))
+    std::min(n - 1, static_cast<int>(std::ceil(resolved_perplexity)))
   );
   const bool kld_auto_stop = false;
 
@@ -1914,7 +1914,7 @@ List knn_tsne_opentsne_float_cpp(IntegerMatrix indices,
   ParallelExecutor parallel_executor(threads);
   ParallelExecutorScope parallel_scope(&parallel_executor);
   if (verbose) {
-    Rcpp::Rcout << "fastEmbedR openTSNE-style float32 t-SNE from KNN: n=" << n
+    Rcpp::Rcout << "fastEmbedR float32 t-SNE from KNN: n=" << n
                 << ", k=" << k
                 << ", perplexity=" << perplexity
                 << ", threads=" << threads << "\n";
@@ -1992,7 +1992,7 @@ List knn_tsne_opentsne_float_cpp(IntegerMatrix indices,
       static_cast<float>(max_step_norm) :
       std::numeric_limits<float>::quiet_NaN();
     if (verbose) {
-      Rcpp::Rcout << "openTSNE-style float32 phase " << phase_name
+      Rcpp::Rcout << "t-SNE float32 phase " << phase_name
                   << ": iterations=" << phase_iter
                   << ", exaggeration=" << phase_exaggeration
                   << ", learning_rate=" << phase_lr
@@ -2168,8 +2168,8 @@ List transform_tsne_cpp(NumericMatrix reference_layout,
   if (initialization != "median" && initialization != "weighted" && initialization != "random") {
     Rcpp::stop("`initialization` must be 'median', 'weighted', or 'random'.");
   }
-  if (3.0 * perplexity > static_cast<double>(k)) {
-    Rcpp::warning("Transform perplexity is close to or larger than the supplied KNN width; consider a wider query KNN.");
+  if (perplexity > static_cast<double>(k)) {
+    Rcpp::warning("Transform perplexity exceeds the supplied KNN width.");
   }
 
   const int offset = resolve_reference_index_offset(indices, n_reference);

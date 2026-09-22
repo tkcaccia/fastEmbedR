@@ -28,6 +28,8 @@ jobs:
           needs: check
       - name: Enforce source style
         run: Rscript tools/check_source_style.R
+      - name: Test CUDA configure discovery and strict mode
+        run: bash .github/scripts/test-configure-cuda.sh
       - name: Build source package
         run: R CMD build . --compact-vignettes=gs+qpdf
       - name: Archive source package

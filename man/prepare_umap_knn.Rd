@@ -5,11 +5,11 @@
 \title{Precompute reusable UMAP graph state from KNN}
 \usage{
 prepare_umap_knn(
-    indices,
-    distances = NULL,
-    backend = NULL,
-    n.cores = NULL,
-    graph_mode = c("fuzzy", "binary")
+  indices,
+  distances = NULL,
+  backend = NULL,
+  n.cores = NULL,
+  graph_mode = c("fuzzy", "binary")
 )
 }
 \arguments{
@@ -18,12 +18,10 @@ observation, or a KNN object containing \code{indices} and \code{distances}.
 One-based and zero-based indices are accepted. A self-neighbor first
 column is removed automatically.}
 
-\item{distances}{Numeric matrix matching \code{indices}. Leave as \code{NULL}
-    when
+\item{distances}{Numeric matrix matching \code{indices}. Leave as \code{NULL} when
 \code{indices} is a KNN object.}
 
-\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or
-    \code{"metal"}.}
+\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}.}
 
 \item{n.cores}{Requested CPU core count. CPU UMAP currently uses at most
 four workers and records both requested and effective values. \code{NULL}
@@ -40,10 +38,8 @@ UMAP graph schedule.
 }
 \description{
 \code{prepare_umap_knn()} builds the CSR graph once from a KNN object or index
-and distance matrices. The result can be passed to
-\code{\link[=umap_knn]{umap_knn()}} or
-\code{\link[=embed_knn]{embed_knn()}} repeatedly with different seeds without
-rebuilding the graph
+and distance matrices. The result can be passed to \code{\link[=umap_knn]{umap_knn()}} or
+\code{\link[=embed_knn]{embed_knn()}} repeatedly with different seeds without rebuilding the graph
 or recomputing \code{epochs_per_sample}.
 }
 \examples{

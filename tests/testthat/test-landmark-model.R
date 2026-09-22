@@ -73,7 +73,7 @@ test_that("staged openTSNE uses the ordinary reference optimizer", {
         x,
         selection,
         method = "tsne",
-        n_neighbors = 12L,
+        n_neighbors = 4L,
         perplexity = 4,
         backend = "cpu",
         n.cores = 2L,
@@ -93,9 +93,9 @@ test_that("staged openTSNE uses the ordinary reference optimizer", {
     )
 
     expect_identical(model$fit$method, "tsne")
-    expect_identical(model$n_neighbors, 12L)
-    expect_identical(model$affinity_support, "standard")
-    expect_identical(model$fit$parameters$affinity_support_k, 12L)
+    expect_identical(model$n_neighbors, 4L)
+    expect_identical(model$affinity_support, "compact")
+    expect_identical(model$fit$parameters$affinity_support_k, 4L)
     expect_equal(dim(fit$layout), c(nrow(x), 2L))
     expect_true(all(is.finite(fit$layout)))
     expect_equal(

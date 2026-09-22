@@ -174,9 +174,7 @@ test_that("t-SNE diagnostics remain finite on pathological valid inputs", {
             }
             observed <- tsne_knn(
                 case_knn,
-                n_neighbors = ncol(case$knn$indices),
                 perplexity = 2,
-                affinity_support = "standard",
                 Y_init = case$layout,
                 early_exaggeration_iter = 0L,
                 n_iter = 1L,
@@ -219,9 +217,7 @@ test_that("t-SNE diagnostics remain finite on pathological valid inputs", {
         expect_error(
             tsne_knn(
                 invalid_knn,
-                n_neighbors = ncol(knn$indices),
                 perplexity = 2,
-                affinity_support = "standard",
                 Y_init = invalid,
                 early_exaggeration_iter = 0L,
                 n_iter = 1L,
@@ -263,9 +259,7 @@ test_that("native Metal and CUDA match the CPU first optimizer step", {
         }
         tsne_knn(
             backend_knn,
-            n_neighbors = 15L,
             perplexity = 5,
-            affinity_support = "standard",
             Y_init = initial,
             early_exaggeration_iter = 0L,
             n_iter = 1L,
@@ -315,6 +309,69 @@ test_that("native Metal and CUDA match the CPU first optimizer step", {
     }
 })
 
+test_that("FFT t-SNE retains exact-objective agreement over a long run", {
+    set.seed(719)
+    x <- matrix(rnorm(180L * 8L), 180L, 8L)
+    knn <- test_exact_knn(x, k = 10L, exclude_self = TRUE)
+    initial <- matrix(rnorm(180L * 2L, sd = 1e-4), 180L, 2L)
+
+    old_grid <- Sys.getenv("FASTEMBEDR_TSNE_FFT_GRID", unset = NA_character_)
+    Sys.setenv(FASTEMBEDR_TSNE_FFT_GRID = "64")
+    on.exit(
+        {
+            if (is.na(old_grid)) {
+                Sys.unsetenv("FASTEMBEDR_TSNE_FFT_GRID")
+            } else {
+                Sys.setenv(FASTEMBEDR_TSNE_FFT_GRID = old_grid)
+            }
+        },
+        add = TRUE
+    )
+
+    run_long <- function(backend, method) {
+        tsne_knn(
+            knn,
+            perplexity = 10,
+            Y_init = initial,
+            seed = 719L,
+            backend = backend,
+            n.cores = 2L,
+            learning_rate = 15,
+            early_exaggeration_iter = 75L,
+            early_exaggeration = 12,
+            n_iter = 225L,
+            exaggeration = 1,
+            initial_momentum = 0.8,
+            final_momentum = 0.8,
+            max_step_norm = "auto",
+            negative_gradient_method = method,
+            auto_config = FALSE
+        )
+    }
+    objective <- function(layout) {
+        fastEmbedR:::opentsne_kl_diagnostic_cpp(
+            knn$indices, knn$distances, layout, 10, 2L
+        )
+    }
+
+    reference_kl <- objective(run_long("cpu", "exact"))
+    cpu_fft_kl <- objective(run_long("cpu", "fft"))
+    expect_true(is.finite(reference_kl))
+    expect_lte(cpu_fft_kl, 1.05 * reference_kl)
+
+    if (isTRUE(fastEmbedR:::embedding_metal_available_cpp())) {
+        metal_fft_kl <- objective(run_long("metal", "fft"))
+        expect_lte(metal_fft_kl, 1.05 * reference_kl)
+    }
+})
+
+test_that("automatic t-SNE step clipping is backend invariant", {
+    expect_identical(
+        fastEmbedR:::resolve_opentsne_max_step_norm("auto"),
+        5
+    )
+})
+
 test_that("explicit small-data CPU FFT records the validated grid floor", {
     set.seed(707)
     x <- matrix(rnorm(64L * 6L), 64L, 6L)
@@ -336,9 +393,7 @@ test_that("explicit small-data CPU FFT records the validated grid floor", {
 
     fit <- tsne_knn(
         knn,
-        n_neighbors = 15L,
         perplexity = 5,
-        affinity_support = "standard",
         Y_init = initial,
         early_exaggeration_iter = 0L,
         n_iter = 1L,
@@ -384,9 +439,7 @@ test_that("explicit small-data Metal FFT records the validated grid floor", {
 
     fit <- tsne_knn(
         knn,
-        n_neighbors = 15L,
         perplexity = 5,
-        affinity_support = "standard",
         Y_init = initial,
         early_exaggeration_iter = 0L,
         n_iter = 1L,

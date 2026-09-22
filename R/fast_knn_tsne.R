@@ -18,17 +18,10 @@
 #'   `NULL` when `indices` is a KNN list.
 #' @param n_neighbors Optional number of non-self neighbor columns to use from
 #'   the supplied KNN graph. This lets you compute a wide KNN once and reuse
-#'   its first columns for comparable tests. If omitted, `affinity_support`
-#'   determines the width. An explicit value must be at least the width implied
-#'   by `affinity_support`.
+#'   its first columns. If omitted, the compact affinity policy uses
+#'   `ceiling(perplexity)` columns. An explicit value must equal that width.
 #' @param perplexity t-SNE perplexity. If `NULL`, the optimizer chooses a safe
 #'   value from the supplied KNN width and sample size.
-#' @param affinity_support Affinity candidate-neighborhood policy. `"standard"`
-#'   (default) uses `ceiling(3 * perplexity)` non-self neighbors, matching the
-#'   conventional sparse t-SNE support rule. `"compact"` uses only
-#'   `ceiling(perplexity)` neighbors and is an explicit approximation with
-#'   nearly uniform conditional probabilities when the support equals the
-#'   target perplexity.
 #' @param init_data Optional original high-dimensional data matrix used only to
 #'   compute PCA initialization for KNN-input runs. It is not used for neighbor
 #'   search or optimization.
@@ -67,7 +60,7 @@
 #' @name tsne_knn
 NULL
 
-validate_gpu_tsne_knn <- function(info, n_neighbors, perplexity, support) {
+validate_gpu_tsne_knn <- function(info, n_neighbors, perplexity) {
     if (isTRUE(info$has_self)) {
         stop(
             "CUDA GPU-resident t-SNE requires non-self KNN. Provide a ",
@@ -75,9 +68,7 @@ validate_gpu_tsne_knn <- function(info, n_neighbors, perplexity, support) {
             call. = FALSE
         )
     }
-    policy <- opentsne_neighbor_policy(
-        info$n, perplexity, info$k, support
-    )
+    policy <- opentsne_neighbor_policy(info$n, perplexity, info$k)
     n_neighbors <- n_neighbors %||% policy$n_neighbors
     n_neighbors <- as.integer(n_neighbors)
     invalid <- length(n_neighbors) != 1L || is.na(n_neighbors) ||
@@ -91,16 +82,16 @@ validate_gpu_tsne_knn <- function(info, n_neighbors, perplexity, support) {
         )
     }
     perplexity <- perplexity %||% policy$perplexity
-    validate_tsne_support_width(n_neighbors, perplexity, support)
+    validate_tsne_support_width(n_neighbors, perplexity)
     list(n_neighbors = n_neighbors, perplexity = perplexity)
 }
 
-validate_tsne_support_width <- function(n_neighbors, perplexity, support) {
-    required <- opentsne_support_width(perplexity, support)
-    if (n_neighbors < required) {
+validate_tsne_support_width <- function(n_neighbors, perplexity) {
+    required <- opentsne_support_width(perplexity)
+    if (n_neighbors != required) {
         stop(
-            "`n_neighbors` is too small for `affinity_support = \"",
-            support, "\"`; need at least ", required, ".",
+            "Compact t-SNE affinity support requires `n_neighbors = ",
+            required, "` for this perplexity.",
             call. = FALSE
         )
     }
@@ -110,8 +101,7 @@ validate_tsne_support_width <- function(n_neighbors, perplexity, support) {
 run_gpu_tsne_knn <- function(indices, init_data, settings, extra) {
     info <- fastembedr_gpu_knn_info(indices)
     policy <- validate_gpu_tsne_knn(
-        info, settings$n_neighbors, settings$perplexity,
-        settings$affinity_support
+        info, settings$n_neighbors, settings$perplexity
     )
     Y_init <- resolve_opentsne_y_init(
         settings$Y_init, info$n, settings$n_components
@@ -136,13 +126,12 @@ run_gpu_tsne_knn <- function(indices, init_data, settings, extra) {
     ), settings$optimizer, extra)
     layout <- do.call(fast_knn_opentsne_materialized, args)
     annotate_opentsne_affinity_support(
-        layout, policy$n_neighbors, policy$perplexity,
-        settings$affinity_support
+        layout, policy$n_neighbors, policy$perplexity
     )
 }
 
 resolve_host_tsne_knn <- function(
-    indices, distances, n_neighbors, perplexity, support, support_missing
+    indices, distances, n_neighbors, perplexity
 ) {
     if (inherits(indices, "fastEmbedR_tsne_prepared")) {
         if (!is.null(distances)) {
@@ -151,21 +140,15 @@ resolve_host_tsne_knn <- function(
                 call. = FALSE
             )
         }
-        support <- if (support_missing) {
-            indices$affinity_support %||% support
-        } else {
-            support
-        }
         return(list(
             knn = indices$knn,
             perplexity = perplexity %||% indices$perplexity,
-            n_neighbors = n_neighbors %||% indices$n_neighbors,
-            support = support
+            n_neighbors = n_neighbors %||% indices$n_neighbors
         ))
     }
     raw <- coerce_knn_input(indices, distances)
     policy <- opentsne_neighbor_policy(
-        nrow(raw$indices), perplexity, raw$n_neighbors, support
+        nrow(raw$indices), perplexity, raw$n_neighbors
     )
     n_neighbors <- n_neighbors %||% policy$n_neighbors
     list(
@@ -173,16 +156,13 @@ resolve_host_tsne_knn <- function(
             indices, distances, n_neighbors
         ),
         perplexity = perplexity %||% policy$perplexity,
-        n_neighbors = n_neighbors,
-        support = support
+        n_neighbors = n_neighbors
     )
 }
 
 run_host_tsne_knn <- function(resolved, init_data, settings, extra) {
     knn <- resolved$knn
-    validate_tsne_support_width(
-        knn$n_neighbors, resolved$perplexity, resolved$support
-    )
+    validate_tsne_support_width(knn$n_neighbors, resolved$perplexity)
     Y_init <- resolve_opentsne_y_init(
         settings$Y_init, knn$n, settings$n_components
     )
@@ -207,7 +187,7 @@ run_host_tsne_knn <- function(resolved, init_data, settings, extra) {
     ), settings$optimizer, extra)
     layout <- do.call(fast_knn_opentsne_materialized, args)
     annotate_opentsne_affinity_support(
-        layout, knn$n_neighbors, resolved$perplexity, resolved$support
+        layout, knn$n_neighbors, resolved$perplexity
     )
 }
 
@@ -215,7 +195,7 @@ run_host_tsne_knn <- function(resolved, init_data, settings, extra) {
 #' @export
 tsne_knn <- function(
     indices, distances = NULL, n_neighbors = NULL, perplexity = NULL,
-    affinity_support = c("standard", "compact"), n_components = 2L,
+    n_components = 2L,
     init_data = NULL, Y_init = NULL, seed = 4L, verbose = FALSE,
     backend = NULL, n.cores = NULL, learning_rate = "auto",
     early_exaggeration_iter = NULL, early_exaggeration = "auto",
@@ -224,12 +204,17 @@ tsne_knn <- function(
     negative_gradient_method = "auto", record_costs = FALSE,
     auto_config = TRUE, ...
 ) {
-    support_missing <- missing(affinity_support)
-    support <- normalize_opentsne_affinity_support(affinity_support)
+    extra <- list(...)
+    if ("affinity_support" %in% names(extra)) {
+        stop(
+            "`affinity_support` is not configurable; t-SNE uses compact ",
+            "support with `k = ceiling(perplexity)`.",
+            call. = FALSE
+        )
+    }
     backend <- resolve_embedding_backend(backend)
     settings <- list(
         n_neighbors = n_neighbors, perplexity = perplexity,
-        affinity_support = support,
         n_components = validate_opentsne_n_components(n_components, backend),
         Y_init = Y_init, seed = seed, verbose = verbose, backend = backend,
         n_threads = n.cores,
@@ -250,14 +235,13 @@ tsne_knn <- function(
             )
         }
         return(run_gpu_tsne_knn(
-            fastembedr_as_gpu_knn(indices), init_data, settings, list(...)
+            fastembedr_as_gpu_knn(indices), init_data, settings, extra
         ))
     }
     resolved <- resolve_host_tsne_knn(
-        indices, distances, n_neighbors, perplexity, support,
-        support_missing
+        indices, distances, n_neighbors, perplexity
     )
-    run_host_tsne_knn(resolved, init_data, settings, list(...))
+    run_host_tsne_knn(resolved, init_data, settings, extra)
 }
 
 tsne_knn_call_args <- function(data, settings, overrides, extra) {
@@ -265,7 +249,6 @@ tsne_knn_call_args <- function(data, settings, overrides, extra) {
         indices = data,
         n_components = settings$n_components,
         perplexity = settings$perplexity,
-        affinity_support = settings$affinity_support,
         init_data = settings$init_data,
         Y_init = settings$Y_init,
         seed = settings$seed,
@@ -366,8 +349,7 @@ prepare_tsne_knn_input_run <- function(data, nn, settings) {
     }
     full <- normalize_opentsne_knn_input(data, NULL, NULL)
     policy <- opentsne_neighbor_policy(
-        full$n, settings$perplexity, full$n_neighbors,
-        settings$affinity_support
+        full$n, settings$perplexity, full$n_neighbors
     )
     knn <- normalize_opentsne_knn_input(
         data, NULL, policy$n_neighbors
@@ -524,7 +506,14 @@ validate_tsne_dots <- function(extra) {
     if ("n_neighbors" %in% names(extra)) {
         stop(
             "`n_neighbors` is not an argument of `tsne()`; use ",
-            "`perplexity` and `affinity_support` instead.",
+            "`perplexity` instead.",
+            call. = FALSE
+        )
+    }
+    if ("affinity_support" %in% names(extra)) {
+        stop(
+            "`affinity_support` is not configurable; t-SNE uses compact ",
+            "support with `k = ceiling(perplexity)`.",
             call. = FALSE
         )
     }
@@ -591,8 +580,7 @@ run_matrix_input_tsne <- function(data, nn, settings, extra, input_float) {
     x <- preprocess$value$data
     metric <- resolve_embedding_metric(settings$metric, x)
     policy <- opentsne_neighbor_policy(
-        nrow(x), settings$perplexity,
-        affinity_support = settings$affinity_support
+        nrow(x), settings$perplexity
     )
     settings$perplexity <- policy$perplexity
     knn <- timed_do_call(compute_tsne_matrix_knn, list(
@@ -639,13 +627,8 @@ run_matrix_input_tsne <- function(data, nn, settings, extra, input_float) {
 #' @param data Numeric matrix/data frame with observations in rows, or a list
 #'   containing KNN `indices` and `distances`.
 #' @param perplexity t-SNE perplexity. If `NULL`, uses the largest safe value
-#'   up to 30 that is available for the input and selected affinity support.
-#' @param affinity_support Affinity candidate-neighborhood policy. The default
-#'   `"standard"` uses `ceiling(3 * perplexity)` non-self neighbors so the
-#'   Gaussian bandwidth search can produce non-uniform conditional
-#'   probabilities. `"compact"` retains the older
-#'   `ceiling(perplexity)`-neighbor approximation for explicit speed/memory
-#'   experiments; it is not equivalent to conventional sparse t-SNE.
+#'   up to 30 that is available for the input. Compact affinity support uses
+#'   `ceiling(perplexity)` non-self neighbors.
 #' @param n_components Output dimensionality, from 1 to 3. Dimensions other
 #'   than two use CPU exact repulsion; the current Metal and CUDA
 #'   interpolation/FFT optimizers support only `2L`.
@@ -663,9 +646,10 @@ run_matrix_input_tsne <- function(data, nn, settings, extra, input_float) {
 #' @param seed Random seed.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. CPU KNN
 #'   uses package-native HNSW. Metal uses package-native exact or recall-tuned
-#'   IVF-Flat search. CUDA uses direct FAISS GPU exact search below 100,000
-#'   rows and direct RAPIDS cuVS IVF-Flat above that threshold, then passes the
-#'   device pointers directly to native CUDA t-SNE.
+#'   IVF-Flat search. CUDA uses cuVS brute-force exact search below 100,000
+#'   rows and cuVS IVF-Flat above that threshold; an explicitly enabled FAISS
+#'   GPU build may provide exact search. Device pointers pass directly to the
+#'   native CUDA t-SNE optimizer.
 #'   Unsupported GPU requests fail clearly and are not relabelled CPU runs.
 #' @param keep_knn If `TRUE`, retain KNN matrices in the returned object.
 #' @param verbose Print optimizer progress.
@@ -684,8 +668,8 @@ run_matrix_input_tsne <- function(data, nn, settings, extra, input_float) {
 #' @param initial_momentum Momentum during early exaggeration.
 #' @param final_momentum Momentum during normal optimization.
 #' @param max_step_norm Maximum per-point update norm. `"auto"` uses the
-#'   standard CPU limit and a tighter native Metal FFT-grid limit to avoid
-#'   float32 outlier steps. Use `NULL` or `NA` to disable clipping.
+#'   same validated limit on CPU, Metal, and CUDA. Use `NULL` or `NA` to
+#'   disable clipping.
 #' @param negative_gradient_method `"auto"`, `"exact"`, or
 #'   `"fft"`. On CPU, `"auto"` resolves to the native grid-FFT
 #'   FIt-SNE-style negative-gradient approximation. Native GPU FFT/exact paths
@@ -700,16 +684,17 @@ run_matrix_input_tsne <- function(data, nn, settings, extra, input_float) {
 #' @param ... Additional low-level parameters passed to [tsne_knn()].
 #' @details
 #' The t-SNE API exposes the principal
-#' scientifically consequential optimizer controls: perplexity and candidate
-#' support, initialization, iteration counts, early and normal exaggeration,
+#' scientifically consequential optimizer controls: perplexity,
+#' initialization, iteration counts, early and normal exaggeration,
 #' learning rate, momentum, clipping, and exact-versus-FFT repulsion. Setting
 #' `auto_config = FALSE` disables automatic iteration and stopping choices;
 #' explicit values always override automatic values. The matrix-input function
 #' deliberately does not expose a nearest-neighbor index type or tuning
 #' parameters: it uses the backend router with target recall 0.99. Supply an
-#' externally generated KNN object to [tsne_knn()] when search policy or
-#' affinity support must be controlled independently. The resolved settings
-#' are returned in `fit$parameters`.
+#' externally generated KNN object to [tsne_knn()] when search policy must be
+#' controlled independently. The resolved settings are returned in
+#' `fit$parameters`. Affinity construction always uses compact support with
+#' `k = ceiling(perplexity)` non-self neighbors.
 #' @return A `fastEmbedR_embedding` object.
 #' @examples
 #' fit <- tsne(
@@ -721,7 +706,7 @@ run_matrix_input_tsne <- function(data, nn, settings, extra, input_float) {
 #' @export
 tsne <- function(
     data, perplexity = NULL,
-    affinity_support = c("standard", "compact"), n_components = 2L,
+    n_components = 2L,
     init_data = NULL, Y_init = NULL, standardize = FALSE,
     pca_dims = NULL,
     metric = c("euclidean", "cosine", "correlation", "inner_product"),
@@ -738,9 +723,6 @@ tsne <- function(
     backend <- resolve_embedding_backend(backend)
     settings <- list(
         perplexity = perplexity,
-        affinity_support = normalize_opentsne_affinity_support(
-            affinity_support
-        ),
         n_components = validate_opentsne_n_components(
             n_components, backend
         ),

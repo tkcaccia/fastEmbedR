@@ -9,21 +9,15 @@
 fastEmbedR provides an opinionated fixed-policy float32 UMAP implementation
 and a configurable native interpolation-based t-SNE implementation from
 data or
-precomputed nearest-neighbor matrices. Use \code{\link[=umap]{umap()}} or
-\code{\link[=tsne]{tsne()}}
-for one-call workflows, \code{\link[=precompute_knn]{precompute_knn()}} to run
-the package-native CPU,
+precomputed nearest-neighbor matrices. Use \code{\link[=umap]{umap()}} or \code{\link[=tsne]{tsne()}}
+for one-call workflows, \code{\link[=precompute_knn]{precompute_knn()}} to run the package-native CPU,
 Metal, or CUDA search separately, or pass reusable KNN \code{indices} and
-\code{distances} to \code{\link[=umap_knn]{umap_knn()}} or
-\code{\link[=tsne_knn]{tsne_knn()}}.
+\code{distances} to \code{\link[=umap_knn]{umap_knn()}} or \code{\link[=tsne_knn]{tsne_knn()}}.
 Use \code{\link[=pca]{pca()}} for reusable backend-native PCA and request
 \code{tsne_init = TRUE} when a t-SNE-ready initialization is needed.
-Score embeddings with \code{\link[=evaluate_embedding]{evaluate_embedding()}}.
-Optional downstream graph
-utilities are available through \code{\link[=knn_graph]{knn_graph()}} and
-\code{\link[=graph_cluster]{graph_cluster()}}.
-Use \code{\link[=fastEmbedR_api]{fastEmbedR_api()}} for the complete canonical,
-advanced, diagnostic,
+Score embeddings with \code{\link[=evaluate_embedding]{evaluate_embedding()}}. Optional downstream graph
+utilities are available through \code{\link[=knn_graph]{knn_graph()}} and \code{\link[=graph_cluster]{graph_cluster()}}.
+Use \code{\link[=fastEmbedR_api]{fastEmbedR_api()}} for the complete canonical, advanced, diagnostic,
 secondary, and compatibility API map.
 }
 \details{
@@ -39,21 +33,19 @@ InfoTSNE, PaCMAP, TriMap, or LocalMAP reducers.
 \seealso{
 Useful links:
 \itemize{
-    \item \url{https://github.com/tkcaccia/fastEmbedR}
-    \item \url{https://tkcaccia.github.io/fastEmbedR/}
-    \item \url{https://github.com/tkcaccia/fastEmbedR-benchmark}
-    \item Report bugs at \url{https://github.com/tkcaccia/fastEmbedR/issues}
+  \item \url{https://github.com/tkcaccia/fastEmbedR}
+  \item \url{https://tkcaccia.github.io/fastEmbedR/}
+  \item \url{https://github.com/tkcaccia/fastEmbedR-benchmark}
+  \item Report bugs at \url{https://github.com/tkcaccia/fastEmbedR/issues}
 }
 
 }
 \author{
-\strong{Maintainer}: Stefano Cacciatore \email{tkcaccia@gmail.com}
-(\href{https://orcid.org/0000-0001-7052-7156}{ORCID})
+\strong{Maintainer}: Stefano Cacciatore \email{tkcaccia@gmail.com} (\href{https://orcid.org/0000-0001-7052-7156}{ORCID})
 
 Authors:
 \itemize{
-    \item Stefano Cacciatore \email{tkcaccia@gmail.com}
-        (\href{https://orcid.org/0000-0001-7052-7156}{ORCID})
+  \item Stefano Cacciatore \email{tkcaccia@gmail.com} (\href{https://orcid.org/0000-0001-7052-7156}{ORCID})
 }
 
 }

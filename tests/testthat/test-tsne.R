@@ -28,7 +28,7 @@ test_that("embed_knn runs native openTSNE from supplied neighbours", {
     expect_equal(cfg$learning_rate_normal, nrow(x) / cfg$early_exaggeration)
 })
 
-test_that("openTSNE auto configuration exposes opt-SNE policy metadata", {
+test_that("t-SNE auto configuration uses compact affinity support", {
     policy <- fastEmbedR:::tsne_auto_parameters_cpp(
         150L,
         30L,
@@ -37,7 +37,7 @@ test_that("openTSNE auto configuration exposes opt-SNE policy metadata", {
         "cpu",
         "exact"
     )
-    expect_equal(policy$perplexity, 10)
+    expect_equal(policy$perplexity, 30)
     expect_equal(policy$n_neighbors, 30L)
     expect_equal(policy$learning_rate, 150 / policy$early_exaggeration)
     expect_false(policy$auto_kld_stop)
@@ -56,7 +56,7 @@ test_that("openTSNE auto configuration exposes opt-SNE policy metadata", {
         "fft"
     )
     expect_equal(large_fft$perplexity, 30)
-    expect_equal(large_fft$n_neighbors, 90L)
+    expect_equal(large_fft$n_neighbors, 30L)
     expect_false(large_fft$auto_kld_stop)
 })
 
@@ -138,7 +138,6 @@ test_that("tsne has direct KNN input functions", {
     layout <- tsne_knn(
         knn$indices,
         knn$distances,
-        n_neighbors = 12L,
         perplexity = 3,
         early_exaggeration_iter = 2L,
         n_iter = 3L,
@@ -149,11 +148,11 @@ test_that("tsne has direct KNN input functions", {
     expect_true(all(is.finite(layout)))
     cfg <- attr(layout, "fastEmbedR_config")
     expect_equal(cfg$method, "tsne")
-    expect_equal(cfg$n_neighbors, 12L)
+    expect_equal(cfg$n_neighbors, 3L)
     expect_equal(cfg$perplexity, 3)
-    expect_equal(cfg$affinity_support, "expanded")
-    expect_equal(cfg$affinity_support_multiplier, 4)
-    expect_true(cfg$conventional_affinity_support)
+    expect_equal(cfg$affinity_support, "compact")
+    expect_equal(cfg$affinity_support_multiplier, 1)
+    expect_true(cfg$compact_affinity_support)
     expect_type(layout, "double")
     expect_identical(attr(layout, "precision"), "double")
     expect_identical(cfg$output_precision, "double")
@@ -168,54 +167,45 @@ test_that("tsne has direct KNN input functions", {
     expect_s3_class(fit, "fastEmbedR_embedding")
     expect_equal(dim(fit$layout), c(nrow(x), 2L))
     expect_equal(fit$parameters$input, "knn")
-    expect_equal(fit$metrics$n_neighbors, 9L)
-    expect_equal(fit$parameters$affinity_support, "standard")
-    expect_equal(fit$parameters$affinity_support_k, 9L)
-    expect_equal(fit$parameters$affinity_support_multiplier, 3)
-    expect_true(fit$parameters$conventional_affinity_support)
+    expect_equal(fit$metrics$n_neighbors, 3L)
+    expect_equal(fit$parameters$affinity_support, "compact")
+    expect_equal(fit$parameters$affinity_support_k, 3L)
+    expect_equal(fit$parameters$affinity_support_multiplier, 1)
+    expect_true(fit$parameters$compact_affinity_support)
     expect_equal(fit$metrics$preprocess_elapsed, 0)
     expect_equal(fit$metrics$knn_elapsed, 0)
 
-    compact <- tsne(
-        knn,
-        perplexity = 3,
-        affinity_support = "compact",
-        early_exaggeration_iter = 2L,
-        n_iter = 3L,
-        seed = 322L
+    expect_error(
+        tsne(knn, perplexity = 3, affinity_support = "standard"),
+        "not configurable"
     )
-    expect_equal(compact$metrics$n_neighbors, 3L)
-    expect_equal(compact$parameters$affinity_support, "compact")
-    expect_equal(compact$parameters$affinity_support_k, 3L)
-    expect_equal(compact$parameters$affinity_support_multiplier, 1)
-    expect_false(compact$parameters$conventional_affinity_support)
 })
 
-test_that("openTSNE standard support rejects a compact precomputed KNN", {
+test_that("t-SNE defaults to compact support for precomputed KNN", {
     set.seed(323)
     x <- matrix(rnorm(60L * 5L), 60L, 5L)
     compact_knn <- test_exact_knn(x, k = 6L, backend = "cpu")
 
-    expect_error(
-        tsne_knn(
-            compact_knn,
-            perplexity = 5,
-            early_exaggeration_iter = 1L,
-            n_iter = 2L
-        ),
-        "fewer non-self columns"
-    )
-
     layout <- tsne_knn(
         compact_knn,
         perplexity = 5,
-        affinity_support = "compact",
         early_exaggeration_iter = 1L,
         n_iter = 2L
     )
     cfg <- attr(layout, "fastEmbedR_config")
     expect_equal(cfg$affinity_support, "compact")
-    expect_false(cfg$conventional_affinity_support)
+    expect_true(cfg$compact_affinity_support)
+
+    expect_error(
+        tsne_knn(
+            compact_knn,
+            perplexity = 5,
+            affinity_support = "standard",
+            early_exaggeration_iter = 1L,
+            n_iter = 2L
+        ),
+        "not configurable"
+    )
 })
 
 test_that("post-fit KL diagnostic matches the optimizer's exact final KL", {
@@ -232,7 +222,7 @@ test_that("post-fit KL diagnostic matches the optimizer's exact final KL", {
         seed = 325L
     )
     recorded <- tail(attr(layout, "itercosts"), 1L)
-    normalized <- fastEmbedR:::normalize_opentsne_knn_input(knn, NULL, 15L)
+    normalized <- fastEmbedR:::normalize_opentsne_knn_input(knn, NULL, 5L)
     diagnostic <- fastEmbedR:::opentsne_kl_diagnostic_cpp(
         normalized$indices,
         normalized$distances,
@@ -288,7 +278,6 @@ test_that("native Metal t-SNE runs FFT-grid without CPU fallback", {
     knn <- test_exact_knn(x, k = 16L, backend = "cpu")
     metal <- tsne_knn(
         knn,
-        n_neighbors = 15L,
         perplexity = 5,
         early_exaggeration_iter = 1L,
         n_iter = 2L,
@@ -400,7 +389,7 @@ test_that("CPU openTSNE reports native affinity and optimization timings", {
     )
     layout <- tsne_knn(
         indices, distances,
-        perplexity = 5, affinity_support = "standard",
+        perplexity = 5,
         Y_init = matrix(rnorm(360, sd = 1e-4), ncol = 2),
         backend = "cpu", n.cores = 2,
         early_exaggeration_iter = 2, n_iter = 3, auto_config = FALSE

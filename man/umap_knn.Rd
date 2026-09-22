@@ -5,14 +5,14 @@
 \title{Run UMAP from precomputed nearest neighbors}
 \usage{
 umap_knn(
-    indices,
-    distances = NULL,
-    n_components = 2L,
-    seed = 42L,
-    verbose = FALSE,
-    backend = NULL,
-    n.cores = NULL,
-    graph_mode = c("fuzzy", "binary")
+  indices,
+  distances = NULL,
+  n_components = 2L,
+  seed = 42L,
+  verbose = FALSE,
+  backend = NULL,
+  n.cores = NULL,
+  graph_mode = c("fuzzy", "binary")
 )
 }
 \arguments{
@@ -21,8 +21,7 @@ observation, or a KNN object containing \code{indices} and \code{distances}.
 One-based and zero-based indices are accepted. A self-neighbor first
 column is removed automatically.}
 
-\item{distances}{Numeric matrix matching \code{indices}. Leave as \code{NULL}
-    when
+\item{distances}{Numeric matrix matching \code{indices}. Leave as \code{NULL} when
 \code{indices} is a KNN object.}
 
 \item{n_components}{Output dimensionality. The CPU backend supports positive
@@ -33,8 +32,7 @@ CUDA optimizers support only \code{2L}.}
 
 \item{verbose}{Print native optimizer progress.}
 
-\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or
-    \code{"metal"}.}
+\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}.}
 
 \item{n.cores}{Requested CPU core count. CPU UMAP currently uses at most
 four workers and records both requested and effective values. \code{NULL}
@@ -56,13 +54,11 @@ Run UMAP from precomputed nearest neighbors
 }
 \details{
 This KNN-input function exposes the same deliberately constrained optimizer
-policy as \code{\link[=umap]{umap()}}. It reuses the supplied neighbors but
-still selects
+policy as \code{\link[=umap]{umap()}}. It reuses the supplied neighbors but still selects
 epochs, minimum distance, spread, learning rate, repulsion strength,
 negative-sample rate, spectral iterations, and backend update mode
 internally. The resolved configuration is attached as
-\code{attr(layout, "fastEmbedR_config")}. Pass an object from
-\code{\link[=umap_init]{umap_init()}} to
+\code{attr(layout, "fastEmbedR_config")}. Pass an object from \code{\link[=umap_init]{umap_init()}} to
 reuse both the prepared graph and package-native initialization. This API is
 intended for fixed-boundary comparisons and repeated seeds, not arbitrary
 UMAP hyperparameter sweeps.

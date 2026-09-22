@@ -192,7 +192,9 @@ fastembedr_query_nn_policy <- function(embedding_backend,
 
 fastembedr_nn_policy_engine <- function(policy, keep_gpu = FALSE) {
     if (is.list(policy) && identical(policy$backend, "cuda")) {
-        provider <- if (identical(policy$method %||% "auto", "ivf")) {
+        exact <- !identical(policy$method %||% "auto", "ivf")
+        has_faiss <- isTRUE(fastembedr_build_config_cpp()$faiss_gpu_compiled)
+        provider <- if (!exact || !has_faiss) {
             "native_cuvs"
         } else {
             "native_faiss"
@@ -292,9 +294,10 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' @details
 #' CPU search uses the package-native recall-tuned HNSW implementation. Metal
 #' uses native exact search for small inputs and recall-tuned IVF-Flat for
-#' larger inputs. CUDA uses package-native direct FAISS GPU exact search below
-#' 100,000 observations and direct RAPIDS cuVS IVF-Flat above that threshold.
-#' The internal recall target is 0.99.
+#' larger inputs. CUDA uses RAPIDS cuVS brute-force exact search below 100,000
+#' observations and cuVS IVF-Flat above that threshold. A build may explicitly
+#' enable FAISS GPU as an alternative exact-search provider, but FAISS is not
+#' required. The internal recall target is 0.99.
 #'
 #' The CUDA result remains on the GPU and can be passed directly to
 #' [umap_knn()] or [tsne_knn()] with `backend = "cuda"`. CPU and Metal
@@ -399,9 +402,10 @@ run_precompute_query_knn <- function(reference, query, k, metric,
 #' @details
 #' CPU uses the native recall-tuned HNSW reference-query path. Metal routes
 #' between a native query-only exact kernel and recall-tuned IVF-Flat from the
-#' estimated reference-query distance workload. CUDA uses direct FAISS GPU
-#' exact search below 100,000 reference rows and direct RAPIDS cuVS IVF-Flat
-#' above that threshold. CUDA results remain device-resident for direct
+#' estimated reference-query distance workload. CUDA uses cuVS brute-force
+#' exact search below 100,000 reference rows and cuVS IVF-Flat above that
+#' threshold. An explicitly enabled FAISS GPU build may provide exact search.
+#' CUDA results remain device-resident for direct
 #' consumption by landmark UMAP and t-SNE transformations.
 #'
 #' @return A `fastEmbedR_knn` object with one row per query observation and
@@ -495,20 +499,8 @@ run_native_cuda_knn <- function(data, k, method, metric, output,
             call. = FALSE
         )
     }
-    data_n <- if (is_float32_matrix(data)) {
-        nrow(methods::slot(data, "Data"))
-    } else {
-        nrow(data)
-    }
-    exact <- method %in% c("exact", "flat", "bruteforce") ||
-        (method == "auto" && data_n < 100000L)
     if (!isTRUE(native_cuda_knn_available_cpp())) {
         stop("Native CUDA KNN is unavailable; no fallback was used.",
-            call. = FALSE
-        )
-    }
-    if (exact && !isTRUE(native_cuda_faiss_gpu_available_cpp())) {
-        stop("Native exact CUDA KNN requires direct FAISS GPU linkage.",
             call. = FALSE
         )
     }

@@ -2,8 +2,7 @@ x <- scale(as.matrix(iris[, 1:4]))
 capabilities <- fastEmbedR::fastEmbedR_capabilities()
 knn <- fastEmbedR::precompute_knn(x, k = 15L, backend = "cpu")
 fit_umap <- fastEmbedR::umap(x, n_neighbors = 15L, backend = "cpu")
-layout_tsne <- fastEmbedR::tsne_knn(knn, perplexity = 5,
-  affinity_support = "standard", init_data = x)
+layout_tsne <- fastEmbedR::tsne_knn(knn, perplexity = 5, init_data = x)
 selection <- fastEmbedR::select_landmarks(x, landmarks = 0.5, seed = 4L)
 model <- fastEmbedR::fit_landmark_model(x, selection, method = "umap",
   n_neighbors = 15L, backend = "cpu")

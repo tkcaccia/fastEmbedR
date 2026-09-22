@@ -69,9 +69,11 @@ test_that("core exported functions have tiny t-SNE smoke tests", {
     info <- fastEmbedR_capabilities()
     expect_s3_class(info, "data.frame")
     expect_true(all(c(
-        "backend", "available", "knn_available", "embedding_available",
-        "device", "knn_engine", "precision", "runtime_libraries",
-        "unavailable_reason"
+        "backend", "status", "build_mode", "compiled",
+        "cuda_core_compiled", "cuvs_compiled", "faiss_gpu_compiled",
+        "raft_compiled", "diagnostic_only", "available",
+        "knn_available", "embedding_available", "device", "knn_engine",
+        "precision", "runtime_libraries", "unavailable_reason"
     ) %in% names(info)))
     expect_true(all(c("cpu", "cuvs", "cuda", "metal") %in% info$backend))
     expect_true(isTRUE(info$available[info$backend == "cpu"]))
@@ -79,6 +81,24 @@ test_that("core exported functions have tiny t-SNE smoke tests", {
     expect_match(info$precision[info$backend == "cpu"], "float32")
     expect_false(is.na(info$device[info$backend == "cpu"]))
     expect_true(all(is.na(info$unavailable_reason[info$available])))
+    expect_true(all(info$status %in% c(
+        "available_functional", "unavailable_not_built",
+        "unavailable_runtime", "diagnostic_only"
+    )))
+    if (isTRUE(info$diagnostic_only[[1L]])) {
+        expect_true(all(info$status == "diagnostic_only"))
+        expect_true(info$compiled[info$backend == "cpu"])
+        expect_false(any(info$compiled[info$backend != "cpu"]))
+    }
+    cuda <- info[info$backend == "cuda", , drop = FALSE]
+    if (identical(cuda$status, "available_functional")) {
+        expect_true(cuda$compiled)
+        expect_true(cuda$available)
+    }
+    if (identical(cuda$status, "unavailable_not_built")) {
+        expect_false(cuda$compiled)
+        expect_false(cuda$available)
+    }
     expect_identical(info, fastEmbedR:::backend_info())
 
     knn <- test_exact_knn(x, backend = "cpu")

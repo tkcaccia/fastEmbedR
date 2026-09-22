@@ -7,8 +7,7 @@
 fastEmbedR_backend(backend = NULL)
 }
 \arguments{
-\item{backend}{Optional backend: \code{"cpu"}, \code{"cuda"}, or
-    \code{"metal"}.}
+\item{backend}{Optional backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}.}
 }
 \value{
 The active backend. Setting returns the previous option invisibly.

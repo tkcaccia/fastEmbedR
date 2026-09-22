@@ -64,6 +64,9 @@ The script writes:
 
 - `reproducibility_manifest.txt`;
 - `reproducibility_manifest.json` when `jsonlite` is installed;
+- `comparator_identity.csv` with the exact R/Python package version and the
+  FIt-SNE Git commit, or the executable SHA-256 when its source checkout is
+  unavailable;
 - `sessionInfo.txt`.
 
 The manifest records:
@@ -86,6 +89,26 @@ The manifest records:
   fastEmbedR native-backend probes;
 - directly linked FAISS GPU/cuVS availability recorded by fastEmbedR;
 - paths to the benchmark driver and wrapper scripts.
+
+Release-locked runs additionally require the reviewed package tag and commit,
+source-archive SHA-256, benchmark commit, container SHA-256, and permanent
+result-archive DOI. The benchmark refuses an enforced release lock when any of
+these fields is empty or when the installed package binary has the wrong
+SHA-256. The final gate also rejects a successful comparator whose exact
+version, Git commit, or executable checksum was not captured.
+
+Each dataset has one deterministic stratified quality sample. Its one-based
+row identifiers are written as both RDS and CSV in `fastEmbedR-input`, and the
+CSV path and SHA-256 are copied into every result row. The same rows are reused
+for all methods, backends, timing repetitions, and embedding seeds.
+
+CUDA timing stops only after the native call or direct Python fit has
+synchronized its device stream. GPU memory is sampled every 0.1 seconds with
+`nvidia-smi`. The monitor records device-wide memory immediately before the
+isolated worker starts, the observed device-wide peak, and their nonnegative
+difference. This subtraction removes the measured allocator/runtime baseline
+but cannot attribute allocations made by another process, so publication GPU
+jobs request an exclusive device and retain all three values.
 
 The publication benchmark driver
 [`tools/hpc_embeddings/benchmark_embeddings_float32_publication.R`](https://github.com/tkcaccia/fastEmbedR-benchmark/blob/main/tools/hpc_embeddings/benchmark_embeddings_float32_publication.R)

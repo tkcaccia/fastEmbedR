@@ -247,8 +247,8 @@ test_that("landmark_tsne returns a compact full embedding object", {
     expect_equal(fit$parameters$method, "landmark_tsne")
     expect_true(isTRUE(fit$parameters$landmark))
     expect_equal(fit$parameters$n_landmarks, 20L)
-    expect_equal(fit$parameters$n_neighbors, 12L)
-    expect_equal(fit$parameters$affinity_support_k, 12L)
+    expect_equal(fit$parameters$n_neighbors, 4L)
+    expect_equal(fit$parameters$affinity_support_k, 4L)
     expect_equal(
         fit$parameters$transform_optimizer,
         "opentsne_style_fixed_reference_transform"
@@ -347,7 +347,6 @@ test_that("landmark_tsne uses native HNSW for CPU projection KNN", {
     fit <- landmark_tsne(
         x,
         landmarks = 30L,
-        n_neighbors = 12L,
         perplexity = 4,
         early_exaggeration_iter = 2L,
         n_iter = 3L,
@@ -384,7 +383,7 @@ test_that("landmark_tsne uses the native Metal reference-query KNN", {
     fit <- landmark_tsne(
         x,
         landmarks = 24L,
-        n_neighbors = 10L,
+        n_neighbors = 3L,
         perplexity = 3,
         early_exaggeration_iter = 1L,
         n_iter = 1L,
@@ -424,7 +423,7 @@ test_that("landmark_tsne keeps Metal query search and transform native", {
     fit <- landmark_tsne(
         x,
         landmarks = 24L,
-        n_neighbors = 10L,
+        n_neighbors = 3L,
         perplexity = 3,
         early_exaggeration_iter = 1L,
         n_iter = 1L,

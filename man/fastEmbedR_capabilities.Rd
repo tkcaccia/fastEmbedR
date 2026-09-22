@@ -18,8 +18,7 @@ capability decision made by the compiled native probes.
 Reports whether the installed fastEmbedR build can provide nearest-neighbor
 search, embedding optimization, and graph clustering through each native
 execution backend. This function performs capability checks only; it does
-not change the backend selected by
-\code{\link[=fastEmbedR_backend]{fastEmbedR_backend()}}.
+not change the backend selected by \code{\link[=fastEmbedR_backend]{fastEmbedR_backend()}}.
 }
 \details{
 The \code{cuvs} row describes the RAPIDS cuVS nearest-neighbor component used by

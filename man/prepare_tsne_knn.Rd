@@ -5,16 +5,14 @@
 \title{Precompute reusable t-SNE KNN state}
 \usage{
 prepare_tsne_knn(
-    indices,
-    distances = NULL,
-    n_neighbors = NULL,
-    perplexity = NULL,
-    affinity_support = c("standard", "compact")
+  indices,
+  distances = NULL,
+  n_neighbors = NULL,
+  perplexity = NULL
 )
 }
 \arguments{
-\item{indices}{A list containing KNN \code{indices} and \code{distances}, or an
-    integer
+\item{indices}{A list containing KNN \code{indices} and \code{distances}, or an integer
 KNN index matrix.}
 
 \item{distances}{Numeric KNN distance matrix matching \code{indices}. Leave
@@ -22,20 +20,11 @@ KNN index matrix.}
 
 \item{n_neighbors}{Optional number of non-self neighbor columns to use from
 the supplied KNN graph. This lets you compute a wide KNN once and reuse
-its first columns for comparable tests. If omitted, \code{affinity_support}
-determines the width. An explicit value must be at least the width implied
-by \code{affinity_support}.}
+its first columns. If omitted, the compact affinity policy uses
+\code{ceiling(perplexity)} columns. An explicit value must equal that width.}
 
 \item{perplexity}{t-SNE perplexity. If \code{NULL}, the optimizer chooses a safe
 value from the supplied KNN width and sample size.}
-
-\item{affinity_support}{Affinity candidate-neighborhood policy.
-    \code{"standard"}
-(default) uses \code{ceiling(3 * perplexity)} non-self neighbors, matching the
-conventional sparse t-SNE support rule. \code{"compact"} uses only
-\code{ceiling(perplexity)} neighbors and is an explicit approximation with
-nearly uniform conditional probabilities when the support equals the
-target perplexity.}
 }
 \value{
 A prepared t-SNE KNN object.
@@ -43,8 +32,7 @@ A prepared t-SNE KNN object.
 \description{
 \code{prepare_tsne_knn()} strips self-neighbors, trims to the requested
 non-self width, and stores compact KNN matrices once. Pass the returned
-object to \code{\link[=tsne_knn]{tsne_knn()}} for repeated seeds or backend
-comparisons without
+object to \code{\link[=tsne_knn]{tsne_knn()}} for repeated seeds or backend comparisons without
 repeating KNN normalization/materialization.
 }
 \examples{

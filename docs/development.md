@@ -20,9 +20,9 @@ substitute for another.
    lines. It does not observe Metal or CUDA device-kernel execution.
 3. **Real-hardware smoke/correctness validation.** Explicitly labelled Apple
    Silicon Metal and Linux/NVIDIA CUDA runners verify capability,
-   requested-versus-observed backend identity, public workflows, numerical
-   tests, and the complete installed-package test suite. This is not a
-   scientific performance benchmark.
+   requested-versus-observed backend identity, matrix and precomputed-KNN
+   workflows, numerical tests, and the complete installed-package test suite.
+   This is not a scientific performance benchmark.
 4. **Publication release evidence.** Clean source, installed binaries,
    containers, coverage reports, hardware logs, and benchmark results are tied
    to one package commit and one benchmark commit by SHA-256 and archived under

@@ -6,6 +6,10 @@
   example. The package accepts ordinary matrices and does not require a
   Bioconductor runtime package.
 - Remove Bioconductor-specific classification fields from `DESCRIPTION`.
+- Use the same automatic t-SNE update-norm limit on CPU, Metal, and CUDA.
+  This removes a Metal-only clipping policy that could impair long-run
+  convergence, and adds an exact-objective regression test for sustained
+  FFT-grid optimization.
 
 # fastEmbedR 0.99.17
 
@@ -97,18 +101,16 @@
   machine-readable `inst/THIRD_PARTY_DEPENDENCIES.json` inventory validated by
   `tools/check_provenance_inventory.R`. Remove the unused cuML build switch;
   CUDA PCA links RAFT TSVD directly.
-- Document the public parameter philosophy explicitly. openTSNE exposes its
+- Document the public parameter philosophy explicitly. t-SNE exposes its
   principal scientific controls, whereas UMAP retains one package-owned,
   backend-validated optimizer policy and reports every resolved choice in the
   returned metadata. The manuals and vignettes now distinguish exposed,
   reusable, internal, and approximation controls and state that fastEmbedR is
   not a drop-in API for arbitrary UMAP hyperparameter sweeps.
-- Make conventional sparse t-SNE affinity support the production default:
-  `opentsne()` now supplies `ceiling(3 * perplexity)` non-self neighbors to
-  the Gaussian bandwidth search. The previous `ceiling(perplexity)` policy is
-  retained only as the explicit `affinity_support = "compact"` approximation.
-  KNN-input and landmark workflows record the actual support width, support
-  ratio, and whether the supplied support meets the conventional rule.
+- Use compact t-SNE affinity support consistently: `tsne()` supplies
+  `ceiling(perplexity)` non-self neighbors to the Gaussian bandwidth search.
+  Matrix, KNN-input, landmark, and transformation workflows record the actual
+  support width and support-to-perplexity ratio.
 - Add an independent float64 t-SNE reference harness and commit-bound CPU,
   Metal, and CUDA numerical gates for exact attractive/repulsive forces,
   finite-difference gradients, FFT-grid convergence, identical-state first

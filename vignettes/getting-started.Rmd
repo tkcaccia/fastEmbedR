@@ -384,10 +384,9 @@ knn
 
 `prepare_umap_knn()` builds graph state and `epochs_per_sample` once.
 `prepare_tsne_knn()` validates, strips self-neighbors when needed, and
-stores the selected affinity support. Its default uses three candidate
-neighbors per unit of perplexity; `affinity_support = "compact"` explicitly
-selects the older one-per-perplexity approximation. Prepared objects are
-useful for repeated runs.
+stores the compact affinity support. It uses one candidate neighbor per unit
+of perplexity and trims wider KNN inputs. Prepared objects are useful for
+repeated runs.
 
 ```{r prepared-knn}
 prepared_umap <- prepare_umap_knn(
@@ -819,9 +818,9 @@ faster because every retained edge receives the maximum sampling frequency.
 
 The affinity definition and Kullback--Leibler objective follow van der Maaten
 and Hinton. Interpolation-based repulsion follows FIt-SNE, while the automatic
-two-phase optimization policy is informed by opt-SNE and openTSNE. The default
-affinity support uses `ceiling(3 * perplexity)` non-self candidates; the
-explicit compact approximation uses `ceiling(perplexity)`.
+two-phase optimization policy is informed by opt-SNE and related t-SNE
+implementations. The compact policy uses `ceiling(perplexity)` non-self
+affinity candidates.
 
 CPU uses a retained FFT-grid workspace, Metal uses package-native scatter,
 transform, gather, attraction, and optimizer kernels, and CUDA combines native

@@ -228,24 +228,21 @@ fast_knn_opentsne_core <- function(
 prepare_tsne_knn <- function(indices,
                                 distances = NULL,
                                 n_neighbors = NULL,
-                                perplexity = NULL,
-                                affinity_support = c("standard", "compact")) {
-    affinity_support <- normalize_opentsne_affinity_support(affinity_support)
+                                perplexity = NULL) {
     knn0 <- coerce_knn_input(indices, distances)
     policy <- opentsne_neighbor_policy(
         nrow(knn0$indices),
         perplexity = perplexity,
-        available = knn0$n_neighbors,
-        affinity_support = affinity_support
+        available = knn0$n_neighbors
     )
     if (is.null(n_neighbors)) {
         n_neighbors <- policy$n_neighbors
     }
-    required_k <- opentsne_support_width(policy$perplexity, affinity_support)
-    if (n_neighbors < required_k) {
+    required_k <- opentsne_support_width(policy$perplexity)
+    if (n_neighbors != required_k) {
         stop(
-            "`n_neighbors` is too small for `affinity_support = \"",
-            affinity_support, "\"`; need at least ", required_k, ".",
+            "Compact t-SNE affinity support requires `n_neighbors = ",
+            required_k, "` for this perplexity.",
             call. = FALSE
         )
     }
@@ -254,7 +251,7 @@ prepare_tsne_knn <- function(indices,
         knn = knn,
         perplexity = policy$perplexity,
         n_neighbors = as.integer(n_neighbors),
-        affinity_support = affinity_support,
+        affinity_support = "compact",
         affinity_state = "knn_materialized_affinity_builder_internal"
     )
     class(out) <- c("fastEmbedR_tsne_prepared", "list")

@@ -5,34 +5,32 @@
 \title{Landmark t-SNE with fixed-reference transform}
 \usage{
 landmark_tsne(
-    data,
-    landmarks = TRUE,
-    reference_method = c("tsne"),
-    n_neighbors = NULL,
-    perplexity = NULL,
-    affinity_support = c("standard", "compact"),
-    n_components = 2L,
-    standardize = TRUE,
-    pca_dims = NULL,
-    seed = 4L,
-    backend = NULL,
-    transform_k = NULL,
-    transform_perplexity = 5,
-    transform_iter = 250L,
-    transform_early_exaggeration_iter = 0L,
-    transform_n_negatives = NULL,
-    initialization = c("median", "weighted", "random"),
-    keep_knn = FALSE,
-    verbose = FALSE,
-    n.cores = NULL,
-    ...
+  data,
+  landmarks = TRUE,
+  reference_method = c("tsne"),
+  n_neighbors = NULL,
+  perplexity = NULL,
+  n_components = 2L,
+  standardize = TRUE,
+  pca_dims = NULL,
+  seed = 4L,
+  backend = NULL,
+  transform_k = NULL,
+  transform_perplexity = 5,
+  transform_iter = 250L,
+  transform_early_exaggeration_iter = 0L,
+  transform_n_negatives = NULL,
+  initialization = c("median", "weighted", "random"),
+  keep_knn = FALSE,
+  verbose = FALSE,
+  n.cores = NULL,
+  ...
 )
 }
 \arguments{
 \item{data}{Numeric matrix/data frame with observations in rows.}
 
-\item{landmarks}{\code{TRUE} for an automatic subset, a fraction such as
-    \code{0.5}, a
+\item{landmarks}{\code{TRUE} for an automatic subset, a fraction such as \code{0.5}, a
 landmark count, or explicit row indices.}
 
 \item{reference_method}{Kept for compatibility. Only \code{"tsne"} is
@@ -40,34 +38,24 @@ accepted in the cleaned package API.}
 
 \item{n_neighbors}{Number of non-self neighbors used to embed the landmark
 reference set. If \code{NULL}, it follows the same neighbor policy as
-\code{\link[=tsne]{tsne()}}: \code{ceiling(3 * perplexity)} under standard
-support.}
+\code{\link[=tsne]{tsne()}}: \code{ceiling(perplexity)} under compact support.}
 
 \item{perplexity}{t-SNE perplexity for the landmark reference embedding. If
 \code{NULL}, the optimizer chooses a safe value from the reference KNN width and
 sample size.}
-
-\item{affinity_support}{Affinity candidate-neighborhood policy. The default
-\code{"standard"} uses \code{ceiling(3 * perplexity)} non-self neighbors so the
-Gaussian bandwidth search can produce non-uniform conditional
-probabilities. \code{"compact"} retains the older
-\code{ceiling(perplexity)}-neighbor approximation for explicit speed/memory
-experiments; it is not equivalent to conventional sparse t-SNE.}
 
 \item{n_components}{Output dimensionality, from 1 to 3. Dimensions other
 than two use CPU exact repulsion; the current Metal and CUDA
 interpolation/FFT optimizers support only \code{2L}.}
 
 \item{standardize}{Center and scale columns before landmark selection and
-neighbor search. Unlike \code{\link[=tsne]{tsne()}}, landmark t-SNE defaults to
-\code{TRUE}.}
+neighbor search. Unlike \code{\link[=tsne]{tsne()}}, landmark t-SNE defaults to \code{TRUE}.}
 
 \item{pca_dims}{Optional PCA dimension before KNN.}
 
 \item{seed}{Random seed.}
 
-\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or
-    \code{"metal"}.}
+\item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}.}
 
 \item{transform_k}{Number of landmark neighbors used to place non-landmarks.}
 
@@ -92,15 +80,13 @@ is native and experimental for large reference sets.}
 \item{n.cores}{Number of CPU cores used by CPU KNN and CPU
 transform optimization. Native GPU stages ignore this argument.}
 
-\item{...}{Additional low-level parameters passed to
-    \code{\link[=tsne_knn]{tsne_knn()}}.}
+\item{...}{Additional low-level parameters passed to \code{\link[=tsne_knn]{tsne_knn()}}.}
 }
 \value{
 A \code{fastEmbedR_embedding} object.
 }
 \description{
-\code{landmark_tsne()} embeds a subset of observations with
-\code{\link[=tsne]{tsne()}}, then
+\code{landmark_tsne()} embeds a subset of observations with \code{\link[=tsne]{tsne()}}, then
 places the remaining observations with \code{transform_tsne()}. Projection KNN
 searches only the
 fixed landmark reference: CPU uses native HNSW, Metal uses native exact or

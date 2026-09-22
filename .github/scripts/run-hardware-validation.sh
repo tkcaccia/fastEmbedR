@@ -26,7 +26,8 @@ cd "$root"
 
 git rev-parse HEAD > "$out_dir/git-commit.txt"
 git status --porcelain=v1 > "$out_dir/git-status.txt"
-if [[ -s "$out_dir/git-status.txt" ]]; then
+if [[ -s "$out_dir/git-status.txt" &&
+      "${FASTEMBEDR_ALLOW_DIRTY_VALIDATION:-0}" != "1" ]]; then
   echo "Hardware validation requires a clean checkout." >&2
   cat "$out_dir/git-status.txt" >&2
   exit 3
@@ -52,10 +53,6 @@ fi
   fi
 } > "$out_dir/hardware.txt" 2>&1
 
-git archive --format=tar HEAD > "$out_dir/source.tar"
-source_sha256="$(sha256_file "$out_dir/source.tar")"
-rm "$out_dir/source.tar"
-
 build_dir="$(mktemp -d "${TMPDIR:-/tmp}/fastembedr-hardware.XXXXXX")"
 trap 'rm -rf "$build_dir" "$lib_dir"' EXIT
 
@@ -67,15 +64,6 @@ else
   build_locale="C.UTF-8"
 fi
 
-(
-  cd "$build_dir"
-  LC_ALL="$build_locale" LANG="$build_locale" \
-    R CMD build "$root" --no-build-vignettes --no-manual
-) > "$out_dir/build.log" 2>&1
-package_tar="$(find "$build_dir" -maxdepth 1 -name 'fastEmbedR_*.tar.gz' -print -quit)"
-test -n "$package_tar"
-package_sha256="$(sha256_file "$package_tar")"
-
 if [[ "$backend" == "cpu" ]]; then
   export FASTEMBEDR_USE_CUDA=0
 elif [[ "$backend" == "metal" ]]; then
@@ -83,10 +71,23 @@ elif [[ "$backend" == "metal" ]]; then
   export SDKROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
 else
   export FASTEMBEDR_USE_CUDA=1
-  export FASTEMBEDR_USE_CUVS="${FASTEMBEDR_USE_CUVS:-1}"
-  export FASTEMBEDR_USE_FAISS_GPU="${FASTEMBEDR_USE_FAISS_GPU:-1}"
+  export FASTEMBEDR_USE_CUVS=1
+  export FASTEMBEDR_USE_FAISS_GPU="${FASTEMBEDR_USE_FAISS_GPU:-0}"
   export FASTEMBEDR_USE_RAFT="${FASTEMBEDR_USE_RAFT:-1}"
+  export FASTEMBEDR_REQUIRE_CUDA=1
+  export PACKAGE_REQUIRE_CUDA=1
 fi
+
+(
+  cd "$build_dir"
+  LC_ALL="$build_locale" LANG="$build_locale" \
+    R CMD build "$root" --compact-vignettes=gs+qpdf
+) > "$out_dir/build.log" 2>&1
+package_tar="$(find "$build_dir" -maxdepth 1 -name 'fastEmbedR_*.tar.gz' -print -quit)"
+test -n "$package_tar"
+package_sha256="$(sha256_file "$package_tar")"
+source_sha256="$package_sha256"
+cp "$package_tar" "$out_dir/"
 
 R CMD INSTALL --preclean --library="$lib_dir" "$package_tar" \
   > "$out_dir/install.log" 2>&1
@@ -120,13 +121,31 @@ Rscript tools/validate_tsne_numerics.R \
   --out-dir="$out_dir/tsne-numerical-validation" \
   > "$out_dir/tsne-numerical-validation.log" 2>&1
 
-Rscript -e 'testthat::test_dir("tests/testthat", reporter = "summary", package = "fastEmbedR", load_package = "installed", stop_on_failure = TRUE)' \
+Rscript .github/scripts/run-testthat-timed.R "$out_dir" \
   > "$out_dir/testthat.log" 2>&1
 
+(
+  cd "$build_dir"
+  LC_ALL="$build_locale" LANG="$build_locale" \
+    R CMD check --as-cran "$package_tar"
+) > "$out_dir/check.log" 2>&1
+check_dir="$build_dir/fastEmbedR.Rcheck"
+test -f "$check_dir/00check.log"
+cp "$check_dir/00check.log" "$out_dir/00check.log"
+grep -E '^(Status:|[0-9]+ ERROR|[0-9]+ WARNING|[0-9]+ NOTE|\* DONE)' \
+  "$check_dir/00check.log" > "$out_dir/check-summary.txt" || true
+grep -Fq '* DONE' "$check_dir/00check.log"
+if grep -Eq '^Status:.*(ERROR|WARNING)' \
+  "$check_dir/00check.log"; then
+  echo "R CMD check reported an ERROR or WARNING." >&2
+  exit 5
+fi
+
 git status --porcelain=v1 > "$out_dir/git-status-after.txt"
-if [[ -s "$out_dir/git-status-after.txt" ]]; then
+if ! cmp -s "$out_dir/git-status.txt" "$out_dir/git-status-after.txt"; then
   echo "Validation modified the checkout." >&2
-  cat "$out_dir/git-status-after.txt" >&2
+  diff -u "$out_dir/git-status.txt" \
+    "$out_dir/git-status-after.txt" >&2 || true
   exit 4
 fi
 

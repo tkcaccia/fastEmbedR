@@ -15,7 +15,7 @@
 #' @param new_data Query observations in the same preprocessing space as
 #'   `reference_data`. Required only when `knn` is `NULL`.
 #' @param k Number of reference neighbors used for transform KNN. If `NULL`,
-#'   uses at least `3 * perplexity`, matching the usual t-SNE affinity width.
+#'   uses `ceiling(perplexity)`, matching the package's compact t-SNE support.
 #' @param perplexity Transform perplexity. The default is 5.
 #' @param initialization Initial query placement: `"median"` from reference
 #'   neighbors, inverse-distance `"weighted"`, or `"random"`.
@@ -162,7 +162,7 @@ prepare_tsne_transform_projection <- function(request, reference_layout) {
         request$reference_data, request$new_data, reference_layout
     )
     k <- request$k %||% min(
-        nrow(data$reference), max(25L, ceiling(3 * request$perplexity))
+        nrow(data$reference), ceiling(request$perplexity)
     )
     k <- transform_embedding_k(k, nrow(data$reference))
     policy <- fastembedr_query_nn_policy(
@@ -787,9 +787,6 @@ normalize_landmark_tsne_request <- function(request) {
         request$initialization,
         c("median", "weighted", "random")
     )
-    request$affinity_support <- normalize_opentsne_affinity_support(
-        request$affinity_support
-    )
     request$backend <- resolve_embedding_backend(request$backend)
     request$n_threads <- request$n.cores
     request
@@ -842,7 +839,6 @@ run_full_landmark_tsne <- function(state, request) {
     args <- list(
         data = state$x,
         perplexity = request$perplexity,
-        affinity_support = request$affinity_support,
         n_components = request$n_components,
         standardize = FALSE,
         pca_dims = NULL,
@@ -875,8 +871,7 @@ partition_landmark_tsne <- function(state, request) {
 landmark_tsne_reference_policy <- function(state, request) {
     policy <- opentsne_neighbor_policy(
         state$n_landmarks,
-        perplexity = request$perplexity,
-        affinity_support = request$affinity_support
+        perplexity = request$perplexity
     )
     perplexity <- request$perplexity %||% policy$perplexity
     n_neighbors <- request$n_neighbors %||% policy$n_neighbors
@@ -886,13 +881,11 @@ landmark_tsne_reference_policy <- function(state, request) {
             call. = FALSE
         )
     }
-    required <- opentsne_support_width(
-        perplexity,
-        request$affinity_support
-    )
-    if (n_neighbors < required) {
+    required <- opentsne_support_width(perplexity)
+    if (n_neighbors != required) {
         stop(
-            "`n_neighbors` is too small for the affinity support.",
+            "Compact t-SNE affinity support requires `n_neighbors = ",
+            required, "` for this perplexity.",
             call. = FALSE
         )
     }
@@ -907,7 +900,6 @@ landmark_tsne_reference_args <- function(knn, state, request, policy) {
         indices = knn,
         n_neighbors = policy$n_neighbors,
         perplexity = policy$perplexity,
-        affinity_support = request$affinity_support,
         n_components = request$n_components,
         init_data = state$x_landmarks,
         seed = request$seed,
@@ -1005,10 +997,7 @@ fit_landmark_tsne_reference <- function(state, request) {
 landmark_tsne_transform_controls <- function(state, request) {
     transform_k <- request$transform_k
     if (is.null(transform_k)) {
-        transform_k <- max(
-            25L,
-            ceiling(3 * request$transform_perplexity)
-        )
+        transform_k <- ceiling(request$transform_perplexity)
         transform_k <- min(state$n_landmarks, transform_k)
     }
     transform_iter <- as.integer(request$transform_iter)
@@ -1389,8 +1378,7 @@ landmark_tsne_reference_parameters <- function(state) {
         affinity_support_k = params$affinity_support_k,
         affinity_support_multiplier =
             params$affinity_support_multiplier,
-        conventional_affinity_support =
-            params$conventional_affinity_support,
+        compact_affinity_support = params$compact_affinity_support,
         nn_backend = params$nn_backend
     )
 }
@@ -1509,7 +1497,7 @@ assemble_landmark_tsne_output <- function(state, request) {
 #'   projection-only landmarking with no transform refinement.
 #' @param n_neighbors Number of non-self neighbors used to embed the landmark
 #'   reference set. If `NULL`, it follows the same neighbor policy as
-#'   [tsne()]: `ceiling(3 * perplexity)` under standard support.
+#'   [tsne()]: `ceiling(perplexity)` under compact support.
 #' @param perplexity t-SNE perplexity for the landmark reference embedding. If
 #'   `NULL`, the optimizer chooses a safe value from the reference KNN width and
 #'   sample size.
@@ -1537,7 +1525,7 @@ assemble_landmark_tsne_output <- function(state, request) {
 landmark_tsne <- function(
     data, landmarks = TRUE, reference_method = c("tsne"),
     n_neighbors = NULL, perplexity = NULL,
-    affinity_support = c("standard", "compact"), n_components = 2L,
+    n_components = 2L,
     standardize = TRUE, pca_dims = NULL, seed = 4L, backend = NULL,
     transform_k = NULL, transform_perplexity = 5,
     transform_iter = 250L, transform_early_exaggeration_iter = 0L,
@@ -1548,7 +1536,7 @@ landmark_tsne <- function(
     request <- list(
         landmarks = landmarks, reference_method = reference_method,
         n_neighbors = n_neighbors, perplexity = perplexity,
-        affinity_support = affinity_support, n_components = n_components,
+        n_components = n_components,
         standardize = standardize, pca_dims = pca_dims, seed = seed,
         backend = backend, transform_k = transform_k,
         transform_perplexity = transform_perplexity,

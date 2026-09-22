@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -285,6 +286,30 @@ int fastembedr_cuda_landmark_tsne_from_device_knn(
   int affine_neighbors,
   float affine_ridge,
   float max_extrapolation,
+  float* out
+);
+int fastembedr_cuda_transform_tsne_from_host_knn(
+  const int* indices,
+  const float* distances,
+  int index_offset,
+  const float* reference_layout,
+  const float* initial_layout,
+  int n_reference,
+  int n_query,
+  int k,
+  float perplexity,
+  int n_iter,
+  int early_exaggeration_iter,
+  float learning_rate,
+  float early_exaggeration,
+  float exaggeration,
+  float initial_momentum,
+  float final_momentum,
+  float max_grad_norm,
+  float max_step_norm,
+  int n_negatives,
+  int exact_repulsion_threshold,
+  unsigned int seed,
   float* out
 );
 int fastembedr_cuda_landmark_umap_from_device_knn(
@@ -971,6 +996,83 @@ void validate_projection_inputs(const NumericMatrix& reference_layout,
       }
     }
   }
+}
+
+int transform_reference_index_offset(const IntegerMatrix& indices,
+                                     int n_reference) {
+  int min_index = std::numeric_limits<int>::max();
+  int max_index = std::numeric_limits<int>::min();
+  for (int value : indices) {
+    min_index = std::min(min_index, value);
+    max_index = std::max(max_index, value);
+  }
+  if (min_index >= 1 && max_index <= n_reference) return 1;
+  if (min_index >= 0 && max_index < n_reference) return 0;
+  Rcpp::stop("KNN indices are out of range for `reference_layout`.");
+}
+
+std::vector<float> initialize_tsne_transform_cuda(
+    const NumericMatrix& reference_layout,
+    const IntegerMatrix& indices,
+    const NumericMatrix& distances,
+    const NumericMatrix& y_init,
+    bool init,
+    const std::string& initialization,
+    int index_offset,
+    int seed) {
+  const int n_query = indices.nrow();
+  const int k = indices.ncol();
+  std::vector<float> out(static_cast<std::size_t>(n_query) * 2u, 0.0f);
+  if (init) {
+    if (y_init.nrow() != n_query || y_init.ncol() != 2) {
+      Rcpp::stop("`Y_init` must have one row per query and two columns.");
+    }
+    for (int i = 0; i < n_query; ++i) {
+      out[static_cast<std::size_t>(i) * 2u] = y_init(i, 0);
+      out[static_cast<std::size_t>(i) * 2u + 1u] = y_init(i, 1);
+    }
+    return out;
+  }
+  if (initialization == "random") {
+    std::mt19937 rng(seed == NA_INTEGER ? 5489u : seed);
+    std::normal_distribution<float> normal(0.0f, 1.0e-4f);
+    for (float& value : out) value = normal(rng);
+    return out;
+  }
+  std::vector<float> values(static_cast<std::size_t>(k));
+  for (int i = 0; i < n_query; ++i) {
+    for (int dim = 0; dim < 2; ++dim) {
+      if (initialization == "weighted") {
+        double numerator = 0.0;
+        double denominator = std::numeric_limits<double>::min();
+        for (int j = 0; j < k; ++j) {
+          const int ref = indices(i, j) - index_offset;
+          const double weight = 1.0 / (distances(i, j) + 1.0e-6);
+          numerator += weight * reference_layout(ref, dim);
+          denominator += weight;
+        }
+        out[static_cast<std::size_t>(i) * 2u + dim] =
+          static_cast<float>(numerator / denominator);
+        continue;
+      }
+      for (int j = 0; j < k; ++j) {
+        const int ref = indices(i, j) - index_offset;
+        values[static_cast<std::size_t>(j)] = reference_layout(ref, dim);
+      }
+      const int middle = k / 2;
+      std::nth_element(values.begin(), values.begin() + middle, values.end());
+      float median = values[static_cast<std::size_t>(middle)];
+      if ((k & 1) == 0) {
+        std::nth_element(
+          values.begin(), values.begin() + middle - 1,
+          values.begin() + middle
+        );
+        median = 0.5f * (median + values[static_cast<std::size_t>(middle - 1)]);
+      }
+      out[static_cast<std::size_t>(i) * 2u + dim] = median;
+    }
+  }
+  return out;
 }
 
 NumericVector structure_score_na() {
@@ -2633,6 +2735,105 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
     Rcpp::Named("auto_stop_reason") = "not_available_cuda_gpu_resident_fft",
     Rcpp::Named("auto_iter_end") = early_exaggeration_iter + n_iter,
     Rcpp::Named("knn_residency") = "cuda_device"
+  );
+}
+
+List transform_tsne_cuda_impl(NumericMatrix reference_layout,
+                              IntegerMatrix indices,
+                              NumericMatrix distances,
+                              NumericMatrix y_init,
+                              bool init,
+                              std::string initialization,
+                              double perplexity,
+                              int n_iter,
+                              int early_exaggeration_iter,
+                              double learning_rate,
+                              double early_exaggeration,
+                              double exaggeration,
+                              double initial_momentum,
+                              double final_momentum,
+                              double max_grad_norm,
+                              double max_step_norm,
+                              int n_negatives,
+                              int exact_repulsion_threshold,
+                              int seed) {
+  const int n_reference = reference_layout.nrow();
+  const int n_query = indices.nrow();
+  const int k = indices.ncol();
+  if (n_reference < 1 || reference_layout.ncol() != 2 ||
+      n_query < 1 || k < 1 || distances.nrow() != n_query ||
+      distances.ncol() != k) {
+    Rcpp::stop("CUDA t-SNE transform inputs have incompatible dimensions.");
+  }
+  if (k > kMaxCudaProjectionNeighbors || perplexity <= 0.0 ||
+      n_iter < 0 || early_exaggeration_iter < 0 ||
+      n_iter + early_exaggeration_iter < 1 || learning_rate <= 0.0 ||
+      early_exaggeration <= 0.0 || exaggeration <= 0.0 ||
+      initial_momentum < 0.0 || final_momentum < 0.0) {
+    Rcpp::stop("Invalid CUDA t-SNE transform parameters.");
+  }
+  if (initialization != "median" && initialization != "weighted" &&
+      initialization != "random") {
+    Rcpp::stop("`initialization` must be 'median', 'weighted', or 'random'.");
+  }
+  if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
+  const int index_offset = transform_reference_index_offset(
+    indices, n_reference
+  );
+  std::vector<float> distance_values(
+    static_cast<std::size_t>(n_query) * k
+  );
+  for (R_xlen_t i = 0; i < distances.length(); ++i) {
+    const double value = distances[i];
+    if (!std::isfinite(value) || value < 0.0) {
+      Rcpp::stop("KNN distances must be finite and non-negative.");
+    }
+    distance_values[static_cast<std::size_t>(i)] = value;
+  }
+  std::vector<float> reference = cuda_copy_matrix_float(
+    reference_layout, n_reference, 2, "reference_layout"
+  );
+  std::vector<float> initial = initialize_tsne_transform_cuda(
+    reference_layout, indices, distances, y_init, init, initialization,
+    index_offset, seed
+  );
+  std::vector<float> output(static_cast<std::size_t>(n_query) * 2u);
+  n_negatives = std::max(1, std::min(n_negatives, n_reference));
+  exact_repulsion_threshold = std::max(1, exact_repulsion_threshold);
+  const int status = fastembedr_cuda_transform_tsne_from_host_knn(
+    indices.begin(), distance_values.data(), index_offset, reference.data(),
+    initial.data(), n_reference, n_query, k, perplexity, n_iter,
+    early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration,
+    initial_momentum, final_momentum, max_grad_norm, max_step_norm,
+    n_negatives, exact_repulsion_threshold,
+    static_cast<unsigned int>(seed == NA_INTEGER ? 5489 : seed),
+    output.data()
+  );
+  if (status != 0) {
+    Rcpp::stop(
+      "CUDA t-SNE transform failed: %s", cuda_embedding_error_message()
+    );
+  }
+  NumericMatrix layout(n_query, 2);
+  for (int row = 0; row < n_query; ++row) {
+    layout(row, 0) = output[static_cast<std::size_t>(row) * 2u];
+    layout(row, 1) = output[static_cast<std::size_t>(row) * 2u + 1u];
+  }
+  const bool exact_repulsion = n_reference <= exact_repulsion_threshold ||
+    n_negatives >= n_reference;
+  return List::create(
+    Rcpp::Named("Y") = layout,
+    Rcpp::Named("optimizer") =
+      "opentsne_style_fixed_reference_transform_cuda",
+    Rcpp::Named("initialization") = initialization,
+    Rcpp::Named("repulsion") = exact_repulsion ?
+      "exact_reference_cuda" : "sampled_reference_cuda",
+    Rcpp::Named("affinities") = "precomputed_query_conditional_cuda_float32",
+    Rcpp::Named("affinity_storage") = "cuda_device_rank_major_float32",
+    Rcpp::Named("transform_batch_size") = n_query,
+    Rcpp::Named("transform_batches") = 1,
+    Rcpp::Named("n_negatives") = n_negatives,
+    Rcpp::Named("n_threads") = NA_INTEGER
   );
 }
 

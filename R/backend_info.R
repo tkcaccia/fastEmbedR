@@ -24,7 +24,9 @@ fastEmbedR_capabilities <- function() {
 }
 
 fastembedr_backend_state <- function() {
+    build <- fastembedr_build_config_cpp()
     state <- list(
+        build = build,
         cuda_knn = backend_flag(native_cuda_knn_available_cpp),
         cuda_embedding = backend_flag(embedding_cuda_available_cpp),
         cuda_clustering = backend_flag(graph_clustering_cuda_available_cpp),
@@ -40,6 +42,15 @@ fastembedr_backend_state <- function() {
         state,
         metal_knn || metal_embedding || metal_clustering
     )
+    state$build_mode <- if (isTRUE(build$diagnostic_only)) {
+        "diagnostic_only"
+    } else if (isTRUE(build$cuda_compiled)) {
+        "cuda"
+    } else if (isTRUE(build$metal_compiled)) {
+        "metal"
+    } else {
+        "cpu_only"
+    }
     state$cuda_device <- cuda_device_summary(state$cuda)
     state$metal_device <- metal_device_summary(state$metal)
     state
@@ -50,19 +61,34 @@ fastembedr_unavailable_reasons <- function(state) {
         NA_character_,
         if (state$cuda_knn) {
             NA_character_
+        } else if (isTRUE(state$build$diagnostic_only)) {
+            "The package was built in diagnostic-only mode."
+        } else if (!isTRUE(state$build$cuvs_compiled)) {
+            "The installed build was not compiled with RAPIDS cuVS."
         } else {
             paste(
-                "The installed build did not expose a usable RAPIDS cuVS",
-                "KNN component."
+                "RAPIDS cuVS was compiled, but no functional CUDA device",
+                "was available at runtime."
             )
         },
         if (state$cuda) {
             NA_character_
+        } else if (isTRUE(state$build$diagnostic_only)) {
+            "The package was built in diagnostic-only mode."
+        } else if (!isTRUE(state$build$cuda_compiled)) {
+            "The installed package was built without CUDA support."
         } else {
-            "The installed build did not expose a usable native CUDA component."
+            paste(
+                "CUDA was compiled, but no functional CUDA device was",
+                "available at runtime."
+            )
         },
         if (state$metal) {
             NA_character_
+        } else if (isTRUE(state$build$diagnostic_only)) {
+            "The package was built in diagnostic-only mode."
+        } else if (!isTRUE(state$build$metal_compiled)) {
+            "The installed package was built without Metal support."
         } else {
             paste(
                 "The installed build did not expose a usable native Metal",
@@ -70,6 +96,20 @@ fastembedr_unavailable_reasons <- function(state) {
             )
         }
     )
+}
+
+fastembedr_capability_status <- function(compiled, functional,
+                                            diagnostic_only = FALSE) {
+    if (isTRUE(diagnostic_only)) {
+        return("diagnostic_only")
+    }
+    if (!isTRUE(compiled)) {
+        return("unavailable_not_built")
+    }
+    if (isTRUE(functional)) {
+        return("available_functional")
+    }
+    "unavailable_runtime"
 }
 
 fastembedr_capability_notes <- function(state) {
@@ -109,8 +149,39 @@ fastembedr_capability_table <- function(state) {
     clustering <- c(
         TRUE, FALSE, state$cuda_clustering, state$metal_clustering
     )
+    compiled <- c(
+        TRUE, state$build$cuvs_compiled, state$build$cuda_compiled,
+        state$build$metal_compiled
+    )
+    diagnostic <- isTRUE(state$build$diagnostic_only)
+    status <- c(
+        fastembedr_capability_status(TRUE, TRUE, diagnostic),
+        fastembedr_capability_status(
+            compiled[[2L]], knn[[2L]], diagnostic
+        ),
+        fastembedr_capability_status(
+            compiled[[3L]], knn[[3L]] || embedding[[3L]] || clustering[[3L]],
+            diagnostic
+        ),
+        fastembedr_capability_status(
+            compiled[[4L]], knn[[4L]] || embedding[[4L]] || clustering[[4L]],
+            diagnostic
+        )
+    )
     data.frame(
         backend = c("cpu", "cuvs", "cuda", "metal"),
+        status = status,
+        build_mode = rep(state$build_mode, 4L),
+        compiled = as.logical(compiled),
+        cuda_core_compiled = rep(
+            isTRUE(state$build$cuda_compiled), 4L
+        ),
+        cuvs_compiled = rep(isTRUE(state$build$cuvs_compiled), 4L),
+        faiss_gpu_compiled = rep(
+            isTRUE(state$build$faiss_gpu_compiled), 4L
+        ),
+        raft_compiled = rep(isTRUE(state$build$raft_compiled), 4L),
+        diagnostic_only = rep(diagnostic, 4L),
         available = knn | embedding | clustering,
         knn_available = knn,
         embedding_available = embedding,
@@ -123,7 +194,7 @@ fastembedr_capability_table <- function(state) {
         knn_engine = c(
             "package-native HNSW",
             "RAPIDS cuVS IVF-Flat",
-            "FAISS GPU exact or RAPIDS cuVS IVF-Flat",
+            "cuVS brute-force or IVF-Flat; optional FAISS GPU exact",
             "package-native exact or IVF-Flat"
         ),
         precision = c(
@@ -135,7 +206,10 @@ fastembedr_capability_table <- function(state) {
         runtime_libraries = c(
             "R, Rcpp, package-native C++17",
             "CUDA runtime, RAPIDS cuVS C API",
-            "CUDA runtime, FAISS GPU/cuVS, cuFFT; optional RAFT/RMM TSVD",
+            paste(
+                "CUDA runtime, cuVS, cuFFT/cuBLAS/cuSOLVER; optional",
+                "FAISS GPU and RAFT/RMM"
+            ),
             "Foundation, Accelerate, Metal, MPS, MPSGraph"
         ),
         unavailable_reason = fastembedr_unavailable_reasons(state),

@@ -52,8 +52,8 @@ Each hardware run records:
 - whether the requested backend was available;
 - the evidence class, explicitly marked as hardware smoke/correctness rather
   than a full performance benchmark;
-- the backend actually recorded by PCA, KNN, one-call UMAP, t-SNE, and
-  Leiden results;
+- the backend actually recorded by PCA, KNN, one-call and precomputed-KNN
+  UMAP/t-SNE, held-out landmark projection, and Leiden results;
 - elapsed smoke-test times;
 - the complete installed-package `testthat` results; and
 - SHA-256 identities for the Git archive, source package, installed shared

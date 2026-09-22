@@ -22,9 +22,10 @@
 #' @param seed Random seed.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. CPU KNN
 #'   uses package-native HNSW. Metal uses package-native exact or recall-tuned
-#'   IVF-Flat search. CUDA uses direct FAISS GPU exact search below 100,000
-#'   rows and direct RAPIDS cuVS IVF-Flat above that threshold; the KNN result
-#'   stays on the device through graph construction and optimization.
+#'   IVF-Flat search. CUDA uses cuVS brute-force exact search below 100,000
+#'   rows and cuVS IVF-Flat above that threshold; an explicitly enabled FAISS
+#'   GPU build may provide exact search. The KNN result stays on the device
+#'   through graph construction and optimization.
 #'   GPU requests must resolve to a real native backend; the package does not
 #'   relabel CPU work as GPU.
 #' @param n.cores Requested CPU core count. For matrix input, the value is

@@ -5,29 +5,29 @@
 \title{Transform query points into an existing t-SNE embedding}
 \usage{
 transform_tsne(
-    reference_layout,
-    knn = NULL,
-    reference_data = NULL,
-    new_data = NULL,
-    k = NULL,
-    perplexity = 5,
-    initialization = c("median", "weighted", "random"),
-    Y_init = NULL,
-    n_iter = 250L,
-    early_exaggeration_iter = 0L,
-    learning_rate = 0.1,
-    early_exaggeration = 4,
-    exaggeration = 1.5,
-    initial_momentum = 0.8,
-    final_momentum = 0.8,
-    max_grad_norm = 0.25,
-    max_step_norm = Inf,
-    n_negatives = NULL,
-    exact_repulsion_threshold = 4096L,
-    n.cores = NULL,
-    seed = 4L,
-    backend = NULL,
-    verbose = FALSE
+  reference_layout,
+  knn = NULL,
+  reference_data = NULL,
+  new_data = NULL,
+  k = NULL,
+  perplexity = 5,
+  initialization = c("median", "weighted", "random"),
+  Y_init = NULL,
+  n_iter = 250L,
+  early_exaggeration_iter = 0L,
+  learning_rate = 0.1,
+  early_exaggeration = 4,
+  exaggeration = 1.5,
+  initial_momentum = 0.8,
+  final_momentum = 0.8,
+  max_grad_norm = 0.25,
+  max_step_norm = Inf,
+  n_negatives = NULL,
+  exact_repulsion_threshold = 4096L,
+  n.cores = NULL,
+  seed = 4L,
+  backend = NULL,
+  verbose = FALSE
 )
 }
 \arguments{
@@ -38,14 +38,13 @@ transform_tsne(
 \code{distances}.}
 
 \item{reference_data}{Reference observations in the same preprocessing space
-used to fit \code{reference_layout}. Required only when \code{knn} is
-\code{NULL}.}
+used to fit \code{reference_layout}. Required only when \code{knn} is \code{NULL}.}
 
 \item{new_data}{Query observations in the same preprocessing space as
 \code{reference_data}. Required only when \code{knn} is \code{NULL}.}
 
 \item{k}{Number of reference neighbors used for transform KNN. If \code{NULL},
-uses at least \code{3 * perplexity}, matching the usual t-SNE affinity width.}
+uses \code{ceiling(perplexity)}, matching the package's compact t-SNE support.}
 
 \item{perplexity}{Transform perplexity. The default is 5.}
 
@@ -69,8 +68,7 @@ overrides \code{initialization}.}
 
 \item{final_momentum}{Momentum used during normal optimization.}
 
-\item{max_grad_norm}{Maximum per-query gradient norm. Use \code{Inf} to
-    disable.}
+\item{max_grad_norm}{Maximum per-query gradient norm. Use \code{Inf} to disable.}
 
 \item{max_step_norm}{Maximum per-query step norm. Use \code{Inf} to disable.}
 
@@ -85,8 +83,7 @@ below this reference count.}
 
 \item{seed}{Random seed.}
 
-\item{backend}{Backend used for query KNN when \code{knn} is \code{NULL};
-    \code{"metal"}
+\item{backend}{Backend used for query KNN when \code{knn} is \code{NULL}; \code{"metal"}
 and \code{"cuda"} run their native fixed-reference transform optimizers when
 those backends were compiled. Explicit unavailable GPU requests fail; CPU
 work is never reported as Metal or CUDA.}

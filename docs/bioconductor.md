@@ -73,7 +73,8 @@ rewritten so the coding-practice check passes.
 | R package | `RhpcBLASctl` | Optional CPU BLAS and OpenMP thread control. | suggested |
 | System library | C++17 compiler | Native CPU code and numerical helper compilation. | yes |
 | System library | Apple Metal framework | Native Metal KNN and embedding backends on macOS. | optional |
-| System library | CUDA Toolkit, FAISS GPU, cuFFT, cuBLAS, cuSOLVER, RAPIDS RAFT and cuVS C libraries | Native CUDA KNN, embedding backend, and CUDA TSVD initialization. | optional |
+| System library | CUDA Toolkit, cuFFT, cuBLAS, cuSOLVER, and RAPIDS cuVS | Native CUDA KNN and embedding backend. | optional |
+| System library | RAPIDS RAFT/RMM or FAISS GPU | CUDA TSVD initialization or alternative exact KNN, respectively. | optional |
 
 Reference packages such as `Rtsne`, `uwot`, and `umap` are installed only in
 the separate benchmark environment; they are not part of the package
@@ -86,7 +87,7 @@ Faiss-mlx-informed Metal files retain their permissive licenses under
 
 ## Native KNN Boundary
 
-fastEmbedR owns the internal CPU/Metal KNN and direct FAISS/cuVS CUDA KNN used
+fastEmbedR owns the internal CPU/Metal KNN and direct cuVS CUDA KNN used
 by one-call embeddings. The following are available without another KNN R
 package:
 

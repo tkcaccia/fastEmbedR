@@ -5,35 +5,33 @@
 \title{Run native interpolation-based t-SNE from precomputed KNN}
 \usage{
 tsne_knn(
-    indices,
-    distances = NULL,
-    n_neighbors = NULL,
-    perplexity = NULL,
-    affinity_support = c("standard", "compact"),
-    n_components = 2L,
-    init_data = NULL,
-    Y_init = NULL,
-    seed = 4L,
-    verbose = FALSE,
-    backend = NULL,
-    n.cores = NULL,
-    learning_rate = "auto",
-    early_exaggeration_iter = NULL,
-    early_exaggeration = "auto",
-    n_iter = NULL,
-    exaggeration = NULL,
-    initial_momentum = 0.8,
-    final_momentum = 0.8,
-    max_step_norm = "auto",
-    negative_gradient_method = "auto",
-    record_costs = FALSE,
-    auto_config = TRUE,
-    ...
+  indices,
+  distances = NULL,
+  n_neighbors = NULL,
+  perplexity = NULL,
+  n_components = 2L,
+  init_data = NULL,
+  Y_init = NULL,
+  seed = 4L,
+  verbose = FALSE,
+  backend = NULL,
+  n.cores = NULL,
+  learning_rate = "auto",
+  early_exaggeration_iter = NULL,
+  early_exaggeration = "auto",
+  n_iter = NULL,
+  exaggeration = NULL,
+  initial_momentum = 0.8,
+  final_momentum = 0.8,
+  max_step_norm = "auto",
+  negative_gradient_method = "auto",
+  record_costs = FALSE,
+  auto_config = TRUE,
+  ...
 )
 }
 \arguments{
-\item{indices}{A list containing KNN \code{indices} and \code{distances}, or an
-    integer
+\item{indices}{A list containing KNN \code{indices} and \code{distances}, or an integer
 KNN index matrix.}
 
 \item{distances}{Numeric KNN distance matrix matching \code{indices}. Leave
@@ -41,20 +39,11 @@ KNN index matrix.}
 
 \item{n_neighbors}{Optional number of non-self neighbor columns to use from
 the supplied KNN graph. This lets you compute a wide KNN once and reuse
-its first columns for comparable tests. If omitted, \code{affinity_support}
-determines the width. An explicit value must be at least the width implied
-by \code{affinity_support}.}
+its first columns. If omitted, the compact affinity policy uses
+\code{ceiling(perplexity)} columns. An explicit value must equal that width.}
 
 \item{perplexity}{t-SNE perplexity. If \code{NULL}, the optimizer chooses a safe
 value from the supplied KNN width and sample size.}
-
-\item{affinity_support}{Affinity candidate-neighborhood policy.
-    \code{"standard"}
-(default) uses \code{ceiling(3 * perplexity)} non-self neighbors, matching the
-conventional sparse t-SNE support rule. \code{"compact"} uses only
-\code{ceiling(perplexity)} neighbors and is an explicit approximation with
-nearly uniform conditional probabilities when the support equals the
-target perplexity.}
 
 \item{n_components}{Output dimensionality, from 1 to 3. Dimensions other
 than two use CPU exact repulsion; the current Metal and CUDA
@@ -64,16 +53,14 @@ interpolation/FFT optimizers support only \code{2L}.}
 compute PCA initialization for KNN-input runs. It is not used for neighbor
 search or optimization.}
 
-\item{Y_init}{Optional explicit initial layout. Use
-    \code{\link[=tsne_pca_init]{tsne_pca_init()}} to
+\item{Y_init}{Optional explicit initial layout. Use \code{\link[=tsne_pca_init]{tsne_pca_init()}} to
 precompute and reuse a PCA initialization.}
 
 \item{seed}{Random seed.}
 
 \item{verbose}{Print optimizer progress.}
 
-\item{backend}{Optimizer backend: \code{"cpu"}, \code{"cuda"}, or
-    \code{"metal"}. This
+\item{backend}{Optimizer backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. This
 selects affinity construction and layout optimization only; it does not
 trigger a nearest-neighbor search. Host KNN matrices can be consumed by
 any compiled backend. A CUDA-resident KNN object can be consumed directly
@@ -85,8 +72,7 @@ t-SNE optimization. \code{NULL} uses the package t-SNE thread option, which
 defaults to four. No KNN search is performed. Metal and CUDA optimizers
 ignore this argument.}
 
-\item{learning_rate}{Positive number or \code{"auto"}. With \code{"auto"}, the
-    native
+\item{learning_rate}{Positive number or \code{"auto"}. With \code{"auto"}, the native
 optimizer uses \code{n / exaggeration} separately for each phase.}
 
 \item{early_exaggeration_iter}{Number of early-exaggeration iterations.}
@@ -104,8 +90,8 @@ exaggeration.}
 \item{final_momentum}{Momentum during normal optimization.}
 
 \item{max_step_norm}{Maximum per-point update norm. \code{"auto"} uses the
-standard CPU limit and a tighter native Metal FFT-grid limit to avoid
-float32 outlier steps. Use \code{NULL} or \code{NA} to disable clipping.}
+same validated limit on CPU, Metal, and CUDA. Use \code{NULL} or \code{NA} to
+disable clipping.}
 
 \item{negative_gradient_method}{\code{"auto"}, \code{"exact"}, or
 \code{"fft"}. On CPU, \code{"auto"} resolves to the native grid-FFT
@@ -130,8 +116,7 @@ An embedding matrix with settings stored in
 CUDA-resident KNN object, produce a \code{float::float32} layout; host double
 distances produce a standard R double matrix. Native optimization uses
 float32 in both cases. The exact returned representation is recorded in
-\code{attr(layout, "precision")} and in
-\code{fastEmbedR_config$output_precision}.
+\code{attr(layout, "precision")} and in \code{fastEmbedR_config$output_precision}.
 }
 \description{
 \code{tsne_knn()} is the direct KNN-input entry point for the native

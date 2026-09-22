@@ -5,13 +5,13 @@
 \title{Compute or reuse a PCA initialization for t-SNE}
 \usage{
 tsne_pca_init(
-    data,
-    n_components = 2L,
-    seed = 4L,
-    backend = NULL,
-    n.cores = 1L,
-    cache_file = NULL,
-    force_recompute = FALSE
+  data,
+  n_components = 2L,
+  seed = 4L,
+  backend = NULL,
+  n.cores = 1L,
+  cache_file = NULL,
+  force_recompute = FALSE
 )
 }
 \arguments{
@@ -22,8 +22,7 @@ observations in rows.}
 
 \item{seed}{Random seed used by the truncated PCA subspace sketch.}
 
-\item{backend}{Backend used for PCA when available: \code{"cpu"},
-    \code{"metal"},
+\item{backend}{Backend used for PCA when available: \code{"cpu"}, \code{"metal"},
 or \code{"cuda"}.}
 
 \item{n.cores}{Number of CPU cores used for CPU PCA initialization. Metal
@@ -41,12 +40,10 @@ returned as \code{float::float32} when the selected PCA backend preserves it.
 }
 \description{
 \code{tsne_pca_init()} creates the small-scale PCA initialization used by
-\code{\link[=tsne]{tsne()}} and \code{\link[=tsne_knn]{tsne_knn()}}. Supplying
-\code{cache_file} stores the result
+\code{\link[=tsne]{tsne()}} and \code{\link[=tsne_knn]{tsne_knn()}}. Supplying \code{cache_file} stores the result
 as an RDS file; later calls with the same path reuse the saved matrix instead
 of recomputing PCA. This is useful when comparing several KNN backends with
-exactly the same initialization. For \code{backend = "cuda"}, fastEmbedR
-requires
+exactly the same initialization. For \code{backend = "cuda"}, fastEmbedR requires
 native RAPIDS RAFT TSVD support compiled into the CUDA backend and fails
 loudly if that backend is unavailable. Metal uses fastEmbedR's native
 float32 block-subspace TSVD with native Metal centering/scaling, Metal

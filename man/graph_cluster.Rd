@@ -5,27 +5,24 @@
 \title{Native graph community detection}
 \usage{
 graph_cluster(
-    graph,
-    method = c("leiden", "louvain", "walktrap"),
-    backend = NULL,
-    resolution = 1,
-    n_iterations = 10L,
-    n_runs = 1L,
-    steps = 4L,
-    seed = 1L
+  graph,
+  method = c("leiden", "louvain", "walktrap"),
+  backend = NULL,
+  resolution = 1,
+  n_iterations = 10L,
+  n_runs = 1L,
+  steps = 4L,
+  seed = 1L
 )
 }
 \arguments{
-\item{graph}{A \code{fastEmbedR_graph}, or an edge-list list containing
-    \code{from},
+\item{graph}{A \code{fastEmbedR_graph}, or an edge-list list containing \code{from},
 \code{to}, \code{weight}, and \code{n_vertices}.}
 
-\item{method}{\code{"leiden"}, \code{"louvain"}, or \code{"walktrap"}. Walktrap
-    is the
+\item{method}{\code{"leiden"}, \code{"louvain"}, or \code{"walktrap"}. Walktrap is the
 package's true random-walk community method.}
 
-\item{backend}{Execution backend. \code{"cuda"} and \code{"metal"} are
-    available for
+\item{backend}{Execution backend. \code{"cuda"} and \code{"metal"} are available for
 Louvain and Leiden only and fail explicitly if the requested accelerator
 was not compiled or is unavailable. They never fall back to CPU.}
 

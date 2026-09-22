@@ -58,7 +58,7 @@ jobs:
       - name: Check runner prerequisites
         run: |
           xcrun --find metal
-          Rscript -e 'stopifnot(requireNamespace("Rcpp"), requireNamespace("testthat"), requireNamespace("withr"))'
+          Rscript -e 'stopifnot(requireNamespace("Rcpp"), requireNamespace("testthat"), requireNamespace("withr"), requireNamespace("knitr"), requireNamespace("rmarkdown"))'
       - name: Validate native Metal implementation
         run: bash .github/scripts/run-hardware-validation.sh metal validation-artifacts/metal
       - name: Archive Metal evidence
@@ -80,13 +80,15 @@ jobs:
         run: |
           nvidia-smi
           "${NVCC:-${CUDA_HOME:-/usr/local/cuda}/bin/nvcc}" --version
-          Rscript -e 'stopifnot(requireNamespace("Rcpp"), requireNamespace("testthat"), requireNamespace("withr"))'
+          Rscript -e 'stopifnot(requireNamespace("Rcpp"), requireNamespace("testthat"), requireNamespace("withr"), requireNamespace("knitr"), requireNamespace("rmarkdown"))'
       - name: Validate native CUDA implementation
         env:
           FASTEMBEDR_USE_CUDA: "1"
           FASTEMBEDR_USE_CUVS: "1"
-          FASTEMBEDR_USE_FAISS_GPU: "1"
+          FASTEMBEDR_USE_FAISS_GPU: "0"
           FASTEMBEDR_USE_RAFT: "1"
+          FASTEMBEDR_REQUIRE_CUDA: "1"
+          PACKAGE_REQUIRE_CUDA: "1"
         run: bash .github/scripts/run-hardware-validation.sh cuda validation-artifacts/cuda
       - name: Archive CUDA evidence
         if: ${{ always() }}

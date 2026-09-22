@@ -5,23 +5,23 @@
 \title{Evaluate an embedding against high-dimensional structure}
 \usage{
 evaluate_embedding(
-    x_high,
-    embedding,
-    labels = NULL,
-    batch = NULL,
-    k = c(15L, 30L, 50L),
-    primary_k = NULL,
-    reference_nn = NULL,
-    sample_size_for_global_metrics = min(5000L, nrow(x_high)),
-    sample_size_for_local_metrics = min(2000L, nrow(x_high)),
-    use_cache = FALSE,
-    cache_dir = file.path("results", "cache"),
-    force_recompute = FALSE,
-    seed = NA_integer_,
-    method = NA_character_,
-    backend = NA_character_,
-    n.cores = NULL,
-    dataset = NA_character_
+  x_high,
+  embedding,
+  labels = NULL,
+  batch = NULL,
+  k = c(15L, 30L, 50L),
+  primary_k = NULL,
+  reference_nn = NULL,
+  sample_size_for_global_metrics = min(5000L, nrow(x_high)),
+  sample_size_for_local_metrics = min(2000L, nrow(x_high)),
+  use_cache = FALSE,
+  cache_dir = file.path("results", "cache"),
+  force_recompute = FALSE,
+  seed = NA_integer_,
+  method = NA_character_,
+  backend = NA_character_,
+  n.cores = NULL,
+  dataset = NA_character_
 )
 }
 \arguments{

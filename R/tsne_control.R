@@ -12,7 +12,7 @@ auto_tsne_perplexity <- function(n, k) {
     n <- as.integer(n)
     k <- as.integer(k)
     max_from_n <- floor((n - 1L) / 3L)
-    max_from_k <- floor(k / 3L)
+    max_from_k <- k
     as.numeric(max(1L, min(30L, max_from_n, max_from_k)))
 }
 
@@ -21,44 +21,35 @@ auto_tsne_k <- function(n, perplexity = NULL) {
     if (is.null(perplexity)) {
         perplexity <- min(30, floor((n - 1L) / 3L))
     }
-    k <- as.integer(ceiling(3 * as.numeric(perplexity)))
+    k <- as.integer(ceiling(as.numeric(perplexity)))
     max(1L, min(n - 1L, k))
 }
 
-normalize_opentsne_affinity_support <- function(affinity_support) {
-    match.arg(affinity_support, c("standard", "compact"))
-}
-
-opentsne_support_width <- function(perplexity, affinity_support) {
-    multiplier <- if (identical(affinity_support, "standard")) 3 else 1
-    as.integer(ceiling(multiplier * as.numeric(perplexity)))
+opentsne_support_width <- function(perplexity) {
+    as.integer(ceiling(as.numeric(perplexity)))
 }
 
 classify_opentsne_affinity_support <- function(k, perplexity) {
     k <- as.integer(k)
     perplexity <- as.numeric(perplexity)
-    standard_k <- as.integer(ceiling(3 * perplexity))
     compact_k <- as.integer(ceiling(perplexity))
-    if (k >= standard_k) {
-        if (k == standard_k) "standard" else "expanded"
-    } else if (k == compact_k) {
+    if (k == compact_k) {
         "compact"
     } else {
-        "custom_truncated"
+        "custom"
     }
 }
 
 annotate_opentsne_affinity_support <- function(layout,
                                                 k,
-                                                perplexity,
-                                                requested_policy) {
+                                                perplexity) {
     cfg <- attr(layout, "fastEmbedR_config")
     cfg$affinity_support <- classify_opentsne_affinity_support(k, perplexity)
-    cfg$affinity_support_policy <- as.character(requested_policy)
+    cfg$affinity_support_policy <- "compact"
     cfg$affinity_support_k <- as.integer(k)
     cfg$affinity_support_multiplier <- as.numeric(k) / as.numeric(perplexity)
-    cfg$conventional_affinity_support <- as.integer(k) >=
-        as.integer(ceiling(3 * as.numeric(perplexity)))
+    cfg$compact_affinity_support <- as.integer(k) ==
+        as.integer(ceiling(as.numeric(perplexity)))
     attr(layout, "fastEmbedR_config") <- cfg
     layout
 }
@@ -81,13 +72,9 @@ validate_opentsne_neighbor_counts <- function(n, available) {
     list(n = n, available = available)
 }
 
-default_opentsne_perplexity <- function(
-    max_perplexity, available, affinity_support
-) {
+default_opentsne_perplexity <- function(max_perplexity, available) {
     max_from_support <- if (is.null(available)) {
         max_perplexity
-    } else if (identical(affinity_support, "standard")) {
-        floor(available / 3L)
     } else {
         available
     }
@@ -110,34 +97,25 @@ validate_opentsne_perplexity <- function(perplexity, max_perplexity) {
     perplexity
 }
 
-opentsne_neighbor_policy <- function(
-    n, perplexity = NULL, available = NULL,
-    affinity_support = c("standard", "compact")
-) {
-    affinity_support <- normalize_opentsne_affinity_support(affinity_support)
+opentsne_neighbor_policy <- function(n, perplexity = NULL, available = NULL) {
     counts <- validate_opentsne_neighbor_counts(n, available)
     n <- counts$n
     available <- counts$available
     max_perplexity <- floor((n - 1L) / 3L)
     if (is.null(perplexity)) {
-        perplexity <- default_opentsne_perplexity(
-            max_perplexity,
-            available,
-            affinity_support
-        )
+        perplexity <- default_opentsne_perplexity(max_perplexity, available)
     } else {
         perplexity <- validate_opentsne_perplexity(
             perplexity,
             max_perplexity
         )
     }
-    n_neighbors <- opentsne_support_width(perplexity, affinity_support)
+    n_neighbors <- opentsne_support_width(perplexity)
     n_neighbors <- max(1L, min(n - 1L, n_neighbors))
     if (!is.null(available) && n_neighbors > available) {
         stop(
             "The supplied KNN object has fewer non-self columns than ",
-            "required by ",
-            "`affinity_support = \"", affinity_support, "\"` (need ",
+            "required by compact t-SNE affinity support (need ",
             n_neighbors,
             ", have ", available, ").",
             call. = FALSE
@@ -146,15 +124,8 @@ opentsne_neighbor_policy <- function(
     list(
         perplexity = as.numeric(perplexity),
         n_neighbors = n_neighbors,
-        affinity_support = affinity_support,
-        affinity_support_multiplier = if (identical(
-            affinity_support,
-            "standard"
-        )) {
-            3
-        } else {
-            1
-        }
+        affinity_support = "compact",
+        affinity_support_multiplier = 1
     )
 }
 

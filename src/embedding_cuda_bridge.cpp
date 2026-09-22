@@ -150,6 +150,25 @@ List landmark_project_interpolate_knn_confidence_cuda_impl(NumericMatrix landmar
                                                            NumericMatrix landmark_layout,
                                                            IntegerVector landmark_indices,
                                                            int k);
+List transform_tsne_cuda_impl(NumericMatrix reference_layout,
+                              IntegerMatrix indices,
+                              NumericMatrix distances,
+                              NumericMatrix y_init,
+                              bool init,
+                              std::string initialization,
+                              double perplexity,
+                              int n_iter,
+                              int early_exaggeration_iter,
+                              double learning_rate,
+                              double early_exaggeration,
+                              double exaggeration,
+                              double initial_momentum,
+                              double final_momentum,
+                              double max_grad_norm,
+                              double max_step_norm,
+                              int n_negatives,
+                              int exact_repulsion_threshold,
+                              int seed);
 List landmark_tsne_transform_cuda_gpu_impl(SEXP gpu_knn,
                                            SEXP reference_data,
                                            SEXP query_data,
@@ -206,6 +225,48 @@ List pca_tsvd_cuda_impl(SEXP data,
                         int n_components,
                         bool center,
                         bool scale);
+
+// [[Rcpp::export]]
+List fastembedr_build_config_cpp() {
+#ifdef FASTEMBEDR_HAS_CUDA
+  const bool cuda_compiled = true;
+#else
+  const bool cuda_compiled = false;
+#endif
+#ifdef FASTEMBEDR_HAS_CUVS
+  const bool cuvs_compiled = true;
+#else
+  const bool cuvs_compiled = false;
+#endif
+#ifdef FASTEMBEDR_HAS_FAISS_GPU
+  const bool faiss_gpu_compiled = true;
+#else
+  const bool faiss_gpu_compiled = false;
+#endif
+#ifdef FASTEMBEDR_HAS_RAFT
+  const bool raft_compiled = true;
+#else
+  const bool raft_compiled = false;
+#endif
+#ifdef HAVE_METAL
+  const bool metal_compiled = true;
+#else
+  const bool metal_compiled = false;
+#endif
+#ifdef FASTEMBEDR_DIAGNOSTIC_ONLY
+  const bool diagnostic_only = true;
+#else
+  const bool diagnostic_only = false;
+#endif
+  return List::create(
+    Rcpp::Named("cuda_compiled") = cuda_compiled,
+    Rcpp::Named("cuvs_compiled") = cuvs_compiled,
+    Rcpp::Named("faiss_gpu_compiled") = faiss_gpu_compiled,
+    Rcpp::Named("raft_compiled") = raft_compiled,
+    Rcpp::Named("metal_compiled") = metal_compiled,
+    Rcpp::Named("diagnostic_only") = diagnostic_only
+  );
+}
 
 // [[Rcpp::export]]
 bool embedding_cuda_available_cpp() {
@@ -578,6 +639,35 @@ List landmark_project_interpolate_knn_confidence_cuda_cpp(NumericMatrix landmark
     landmark_layout,
     landmark_indices,
     k
+  );
+}
+
+// [[Rcpp::export]]
+List transform_tsne_cuda_cpp(NumericMatrix reference_layout,
+                             IntegerMatrix indices,
+                             NumericMatrix distances,
+                             NumericMatrix y_init,
+                             bool init,
+                             std::string initialization,
+                             double perplexity,
+                             int n_iter,
+                             int early_exaggeration_iter,
+                             double learning_rate,
+                             double early_exaggeration,
+                             double exaggeration,
+                             double initial_momentum,
+                             double final_momentum,
+                             double max_grad_norm,
+                             double max_step_norm,
+                             int n_negatives,
+                             int exact_repulsion_threshold,
+                             int seed) {
+  return transform_tsne_cuda_impl(
+    reference_layout, indices, distances, y_init, init, initialization,
+    perplexity, n_iter, early_exaggeration_iter, learning_rate,
+    early_exaggeration, exaggeration, initial_momentum, final_momentum,
+    max_grad_norm, max_step_norm, n_negatives,
+    exact_repulsion_threshold, seed
   );
 }
 

@@ -9,8 +9,7 @@ select_landmarks(data, landmarks = TRUE, seed = 4L, n.cores = NULL)
 \arguments{
 \item{data}{Numeric matrix, data frame, or \code{float::float32} matrix.}
 
-\item{landmarks}{\code{TRUE} for an automatic count, a fraction in \verb{(0,
-    1)}, a
+\item{landmarks}{\code{TRUE} for an automatic count, a fraction in \verb{(0, 1)}, a
 landmark count, or explicit row indices.}
 
 \item{seed}{Random seed used by projection-based landmark selection.}

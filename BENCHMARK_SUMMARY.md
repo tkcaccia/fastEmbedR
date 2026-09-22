@@ -24,7 +24,7 @@ for reusable KNN graphs and larger embeddings.
 
 | Package | Status | Notes |
 |---|---:|---|
-| fastEmbedR 0.1.0 | installed | Native C++ UMAP, t-SNE, openTSNE-style paths from KNN. |
+| fastEmbedR 0.1.0 | installed | Native C++ UMAP and t-SNE paths from KNN. |
 | uwot 0.2.4 | installed | Strong GPL UMAP reference with `fast_sgd`. |
 | umap 0.2.10.0 | installed | CRAN UMAP, accepts `umap.knn`. |
 | Rtsne 0.17 | installed | Reference `Rtsne_neighbors()` t-SNE-from-KNN path. |
@@ -35,7 +35,7 @@ for reusable KNN graphs and larger embeddings.
 | fftRtsne | not installed | Not available in this local R library. |
 | dim.reduction.wrappers | not installed | The installed wrapper package is `ReductionWrappers`. |
 
-## MNIST 70k: fastEmbedR UMAP/t-SNE/openTSNE-style Paths
+## MNIST 70k: fastEmbedR UMAP and t-SNE Paths
 
 The KNN stage used `fastEmbedR::nn(..., backend = "cpu_nndescent")`. Timings
 are split so the shared KNN cost is visible.
@@ -44,9 +44,9 @@ are split so the shared KNN cost is visible.
 |---|---:|---:|---:|---:|---:|---:|
 | fastEmbedR UMAP | 14.762 | 7.334 | 22.096 | 0.168 | 0.214 | 0.870 |
 | fastEmbedR t-SNE | 14.762 | 25.229 | 39.991 | 0.132 | 0.066 | 0.800 |
-| fastEmbedR openTSNE-style | 14.762 | 18.363 | 33.125 | 0.304 | 0.168 | 0.884 |
+| fastEmbedR t-SNE | 14.762 | 18.363 | 33.125 | 0.304 | 0.168 | 0.884 |
 
-Current conclusion: the openTSNE-style path is the strongest quality result
+Current conclusion: the t-SNE path is the strongest quality result
 among the three fastEmbedR methods on full MNIST 70k, while UMAP is the fastest
 embedding stage. The NN-descent KNN cost is now a major part of the total.
 
@@ -65,7 +65,7 @@ Python wrapper because that interface does not consume the package KNN object.
 |---|---|---:|---:|---:|---:|---:|
 | fastEmbedR UMAP | fastEmbedR | success | 0.494 | 0.380 | 0.129 | 0.735 |
 | fastEmbedR t-SNE | fastEmbedR | success | 0.526 | 0.415 | 0.094 | 0.774 |
-| fastEmbedR openTSNE-style | fastEmbedR | success | 0.805 | 0.406 | 0.100 | 0.769 |
+| fastEmbedR t-SNE | fastEmbedR | success | 0.805 | 0.406 | 0.100 | 0.769 |
 | uwot fast_sgd | uwot | success | 0.823 | 0.367 | 0.130 | 0.734 |
 | umap package | umap | success | 9.284 | 0.367 | 0.115 | 0.720 |
 | Rtsne_neighbors | Rtsne | success | 0.857 | 0.419 | 0.090 | 0.781 |

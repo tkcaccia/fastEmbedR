@@ -17,9 +17,10 @@ introduced by McInnes and colleagues [7,13]. The t-SNE path follows the
 probabilistic neighbor-embedding objective of van der Maaten and Hinton [1],
 with modern interpolation-based optimization ideas from FIt-SNE and openTSNE [3-4].
 The package is intentionally KNN-first. fastEmbedR implements its CPU HNSW and
-Apple Metal exact/IVF-Flat one-call KNN paths natively. CUDA builds link
-directly to FAISS GPU for exact search and to the Apache-2.0 RAPIDS cuVS C API
-for IVF-Flat; they do not call another R package, Python, or `reticulate`. Graph/affinity construction,
+Apple Metal exact/IVF-Flat one-call KNN paths natively. CUDA builds link to the
+Apache-2.0 RAPIDS cuVS C API for exact and IVF-Flat search; FAISS GPU is an
+optional exact-search provider. They do not call another R package, Python, or
+`reticulate`. Graph/affinity construction,
 initialization, stochastic optimization, native fixed-reference transforms,
 backend reporting, and quality metrics remain inside fastEmbedR.
 
@@ -28,7 +29,7 @@ The public package surface is deliberately small:
 - `precompute_knn()` exposes the same native backend policy used by the
   one-call functions, while keeping algorithm and recall tuning internal.
 - `tsne_knn()` and `umap_knn()` consume a supplied KNN object.
-- `tsne()` and `umap()` select native CPU/Metal KNN or direct FAISS/cuVS CUDA KNN and
+- `tsne()` and `umap()` select native CPU/Metal KNN or direct cuVS CUDA KNN and
   then call the corresponding KNN entry point.
 - `pca()` computes backend-native truncated PCA scores and loadings. CPU uses
   fastEmbedR's native blocked RSVD implementation, Metal uses a resident
@@ -62,9 +63,9 @@ CUDA translation units are compiled by NVCC as C++17 with extended lambdas,
 relaxed `constexpr`, and position-independent host code. The deployment
 architectures are explicit through `FASTEMBEDR_CUDA_ARCH`. `CUDAHOSTCXX`
 selects an R-ABI-compatible host compiler when CUDA and R come from different
-toolchain prefixes. FAISS GPU, cuVS, RAFT, and their CUDA dependencies must be
-built for the same devices; adding an architecture to fastEmbedR cannot add
-missing kernels to a linked library.
+toolchain prefixes. cuVS, optional FAISS GPU, RAFT, and their CUDA dependencies
+must be built for the same devices; adding an architecture to fastEmbedR cannot
+add missing kernels to a linked library.
 
 The complete commands, architecture examples, diagnostics, and failure modes
 are documented in
@@ -152,16 +153,17 @@ and a small/large data policy:
 
 - CPU one-call embeddings use native HNSW. Metal uses native exact KNN below
   4,096 observations and recall-tuned IVF-Flat for larger inputs.
-- CUDA one-call embeddings use direct FAISS GPU `bfKnn` below 100,000 samples
-  and recall-tuned cuVS IVF-Flat at or above 100,000 samples. Exact float32
-  Euclidean/IP input is uploaded in its existing R column-major layout because
-  FAISS accepts column-major vectors; this removes a full host transpose and
-  its temporary buffer without changing distances or neighbors. IVF starts from a
+- CUDA one-call embeddings use cuVS brute force below 100,000 samples and
+  recall-tuned cuVS IVF-Flat at or above 100,000 samples. An explicitly enabled
+  FAISS GPU build may provide exact search. Exact float32 input is uploaded in
+  its existing R column-major layout, removing a full host transpose and its
+  temporary buffer without changing distances or neighbors. IVF starts from a
   deterministic shape rule, compares evenly spaced pilot queries against a
   cuVS exact oracle, and expands `nprobe` until it reaches the requested recall
   tier with a small safety margin. It records pilot recall, `nlist`, `nprobe`,
   and the number of tuning attempts.
-- FAISS/cuVS write int64 row-major search output on the device. One package CUDA
+- cuVS, and optional FAISS GPU, write int64 row-major search output on the
+  device. One package CUDA
   kernel removes self-neighbors, converts indices to int32/one-based form,
   transforms squared distances, and packs the result directly into the
   column-major device layout consumed by UMAP and t-SNE. No KNN matrix is
@@ -357,7 +359,7 @@ neighbor-width defaults, optimizer trajectory, and coordinates are not
 compatibility targets.
 
 `tsne_knn()` implements the t-SNE optimization structure used by modern
-openTSNE/FIt-SNE workflows [3-4]:
+published interpolation-based t-SNE workflows [3-4]:
 
 1. Convert KNN distances to conditional probabilities by binary search on the
    Gaussian bandwidth for a target perplexity.
@@ -370,15 +372,11 @@ openTSNE/FIt-SNE workflows [3-4]:
    rate, update clipping, and recentering.
 6. Return the layout with parameters, timing, and backend metadata.
 
-The production matrix-input policy supplies
-`ceiling(3 * perplexity)` non-self candidate neighbors to the bandwidth
-search. This larger-than-perplexity support lets distances determine
-non-uniform conditional probabilities and follows conventional sparse t-SNE
-practice. `affinity_support = "compact"` instead supplies only
-`ceiling(perplexity)` neighbors. That mode reduces sparse work but drives the
-target entropy toward the maximum available entropy, so it is documented and
-reported as an approximation rather than a standard t-SNE configuration.
-`tsne_knn()` records the exact support width and support/perplexity ratio.
+The production matrix-input policy uses compact support and supplies
+`ceiling(perplexity)` non-self candidate neighbors to the bandwidth search.
+This is the package's defined sparse-affinity policy across CPU, Metal, and
+CUDA. `tsne_knn()` records the exact support width and
+support-to-perplexity ratio.
 
 The public `tsne()` function is now only a convenience wrapper around this
 KNN implementation. If a KNN object is supplied through `nn`, then

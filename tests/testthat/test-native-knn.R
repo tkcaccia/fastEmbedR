@@ -293,12 +293,19 @@ test_that("one-call routing uses native CPU and Metal KNN", {
     expect_identical(
         fastembedr_embedding_nn_policy("cuda", 100000L)$method, "ivf"
     )
+    expected_exact_engine <- if (
+        isTRUE(fastembedr_build_config_cpp()$faiss_gpu_compiled)
+    ) {
+        "native_faiss_gpu_exact"
+    } else {
+        "native_cuvs_gpu_exact"
+    }
     expect_identical(
         fastembedr_nn_policy_engine(
             fastembedr_embedding_nn_policy("cuda", 70000L),
             keep_gpu = TRUE
         ),
-        "native_faiss_gpu_exact"
+        expected_exact_engine
     )
 })
 
@@ -322,18 +329,17 @@ test_that("native CUDA KNN never silently falls back", {
 test_that("precompute_knn CUDA output stays resident or fails explicitly", {
     set.seed(26)
     x <- matrix(rnorm(128 * 8), nrow = 128)
-    if (!isTRUE(native_cuda_knn_available_cpp()) ||
-        !isTRUE(native_cuda_faiss_gpu_available_cpp())) {
+    if (!isTRUE(native_cuda_knn_available_cpp())) {
         expect_error(
             precompute_knn(x, k = 8L, backend = "cuda"),
-            "Native (CUDA KNN|exact CUDA KNN)"
+            "Native CUDA KNN"
         )
     } else {
         observed <- precompute_knn(x, k = 8L, backend = "cuda")
         expect_s3_class(observed, "fastEmbedR_gpu_knn")
         expect_s3_class(observed, "fastEmbedR_knn")
         expect_identical(observed$result_residency, "cuda")
-        expect_identical(observed$device_to_host_result_copies, 0)
+        expect_identical(observed$device_to_host_result_copies, 0L)
         expect_false(any(c("indices", "distances") %in% names(observed)))
     }
 })
@@ -345,10 +351,6 @@ test_that(paste(
     skip_if_not(
         isTRUE(native_cuda_knn_available_cpp()),
         "native CUDA KNN is unavailable"
-    )
-    skip_if_not(
-        isTRUE(native_cuda_faiss_gpu_available_cpp()),
-        "native FAISS GPU KNN is unavailable"
     )
     set.seed(4)
     x <- matrix(rnorm(256 * 12), nrow = 256)
@@ -362,7 +364,7 @@ test_that(paste(
     expect_identical(device_knn$result_residency, "cuda")
     expect_identical(device_knn$layout, "column_major_query_by_k")
     expect_identical(device_knn$distance_type, "float32")
-    expect_identical(device_knn$device_to_host_result_copies, 0)
+    expect_identical(device_knn$device_to_host_result_copies, 0L)
     expect_false(isTRUE(device_knn$cpu_fallback))
     expect_equal(device_knn$resident_result_bytes, 256 * 10 * 8)
     expect_lt(

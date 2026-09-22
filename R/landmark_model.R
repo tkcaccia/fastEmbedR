@@ -119,9 +119,6 @@ normalize_landmark_selection <- function(selection, data) {
 #' @param n_neighbors UMAP neighborhood size. For t-SNE this is the
 #'   precomputed KNN support width; `NULL` derives it from `perplexity`.
 #' @param perplexity t-SNE perplexity.
-#' @param affinity_support t-SNE affinity support policy. `"standard"`
-#'   uses `ceiling(3 * perplexity)` neighbors; `"compact"` is the explicit
-#'   `ceiling(perplexity)` approximation.
 #' @param n_components Embedding dimensionality.
 #' @param metric KNN metric.
 #' @param seed Random seed.
@@ -145,7 +142,6 @@ normalize_landmark_selection <- function(selection, data) {
 fit_landmark_model <- function(data, selection,
                                 method = c("umap", "tsne"),
                                 n_neighbors = NULL, perplexity = NULL,
-                                affinity_support = c("standard", "compact"),
                                 n_components = 2L,
                                 metric = c(
                                     "euclidean", "cosine",
@@ -156,7 +152,7 @@ fit_landmark_model <- function(data, selection,
                                 keep_knn = FALSE, verbose = FALSE, ...) {
     state <- prepare_landmark_model(
         data, selection, method, n_components, metric, seed,
-        backend, n.cores, graph_mode, affinity_support
+        backend, n.cores, graph_mode
     )
     timed <- system.time({
         fitted <- if (identical(state$method, "umap")) {
@@ -188,13 +184,10 @@ landmark_model_reference_data <- function(x, selection, n.cores) {
 
 prepare_landmark_model <- function(data, selection, method, n_components,
                                     metric, seed, backend, n.cores,
-                                    graph_mode, affinity_support) {
+                                    graph_mode) {
     method <- match.arg(method, c("umap", "tsne"))
     backend <- resolve_embedding_backend(backend)
     graph_mode <- match.arg(graph_mode, c("fuzzy", "binary"))
-    affinity_support <- normalize_opentsne_affinity_support(
-        affinity_support
-    )
     metric <- resolve_embedding_metric(metric, data)
     n_components <- validate_n_components(n_components)
     prepared <- prepare_embedding_data(
@@ -214,7 +207,7 @@ prepare_landmark_model <- function(data, selection, method, n_components,
         reference_data = reference, method = method,
         n_components = n_components, metric = metric, seed = seed,
         backend = backend, n.cores = n.cores, graph_mode = graph_mode,
-        affinity_support = affinity_support
+        affinity_support = "compact"
     )
 }
 
@@ -247,12 +240,10 @@ fit_landmark_umap_model <- function(state, n_neighbors,
 }
 
 resolve_landmark_model_tsne_neighbors <- function(n_neighbors, n_reference,
-                                                    perplexity,
-                                                    affinity_support) {
+                                                    perplexity) {
     policy <- opentsne_neighbor_policy(
         n_reference,
-        perplexity = perplexity,
-        affinity_support = affinity_support
+        perplexity = perplexity
     )
     if (is.null(perplexity)) perplexity <- policy$perplexity
     if (is.null(n_neighbors)) {
@@ -269,11 +260,11 @@ resolve_landmark_model_tsne_neighbors <- function(n_neighbors, n_reference,
             call. = FALSE
         )
     }
-    required <- opentsne_support_width(perplexity, affinity_support)
-    if (n_neighbors < required) {
+    required <- opentsne_support_width(perplexity)
+    if (n_neighbors != required) {
         stop(
-            "`n_neighbors` is too small for the affinity support; need ",
-            required, ".",
+            "Compact t-SNE affinity support requires `n_neighbors = ",
+            required, "` for this perplexity.",
             call. = FALSE
         )
     }
@@ -283,8 +274,7 @@ resolve_landmark_model_tsne_neighbors <- function(n_neighbors, n_reference,
 fit_landmark_tsne_model <- function(state, n_neighbors, perplexity,
                                     keep_knn, verbose, dots) {
     policy <- resolve_landmark_model_tsne_neighbors(
-        n_neighbors, nrow(state$reference_data), perplexity,
-        state$affinity_support
+        n_neighbors, nrow(state$reference_data), perplexity
     )
     knn <- precompute_knn(
         state$reference_data,
@@ -294,7 +284,6 @@ fit_landmark_tsne_model <- function(state, n_neighbors, perplexity,
     )
     args <- c(list(
         data = state$reference_data, perplexity = policy$perplexity,
-        affinity_support = state$affinity_support,
         n_components = state$n_components,
         init_data = state$reference_data, standardize = FALSE,
         metric = state$metric, nn = knn, seed = state$seed,
@@ -400,7 +389,7 @@ landmark_model_projection_k <- function(model,
         transform_k <- if (identical(model$method, "umap")) {
             model$n_neighbors
         } else {
-            max(25L, ceiling(3 * transform_perplexity))
+            ceiling(transform_perplexity)
         }
     }
     transform_embedding_k(

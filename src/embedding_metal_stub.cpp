@@ -175,5 +175,5 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix,
                                   bool,
                                   bool,
                                   double) {
-  Rcpp::stop("Metal openTSNE optimizer is only available on macOS with Metal support.");
+  Rcpp::stop("Metal t-SNE optimizer is only available on macOS with Metal support.");
 }

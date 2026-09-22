@@ -15,9 +15,13 @@
 #include <thrust/iterator/counting_iterator.h>
 
 #ifdef FASTEMBEDR_HAS_RAFT
+#include <cstdio>
+#include <R_ext/Print.h>
+#define printf REprintf
 #include <raft/core/device_mdspan.hpp>
 #include <raft/core/handle.hpp>
 #include <raft/linalg/tsvd.cuh>
+#undef printf
 #endif
 
 #include <algorithm>
@@ -250,7 +254,7 @@ int check_embedding_memory_available(std::size_t required_bytes, const char* whe
   return 0;
 }
 
-__device__ unsigned int mix_uint(unsigned int x) {
+static __device__ __forceinline__ unsigned int mix_uint(unsigned int x) {
   x ^= x >> 16;
   x *= 0x7feb352du;
   x ^= x >> 15;
@@ -259,7 +263,7 @@ __device__ unsigned int mix_uint(unsigned int x) {
   return x;
 }
 
-__device__ unsigned int deterministic_vertex(unsigned int n,
+static __device__ __forceinline__ unsigned int deterministic_vertex(unsigned int n,
                                              unsigned int seed,
                                              unsigned int epoch,
                                              unsigned int i,
@@ -273,7 +277,7 @@ __device__ unsigned int deterministic_vertex(unsigned int n,
   return mix_uint(x) % n;
 }
 
-__device__ float deterministic_unit(unsigned int seed,
+static __device__ __forceinline__ float deterministic_unit(unsigned int seed,
                                     unsigned int row,
                                     unsigned int col) {
   unsigned int x = seed;
@@ -287,25 +291,27 @@ __device__ __forceinline__ int tsne_sign_component(float value) {
   return (value > 0.0f) - (value < 0.0f);
 }
 
-__device__ float clip4(float x) {
+static __device__ __forceinline__ float clip4(float x) {
   return fminf(4.0f, fmaxf(-4.0f, x));
 }
 
-__device__ bool pair_less_device(double a_dist,
+static __device__ __forceinline__ bool pair_less_device(double a_dist,
                                  int a_idx,
                                  double b_dist,
                                  int b_idx) {
   return (a_dist < b_dist) || (a_dist == b_dist && a_idx < b_idx);
 }
 
-__device__ double layout_d2_2d(const double* layout, int n, int i, int j) {
+static __device__ __forceinline__ double layout_d2_2d(
+    const double* layout, int n, int i, int j) {
   const double dx = layout[i] - layout[j];
   const double dy = layout[static_cast<std::size_t>(n) + i] -
     layout[static_cast<std::size_t>(n) + j];
   return dx * dx + dy * dy;
 }
 
-__device__ double median_device(double* values, int count) {
+static __device__ __forceinline__ double median_device(
+    double* values, int count) {
   for (int i = 1; i < count; ++i) {
     const double value = values[i];
     int j = i - 1;
@@ -319,7 +325,8 @@ __device__ double median_device(double* values, int count) {
   return (count & 1) ? values[mid] : 0.5 * (values[mid - 1] + values[mid]);
 }
 
-__device__ void insert_top_neighbor(double* top_dist,
+static __device__ __forceinline__ void insert_top_neighbor(
+                                    double* top_dist,
                                     int* top_idx,
                                     int* top_count,
                                     int k,
@@ -361,7 +368,7 @@ __device__ void insert_top_neighbor(double* top_dist,
 // It uses IEEE-754 exponent interpolation, following Schraudolph's published
 // fast exponential idea, and is mirrored from the CPU implementation without
 // vendoring third-party source.
-__device__ float fast_positive_pow(float x, float b) {
+static __device__ __forceinline__ float fast_positive_pow(float x, float b) {
   if (x <= 0.0f) return 0.0f;
   const unsigned int x_bits = __float_as_uint(x);
   constexpr float exponent_bias_word = 1064866805.0f;
@@ -382,7 +389,8 @@ __device__ float fast_positive_pow(float x, float b) {
   return integer_pow * fractional_pow;
 }
 
-__device__ float attractive_coeff(float d2, float weight, const EmbedParams p) {
+static __device__ __forceinline__ float attractive_coeff(
+    float d2, float weight, const EmbedParams p) {
   if (p.objective == 0) {
     if (d2 <= 0.0f) return 0.0f;
     const float d2b = fast_positive_pow(d2, p.b);
@@ -394,7 +402,8 @@ __device__ float attractive_coeff(float d2, float weight, const EmbedParams p) {
   return -2.0f * weight / (1.0f + d2);
 }
 
-__device__ float repulsive_coeff(float d2, const EmbedParams p) {
+static __device__ __forceinline__ float repulsive_coeff(
+    float d2, const EmbedParams p) {
   if (d2 <= 0.0f) return 0.0f;
   if (p.objective == 0) {
     const float d2b = fast_positive_pow(d2, p.b);
@@ -406,7 +415,8 @@ __device__ float repulsive_coeff(float d2, const EmbedParams p) {
   return p.repulsion_strength * 2.0f / (1.0f + d2);
 }
 
-__device__ int positive_samples_this_epoch(float weight, const EmbedParams p, unsigned int epoch) {
+static __device__ __forceinline__ int positive_samples_this_epoch(
+    float weight, const EmbedParams p, unsigned int epoch) {
   if (p.objective != 0) return 1;
   if (weight <= 0.0f) return 0;
   const float period = p.max_weight / fmaxf(weight, 1.0e-6f);
@@ -419,7 +429,8 @@ __device__ int positive_samples_this_epoch(float weight, const EmbedParams p, un
   return samples > 0 ? samples : 0;
 }
 
-__device__ int positive_samples_this_epoch_period(float period, unsigned int epoch) {
+static __device__ __forceinline__ int positive_samples_this_epoch_period(
+    float period, unsigned int epoch) {
   if (period <= 0.0f || !isfinite(period)) return 0;
   const float now = static_cast<float>(epoch + 1u);
   const float previous = static_cast<float>(epoch);
@@ -429,7 +440,8 @@ __device__ int positive_samples_this_epoch_period(float period, unsigned int epo
   return samples > 0 ? samples : 0;
 }
 
-__device__ int cumulative_umap_negative_samples(float active_epoch, float negative_period) {
+static __device__ __forceinline__ int cumulative_umap_negative_samples(
+    float active_epoch, float negative_period) {
   if (negative_period <= 0.0f || !isfinite(negative_period)) return 0;
   const int samples = static_cast<int>(
     floorf(((active_epoch - negative_period) / negative_period) + 1.0e-6f)
@@ -437,7 +449,8 @@ __device__ int cumulative_umap_negative_samples(float active_epoch, float negati
   return samples > 0 ? samples : 0;
 }
 
-__device__ int negative_samples_this_epoch(float weight, const EmbedParams p, unsigned int epoch) {
+static __device__ __forceinline__ int negative_samples_this_epoch(
+    float weight, const EmbedParams p, unsigned int epoch) {
   if (p.objective != 0) return p.negative_sample_rate;
   if (weight <= 0.0f || p.negative_sample_rate <= 0) return 0;
   const float period = p.max_weight / fmaxf(weight, 1.0e-6f);
@@ -459,7 +472,8 @@ __device__ int negative_samples_this_epoch(float weight, const EmbedParams p, un
   return samples > 0 ? samples : 0;
 }
 
-__device__ int negative_samples_this_epoch_period(float period, const EmbedParams p, unsigned int epoch) {
+static __device__ __forceinline__ int negative_samples_this_epoch_period(
+    float period, const EmbedParams p, unsigned int epoch) {
   if (p.negative_sample_rate <= 0 || period <= 0.0f || !isfinite(period)) return 0;
   const float now = static_cast<float>(epoch + 1u);
   const float previous = static_cast<float>(epoch);
@@ -494,7 +508,8 @@ struct LandmarkTsneParams {
   float max_step_norm;
 };
 
-__device__ float landmark_median_float(float* values, int count) {
+static __device__ __forceinline__ float landmark_median_float(
+    float* values, int count) {
   for (int i = 1; i < count; ++i) {
     const float value = values[i];
     int j = i - 1;
@@ -508,7 +523,8 @@ __device__ float landmark_median_float(float* values, int count) {
   return (count & 1) ? values[mid] : 0.5f * (values[mid - 1] + values[mid]);
 }
 
-__device__ unsigned int landmark_reference_sample(unsigned int n,
+static __device__ __forceinline__ unsigned int landmark_reference_sample(
+                                                  unsigned int n,
                                                   unsigned int seed,
                                                   unsigned int epoch,
                                                   unsigned int row,
@@ -520,7 +536,8 @@ __device__ unsigned int landmark_reference_sample(unsigned int n,
   return mix_uint(x) % n;
 }
 
-__device__ void landmark_affine_fallback(const float* reference_layout,
+static __device__ __forceinline__ void landmark_affine_fallback(
+                                         const float* reference_layout,
                                          const int* projection_indices,
                                          const float* projection_distances,
                                          float2* out,
@@ -1073,7 +1090,8 @@ __global__ void prepare_directed_knn_kernel(const int* indices,
   }
 }
 
-__device__ float reverse_directed_weight(const int* neighbors,
+static __device__ __forceinline__ float reverse_directed_weight(
+                                         const int* neighbors,
                                          const float* weights,
                                          int width,
                                          int row,
@@ -1086,7 +1104,8 @@ __device__ float reverse_directed_weight(const int* neighbors,
   return 0.0f;
 }
 
-__device__ bool direct_contains(const int* neighbors,
+static __device__ __forceinline__ bool direct_contains(
+                                const int* neighbors,
                                 int width,
                                 int row,
                                 int target,
@@ -1811,7 +1830,7 @@ __global__ void overwrite_landmark_rows_kernel(double* out,
     landmark_layout[static_cast<std::size_t>(component) * n_landmarks + landmark];
 }
 
-__device__ int high_rank_device(const int* indices,
+static __device__ __forceinline__ int high_rank_device(const int* indices,
                                 int index_rows,
                                 int index_row,
                                 int candidate,
@@ -2693,7 +2712,8 @@ __global__ void opentsne_fft_multiply_all_kernel(const cufftComplex* mass,
   yq2[gid].y = my.x * kq2.y + my.y * kq2.x;
 }
 
-__device__ float bilinear_grid_complex_real(const cufftComplex* values,
+static __device__ __forceinline__ float bilinear_grid_complex_real(
+                                            const cufftComplex* values,
                                             int fft_size,
                                             int grid_size,
                                             float gx,
@@ -3041,7 +3061,8 @@ __global__ void pack_coo_graph_from_selected_rank_major_kernel(const int* select
   coo_epochs_per_sample[out] = max_weight / fmaxf(w, 1.0e-6f);
 }
 
-__device__ int positive_samples_this_epoch_umap_schedule(float period, unsigned int epoch) {
+static __device__ __forceinline__ int
+positive_samples_this_epoch_umap_schedule(float period, unsigned int epoch) {
   if (period <= 0.0f || !isfinite(period) || epoch == 0u) return 0;
   const float now = static_cast<float>(epoch);
   const float previous = static_cast<float>(epoch - 1u);
@@ -3051,7 +3072,8 @@ __device__ int positive_samples_this_epoch_umap_schedule(float period, unsigned 
   return samples > 0 ? samples : 0;
 }
 
-__device__ int negative_samples_this_epoch_umap_schedule(float period,
+static __device__ __forceinline__ int
+negative_samples_this_epoch_umap_schedule(float period,
                                                 const EmbedParams p,
                                                 unsigned int epoch) {
   if (p.negative_sample_rate <= 0 ||
@@ -3568,6 +3590,109 @@ int raft_tsvd_scores_to_device(const HostT* values,
 #endif
 
 } // namespace
+
+extern "C" int fastembedr_cuda_transform_tsne_from_host_knn(
+    const int* indices,
+    const float* distances,
+    int index_offset,
+    const float* reference_layout,
+    const float* initial_layout,
+    int n_reference,
+    int n_query,
+    int k,
+    float perplexity,
+    int n_iter,
+    int early_exaggeration_iter,
+    float learning_rate,
+    float early_exaggeration,
+    float exaggeration,
+    float initial_momentum,
+    float final_momentum,
+    float max_grad_norm,
+    float max_step_norm,
+    int n_negatives,
+    int exact_repulsion_threshold,
+    unsigned int seed,
+    float* out) {
+  embedding_last_error.clear();
+  if (indices == nullptr || distances == nullptr ||
+      reference_layout == nullptr || initial_layout == nullptr ||
+      out == nullptr || n_reference < 1 || n_query < 1 || k < 1 ||
+      k > kCudaProjectionMaxK || perplexity <= 0.0f) {
+    set_embedding_error("invalid CUDA t-SNE transform inputs");
+    return 1;
+  }
+  const std::size_t graph_items = static_cast<std::size_t>(n_query) * k;
+  const std::size_t layout_items = static_cast<std::size_t>(n_reference) * 2u;
+  const std::size_t query_items = static_cast<std::size_t>(n_query);
+  const std::size_t required_bytes =
+    align_bytes(graph_items * sizeof(int)) +
+    2u * align_bytes(graph_items * sizeof(float)) +
+    align_bytes(layout_items * sizeof(float)) +
+    3u * align_bytes(query_items * sizeof(float2));
+  if (check_embedding_memory_available(
+        required_bytes, "CUDA t-SNE transform workspace")) return 1;
+  CudaWorkspace workspace;
+  if (workspace.init(required_bytes, "t-SNE transform")) return 1;
+  int* d_indices = workspace.alloc<int>(graph_items, "transform indices");
+  float* d_distances = workspace.alloc<float>(graph_items, "transform distances");
+  float* d_probabilities = workspace.alloc<float>(graph_items, "transform probabilities");
+  float* d_reference = workspace.alloc<float>(layout_items, "transform reference");
+  float2* d_current = workspace.alloc<float2>(query_items, "transform current");
+  float2* d_gains = workspace.alloc<float2>(query_items, "transform gains");
+  float2* d_updates = workspace.alloc<float2>(query_items, "transform updates");
+  if (d_indices == nullptr || d_distances == nullptr ||
+      d_probabilities == nullptr || d_reference == nullptr ||
+      d_current == nullptr || d_gains == nullptr || d_updates == nullptr) {
+    return 1;
+  }
+  if (check_cuda(cudaMemcpy(
+        d_indices, indices, graph_items * sizeof(int), cudaMemcpyHostToDevice),
+        "cudaMemcpy(transform indices H2D)") ||
+      check_cuda(cudaMemcpy(
+        d_distances, distances, graph_items * sizeof(float),
+        cudaMemcpyHostToDevice), "cudaMemcpy(transform distances H2D)") ||
+      check_cuda(cudaMemcpy(
+        d_reference, reference_layout, layout_items * sizeof(float),
+        cudaMemcpyHostToDevice), "cudaMemcpy(transform reference H2D)") ||
+      check_cuda(cudaMemcpy(
+        d_current, initial_layout, query_items * sizeof(float2),
+        cudaMemcpyHostToDevice), "cudaMemcpy(transform initial H2D)")) {
+    return 1;
+  }
+  constexpr int threads = 128;
+  const int blocks = (n_query + threads - 1) / threads;
+  landmark_tsne_probabilities_kernel<<<blocks, threads>>>(
+    d_distances, d_probabilities, n_query, k, perplexity
+  );
+  landmark_tsne_state_init_kernel<<<blocks, threads>>>(
+    d_gains, d_updates, n_query
+  );
+  if (check_cuda(cudaGetLastError(), "CUDA t-SNE transform setup")) return 1;
+  const int total_iter = n_iter + early_exaggeration_iter;
+  for (int iter = 0; iter < total_iter; ++iter) {
+    const bool early = iter < early_exaggeration_iter;
+    LandmarkTsneParams params{
+      n_reference, n_query, k,
+      std::max(1, std::min(n_negatives, n_reference)), seed,
+      (n_reference <= exact_repulsion_threshold ||
+       n_negatives >= n_reference) ? 1 : 0,
+      learning_rate, early ? early_exaggeration : exaggeration,
+      early ? initial_momentum : final_momentum,
+      max_grad_norm, max_step_norm
+    };
+    landmark_tsne_epoch_kernel<<<blocks, threads>>>(
+      d_reference, d_indices, d_probabilities, d_current,
+      d_gains, d_updates, params, static_cast<unsigned int>(iter),
+      index_offset
+    );
+  }
+  if (check_cuda(cudaGetLastError(), "CUDA t-SNE transform kernels") ||
+      check_cuda(cudaMemcpy(
+        out, d_current, query_items * sizeof(float2), cudaMemcpyDeviceToHost),
+        "cudaMemcpy(transform layout D2H)")) return 1;
+  return 0;
+}
 
 extern "C" int fastembedr_cuda_landmark_tsne_from_device_knn(
     const int* device_indices,

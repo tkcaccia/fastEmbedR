@@ -5,25 +5,24 @@
 \title{Project observations into a fitted landmark embedding}
 \usage{
 project_landmark_model(
-    model,
-    data,
-    query_indices = NULL,
-    transform_k = NULL,
-    refinement_epochs = 50L,
-    transform_perplexity = 5,
-    transform_iter = 250L,
-    transform_early_exaggeration_iter = 0L,
-    transform_n_negatives = NULL,
-    initialization = c("median", "weighted", "random"),
-    keep_knn = FALSE,
-    n.cores = NULL,
-    verbose = FALSE,
-    ...
+  model,
+  data,
+  query_indices = NULL,
+  transform_k = NULL,
+  refinement_epochs = 50L,
+  transform_perplexity = 5,
+  transform_iter = 250L,
+  transform_early_exaggeration_iter = 0L,
+  transform_n_negatives = NULL,
+  initialization = c("median", "weighted", "random"),
+  keep_knn = FALSE,
+  n.cores = NULL,
+  verbose = FALSE,
+  ...
 )
 }
 \arguments{
-\item{model}{A model returned by
-    \code{\link[=fit_landmark_model]{fit_landmark_model()}}.}
+\item{model}{A model returned by \code{\link[=fit_landmark_model]{fit_landmark_model()}}.}
 
 \item{data}{The original full data matrix for a model fitted on a strict
 landmark subset, or a matrix containing only new query observations in the

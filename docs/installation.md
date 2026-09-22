@@ -5,137 +5,160 @@
 [Bioconductor](bioconductor.md) |
 [Implementation](implementation.md) |
 [Examples](examples.md) |
-[Benchmarks](benchmarks.md) |
-[API](usage-api.md) |
-[Reproducibility](reproducibility.md) |
-[References](references.md)
+[API](usage-api.md)
 
-`fastEmbedR` contains the compact native KNN routes required by its one-call
-embeddings, UMAP, interpolation-based t-SNE, landmark transforms, embedding metrics,
-KNN graph construction, and native community detection.
+## CPU
 
-## R Packages
-
-```r
-install.packages("remotes")
-# Use the exact release tag or full commit recorded in the publication or
-# analysis manifest; do not use a moving branch for a reproducible analysis.
-ref <- "REPLACE_WITH_FROZEN_TAG_OR_COMMIT"
-remotes::install_github(paste0("tkcaccia/fastEmbedR@", ref))
-```
-
-Optional packages that enable float32 R input, graph-validation helpers,
-provenance serialization, or CPU thread control can be installed with:
-
-```r
-install.packages(c(
-  "float", "igraph", "jsonlite", "RhpcBLASctl"
-))
-```
-
-`knitr`, `rmarkdown`, and `testthat` are suggested only for building package
-documentation and running its tests. Comparator packages such as `Rtsne`,
-`uwot`, and `umap` belong to the separate benchmark environment and are not
-package dependencies.
-
-## Core Build Dependencies
-
-A CPU installation needs only R, `Rcpp`, and the C++17 compiler configured for
-that R installation. The CPU HNSW implementation is compiled from source in
-fastEmbedR and does not link FAISS.
-
-On Apple Silicon, Xcode supplies Foundation, Accelerate, Metal, Metal
-Performance Shaders, and Metal Performance Shaders Graph. The package-native
-Metal exact and IVF-Flat implementations likewise do not link FAISS, MLX, or
-another R package.
-
-CUDA support is optional and has a separate build contract. The embedding
-kernels directly use the CUDA runtime, cuFFT, cuBLAS, cuSOLVER, and CUB/Thrust
-headers. CUDA nearest-neighbor search links installed FAISS GPU for exact
-search and RAPIDS cuVS for IVF-Flat search. RAPIDS RAFT and RMM are needed only
-when CUDA TSVD initialization is explicitly enabled. Distilling the R-facing
-adapters into fastEmbedR removed the faissR package dependency; it did not
-vendor or reimplement these CUDA libraries. Follow the
-[backend build guide](installation-backends.md) for exact compiler,
-GPU-architecture, header, library, and runtime requirements.
-
-The portable C++ core inherits `CXX17` and `CXX17FLAGS` from R and adds only
-`-pthread`. The package does not globally force `-march=native`,
-`-ffast-math`, or `-O3`. This keeps release binaries portable and avoids
-changing floating-point-sensitive KNN and embedding trajectories.
-
-## CUDA Embedding Build
-
-CUDA KNN uses direct FAISS GPU exact search and direct cuVS IVF-Flat linkage.
-CUDA builds also compile the native UMAP/t-SNE kernels.
+A CPU build needs R, Rcpp, and the C++17 toolchain configured for that R
+installation. It does not need CUDA, cuVS, or a linked FAISS library.
 
 ```sh
-CUDA_HOME=/usr/local/cuda \
-FAISS_HOME=/path/to/faiss-gpu \
-CUVS_HOME=/path/to/rapids \
-RAFT_HOME=/path/to/rapids \
-RMM_HOME=/path/to/rapids \
-CCCL_HOME=/path/to/compatible-cccl \
-CUDAHOSTCXX=/path/to/cuda-compatible-c++ \
-FASTEMBEDR_CUDA_ARCH="75 89" \
-FASTEMBEDR_USE_CUDA=1 \
-FASTEMBEDR_USE_FAISS_GPU=1 \
-FASTEMBEDR_USE_CUVS=1 \
-FASTEMBEDR_USE_RAFT=1 \
-R CMD INSTALL /path/to/fastEmbedR
+FASTEMBEDR_USE_CUDA=0 \
+R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 ```
 
-If CUDA is requested explicitly and unavailable, the embedding function fails
-clearly. It does not run on CPU while reporting CUDA.
-
-`FASTEMBEDR_CUDA_ARCH` must cover every deployment GPU, and linked FAISS/cuVS
-libraries must be compiled for the same devices. For example, `75` covers a T4
-and `89` covers an L40S.
+The CPU HNSW source is compiled into fastEmbedR. Its retained FAISS notice
+describes source provenance; it does not imply a runtime libfaiss dependency.
 
 ## Apple Metal
 
-The build-supported Metal target is Apple Silicon. The source requires an SDK that
-exposes the macOS 14 MPSGraph FFT declarations, so use macOS 14 or newer and a
-full Xcode 15 or newer toolchain. Full performance benchmarking is currently
-limited to a MacBook Pro with an Apple M3, macOS 14.5, Xcode 16.2, and 8 GB
-unified memory. Other Apple Silicon systems are compatibility targets, not
-performance-validated configurations. Intel Macs are not a supported Metal
-target; use `backend = "cpu"` on those systems.
+On supported Apple Silicon, the package builds against Foundation, Accelerate,
+Metal, Metal Performance Shaders (MPS), and MPSGraph from the Apple SDK. Use
+macOS 14 or newer and a full Xcode 15 or newer installation. Intel Macs use the
+CPU backend.
 
-On a build-supported Apple Silicon system, `fastEmbedR` builds native
-Objective-C++/Metal embedding kernels for:
+```sh
+xcode-select -p
+xcrun --sdk macosx --show-sdk-path
+FASTEMBEDR_USE_CUDA=0 R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
+```
 
-- exact and recall-tuned IVF-Flat KNN;
-- UMAP layout optimization from KNN;
-- t-SNE FFT-grid optimization;
-- selected projection/refinement operations.
+## NVIDIA driver and CUDA toolkit
 
-No Python, Torch, MLX, or `reticulate` call is required for the public Metal
-embedding paths.
+The NVIDIA driver and CUDA toolkit are separate components. The host driver
+controls the GPU and is normally managed by the system administrator. The CUDA
+toolkit supplies `nvcc`, headers, and link libraries used to build fastEmbedR.
+The package never installs, removes, downgrades, or modifies the host driver.
 
-Metal feature parity is explicit rather than inferred from a backend label.
-Core KNN, PCA, two-dimensional UMAP/t-SNE, transformation, and landmark
-paths are native. `knn_graph()` uses Metal for neighbor search but constructs
-the graph object on CPU; `evaluate_embedding()` computes metrics on CPU after
-the final layout transfer; and Walktrap clustering is CPU-only. See the
-[backend capability matrix](backend-capabilities.md) for dimensional and
-metric limits.
+Do not replace a working vendor driver merely to install a distribution CUDA
+metapackage. Install a compatible toolkit in a separate prefix, or use a
+controlled container with NVIDIA GPU passthrough. The driver must be new enough
+for the toolkit/runtime used in that environment.
 
-## Backend Check
+Core CUDA embedding requires:
 
-For CUDA dependency diagnostics after installation:
+- the CUDA runtime, cuFFT, cuBLAS, and cuSOLVER;
+- CUB and Thrust headers from CUDA Core Compute Libraries (CCCL);
+- RAPIDS cuVS C and C++ libraries for exact and IVF-Flat KNN.
+
+FAISS GPU is not required. It is an optional exact-search provider enabled only
+with `FASTEMBEDR_USE_FAISS_GPU=1`. RAFT/RMM are optional and needed only for the
+CUDA truncated singular-value decomposition (TSVD) PCA route.
+
+## Strict CUDA installation
+
+Keep the system compiler before CUDA or Conda compiler wrappers in `PATH` and
+select the host compiler explicitly. `nvcc` may invoke this compiler.
+
+```sh
+export CUDA_HOME=/usr/local/cuda
+export CUVS_HOME=/opt/rapids
+export CUDAHOSTCXX=/usr/bin/g++
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin:${PATH}
+export FASTEMBEDR_CUDA_ARCH="89"
+
+PACKAGE_REQUIRE_CUDA=1 \
+FASTEMBEDR_USE_CUDA=1 \
+FASTEMBEDR_USE_CUVS=1 \
+FASTEMBEDR_USE_FAISS_GPU=0 \
+R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
+```
+
+`PACKAGE_REQUIRE_CUDA=1` and its package-specific alias
+`FASTEMBEDR_REQUIRE_CUDA=1` are equivalent. Strict mode compiles and links a
+CUDA test and a cuVS test during configuration. Installation fails if either
+test fails; it cannot produce a CPU fallback build.
+
+To enable CUDA TSVD PCA, also set:
+
+```sh
+export RAFT_HOME=/opt/rapids
+export RAPIDS_HOME=/opt/rapids
+export FASTEMBEDR_USE_RAFT=1
+```
+
+To opt into FAISS GPU exact search, set `FAISS_HOME` and
+`FASTEMBEDR_USE_FAISS_GPU=1`. This is optional and disabled by default.
+
+## Discovery variables
+
+The toolkit root is resolved from `CUDA_HOME`, `CUDA_PATH`, or
+`CUDAToolkit_ROOT`; `NVCC` may name `nvcc` directly. For every toolkit root,
+configuration searches:
+
+```text
+$CUDA_HOME/include
+$CUDA_HOME/lib
+$CUDA_HOME/lib64
+$CUDA_HOME/targets/*/include
+$CUDA_HOME/targets/*/lib
+$CUDA_HOME/targets/*/lib64
+```
+
+Use `CUVS_HOME`, `RAFT_HOME`, `RAPIDS_HOME`, and optional `FAISS_HOME` for
+external prefixes. Configure records runtime search paths for detected CUDA,
+cuVS, RAFT/RMM, and optional FAISS libraries. A matching `LD_LIBRARY_PATH` may
+still be needed for transitive dependencies:
+
+```sh
+export LD_LIBRARY_PATH=/opt/rapids/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}
+```
+
+## Verify the installed backend
 
 ```r
 library(fastEmbedR)
-fastEmbedR_capabilities()
+
+cap <- fastEmbedR_capabilities()
+print(cap)
+cuda <- cap[cap$backend == "cuda", ]
+stopifnot(
+    identical(cuda$status, "available_functional"),
+    isTRUE(cuda$compiled),
+    isTRUE(cuda$knn_available),
+    isTRUE(cuda$embedding_available)
+)
+
+set.seed(1)
+x <- matrix(runif(2048 * 32), nrow = 2048)
+knn <- precompute_knn(x, k = 15, backend = "cuda")
+stopifnot(
+    inherits(knn, "fastEmbedR_gpu_knn"),
+    identical(knn$result_residency, "cuda"),
+    identical(knn$device_to_host_result_copies, 0),
+    !isTRUE(knn$cpu_fallback)
+)
 ```
 
-The diagnostic reports CUDA nearest-neighbor and embedding availability.
-`fastEmbedR` checks CPU, Metal, and CUDA embedding backends when a function is
-called with `backend = "cpu"`, `"metal"`, or `"cuda"`.
+The capability status distinguishes a functional accelerator, a backend that
+was not built, a compiled backend unavailable at runtime, and a package built
+in diagnostic-only mode.
 
-## Backend Rule
+## Common failures
 
-Backend labels are strict. An explicit GPU request must resolve to a real
-native GPU backend. Otherwise the function errors and reports what dependency
-is missing.
+- `nvcc was not found`: set `CUDA_HOME` or `NVCC` to the toolkit, not the
+  driver installation.
+- CUDA compile/link probe failure: inspect configure output for missing CUDA
+  headers or libraries and mixed target prefixes.
+- cuVS probe failure: make `cuvs/core/c_api.h`, `libcuvs_c`, and `libcuvs`
+  available under one compatible prefix.
+- `cudaErrorInsufficientDriver`: use a toolkit/runtime compatible with the
+  installed driver; do not let the package change the driver.
+- `cudaErrorNoKernelImageForDevice`: rebuild fastEmbedR and external CUDA
+  libraries for the GPU compute capability.
+- undefined `__nvJitLink...`: CUDA and RAPIDS libraries from different
+  releases are being mixed. Correct their library search order.
+- missing `libcuvs_c.so`: restore the runtime path matching the build prefix.
+
+See [Backend installation](installation-backends.md) for the complete build
+and validation contract.

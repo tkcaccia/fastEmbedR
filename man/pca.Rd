@@ -5,15 +5,15 @@
 \title{Backend-native truncated PCA}
 \usage{
 pca(
-    x,
-    ncomp = 2L,
-    xtest = NULL,
-    center = TRUE,
-    scale = FALSE,
-    backend = NULL,
-    n.cores = 1L,
-    seed = 4L,
-    tsne_init = FALSE
+  x,
+  ncomp = 2L,
+  xtest = NULL,
+  center = TRUE,
+  scale = FALSE,
+  backend = NULL,
+  n.cores = 1L,
+  seed = 4L,
+  tsne_init = FALSE
 )
 }
 \arguments{
@@ -42,8 +42,7 @@ provenance but does not consume random numbers.}
 
 \item{tsne_init}{If \code{TRUE}, add \code{tsne_init} to the returned PCA
 object. This matrix is centered and rescaled so its largest component
-standard deviation is \code{1e-4}, ready to pass as \code{Y_init} to
-\code{\link[=tsne]{tsne()}}
+standard deviation is \code{1e-4}, ready to pass as \code{Y_init} to \code{\link[=tsne]{tsne()}}
 or \code{\link[=tsne_knn]{tsne_knn()}}.}
 }
 \value{
@@ -51,8 +50,7 @@ A \code{fastEmbedR_pca} list with \code{scores}, \code{loadings},
 \code{singular_values}, centering/scaling vectors, backend metadata, and
 decomposition metadata. When \code{tsne_init = TRUE}, the list also
 contains \code{tsne_init}; when \code{xtest} is supplied, it also contains
-\code{scores_test}. Metal and CUDA preserve \code{float::float32} scores,
-loadings,
+\code{scores_test}. Metal and CUDA preserve \code{float::float32} scores, loadings,
 initialization, and compatible test projections when the input is
 float32. CPU results also record \code{n.cores_requested},
 \code{n.cores_effective}, and \code{core_control}.
@@ -71,11 +69,9 @@ CPU PCA.
 CPU matrix products and factorizations use the BLAS/LAPACK linked to R.
 Set \code{n.cores} to control their CPU core limit. The requested value is
 applied temporarily through standard BLAS/OpenMP environment variables and,
-when installed, \code{RhpcBLASctl}; the prior process settings are restored
-after
+when installed, \code{RhpcBLASctl}; the prior process settings are restored after
 the call. A single-threaded BLAS can still report one effective thread. With
-\code{float::float32} input, native Metal and CUDA preprocessing and the
-returned
+\code{float::float32} input, native Metal and CUDA preprocessing and the returned
 scores/loadings also remain float32. The API intentionally has no
 decomposition method menu and does not call Python. Explicit unavailable GPU
 requests fail instead of being reported as GPU work.

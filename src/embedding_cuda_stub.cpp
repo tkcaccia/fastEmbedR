@@ -198,6 +198,31 @@ List landmark_project_interpolate_knn_confidence_cuda_impl(NumericMatrix,
   Rcpp::stop("CUDA fused landmark projection is available only when the package is built with CUDA support.");
 }
 
+List transform_tsne_cuda_impl(NumericMatrix,
+                              IntegerMatrix,
+                              NumericMatrix,
+                              NumericMatrix,
+                              bool,
+                              std::string,
+                              double,
+                              int,
+                              int,
+                              double,
+                              double,
+                              double,
+                              double,
+                              double,
+                              double,
+                              double,
+                              int,
+                              int,
+                              int) {
+  Rcpp::stop(
+    "CUDA t-SNE transform is available only when the package is built "
+    "with CUDA support."
+  );
+}
+
 List landmark_tsne_transform_cuda_gpu_impl(SEXP,
                                            SEXP,
                                            SEXP,

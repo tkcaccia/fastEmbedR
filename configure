@@ -2,52 +2,240 @@
 
 set -eu
 
-use_cuda=${FASTEMBEDR_USE_CUDA:-auto}
-use_cuvs=${FASTEMBEDR_USE_CUVS:-auto}
-use_faiss_gpu=${FASTEMBEDR_USE_FAISS_GPU:-auto}
-cuda_home=${CUDA_HOME:-}
+fatal() {
+  echo "configure: error: $*" >&2
+  exit 1
+}
+
+notice() {
+  echo "configure: $*"
+}
+
+normalize_switch() {
+  case "$1" in
+    0|no|false|off) echo 0 ;;
+    1|yes|true|on) echo 1 ;;
+    auto|'') echo auto ;;
+    *) fatal "$2 must be 0, 1, or auto (received '$1')." ;;
+  esac
+}
+
+is_true() {
+  case "$1" in
+    1|yes|true|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+append_colon_dir() {
+  list=$1
+  directory=$2
+  [ -d "$directory" ] || {
+    printf '%s' "$list"
+    return
+  }
+  if [ -z "$list" ]; then
+    printf '%s' "$directory"
+    return
+  fi
+  case ":$list:" in
+    *":$directory:"*) printf '%s' "$list" ;;
+    *) printf '%s:%s' "$list" "$directory" ;;
+  esac
+}
+
+include_flags_from_dirs() {
+  result=""
+  old_ifs=$IFS
+  IFS=:
+  for directory in $1; do
+    [ -n "$directory" ] && result="$result -I$directory"
+  done
+  IFS=$old_ifs
+  printf '%s' "$result"
+}
+
+system_include_flags_from_dirs() {
+  result=""
+  old_ifs=$IFS
+  IFS=:
+  for directory in $1; do
+    [ -n "$directory" ] && result="$result -isystem $directory"
+  done
+  IFS=$old_ifs
+  printf '%s' "$result"
+}
+
+library_flags_from_dirs() {
+  result=""
+  old_ifs=$IFS
+  IFS=:
+  for directory in $1; do
+    [ -n "$directory" ] && result="$result -L$directory"
+  done
+  IFS=$old_ifs
+  printf '%s' "$result"
+}
+
+rpath_flags_from_dirs() {
+  result=""
+  old_ifs=$IFS
+  IFS=:
+  for directory in $1; do
+    [ -n "$directory" ] && result="$result -Wl,-rpath,$directory"
+  done
+  IFS=$old_ifs
+  printf '%s' "$result"
+}
+
+find_header_dir() {
+  directories=$1
+  header=$2
+  old_ifs=$IFS
+  IFS=:
+  for directory in $directories; do
+    if [ -f "$directory/$header" ]; then
+      IFS=$old_ifs
+      printf '%s' "$directory"
+      return 0
+    fi
+  done
+  IFS=$old_ifs
+  return 1
+}
+
+find_library_dir() {
+  directories=$1
+  library=$2
+  old_ifs=$IFS
+  IFS=:
+  for directory in $directories; do
+    if [ -e "$directory/lib$library.so" ] || \
+       [ -e "$directory/lib$library.dylib" ] || \
+       [ -e "$directory/lib$library.a" ]; then
+      IFS=$old_ifs
+      printf '%s' "$directory"
+      return 0
+    fi
+  done
+  IFS=$old_ifs
+  return 1
+}
+
+collect_prefix_dirs() {
+  prefix=$1
+  prefix_include_dirs=""
+  prefix_library_dirs=""
+  [ -n "$prefix" ] || return 0
+  for directory in \
+    "$prefix/include" \
+    "$prefix/include/rapids" \
+    "$prefix"/targets/*/include \
+    "$prefix"/targets/*/include/rapids; do
+    prefix_include_dirs=$(append_colon_dir \
+      "$prefix_include_dirs" "$directory")
+  done
+  for directory in \
+    "$prefix/lib" \
+    "$prefix/lib64" \
+    "$prefix"/targets/*/lib \
+    "$prefix"/targets/*/lib64; do
+    prefix_library_dirs=$(append_colon_dir \
+      "$prefix_library_dirs" "$directory")
+  done
+}
+
+print_probe_failure() {
+  label=$1
+  log=$2
+  echo "configure: $label probe failed." >&2
+  if [ -s "$log" ]; then
+    echo "----- $label probe output -----" >&2
+    cat "$log" >&2
+    echo "----- end probe output -----" >&2
+  fi
+}
+
+os_name=$(uname -s 2>/dev/null || echo unknown)
+use_cuda=$(normalize_switch "${FASTEMBEDR_USE_CUDA:-auto}" \
+  FASTEMBEDR_USE_CUDA)
+use_cuvs=$(normalize_switch "${FASTEMBEDR_USE_CUVS:-auto}" \
+  FASTEMBEDR_USE_CUVS)
+use_faiss_gpu=$(normalize_switch "${FASTEMBEDR_USE_FAISS_GPU:-0}" \
+  FASTEMBEDR_USE_FAISS_GPU)
+require_cuda=${FASTEMBEDR_REQUIRE_CUDA:-${PACKAGE_REQUIRE_CUDA:-0}}
+diagnostic_only=${FASTEMBEDR_DIAGNOSTIC_ONLY:-0}
+
+r_binary="${R_HOME:+$R_HOME/bin/R}"
+rscript_binary="${R_HOME:+$R_HOME/bin/Rscript}"
+if [ ! -x "$r_binary" ]; then
+  r_binary=$(command -v R 2>/dev/null || true)
+fi
+if [ ! -x "$rscript_binary" ]; then
+  rscript_binary=$(command -v Rscript 2>/dev/null || true)
+fi
+[ -n "$r_binary" ] || fatal "A functional R executable was not found."
+[ -n "$rscript_binary" ] || fatal "A functional Rscript executable was not found."
+
+if is_true "$require_cuda"; then
+  [ "$diagnostic_only" = "0" ] || \
+    fatal "strict CUDA and diagnostic-only modes cannot be combined."
+  use_cuda=1
+  [ "$use_cuvs" != "0" ] || \
+    fatal "strict CUDA requires FASTEMBEDR_USE_CUVS=1."
+  use_cuvs=1
+fi
+
+if is_true "$diagnostic_only"; then
+  use_cuda=0
+  use_cuvs=0
+  use_faiss_gpu=0
+fi
+
+cuda_home=${CUDA_HOME:-${CUDA_PATH:-${CUDAToolkit_ROOT:-}}}
 nvcc=${NVCC:-}
 cuda_host_cxx=${CUDAHOSTCXX:-}
+
+if [ -z "$nvcc" ] && [ -n "$cuda_home" ] && \
+   [ -x "$cuda_home/bin/nvcc" ]; then
+  nvcc="$cuda_home/bin/nvcc"
+fi
 if [ -z "$nvcc" ]; then
-  if [ -n "$cuda_home" ] && [ -x "$cuda_home/bin/nvcc" ]; then
-    nvcc="$cuda_home/bin/nvcc"
+  nvcc=$(command -v nvcc 2>/dev/null || true)
+fi
+if [ -n "$nvcc" ] && command -v readlink >/dev/null 2>&1; then
+  resolved_nvcc=$(readlink -f "$nvcc" 2>/dev/null || true)
+  [ -n "$resolved_nvcc" ] && nvcc=$resolved_nvcc
+fi
+if [ -z "$cuda_home" ] && [ -n "$nvcc" ]; then
+  cuda_home=$(dirname "$(dirname "$nvcc")")
+fi
+
+if [ -z "$cuda_host_cxx" ]; then
+  if [ -x /usr/bin/g++ ]; then
+    cuda_host_cxx=/usr/bin/g++
+  elif [ -x /usr/bin/c++ ]; then
+    cuda_host_cxx=/usr/bin/c++
   else
-    nvcc=$(command -v nvcc 2>/dev/null || true)
+    r_cxx17=$("$r_binary" CMD config CXX17 2>/dev/null || true)
+    set -- $r_cxx17
+    candidate=${1:-}
+    if [ -n "$candidate" ]; then
+      cuda_host_cxx=$(command -v "$candidate" 2>/dev/null || true)
+    fi
   fi
 fi
 
-if [ -z "$cuda_home" ] && [ -n "$nvcc" ]; then
-  cuda_bin=$(dirname "$nvcc")
-  cuda_home=$(dirname "$cuda_bin")
+if [ -n "$cuda_host_cxx" ] && [ ! -x "$cuda_host_cxx" ]; then
+  resolved_host=$(command -v "$cuda_host_cxx" 2>/dev/null || true)
+  [ -n "$resolved_host" ] || \
+    fatal "CUDAHOSTCXX is not an executable compiler: $cuda_host_cxx"
+  cuda_host_cxx=$resolved_host
 fi
 
-if [ "$use_cuda" = "1" ] && [ -z "$nvcc" ]; then
-  echo "FASTEMBEDR_USE_CUDA=1 was requested, but nvcc was not found." >&2
-  echo "Set CUDA_HOME or NVCC, or use FASTEMBEDR_USE_CUDA=0 for a non-CUDA build." >&2
-  exit 1
-fi
-
-if [ "$use_cuda" = "1" ] && [ -z "$cuda_home" ]; then
-  echo "FASTEMBEDR_USE_CUDA=1 was requested, but CUDA_HOME could not be resolved." >&2
-  echo "Set CUDA_HOME to the CUDA toolkit root." >&2
-  exit 1
-fi
-
-if [ "$use_cuvs" = "1" ] && { [ "$use_cuda" = "0" ] || [ -z "$nvcc" ] || [ -z "$cuda_home" ]; }; then
-  echo "FASTEMBEDR_USE_CUVS=1 requires a working CUDA toolkit." >&2
-  echo "Set CUDA_HOME/NVCC and FASTEMBEDR_USE_CUDA=1." >&2
-  exit 1
-fi
-
-if [ "$use_faiss_gpu" = "1" ] && { [ "$use_cuda" = "0" ] || [ -z "$nvcc" ] || [ -z "$cuda_home" ]; }; then
-  echo "FASTEMBEDR_USE_FAISS_GPU=1 requires a working CUDA toolkit." >&2
-  echo "Set CUDA_HOME/NVCC and FASTEMBEDR_USE_CUDA=1." >&2
-  exit 1
-fi
-
-os_name=$(uname -s 2>/dev/null || echo unknown)
-
-metal_objects="embedding_metal_bridge.o embedding_metal_stub.o native_knn_metal_stub.o graph_clustering_metal_stub.o"
+metal_objects="embedding_metal_bridge.o embedding_metal_stub.o"
+metal_objects="$metal_objects native_knn_metal_stub.o"
+metal_objects="$metal_objects graph_clustering_metal_stub.o"
 cppflags=""
 libs="-pthread"
 objcxxflags=""
@@ -55,39 +243,151 @@ metal_enabled=0
 cuda_enabled=0
 enable_faiss_gpu=0
 enable_cuvs=0
+enable_raft=0
+build_mode=cpu_only
 
-if [ "$os_name" = "Darwin" ]; then
+if is_true "$diagnostic_only"; then
+  cppflags="$cppflags -DFASTEMBEDR_DIAGNOSTIC_ONLY=1"
+  build_mode=diagnostic_only
+fi
+
+if [ "$os_name" = "Darwin" ] && ! is_true "$diagnostic_only"; then
   metal_enabled=1
-  metal_objects="embedding_metal_bridge.o embedding_metal_impl.o native_knn_metal_impl.o graph_clustering_metal_impl.o"
-  cppflags="-DHAVE_METAL=1"
+  metal_objects="embedding_metal_bridge.o embedding_metal_impl.o"
+  metal_objects="$metal_objects native_knn_metal_impl.o"
+  metal_objects="$metal_objects graph_clustering_metal_impl.o"
+  cppflags="$cppflags -DHAVE_METAL=1"
   objcxxflags='$(CXXFLAGS) -pthread'
-  libs="-pthread -framework Foundation -framework Accelerate -framework Metal -framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph"
+  libs="-pthread -framework Foundation -framework Accelerate"
+  libs="$libs -framework Metal -framework MetalPerformanceShaders"
+  libs="$libs -framework MetalPerformanceShadersGraph"
+  build_mode=metal
 fi
 
 cuda_objects="embedding_cuda_stub.o"
 native_cuda_knn_object="native_knn_cuda_stub.o"
 graph_cuda_object="graph_clustering_cuda_stub.o"
 cuda_rule=""
-if [ "$use_cuda" != "0" ] && [ -n "$nvcc" ] && [ -n "$cuda_home" ]; then
+cuda_include_dirs=""
+cuda_library_dirs=""
+cuda_probe_ok=0
+
+if [ "$use_cuda" != "0" ] && [ -n "$nvcc" ] && \
+   [ -n "$cuda_home" ]; then
+  for directory in \
+    "$cuda_home/include" \
+    "$cuda_home"/targets/*/include; do
+    cuda_include_dirs=$(append_colon_dir "$cuda_include_dirs" "$directory")
+    if [ -d "$directory/cccl" ]; then
+      cuda_include_dirs=$(append_colon_dir \
+        "$cuda_include_dirs" "$directory/cccl")
+    fi
+  done
+  for directory in \
+    "$cuda_home/lib" \
+    "$cuda_home/lib64" \
+    "$cuda_home"/targets/*/lib \
+    "$cuda_home"/targets/*/lib64; do
+    cuda_library_dirs=$(append_colon_dir \
+      "$cuda_library_dirs" "$directory")
+  done
+
+  cuda_header_dir=$(find_header_dir \
+    "$cuda_include_dirs" cuda_runtime.h 2>/dev/null || true)
+  cub_header_dir=$(find_header_dir \
+    "$cuda_include_dirs" cub/cub.cuh 2>/dev/null || true)
+  thrust_header_dir=$(find_header_dir \
+    "$cuda_include_dirs" thrust/iterator/counting_iterator.h \
+    2>/dev/null || true)
+  cudart_libdir=$(find_library_dir \
+    "$cuda_library_dirs" cudart 2>/dev/null || true)
+  cufft_libdir=$(find_library_dir \
+    "$cuda_library_dirs" cufft 2>/dev/null || true)
+  cublas_libdir=$(find_library_dir \
+    "$cuda_library_dirs" cublas 2>/dev/null || true)
+  cusolver_libdir=$(find_library_dir \
+    "$cuda_library_dirs" cusolver 2>/dev/null || true)
+
+  missing_cuda=""
+  [ -n "$cuda_header_dir" ] || missing_cuda="$missing_cuda cuda_runtime.h"
+  [ -n "$cub_header_dir" ] || missing_cuda="$missing_cuda cub/cub.cuh"
+  [ -n "$thrust_header_dir" ] || \
+    missing_cuda="$missing_cuda thrust/iterator/counting_iterator.h"
+  [ -n "$cudart_libdir" ] || missing_cuda="$missing_cuda libcudart"
+  [ -n "$cufft_libdir" ] || missing_cuda="$missing_cuda libcufft"
+  [ -n "$cublas_libdir" ] || missing_cuda="$missing_cuda libcublas"
+  [ -n "$cusolver_libdir" ] || missing_cuda="$missing_cuda libcusolver"
+
+  cuda_toolkit_include_flags=$(include_flags_from_dirs "$cuda_include_dirs")
+  cuda_lib_flags=$(library_flags_from_dirs "$cuda_library_dirs")
+  cuda_rpath_flags=$(rpath_flags_from_dirs "$cuda_library_dirs")
+  cuda_host_flags=""
+  [ -n "$cuda_host_cxx" ] && \
+    cuda_host_flags="-ccbin=$cuda_host_cxx"
+
+  configure_tmp=$(mktemp -d "${TMPDIR:-/tmp}/fastembedr-config.XXXXXX")
+  trap 'rm -rf "$configure_tmp"' EXIT HUP INT TERM
+  cat > "$configure_tmp/cuda-link.cu" <<'EOF_CUDA'
+#include <cuda_runtime.h>
+#include <cublas_v2.h>
+#include <cub/cub.cuh>
+#include <cufft.h>
+#include <cusolverDn.h>
+#include <thrust/iterator/counting_iterator.h>
+
+int main() {
+  const void* symbols[] = {
+    reinterpret_cast<const void*>(&cudaRuntimeGetVersion),
+    reinterpret_cast<const void*>(&cublasCreate_v2),
+    reinterpret_cast<const void*>(&cufftPlan1d),
+    reinterpret_cast<const void*>(&cusolverDnCreate)
+  };
+  return symbols[0] == nullptr || symbols[1] == nullptr ||
+    symbols[2] == nullptr || symbols[3] == nullptr;
+}
+EOF_CUDA
+
+  if [ -n "$missing_cuda" ]; then
+    echo "configure: missing CUDA components:$missing_cuda" >&2
+    print_probe_failure "CUDA compile/link" \
+      "$configure_tmp/cuda-link.log"
+  else
+    if "$nvcc" -std=c++17 $cuda_host_flags \
+       $cuda_toolkit_include_flags \
+       "$configure_tmp/cuda-link.cu" \
+       $cuda_lib_flags -lcudart -lcufft -lcublas -lcusolver \
+       -o "$configure_tmp/cuda-link" \
+       > "$configure_tmp/cuda-link.log" 2>&1; then
+      cuda_probe_ok=1
+    else
+      print_probe_failure "CUDA compile/link" \
+        "$configure_tmp/cuda-link.log"
+    fi
+  fi
+fi
+
+if [ "$use_cuda" = "1" ] && [ -z "$nvcc" ]; then
+  fatal "CUDA was required, but nvcc was not found. Set CUDA_HOME or NVCC."
+fi
+if [ "$use_cuda" = "1" ] && [ -z "$cuda_home" ]; then
+  fatal "CUDA was required, but the CUDA toolkit root could not be resolved."
+fi
+if [ "$use_cuda" = "1" ] && [ "$cuda_probe_ok" != "1" ]; then
+  fatal "CUDA was required, but the toolkit compile/link probe failed."
+fi
+
+if [ "$cuda_probe_ok" = "1" ]; then
   cuda_enabled=1
-  cuda_include_flags="-I$cuda_home/include"
-  r_home=${R_HOME:-$(R RHOME)}
-  r_cppflags=$(R CMD config --cppflags 2>/dev/null || true)
+  build_mode=cuda
+  r_home=${R_HOME:-$("$r_binary" RHOME)}
+  r_cppflags=$("$r_binary" CMD config --cppflags 2>/dev/null || true)
   if [ -z "$r_cppflags" ]; then
-    r_cppflags=$(R CMD config CPPFLAGS 2>/dev/null || true)
+    r_cppflags=$("$r_binary" CMD config CPPFLAGS 2>/dev/null || true)
   fi
-  rcpp_include=$(Rscript -e 'cat(system.file("include", package = "Rcpp"))')
-  cuda_include_flags="$cuda_include_flags $r_cppflags -I$r_home/include -I$rcpp_include"
-  cuda_lib_flags="-L$cuda_home/lib64 -L$cuda_home/lib"
-  if [ -d "$cuda_home/targets/x86_64-linux/include" ]; then
-    cuda_include_flags="$cuda_include_flags -I$cuda_home/targets/x86_64-linux/include"
-  fi
-  if [ -d "$cuda_home/targets/x86_64-linux/include/cccl" ]; then
-    cuda_include_flags="$cuda_include_flags -I$cuda_home/targets/x86_64-linux/include/cccl"
-  fi
-  if [ -d "$cuda_home/targets/x86_64-linux/lib" ]; then
-    cuda_lib_flags="$cuda_lib_flags -L$cuda_home/targets/x86_64-linux/lib"
-  fi
+  rcpp_include=$("$rscript_binary" -e \
+    'cat(system.file("include", package = "Rcpp"))')
+  cuda_include_flags="$cuda_toolkit_include_flags $r_cppflags"
+  cuda_include_flags="$cuda_include_flags -I$r_home/include -I$rcpp_include"
   cuda_arch_flags=""
   cuda_arch_list=$(printf '%s' "${FASTEMBEDR_CUDA_ARCH:-}" | tr ',;' '  ')
   for arch in $cuda_arch_list; do
@@ -98,166 +398,257 @@ if [ "$use_cuda" != "0" ] && [ -n "$nvcc" ] && [ -n "$cuda_home" ]; then
     esac
     case "$arch" in
       ''|*[!0-9]*)
-        echo "Invalid FASTEMBEDR_CUDA_ARCH entry: $arch" >&2
-        echo "Use numeric compute capabilities, for example '75 89'." >&2
-        exit 1
+        fatal "invalid FASTEMBEDR_CUDA_ARCH '$arch'; use values such as 75 89."
         ;;
     esac
     cuda_arch_flags="$cuda_arch_flags -gencode=arch=compute_$arch,code=sm_$arch"
   done
-  cuda_host_flags=""
-  if [ -n "$cuda_host_cxx" ]; then
-    if [ ! -x "$cuda_host_cxx" ] && ! command -v "$cuda_host_cxx" >/dev/null 2>&1; then
-      echo "CUDAHOSTCXX does not name an executable compiler: $cuda_host_cxx" >&2
-      exit 1
-    fi
-    cuda_host_flags="-ccbin=$cuda_host_cxx"
-  fi
   cuda_extra_flags=${FASTEMBEDR_CUDA_FLAGS:-}
   cuda_objects="embedding_cuda_impl.o embedding_cuda_kernels.o"
   graph_cuda_object="graph_clustering_cuda_kernels.o"
   cppflags="$cppflags -DFASTEMBEDR_HAS_CUDA $cuda_include_flags"
-  libs="$libs $cuda_lib_flags -lcudart -lcufft -lcublas -lcusolver"
-  faiss_home=${FAISS_HOME:-${RAPIDS_HOME:-${CUVS_HOME:-}}}
-  if [ "$use_faiss_gpu" = "1" ] || { [ "$use_faiss_gpu" = "auto" ] && [ -n "$faiss_home" ]; }; then
-    faiss_include=""
-    faiss_libdir=""
-    if [ -n "$faiss_home" ] && [ -f "$faiss_home/include/faiss/gpu/GpuDistance.h" ]; then
-      faiss_include="$faiss_home/include"
-    fi
-    if [ -n "$faiss_home" ]; then
-      for candidate in "$faiss_home/lib" "$faiss_home/lib64" "$faiss_home/targets/x86_64-linux/lib"; do
-        if [ -f "$candidate/libfaiss.so" ] || [ -f "$candidate/libfaiss.dylib" ] || \
-           [ -f "$candidate/libfaiss.a" ]; then
-          faiss_libdir="$candidate"
-          break
-        fi
-      done
-    fi
-    if [ -z "$faiss_include" ] || [ -z "$faiss_libdir" ]; then
-      if [ "$use_faiss_gpu" = "1" ]; then
-        echo "Could not find FAISS GPU headers and libfaiss under FAISS_HOME=$faiss_home." >&2
-        exit 1
-      fi
-    else
-      enable_faiss_gpu=1
-      cppflags="$cppflags -DFASTEMBEDR_HAS_FAISS_GPU -I$faiss_include"
-      cuda_include_flags="$cuda_include_flags -DFASTEMBEDR_HAS_FAISS_GPU -I$faiss_include"
-      faiss_rpath="-Wl,-rpath,$faiss_libdir"
-      if [ "$os_name" = "Linux" ]; then
-        faiss_rpath="-Wl,--disable-new-dtags,-rpath,$faiss_libdir"
-      fi
-      libs="$libs -L$faiss_libdir $faiss_rpath -lfaiss"
-    fi
-  fi
-  cuvs_home=${CUVS_HOME:-${RAPIDS_HOME:-}}
-  if [ "$use_cuvs" = "1" ] || { [ "$use_cuvs" = "auto" ] && [ -n "$cuvs_home" ]; }; then
-    if [ -z "$cuvs_home" ]; then
-      echo "FASTEMBEDR_USE_CUVS=1 was requested, but CUVS_HOME or RAPIDS_HOME is not set." >&2
-      exit 1
-    fi
-    cuvs_include=""
-    for candidate in "$cuvs_home/include/rapids" "$cuvs_home/include"; do
-      if [ -f "$candidate/cuvs/core/c_api.h" ]; then
-        cuvs_include="$candidate"
-        break
-      fi
-    done
-    cuvs_libdir=""
-    for candidate in "$cuvs_home/lib" "$cuvs_home/lib64" "$cuvs_home/targets/x86_64-linux/lib"; do
-      if [ -f "$candidate/libcuvs_c.so" ] || [ -f "$candidate/libcuvs_c.dylib" ] || \
-         [ -f "$candidate/libcuvs_c.a" ]; then
-        cuvs_libdir="$candidate"
-        break
-      fi
-    done
-    if [ -z "$cuvs_include" ] || [ -z "$cuvs_libdir" ]; then
-      if [ "$use_cuvs" = "1" ]; then
-        echo "Could not find cuVS C headers and libcuvs_c under CUVS_HOME=$cuvs_home." >&2
-        exit 1
-      fi
-    else
-      enable_cuvs=1
-      native_cuda_knn_object="native_knn_cuda_impl.o"
-      cppflags="$cppflags -DFASTEMBEDR_HAS_CUVS -I. -I$cuvs_include -I$cuvs_home/include"
-      cuda_include_flags="$cuda_include_flags -DFASTEMBEDR_HAS_CUVS -I. -I$cuvs_include -I$cuvs_home/include"
-      cuvs_rpath="-Wl,-rpath,$cuvs_libdir"
-      if [ "$os_name" = "Linux" ]; then
-        # cuVS loads CUDA runtime libraries such as nvJitLink transitively.
-        # DT_RPATH is intentional here: unlike DT_RUNPATH, it is consulted for
-        # dependencies of libcuvs as well as for libcuvs itself.
-        cuvs_rpath="-Wl,--disable-new-dtags,-rpath,$cuvs_libdir"
-      fi
-      libs="$libs -L$cuvs_libdir $cuvs_rpath -lcuvs_c -lcuvs"
-      if [ "$os_name" = "Linux" ] && \
-         { [ -e "$cuvs_libdir/libnvJitLink.so" ] || [ -e "$cuvs_libdir/libnvJitLink.so.13" ]; }; then
-        # Keep the CUDA JIT linker selected by the RAPIDS environment as a
-        # direct dependency. This prevents an older system CUDA copy from
-        # satisfying libcuvs' soname with missing versioned symbols.
-        libs="$libs -Wl,--no-as-needed -lnvJitLink -Wl,--as-needed"
-      fi
-      for dep_home in ${RMM_HOME:-} ${RAFT_HOME:-} ${RAPIDS_HOME:-}; do
-        if [ -n "$dep_home" ]; then
-          if [ -d "$dep_home/include/rapids" ]; then
-            cppflags="$cppflags -I$dep_home/include/rapids"
-          fi
-          if [ -d "$dep_home/include" ]; then
-            cppflags="$cppflags -I$dep_home/include"
-          fi
-          if [ -d "$dep_home/lib" ]; then
-            libs="$libs -L$dep_home/lib -Wl,-rpath,$dep_home/lib"
-          fi
-          if [ -d "$dep_home/lib64" ]; then
-            libs="$libs -L$dep_home/lib64 -Wl,-rpath,$dep_home/lib64"
-          fi
-          if [ -d "$dep_home/targets/x86_64-linux/lib" ]; then
-            libs="$libs -L$dep_home/targets/x86_64-linux/lib -Wl,-rpath,$dep_home/targets/x86_64-linux/lib"
-          fi
-        fi
-      done
-    fi
-  fi
-  if [ "${FASTEMBEDR_USE_RAFT:-0}" = "1" ]; then
-    raft_home=${RAFT_HOME:-${RAPIDS_HOME:-}}
-    if [ -z "$raft_home" ]; then
-      echo "FASTEMBEDR_USE_RAFT=1 was requested, but RAFT_HOME or RAPIDS_HOME is not set." >&2
-      exit 1
-    fi
-    if [ ! -f "$raft_home/include/raft/linalg/tsvd.cuh" ]; then
-      echo "Could not find raft/linalg/tsvd.cuh under RAFT_HOME=$raft_home." >&2
-      exit 1
-    fi
-    if [ -d "$raft_home/include/rapids" ]; then
-      cppflags="-I$raft_home/include/rapids $cppflags"
-      cuda_include_flags="-I$raft_home/include/rapids $cuda_include_flags"
-    fi
-    cccl_home=${CCCL_HOME:-$raft_home}
-    if [ -d "$cccl_home/targets/x86_64-linux/include/cccl" ]; then
-      cppflags="-I$cccl_home/targets/x86_64-linux/include/cccl $cppflags"
-      cuda_include_flags="-I$cccl_home/targets/x86_64-linux/include/cccl $cuda_include_flags"
-    fi
-    cppflags="$cppflags -DFASTEMBEDR_HAS_RAFT -I$raft_home/include"
-    cuda_include_flags="$cuda_include_flags -DFASTEMBEDR_HAS_RAFT -I$raft_home/include"
-    for dep_home in ${RMM_HOME:-} ${RAPIDS_HOME:-}; do
-      if [ -n "$dep_home" ]; then
-        if [ -d "$dep_home/include" ]; then
-          cppflags="$cppflags -I$dep_home/include"
-          cuda_include_flags="$cuda_include_flags -I$dep_home/include"
-        fi
-        if [ -d "$dep_home/lib64" ]; then
-          libs="$libs -L$dep_home/lib64"
-        fi
-        if [ -d "$dep_home/lib" ]; then
-          libs="$libs -L$dep_home/lib"
-        fi
-      fi
-    done
-    libs="$libs -lrmm -lrapids_logger -lcublasLt -lcusparse -lcurand"
-  fi
-  cuda_rule="
-.DEFAULT_GOAL := all
+  libs="$libs $cuda_lib_flags $cuda_rpath_flags"
+  libs="$libs -lcudart -lcufft -lcublas -lcusolver"
 
-CUDA_NVCCFLAGS = -std=c++17 -x cu --extended-lambda --expt-relaxed-constexpr -Xcompiler -fPIC $cuda_host_flags $cuda_include_flags$cuda_arch_flags $cuda_extra_flags
+  faiss_home=${FAISS_HOME:-${RAPIDS_HOME:-${CONDA_PREFIX:-}}}
+  if [ "$use_faiss_gpu" = "1" ] || \
+     { [ "$use_faiss_gpu" = "auto" ] && [ -n "$faiss_home" ]; }; then
+    collect_prefix_dirs "$faiss_home"
+    faiss_include=$(find_header_dir \
+      "$prefix_include_dirs" faiss/gpu/GpuDistance.h 2>/dev/null || true)
+    faiss_libdir=$(find_library_dir \
+      "$prefix_library_dirs" faiss 2>/dev/null || true)
+    if [ -n "$faiss_include" ] && [ -n "$faiss_libdir" ]; then
+      cat > "$configure_tmp/faiss-link.cpp" <<'EOF_FAISS'
+#include <faiss/gpu/GpuDistance.h>
+#include <faiss/gpu/StandardGpuResources.h>
+
+int main() {
+  faiss::gpu::StandardGpuResources resources;
+  return resources.getDefaultStream(0) == nullptr ? 0 : 0;
+}
+EOF_FAISS
+      r_cxx17=$("$r_binary" CMD config CXX17)
+      r_cxx17flags=$("$r_binary" CMD config CXX17FLAGS 2>/dev/null || true)
+      r_lapack=$("$r_binary" CMD config LAPACK_LIBS 2>/dev/null || true)
+      r_blas=$("$r_binary" CMD config BLAS_LIBS 2>/dev/null || true)
+      r_flibs=$("$r_binary" CMD config FLIBS 2>/dev/null || true)
+      faiss_command="$r_cxx17 $r_cxx17flags -std=c++17"
+      faiss_command="$faiss_command $cuda_toolkit_include_flags"
+      faiss_command="$faiss_command -I$faiss_include"
+      faiss_command="$faiss_command $configure_tmp/faiss-link.cpp"
+      faiss_command="$faiss_command $cuda_lib_flags -L$faiss_libdir"
+      faiss_command="$faiss_command -lfaiss -lcudart -lcublas"
+      faiss_command="$faiss_command $r_lapack $r_blas $r_flibs"
+      faiss_command="$faiss_command -o $configure_tmp/faiss-link"
+      if eval "$faiss_command" \
+         > "$configure_tmp/faiss-link.log" 2>&1; then
+        enable_faiss_gpu=1
+        cppflags="$cppflags -DFASTEMBEDR_HAS_FAISS_GPU -I$faiss_include"
+        cuda_include_flags="$cuda_include_flags"
+        cuda_include_flags="$cuda_include_flags -DFASTEMBEDR_HAS_FAISS_GPU"
+        cuda_include_flags="$cuda_include_flags -I$faiss_include"
+        libs="$libs -L$faiss_libdir"
+        libs="$libs $(rpath_flags_from_dirs "$faiss_libdir") -lfaiss"
+      else
+        print_probe_failure "FAISS GPU compile/link" \
+          "$configure_tmp/faiss-link.log"
+      fi
+    fi
+    if [ "$enable_faiss_gpu" != "1" ] && \
+       [ "$use_faiss_gpu" = "1" ]; then
+      fatal "FAISS GPU headers or a linkable libfaiss were not found under FAISS_HOME='$faiss_home'."
+    fi
+  fi
+
+  cuvs_home=${CUVS_HOME:-${RAPIDS_HOME:-${CONDA_PREFIX:-}}}
+  if [ "$use_cuvs" = "1" ] || \
+     { [ "$use_cuvs" = "auto" ] && [ -n "$cuvs_home" ]; }; then
+    collect_prefix_dirs "$cuvs_home"
+    cuvs_include=$(find_header_dir \
+      "$prefix_include_dirs" cuvs/core/c_api.h 2>/dev/null || true)
+    cuvs_brute_include=$(find_header_dir \
+      "$prefix_include_dirs" cuvs/neighbors/brute_force.h \
+      2>/dev/null || true)
+    cuvs_ivf_include=$(find_header_dir \
+      "$prefix_include_dirs" cuvs/neighbors/ivf_flat.h \
+      2>/dev/null || true)
+    cuvs_distance_include=$(find_header_dir \
+      "$prefix_include_dirs" cuvs/distance/distance.h \
+      2>/dev/null || true)
+    dlpack_include=$(find_header_dir \
+      "$prefix_include_dirs" dlpack/dlpack.h 2>/dev/null || true)
+    cuvs_libdir=$(find_library_dir \
+      "$prefix_library_dirs" cuvs_c 2>/dev/null || true)
+    cuvs_cpp_libdir=$(find_library_dir \
+      "$prefix_library_dirs" cuvs 2>/dev/null || true)
+    if [ -n "$cuvs_include" ] && [ -n "$cuvs_brute_include" ] && \
+       [ -n "$cuvs_ivf_include" ] && [ -n "$cuvs_distance_include" ] && \
+       [ -n "$dlpack_include" ] && [ -n "$cuvs_libdir" ] && \
+       [ -n "$cuvs_cpp_libdir" ]; then
+      cat > "$configure_tmp/cuvs-link.cpp" <<'EOF_CUVS'
+#include <cuvs/core/c_api.h>
+#include <cuvs/neighbors/ivf_flat.h>
+
+int main() {
+  const void* symbols[] = {
+    reinterpret_cast<const void*>(&cuvsResourcesCreate),
+    reinterpret_cast<const void*>(&cuvsIvfFlatIndexCreate)
+  };
+  return symbols[0] == nullptr || symbols[1] == nullptr;
+}
+EOF_CUVS
+      cuvs_include_dirs=""
+      for directory in \
+        "$cuvs_include" \
+        "$cuvs_brute_include" \
+        "$cuvs_ivf_include" \
+        "$cuvs_distance_include" \
+        "$dlpack_include"; do
+        cuvs_include_dirs=$(append_colon_dir \
+          "$cuvs_include_dirs" "$directory")
+      done
+      cuvs_include_flags=$(include_flags_from_dirs "$cuvs_include_dirs")
+      nvjitlink_dir=""
+      nvjitlink_flag=""
+      if [ "$os_name" = "Linux" ]; then
+        for candidate in \
+          "$cuvs_libdir"/libnvJitLink.so \
+          "$cuvs_libdir"/libnvJitLink.so.[0-9]* \
+          "$cuvs_cpp_libdir"/libnvJitLink.so \
+          "$cuvs_cpp_libdir"/libnvJitLink.so.[0-9]*; do
+          [ -e "$candidate" ] || continue
+          nvjitlink_dir=$(dirname "$candidate")
+          nvjitlink_name=$(basename "$candidate")
+          case "$nvjitlink_name" in
+            libnvJitLink.so)
+              nvjitlink_flag="-lnvJitLink"
+              ;;
+            *)
+              nvjitlink_flag="-l:$nvjitlink_name"
+              ;;
+          esac
+          break
+        done
+      fi
+      r_cxx17=$("$r_binary" CMD config CXX17)
+      r_cxx17flags=$("$r_binary" CMD config CXX17FLAGS 2>/dev/null || true)
+      cuvs_command="$r_cxx17 $r_cxx17flags -std=c++17"
+      cuvs_command="$cuvs_command $cuda_toolkit_include_flags"
+      cuvs_command="$cuvs_command $cuvs_include_flags"
+      cuvs_command="$cuvs_command $configure_tmp/cuvs-link.cpp"
+      cuvs_command="$cuvs_command $cuda_lib_flags -L$cuvs_libdir"
+      cuvs_command="$cuvs_command -L$cuvs_cpp_libdir"
+      cuvs_command="$cuvs_command -lcuvs_c -lcuvs -lcudart"
+      if [ -n "$nvjitlink_flag" ]; then
+        cuvs_command="$cuvs_command -L$nvjitlink_dir"
+        cuvs_command="$cuvs_command -Wl,--no-as-needed"
+        cuvs_command="$cuvs_command $nvjitlink_flag -Wl,--as-needed"
+      fi
+      cuvs_command="$cuvs_command -o $configure_tmp/cuvs-link"
+      if eval "$cuvs_command" \
+         > "$configure_tmp/cuvs-link.log" 2>&1; then
+        enable_cuvs=1
+        native_cuda_knn_object="native_knn_cuda_impl.o"
+        cppflags="$cppflags -DFASTEMBEDR_HAS_CUVS -I."
+        cppflags="$cppflags $cuvs_include_flags"
+        cuda_include_flags="$cuda_include_flags -DFASTEMBEDR_HAS_CUVS"
+        cuda_include_flags="$cuda_include_flags -I."
+        cuda_include_flags="$cuda_include_flags $cuvs_include_flags"
+        libs="$libs -L$cuvs_libdir -L$cuvs_cpp_libdir"
+        libs="$libs $(rpath_flags_from_dirs "$cuvs_libdir:$cuvs_cpp_libdir")"
+        libs="$libs -lcuvs_c -lcuvs"
+        if [ -n "$nvjitlink_flag" ]; then
+          libs="$libs -L$nvjitlink_dir"
+          libs="$libs $(rpath_flags_from_dirs "$nvjitlink_dir")"
+          libs="$libs -Wl,--no-as-needed $nvjitlink_flag"
+          libs="$libs -Wl,--as-needed"
+        fi
+      else
+        print_probe_failure "cuVS compile/link" \
+          "$configure_tmp/cuvs-link.log"
+      fi
+    fi
+    if [ "$enable_cuvs" != "1" ] && [ "$use_cuvs" = "1" ]; then
+      fatal "cuVS headers and linkable libcuvs_c/libcuvs were not found under CUVS_HOME='$cuvs_home'."
+    fi
+  fi
+
+  if [ "${FASTEMBEDR_USE_RAFT:-0}" = "1" ]; then
+    raft_home=${RAFT_HOME:-${RAPIDS_HOME:-${CONDA_PREFIX:-}}}
+    [ -n "$raft_home" ] || \
+      fatal "FASTEMBEDR_USE_RAFT=1 requires RAFT_HOME or RAPIDS_HOME."
+    collect_prefix_dirs "$raft_home"
+    raft_include=$(find_header_dir \
+      "$prefix_include_dirs" raft/linalg/tsvd.cuh 2>/dev/null || true)
+    [ -n "$raft_include" ] || \
+      fatal "raft/linalg/tsvd.cuh was not found under RAFT_HOME='$raft_home'."
+    raft_handle_include=$(find_header_dir \
+      "$prefix_include_dirs" raft/core/handle.hpp 2>/dev/null || true)
+    [ -n "$raft_handle_include" ] || \
+      fatal "raft/core/handle.hpp was not found under RAFT_HOME='$raft_home'."
+    rmm_libdir=$(find_library_dir \
+      "$prefix_library_dirs" rmm 2>/dev/null || true)
+    logger_libdir=$(find_library_dir \
+      "$prefix_library_dirs" rapids_logger 2>/dev/null || true)
+    [ -n "$rmm_libdir" ] || \
+      fatal "librmm was not found under RAFT_HOME='$raft_home'."
+    [ -n "$logger_libdir" ] || \
+      fatal "librapids_logger was not found under RAFT_HOME='$raft_home'."
+    raft_include_dirs=""
+    raft_include_dirs=$(append_colon_dir \
+      "$raft_include_dirs" "$raft_include")
+    raft_include_dirs=$(append_colon_dir \
+      "$raft_include_dirs" "$raft_handle_include")
+    raft_include_flags=$(include_flags_from_dirs "$raft_include_dirs")
+    raft_system_include_flags=$(system_include_flags_from_dirs \
+      "$raft_include_dirs")
+    raft_library_flags=$(library_flags_from_dirs "$prefix_library_dirs")
+    raft_rpath_flags=$(rpath_flags_from_dirs "$prefix_library_dirs")
+    cat > "$configure_tmp/raft-link.cu" <<'EOF_RAFT'
+#include <raft/core/handle.hpp>
+#include <raft/linalg/tsvd.cuh>
+
+int main() {
+  raft::handle_t handle;
+  raft::linalg::paramsTSVD params;
+  params.n_iterations = 1;
+  return params.n_iterations != 1;
+}
+EOF_RAFT
+    if "$nvcc" -std=c++17 --extended-lambda \
+       --expt-relaxed-constexpr $cuda_host_flags \
+       $cuda_toolkit_include_flags $raft_include_flags \
+       "$configure_tmp/raft-link.cu" \
+       $cuda_lib_flags $raft_library_flags \
+       -lraft -lrmm -lrapids_logger -lcublasLt -lcublas \
+       -lcusolver -lcusparse -lcurand -lcudart \
+       -o "$configure_tmp/raft-link" \
+       > "$configure_tmp/raft-link.log" 2>&1; then
+      enable_raft=1
+      cppflags="$cppflags -DFASTEMBEDR_HAS_RAFT"
+      cppflags="$cppflags $raft_include_flags"
+    cuda_include_flags="$cuda_include_flags -DFASTEMBEDR_HAS_RAFT"
+    cuda_include_flags="$cuda_include_flags $raft_system_include_flags"
+      libs="$libs $raft_library_flags $raft_rpath_flags"
+      libs="$libs -lraft -lrmm -lrapids_logger"
+      libs="$libs -lcublasLt -lcusparse -lcurand"
+    else
+      print_probe_failure "RAFT TSVD compile/link" \
+        "$configure_tmp/raft-link.log"
+      fatal "FASTEMBEDR_USE_RAFT=1 requested unusable RAFT/RMM libraries."
+    fi
+  fi
+
+  if is_true "$require_cuda"; then
+    [ "$enable_cuvs" = "1" ] || \
+      fatal "strict CUDA requires a validated cuVS build."
+  fi
+
+  cuda_rule="
+all: \$(SHLIB)
+
+CUDA_NVCCFLAGS = -std=c++17 -x cu --extended-lambda --expt-relaxed-constexpr -DNDEBUG -Xcompiler -fPIC $cuda_host_flags $cuda_include_flags$cuda_arch_flags $cuda_extra_flags
 
 embedding_cuda_kernels.o: embedding_cuda_kernels.cpp
 	\$(NVCC) \$(CUDA_NVCCFLAGS) -c \$< -o \$@
@@ -265,6 +656,14 @@ embedding_cuda_kernels.o: embedding_cuda_kernels.cpp
 graph_clustering_cuda_kernels.o: graph_clustering_cuda_kernels.cu
 	\$(NVCC) \$(CUDA_NVCCFLAGS) -c \$< -o \$@
 "
+fi
+
+if [ "$cuda_enabled" = "0" ] && is_true "$require_cuda"; then
+  fatal "strict CUDA mode did not produce a CUDA-enabled build."
+fi
+
+if [ "$os_name" != "Darwin" ]; then
+  libs="$libs \$(LAPACK_LIBS) \$(BLAS_LIBS) \$(FLIBS)"
 fi
 
 {
@@ -277,7 +676,7 @@ fi
     echo "PKG_CPPFLAGS = $cppflags"
   fi
   echo "PKG_LIBS = $libs"
-  if [ "$cuda_objects" != "embedding_cuda_stub.o" ]; then
+  if [ "$cuda_enabled" = "1" ]; then
     echo "NVCC = $nvcc"
     printf "%s" "$cuda_rule"
   fi
@@ -286,18 +685,21 @@ fi
 
 echo "fastEmbedR configuration:"
 echo "  operating system:       $os_name"
-echo "  C++ standard:           C++17 (R CXX17/CXX17FLAGS)"
-echo "  package C++ flags:      -pthread"
+echo "  build mode:             $build_mode"
+echo "  C++ standard:           C++17"
 echo "  Metal compiled:         $metal_enabled"
-if [ "$metal_enabled" = "1" ]; then
-  echo "  Objective-C++ flags:    R CXXFLAGS plus -pthread"
-fi
 echo "  CUDA compiled:          $cuda_enabled"
+echo "  strict CUDA required:   $(is_true "$require_cuda" && echo yes || echo no)"
 if [ "$cuda_enabled" = "1" ]; then
+  echo "  CUDA toolkit root:      $cuda_home"
   echo "  nvcc:                   $nvcc"
   echo "  CUDA host compiler:     ${cuda_host_cxx:-nvcc default}"
+  echo "  CUDA include dirs:      $cuda_include_dirs"
+  echo "  CUDA library dirs:      $cuda_library_dirs"
   echo "  CUDA architectures:     ${FASTEMBEDR_CUDA_ARCH:-nvcc default}"
-  echo "  CUDA extra flags:       ${FASTEMBEDR_CUDA_FLAGS:-none}"
   echo "  FAISS GPU linked:       $enable_faiss_gpu"
   echo "  cuVS linked:            $enable_cuvs"
+  echo "  RAFT linked:            $enable_raft"
+elif [ "$use_cuda" = "auto" ]; then
+  notice "CUDA was not enabled; the CPU-only build remains available."
 fi

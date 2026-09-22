@@ -2,10 +2,10 @@
 "t-SNE","python_opentsne_fft","Python openTSNE via R - CPU (4 cores)","Reference CPU",156.313,156.0345,157.226
 "t-SNE","Rtsne_full","Rtsne - CPU (4 cores)","Reference CPU",93.812,93.7865,94.4715
 "t-SNE","KlugerLab_FItSNE","FIt-SNE - CPU (4 cores)","Reference CPU",88.693,88.295,88.7705
-"t-SNE","fastEmbedR_opentsne_cpu_full","fastEmbedR openTSNE - CPU (4 cores)","fastEmbedR CPU",43.287,43.0625,43.65
-"t-SNE","fastEmbedR_opentsne_metal_full","fastEmbedR openTSNE - Metal","Metal",13.215,13.113,13.2365
+"t-SNE","fastEmbedR_tsne_cpu_full","fastEmbedR t-SNE - CPU (4 cores)","fastEmbedR CPU",43.287,43.0625,43.65
+"t-SNE","fastEmbedR_tsne_metal_full","fastEmbedR t-SNE - Metal","Metal",13.215,13.113,13.2365
 "t-SNE","rapids_cuml_tsne_full","RAPIDS cuML t-SNE via R - CUDA","CUDA",6.433,6.4245,6.4445
-"t-SNE","fastEmbedR_opentsne_cuda_full","fastEmbedR openTSNE - CUDA","CUDA",1.911,1.899,1.9465
+"t-SNE","fastEmbedR_tsne_cuda_full","fastEmbedR t-SNE - CUDA","CUDA",1.911,1.899,1.9465
 "UMAP","umap_package","umap R package - CPU (4 cores)","Reference CPU",938.783,922.178,942.2865
 "UMAP","python_umap_learn","Python umap-learn via R - CPU (4 cores)","Reference CPU",83.356,83.1485,84.211
 "UMAP","uwot_default","uwot default - CPU (4 cores)","Reference CPU",68.042,67.8455,68.103

@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 
-# Release-level numerical validation for the native openTSNE-style kernels.
+# Release-level numerical validation for the native t-SNE kernels.
 # Run from the fastEmbedR source root after installing the source being tested.
 
 arguments <- commandArgs(trailingOnly = TRUE)
@@ -328,9 +328,7 @@ run_prefix <- function(backend, method, iterations, learning_rate = 1) {
   }
   result <- tsne_knn(
     knn_input,
-    n_neighbors = 15L,
     perplexity = 5,
-    affinity_support = "standard",
     Y_init = initial_backend,
     early_exaggeration_iter = 0L,
     n_iter = as.integer(iterations),
@@ -372,9 +370,7 @@ for (backend in requested_backends) {
     result <- tryCatch(
       tsne_knn(
         case_knn,
-        n_neighbors = ncol(case$knn$indices),
         perplexity = 2,
-        affinity_support = "standard",
         Y_init = case$layout,
         early_exaggeration_iter = 0L,
         n_iter = 1L,
@@ -421,9 +417,7 @@ for (backend in requested_backends) {
   invalid_public <- tryCatch(
     tsne_knn(
       invalid_knn,
-      n_neighbors = ncol(knn_path$indices),
       perplexity = 2,
-      affinity_support = "standard",
       Y_init = invalid_layout,
       early_exaggeration_iter = 0L,
       n_iter = 1L,

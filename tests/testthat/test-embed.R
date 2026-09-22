@@ -860,8 +860,8 @@ test_that("high-level embeddings avoid retaining KNN matrices by default", {
     )
 
     expect_null(compact$knn)
-    expect_equal(dim(retained$knn$indices), c(nrow(x), 3L))
-    expect_equal(dim(retained$knn$distances), c(nrow(x), 3L))
+    expect_equal(dim(retained$knn$indices), c(nrow(x), 1L))
+    expect_equal(dim(retained$knn$distances), c(nrow(x), 1L))
 })
 
 test_that("CPU UMAP and openTSNE return genuine three-dimensional layouts", {
@@ -878,7 +878,6 @@ test_that("CPU UMAP and openTSNE return genuine three-dimensional layouts", {
     tsne_fit <- tsne(
         x,
         perplexity = 5,
-        affinity_support = "standard",
         n_components = 3L,
         backend = "cpu",
         n.cores = 2L,

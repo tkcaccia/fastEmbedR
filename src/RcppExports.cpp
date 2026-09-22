@@ -10,6 +10,16 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// fastembedr_build_config_cpp
+List fastembedr_build_config_cpp();
+RcppExport SEXP _fastEmbedR_fastembedr_build_config_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(fastembedr_build_config_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
 // embedding_cuda_available_cpp
 bool embedding_cuda_available_cpp();
 RcppExport SEXP _fastEmbedR_embedding_cuda_available_cpp() {
@@ -332,6 +342,35 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< IntegerVector >::type landmark_indices(landmark_indicesSEXP);
     Rcpp::traits::input_parameter< int >::type k(kSEXP);
     rcpp_result_gen = Rcpp::wrap(landmark_project_interpolate_knn_confidence_cuda_cpp(landmark_data, query_data, landmark_layout, landmark_indices, k));
+    return rcpp_result_gen;
+END_RCPP
+}
+// transform_tsne_cuda_cpp
+List transform_tsne_cuda_cpp(NumericMatrix reference_layout, IntegerMatrix indices, NumericMatrix distances, NumericMatrix y_init, bool init, std::string initialization, double perplexity, int n_iter, int early_exaggeration_iter, double learning_rate, double early_exaggeration, double exaggeration, double initial_momentum, double final_momentum, double max_grad_norm, double max_step_norm, int n_negatives, int exact_repulsion_threshold, int seed);
+RcppExport SEXP _fastEmbedR_transform_tsne_cuda_cpp(SEXP reference_layoutSEXP, SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP initSEXP, SEXP initializationSEXP, SEXP perplexitySEXP, SEXP n_iterSEXP, SEXP early_exaggeration_iterSEXP, SEXP learning_rateSEXP, SEXP early_exaggerationSEXP, SEXP exaggerationSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP max_grad_normSEXP, SEXP max_step_normSEXP, SEXP n_negativesSEXP, SEXP exact_repulsion_thresholdSEXP, SEXP seedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type reference_layout(reference_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type y_init(y_initSEXP);
+    Rcpp::traits::input_parameter< bool >::type init(initSEXP);
+    Rcpp::traits::input_parameter< std::string >::type initialization(initializationSEXP);
+    Rcpp::traits::input_parameter< double >::type perplexity(perplexitySEXP);
+    Rcpp::traits::input_parameter< int >::type n_iter(n_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type early_exaggeration_iter(early_exaggeration_iterSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type early_exaggeration(early_exaggerationSEXP);
+    Rcpp::traits::input_parameter< double >::type exaggeration(exaggerationSEXP);
+    Rcpp::traits::input_parameter< double >::type initial_momentum(initial_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type final_momentum(final_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type max_grad_norm(max_grad_normSEXP);
+    Rcpp::traits::input_parameter< double >::type max_step_norm(max_step_normSEXP);
+    Rcpp::traits::input_parameter< int >::type n_negatives(n_negativesSEXP);
+    Rcpp::traits::input_parameter< int >::type exact_repulsion_threshold(exact_repulsion_thresholdSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(transform_tsne_cuda_cpp(reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, seed));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1806,6 +1845,7 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_fastEmbedR_fastembedr_build_config_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_build_config_cpp, 0},
     {"_fastEmbedR_embedding_cuda_available_cpp", (DL_FUNC) &_fastEmbedR_embedding_cuda_available_cpp, 0},
     {"_fastEmbedR_spectral_knn_init_cuda_cpp", (DL_FUNC) &_fastEmbedR_spectral_knn_init_cuda_cpp, 5},
     {"_fastEmbedR_knn_embed_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_cuda_cpp, 9},
@@ -1823,6 +1863,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_project_embedding_knn_cuda_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_knn_cuda_cpp, 3},
     {"_fastEmbedR_interpolate_landmark_layout_cuda_cpp", (DL_FUNC) &_fastEmbedR_interpolate_landmark_layout_cuda_cpp, 5},
     {"_fastEmbedR_landmark_project_interpolate_knn_confidence_cuda_cpp", (DL_FUNC) &_fastEmbedR_landmark_project_interpolate_knn_confidence_cuda_cpp, 5},
+    {"_fastEmbedR_transform_tsne_cuda_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_cuda_cpp, 19},
     {"_fastEmbedR_landmark_tsne_transform_cuda_gpu_cpp", (DL_FUNC) &_fastEmbedR_landmark_tsne_transform_cuda_gpu_cpp, 20},
     {"_fastEmbedR_landmark_umap_project_refine_cuda_gpu_cpp", (DL_FUNC) &_fastEmbedR_landmark_umap_project_refine_cuda_gpu_cpp, 16},
     {"_fastEmbedR_knn_structure_score_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_structure_score_cuda_cpp, 6},

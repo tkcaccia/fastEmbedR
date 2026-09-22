@@ -5,15 +5,15 @@
 \title{Precompute a reusable UMAP initialization}
 \usage{
 umap_init(
-    x,
-    distances = NULL,
-    n_neighbors = NULL,
-    n_components = 2L,
-    metric = c("euclidean", "cosine", "correlation", "inner_product"),
-    backend = NULL,
-    seed = 4L,
-    n.cores = NULL,
-    graph_mode = c("fuzzy", "binary")
+  x,
+  distances = NULL,
+  n_neighbors = NULL,
+  n_components = 2L,
+  metric = c("euclidean", "cosine", "correlation", "inner_product"),
+  backend = NULL,
+  seed = 4L,
+  n.cores = NULL,
+  graph_mode = c("fuzzy", "binary")
 )
 }
 \arguments{
@@ -22,16 +22,14 @@ umap_init(
 
 \item{distances}{Optional KNN distance matrix when \code{x} is an index matrix.}
 
-\item{n_neighbors}{Number of non-self neighbors when \code{x} is data.
-    \code{NULL}
+\item{n_neighbors}{Number of non-self neighbors when \code{x} is data. \code{NULL}
 uses the package's size-aware default.}
 
 \item{n_components}{Output dimensionality.}
 
 \item{metric}{Distance metric used only when KNN must be computed.}
 
-\item{backend}{Initialization backend: \code{"cpu"}, \code{"cuda"}, or
-    \code{"metal"}.}
+\item{backend}{Initialization backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}.}
 
 \item{seed}{Random seed.}
 
@@ -41,17 +39,14 @@ uses the package's size-aware default.}
 \code{"binary"} requests the adjacency-only sensitivity graph.}
 }
 \value{
-A \code{fastEmbedR_umap_initialization} object with \code{layout},
-\code{prepared},
+A \code{fastEmbedR_umap_initialization} object with \code{layout}, \code{prepared},
 resolved \code{parameters}, and component timings. Pass the complete object to
-\code{\link[=umap_knn]{umap_knn()}} or use its \code{layout} component directly
-for diagnostics.
+\code{\link[=umap_knn]{umap_knn()}} or use its \code{layout} component directly for diagnostics.
 }
 \description{
 \code{umap_init()} separates UMAP neighbor search, graph construction, and
 initialization from stochastic optimization. The returned object can be
-passed directly to \code{\link[=umap_knn]{umap_knn()}} so repeated or
-cross-backend runs reuse the
+passed directly to \code{\link[=umap_knn]{umap_knn()}} so repeated or cross-backend runs reuse the
 same KNN graph and initial coordinates.
 }
 \details{

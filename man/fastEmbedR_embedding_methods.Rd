@@ -9,28 +9,26 @@
 \method{print}{fastEmbedR_embedding}(x, ...)
 
 \method{plot}{fastEmbedR_embedding}(
-    x,
-    labels = x$labels,
-    pch = 21,
-    bg = NULL,
-    col = "black",
-    xlab = "Component 1",
-    ylab = "Component 2",
-    main = NULL,
-    ...
+  x,
+  labels = x$labels,
+  pch = 21,
+  bg = NULL,
+  col = "black",
+  xlab = "Component 1",
+  ylab = "Component 2",
+  main = NULL,
+  ...
 )
 }
 \arguments{
 \item{x}{A \code{fastEmbedR_embedding} object.}
 
-\item{...}{Additional arguments passed to
-    \code{\link[graphics:plot]{graphics::plot()}} by the plot
+\item{...}{Additional arguments passed to \code{\link[graphics:plot]{graphics::plot()}} by the plot
 method. The print method ignores them.}
 
 \item{labels}{Optional labels used to color plotted observations.}
 
-\item{pch}{Plotting symbol passed to
-    \code{\link[graphics:plot]{graphics::plot()}}.}
+\item{pch}{Plotting symbol passed to \code{\link[graphics:plot]{graphics::plot()}}.}
 
 \item{bg}{Point background colors. When \code{NULL}, integer colors are derived
 from \code{labels}, or white is used when labels are absent.}

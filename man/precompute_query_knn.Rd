@@ -5,12 +5,12 @@
 \title{Precompute query-to-reference nearest neighbors}
 \usage{
 precompute_query_knn(
-    reference,
-    query,
-    k = 30L,
-    metric = c("euclidean", "cosine", "correlation", "inner_product"),
-    backend = NULL,
-    n.cores = NULL
+  reference,
+  query,
+  k = 30L,
+  metric = c("euclidean", "cosine", "correlation", "inner_product"),
+  backend = NULL,
+  n.cores = NULL
 )
 }
 \arguments{
@@ -22,8 +22,7 @@ precompute_query_knn(
 \item{k}{Number of non-self nearest neighbors to return.}
 
 \item{metric}{Distance metric: \code{"euclidean"}, \code{"cosine"},
-\code{"correlation"}, or \code{"inner_product"}. Raw inner product is available
-only
+\code{"correlation"}, or \code{"inner_product"}. Raw inner product is available only
 in CUDA builds that support it.}
 
 \item{backend}{Search backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}.}
@@ -38,16 +37,16 @@ one-based indices into \code{reference}.
 \description{
 \code{precompute_query_knn()} searches a fixed reference matrix for every row of
 a query matrix. It uses the same package-native backend family and routing
-policy as \code{\link[=precompute_knn]{precompute_knn()}}, but does not compute
-unnecessary
+policy as \code{\link[=precompute_knn]{precompute_knn()}}, but does not compute unnecessary
 reference-to-reference or query-to-query neighbors.
 }
 \details{
 CPU uses the native recall-tuned HNSW reference-query path. Metal routes
 between a native query-only exact kernel and recall-tuned IVF-Flat from the
-estimated reference-query distance workload. CUDA uses direct FAISS GPU
-exact search below 100,000 reference rows and direct RAPIDS cuVS IVF-Flat
-above that threshold. CUDA results remain device-resident for direct
+estimated reference-query distance workload. CUDA uses cuVS brute-force
+exact search below 100,000 reference rows and cuVS IVF-Flat above that
+threshold. An explicitly enabled FAISS GPU build may provide exact search.
+CUDA results remain device-resident for direct
 consumption by landmark UMAP and t-SNE transformations.
 }
 \examples{
