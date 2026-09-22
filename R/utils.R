@@ -51,7 +51,12 @@ integer_scalar <- function(x, default = NA_integer_) {
         value > .Machine$integer.max) {
         return(default)
     }
-    as.integer(value)
+    rounded <- round(value)
+    tolerance <- sqrt(.Machine$double.eps) * max(1, abs(value))
+    if (abs(value - rounded) > tolerance) {
+        return(default)
+    }
+    as.integer(rounded)
 }
 
 set_local_seed <- function(seed) {

@@ -41,11 +41,13 @@ policy as \code{\link[=precompute_knn]{precompute_knn()}}, but does not compute 
 reference-to-reference or query-to-query neighbors.
 }
 \details{
-CPU uses the native recall-tuned HNSW reference-query path. Metal routes
+CPU uses a native HNSW reference-query path with fixed, size-aware search
+parameters and does not claim an audited recall target. Metal routes
 between a native query-only exact kernel and recall-tuned IVF-Flat from the
-estimated reference-query distance workload. CUDA uses cuVS brute-force
-exact search below 100,000 reference rows and cuVS IVF-Flat above that
-threshold. An explicitly enabled FAISS GPU build may provide exact search.
+estimated reference-query distance workload. CUDA routes between cuVS
+brute-force exact search and cuVS IVF-Flat using the reference size, query
+batch size, and feature count. An explicitly enabled FAISS GPU build may
+provide exact search.
 CUDA results remain device-resident for direct
 consumption by landmark UMAP and t-SNE transformations.
 }

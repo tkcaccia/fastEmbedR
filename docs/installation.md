@@ -62,6 +62,7 @@ select the host compiler explicitly. `nvcc` may invoke this compiler.
 
 ```sh
 export CUDA_HOME=/usr/local/cuda
+export CCCL_HOME=/opt/cccl
 export CUVS_HOME=/opt/rapids
 export CUDAHOSTCXX=/usr/bin/g++
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin:${PATH}
@@ -105,14 +106,19 @@ $CUDA_HOME/targets/*/lib
 $CUDA_HOME/targets/*/lib64
 ```
 
+When CUDA Core Compute Libraries (CCCL) are installed separately, set
+`CCCL_HOME`. Configuration searches its root, `include`, `include/cccl`, and
+the corresponding `targets/*/include` directories for CUB and Thrust.
+
 Use `CUVS_HOME`, `RAFT_HOME`, `RAPIDS_HOME`, and optional `FAISS_HOME` for
 external prefixes. Configure records runtime search paths for detected CUDA,
 cuVS, RAFT/RMM, and optional FAISS libraries. A matching `LD_LIBRARY_PATH` may
 still be needed for transitive dependencies:
 
-`FASTEMBEDR_CUDA_FLAGS` is applied to both CUDA configure probes and package
-translation units. Custom CCCL or toolchain include flags are therefore
-validated before package compilation begins.
+`FASTEMBEDR_CUDA_CPPFLAGS` supplies CUDA preprocessor and include flags.
+`FASTEMBEDR_CUDA_FLAGS` supplies general NVCC flags. Both are applied to CUDA
+configure probes and package translation units, so custom toolchain settings
+are validated before package compilation begins.
 
 ```sh
 export LD_LIBRARY_PATH=/opt/rapids/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}

@@ -1,7 +1,10 @@
 normalize_nn_threads <- function(n_threads) {
+    if (is.null(n_threads)) {
+        return(1L)
+    }
     n_threads <- integer_scalar(n_threads)
     if (length(n_threads) != 1L || is.na(n_threads) || n_threads < 1L) {
-        n_threads <- 1L
+        stop("`n_threads` must be a positive integer.", call. = FALSE)
     }
     n_threads
 }
@@ -124,7 +127,8 @@ fastembedr_embedding_nn_policy <- function(embedding_backend, n = NULL) {
     }
     list(
         backend = "cpu", method = "hnsw", tuning = "auto",
-        target_recall = 0.99
+        target_recall = NA_real_,
+        recall_status = "not_audited_fixed_heuristic"
     )
 }
 
@@ -149,6 +153,24 @@ fastembedr_metal_query_method <- function(n_reference, n_query, p) {
     if (isTRUE(use_ivf)) "ivf" else "exact"
 }
 
+fastembedr_cuda_query_method <- function(n_reference, n_query, p) {
+    complete <- all(vapply(
+        list(n_reference, n_query, p),
+        function(x) length(x) == 1L && !is.na(x),
+        logical(1L)
+    ))
+    if (!complete) {
+        return(if (
+            length(n_reference) == 1L &&
+                !is.na(n_reference) &&
+                n_reference >= 100000L
+        ) "ivf" else "exact")
+    }
+    work <- as.double(n_reference) * as.double(n_query) * as.double(p)
+    use_ivf <- n_reference >= 100000L && n_query > 64L && work >= 5e9
+    if (isTRUE(use_ivf)) "ivf" else "exact"
+}
+
 fastembedr_query_nn_policy <- function(embedding_backend,
                                         n_reference = NULL,
                                         n_query = NULL,
@@ -160,14 +182,11 @@ fastembedr_query_nn_policy <- function(embedding_backend,
     if (identical(embedding_backend, "cuda")) {
         return(list(
             backend = "cuda",
-            method = if (
-                length(n_reference) == 1L && !is.na(n_reference) &&
-                    n_reference < 100000L
-            ) {
-                "exact"
-            } else {
-                "ivf"
-            },
+            method = fastembedr_cuda_query_method(
+                n_reference,
+                n_query,
+                p
+            ),
             tuning = "auto",
             target_recall = 0.99
         ))
@@ -186,7 +205,8 @@ fastembedr_query_nn_policy <- function(embedding_backend,
     }
     list(
         backend = "cpu", method = "hnsw", tuning = "auto",
-        target_recall = 0.99
+        target_recall = NA_real_,
+        recall_status = "not_audited_fixed_heuristic"
     )
 }
 
@@ -242,7 +262,14 @@ finish_precomputed_knn <- function(out, metadata, policy, elapsed) {
     out$execution_backend <- metadata$backend
     out$engine <- fastembedr_nn_policy_engine(policy, keep_gpu)
     out$elapsed_sec <- unname(elapsed[["elapsed"]])
-    out$target_recall <- policy$target_recall
+    if (identical(policy$backend, "cpu")) {
+        out$target_recall <- NULL
+        out$target_met <- NA
+        out$recall_audited <- FALSE
+        out$recall_status <- policy$recall_status
+    } else {
+        out$target_recall <- policy$target_recall
+    }
     out$result_residency <- if (keep_gpu) "cuda" else "host"
     classes <- if (keep_gpu) {
         c("fastEmbedR_gpu_knn", "fastEmbedR_knn", class(out), "list")
@@ -292,12 +319,14 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #'   this argument.
 #'
 #' @details
-#' CPU search uses the package-native recall-tuned HNSW implementation. Metal
+#' CPU search uses a package-native HNSW implementation with fixed,
+#' size-aware search parameters; its recall is not audited at runtime. Metal
 #' uses native exact search for small inputs and recall-tuned IVF-Flat for
 #' larger inputs. CUDA uses RAPIDS cuVS brute-force exact search below 100,000
 #' observations and cuVS IVF-Flat above that threshold. A build may explicitly
 #' enable FAISS GPU as an alternative exact-search provider, but FAISS is not
-#' required. The internal recall target is 0.99.
+#' required. Approximate Metal and CUDA routes use an internal recall target
+#' of 0.99 and report whether their pilot audit met it.
 #'
 #' The CUDA result remains on the GPU and can be passed directly to
 #' [umap_knn()] or [tsne_knn()] with `backend = "cuda"`. CPU and Metal
@@ -400,11 +429,13 @@ run_precompute_query_knn <- function(reference, query, k, metric,
 #' @inheritParams precompute_knn
 #'
 #' @details
-#' CPU uses the native recall-tuned HNSW reference-query path. Metal routes
+#' CPU uses a native HNSW reference-query path with fixed, size-aware search
+#' parameters and does not claim an audited recall target. Metal routes
 #' between a native query-only exact kernel and recall-tuned IVF-Flat from the
-#' estimated reference-query distance workload. CUDA uses cuVS brute-force
-#' exact search below 100,000 reference rows and cuVS IVF-Flat above that
-#' threshold. An explicitly enabled FAISS GPU build may provide exact search.
+#' estimated reference-query distance workload. CUDA routes between cuVS
+#' brute-force exact search and cuVS IVF-Flat using the reference size, query
+#' batch size, and feature count. An explicitly enabled FAISS GPU build may
+#' provide exact search.
 #' CUDA results remain device-resident for direct
 #' consumption by landmark UMAP and t-SNE transformations.
 #'
@@ -593,7 +624,10 @@ fastembedr_nn_without_self <- function(data,
                                         tuning = "auto",
                                         target_recall = NULL,
                                         keep_gpu = FALSE) {
-    k <- as.integer(k)
+    k <- integer_scalar(k)
+    if (is.na(k) || k < 1L) {
+        stop("`k` must be a positive integer.", call. = FALSE)
+    }
     target_recall <- target_recall %||% 0.99
     switch(backend,
         cuda = run_native_cuda_knn(
@@ -619,10 +653,14 @@ fastembedr_native_query_knn <- function(data,
                                         backend = "cpu",
                                         method = "auto",
                                         keep_gpu = FALSE) {
+    k <- integer_scalar(k)
+    if (is.na(k) || k < 1L) {
+        stop("`k` must be a positive integer.", call. = FALSE)
+    }
     if (identical(backend, "cuda")) {
         out <- native_cuda_query_knn_cpp(
             data, query,
-            k = as.integer(k), method = method, metric = metric,
+            k = k, method = method, metric = metric,
             target_recall = target_recall, keep_gpu = isTRUE(keep_gpu)
         )
         if (isTRUE(keep_gpu)) {
@@ -633,7 +671,7 @@ fastembedr_native_query_knn <- function(data,
     if (identical(backend, "metal")) {
         out <- native_metal_query_knn_cpp(
             data, query,
-            k = as.integer(k), method = method, metric = metric,
+            k = k, method = method, metric = metric,
             target_recall = target_recall
         )
         if (identical(out$method, "native_metal_ivf_query") &&
@@ -650,7 +688,7 @@ fastembedr_native_query_knn <- function(data,
     }
     out <- native_hnsw_query_cpp(
         data, query,
-        k = as.integer(k),
+        k = k,
         n_threads = normalize_nn_threads(n_threads), metric = metric,
         target_recall = target_recall
     )

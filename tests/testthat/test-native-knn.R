@@ -27,6 +27,12 @@ test_that("native CPU HNSW reaches its recall tier", {
     expect_gte(knn_recall_test(observed, truth), 0.99)
     expect_identical(attr(observed, "backend"), "cpu")
     expect_identical(observed$method, "native_hnsw")
+    expect_false(observed$recall_audited)
+    expect_true(is.na(observed$target_met))
+    expect_identical(
+        observed$recall_status,
+        "not_audited_fixed_heuristic"
+    )
 })
 
 test_that("native CPU HNSW construction is invariant to thread count", {
@@ -60,6 +66,12 @@ test_that(paste(
     expect_identical(observed$execution_backend, "cpu")
     expect_identical(observed$engine, "native_cpu_hnsw")
     expect_identical(observed$result_residency, "host")
+    expect_null(observed$target_recall)
+    expect_false(observed$recall_audited)
+    expect_identical(
+        observed$recall_status,
+        "not_audited_fixed_heuristic"
+    )
     expect_true(is.finite(observed$elapsed_sec))
     expect_identical(attr(observed, "exclude_self"), TRUE)
 
@@ -275,6 +287,44 @@ test_that("Metal query routing accounts for the full distance workload", {
     expect_identical(small$method, "exact")
     expect_identical(large$method, "ivf")
     expect_equal(large$target_recall, 0.99)
+})
+
+test_that("CUDA query routing accounts for query work", {
+    small_query <- fastembedr_query_nn_policy(
+        "cuda",
+        n_reference = 200000L, n_query = 16L, p = 784L
+    )
+    low_work <- fastembedr_query_nn_policy(
+        "cuda",
+        n_reference = 200000L, n_query = 100L, p = 16L
+    )
+    large_query <- fastembedr_query_nn_policy(
+        "cuda",
+        n_reference = 200000L, n_query = 10000L, p = 128L
+    )
+    expect_identical(small_query$method, "exact")
+    expect_identical(low_work$method, "exact")
+    expect_identical(large_query$method, "ivf")
+    expect_equal(large_query$target_recall, 0.99)
+})
+
+test_that("native KNN rejects fractional integer controls", {
+    x <- matrix(rnorm(80L), nrow = 20L)
+    expect_error(
+        precompute_knn(x, k = 3.8, backend = "cpu"),
+        "one integer"
+    )
+    expect_error(
+        precompute_knn(x, k = 3L, backend = "cpu", n.cores = 1.5),
+        "positive integer"
+    )
+    expect_error(
+        fastembedr_native_query_knn(
+            x, x[1:2, , drop = FALSE], k = 2.5,
+            backend = "cpu"
+        ),
+        "positive integer"
+    )
 })
 
 test_that("one-call routing uses native CPU and Metal KNN", {

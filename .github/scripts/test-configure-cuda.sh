@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/fastembedr-config-test.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
+TEST_CXX="$(command -v clang++ || command -v g++)"
 
 TOOLKIT="$TMP/cuda"
 INCLUDE="$TOOLKIT/targets/x86_64-linux/include"
@@ -13,11 +14,12 @@ RAPIDS="$TMP/rapids"
 RAPIDS_INCLUDE="$RAPIDS/include/rapids"
 RAPIDS_LIB="$RAPIDS/lib"
 CUSTOM_CCCL="$TMP/custom-cccl"
-mkdir -p "$INCLUDE/cub" "$INCLUDE/thrust/iterator"
+CUSTOM_CCCL_INCLUDE="$CUSTOM_CCCL/include"
 mkdir -p "$INCLUDE/cuvs/core" "$INCLUDE/cuvs/neighbors"
 mkdir -p "$INCLUDE/cuvs/distance" "$INCLUDE/dlpack" "$LIB"
 mkdir -p "$RAPIDS_INCLUDE/raft/core" "$RAPIDS_INCLUDE/raft/linalg"
-mkdir -p "$RAPIDS_LIB" "$CUSTOM_CCCL"
+mkdir -p "$RAPIDS_LIB" "$CUSTOM_CCCL_INCLUDE/cub"
+mkdir -p "$CUSTOM_CCCL_INCLUDE/thrust/iterator"
 
 cat > "$INCLUDE/cuda_runtime.h" <<'EOF'
 #pragma once
@@ -63,12 +65,14 @@ int cusolverDnCreate(cusolverDnHandle_t* handle);
 }
 #endif
 EOF
-printf '#pragma once\n' > "$INCLUDE/cub/cub.cuh"
-printf '#pragma once\n' > "$INCLUDE/thrust/iterator/counting_iterator.h"
+printf '#pragma once\n' > "$CUSTOM_CCCL_INCLUDE/cub/cub.cuh"
+printf '#pragma once\n' \
+  > "$CUSTOM_CCCL_INCLUDE/thrust/iterator/counting_iterator.h"
 printf '#pragma once\n' > "$INCLUDE/dlpack/dlpack.h"
 printf '#pragma once\n' > "$INCLUDE/cuvs/neighbors/brute_force.h"
 printf '#pragma once\n' > "$INCLUDE/cuvs/distance/distance.h"
-printf '#pragma once\n' > "$CUSTOM_CCCL/fastembedr_custom_cccl.hpp"
+printf '#pragma once\n' \
+  > "$CUSTOM_CCCL_INCLUDE/fastembedr_custom_cccl.hpp"
 cat > "$RAPIDS_INCLUDE/raft/core/handle.hpp" <<'EOF'
 #pragma once
 #include <fastembedr_custom_cccl.hpp>
@@ -78,6 +82,12 @@ class handle_t {};
 EOF
 cat > "$RAPIDS_INCLUDE/raft/linalg/tsvd.cuh" <<'EOF'
 #pragma once
+#ifndef FASTEMBEDR_CUSTOM_CPPFLAG
+#error FASTEMBEDR_CUDA_CPPFLAGS did not reach the RAFT probe
+#endif
+#ifndef FASTEMBEDR_CUSTOM_NVCC_FLAG
+#error FASTEMBEDR_CUDA_FLAGS did not reach the RAFT probe
+#endif
 namespace raft {
 namespace linalg {
 struct paramsTSVD {
@@ -88,6 +98,9 @@ struct paramsTSVD {
 EOF
 cat > "$INCLUDE/cuvs/core/c_api.h" <<'EOF'
 #pragma once
+#ifndef FASTEMBEDR_CUSTOM_CPPFLAG
+#error FASTEMBEDR_CUDA_CPPFLAGS did not reach the cuVS probe
+#endif
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -176,7 +189,7 @@ for arg in "$@"; do
     *) args+=("$arg") ;;
   esac
 done
-exec /usr/bin/g++ -x c++ "${args[@]}"
+exec "${TEST_HOST_CXX:?}" -x c++ "${args[@]}"
 EOF
 chmod +x "$TOOLKIT/bin/nvcc"
 
@@ -188,15 +201,19 @@ chmod +x "$GOOD/configure"
 if ! (
   cd "$GOOD"
   PATH="/usr/bin:/bin:$PATH" \
+  TEST_HOST_CXX="$TEST_CXX" \
   NVCC_LOG="$TMP/nvcc.log" \
   CUDA_HOME="$TOOLKIT" \
+  CCCL_HOME="$CUSTOM_CCCL" \
   CUVS_HOME="$TOOLKIT" \
   RAFT_HOME="$RAPIDS" \
   NVCC="$TOOLKIT/bin/nvcc" \
+  CUDAHOSTCXX="$TEST_CXX" \
   PACKAGE_REQUIRE_CUDA=1 \
   FASTEMBEDR_USE_FAISS_GPU=0 \
   FASTEMBEDR_USE_RAFT=1 \
-  FASTEMBEDR_CUDA_FLAGS="-I$CUSTOM_CCCL" \
+  FASTEMBEDR_CUDA_CPPFLAGS="-DFASTEMBEDR_CUSTOM_CPPFLAG=1" \
+  FASTEMBEDR_CUDA_FLAGS="-DFASTEMBEDR_CUSTOM_NVCC_FLAG=1" \
   ./configure > "$TMP/good.log" 2>&1
 ); then
   cat "$TMP/good.log" >&2
@@ -209,19 +226,32 @@ grep -F -- "-Wl,-rpath,$LIB" "$GOOD/src/Makevars"
 grep -F -- "-DFASTEMBEDR_HAS_CUDA" "$GOOD/src/Makevars"
 grep -F -- "-DFASTEMBEDR_HAS_CUVS" "$GOOD/src/Makevars"
 grep -F -- "-DFASTEMBEDR_HAS_RAFT" "$GOOD/src/Makevars"
-grep -F -- "-I$CUSTOM_CCCL" "$GOOD/src/Makevars"
+grep -F -- "-I$CUSTOM_CCCL_INCLUDE" "$GOOD/src/Makevars"
+grep -F -- "-DFASTEMBEDR_CUSTOM_CPPFLAG=1" "$GOOD/src/Makevars"
+grep -F -- "-DFASTEMBEDR_CUSTOM_NVCC_FLAG=1" "$GOOD/src/Makevars"
 grep -F -- "-DNDEBUG" "$GOOD/src/Makevars"
 grep -F -- 'all: $(SHLIB)' "$GOOD/src/Makevars"
 if grep -Fq -- ".DEFAULT_GOAL" "$GOOD/src/Makevars"; then
   echo "Generated Makevars contains a GNU-only default-goal assignment." >&2
   exit 1
 fi
-if [[ -x /usr/bin/g++ ]]; then
-  grep -F -- "-ccbin=/usr/bin/g++" "$GOOD/src/Makevars"
-  grep -F -- "-ccbin=/usr/bin/g++" "$TMP/nvcc.log"
-fi
+grep -F -- "-ccbin=$TEST_CXX" "$GOOD/src/Makevars"
+grep -F -- "-ccbin=$TEST_CXX" "$TMP/nvcc.log"
 raft_probe=$(grep 'raft-link.cu' "$TMP/nvcc.log")
-printf '%s\n' "$raft_probe" | grep -F -- "-I$CUSTOM_CCCL"
+printf '%s\n' "$raft_probe" | grep -F -- "-I$CUSTOM_CCCL_INCLUDE"
+printf '%s\n' "$raft_probe" | grep -F -- \
+  "-DFASTEMBEDR_CUSTOM_CPPFLAG=1"
+printf '%s\n' "$raft_probe" | grep -F -- \
+  "-DFASTEMBEDR_CUSTOM_NVCC_FLAG=1"
+cuda_probe=$(grep 'cuda-link.cu' "$TMP/nvcc.log")
+printf '%s\n' "$cuda_probe" | grep -F -- "-I$CUSTOM_CCCL_INCLUDE"
+printf '%s\n' "$cuda_probe" | grep -F -- \
+  "-DFASTEMBEDR_CUSTOM_CPPFLAG=1"
+printf '%s\n' "$cuda_probe" | grep -F -- \
+  "-DFASTEMBEDR_CUSTOM_NVCC_FLAG=1"
+grep -F -- "CCCL root:              $CUSTOM_CCCL" "$TMP/good.log"
+grep '^PKG_CPPFLAGS.*-DFASTEMBEDR_CUSTOM_CPPFLAG=1' \
+  "$GOOD/src/Makevars"
 
 BROKEN="$TMP/broken"
 mkdir -p "$BROKEN/src" "$BROKEN/cuda/bin" "$BROKEN/cuda/include"
@@ -231,8 +261,10 @@ chmod +x "$BROKEN/configure" "$BROKEN/cuda/bin/nvcc"
 if (
   cd "$BROKEN"
   NVCC_LOG="$TMP/nvcc-broken.log" \
+  TEST_HOST_CXX="$TEST_CXX" \
   CUDA_HOME="$BROKEN/cuda" \
   NVCC="$BROKEN/cuda/bin/nvcc" \
+  CUDAHOSTCXX="$TEST_CXX" \
   PACKAGE_REQUIRE_CUDA=1 \
   FASTEMBEDR_USE_FAISS_GPU=0 \
   ./configure > "$TMP/broken.log" 2>&1

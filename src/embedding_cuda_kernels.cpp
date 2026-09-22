@@ -8,32 +8,43 @@
  * in fastEmbedR. See inst/THIRD_PARTY_DEPENDENCIES.json.
  */
 
-#include <cuda_runtime.h>
-#include <cufft.h>
-#include <math_constants.h>
-#include <cub/cub.cuh>
-#include <thrust/iterator/counting_iterator.h>
-
-#ifdef FASTEMBEDR_HAS_RAFT
-#include <cstdio>
-#include <R_ext/Print.h>
-#define printf REprintf
-#include <raft/core/device_mdspan.hpp>
-#include <raft/core/handle.hpp>
-#include <raft/linalg/tsvd.cuh>
-#undef printf
-#endif
-
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <string>
 #include <vector>
+
+#include <cuda_runtime.h>
+#include <cufft.h>
+#include <math_constants.h>
+
+#ifndef CCCL_IGNORE_DEPRECATED_STREAM_REF_HEADER
+#define CCCL_IGNORE_DEPRECATED_STREAM_REF_HEADER
+#endif
+#include <cub/cub.cuh>
+#include <thrust/iterator/counting_iterator.h>
+
+#ifdef FASTEMBEDR_HAS_RAFT
+#include <R_ext/Print.h>
+#define printf REprintf
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+#include <raft/core/device_mdspan.hpp>
+#include <raft/core/handle.hpp>
+#include <raft/linalg/tsvd.cuh>
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+#undef printf
+#endif
 
 namespace {
 
@@ -3397,6 +3408,10 @@ int scale_tsne_pca_device_init(float* d_values,
 }
 
 #ifdef FASTEMBEDR_HAS_RAFT
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 template <typename HostT>
 int raft_tsvd_scores_to_device(const HostT* values,
                                int n,
@@ -3587,6 +3602,9 @@ int raft_tsvd_scores_to_device(const HostT* values,
     return 1;
   }
 }
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 #endif
 
 } // namespace

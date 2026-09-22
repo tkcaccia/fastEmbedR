@@ -223,10 +223,9 @@ finite_sample_size <- function(sample_size, n) {
     if (is.null(sample_size)) {
         return(n)
     }
-    sample_size <- as.integer(sample_size)
-    if (length(sample_size) != 1L || is.na(sample_size) ||
-        sample_size < 1L) {
-        return(n)
+    sample_size <- integer_scalar(sample_size)
+    if (is.na(sample_size) || sample_size < 1L) {
+        stop("Sample sizes must be positive integers.", call. = FALSE)
     }
     min(sample_size, n)
 }
@@ -637,13 +636,30 @@ evaluate_embedding <- function(x_high, embedding, labels = NULL,
     )
 }
 
+validate_finite_evaluation_matrix <- function(x, name) {
+    if (!is.matrix(x) && !is_float32_matrix(x)) {
+        x <- as.matrix(x)
+    }
+    if (!is_float32_matrix(x) && !is.numeric(x)) {
+        stop("`", name, "` must be a numeric matrix.", call. = FALSE)
+    }
+    if (length(dim(x)) != 2L || ncol(x) < 1L) {
+        stop("`", name, "` must have at least one column.", call. = FALSE)
+    }
+    finite <- if (is_float32_matrix(x)) {
+        float32_all_finite_cpp(x)
+    } else {
+        all(is.finite(x))
+    }
+    if (!isTRUE(finite)) {
+        stop("`", name, "` must contain only finite values.", call. = FALSE)
+    }
+    x
+}
+
 validate_evaluation_inputs <- function(x_high, embedding, labels, batch) {
-    if (!is.matrix(x_high) && !is_float32_matrix(x_high)) {
-        x_high <- as.matrix(x_high)
-    }
-    if (!is.matrix(embedding) && !is_float32_matrix(embedding)) {
-        embedding <- as.matrix(embedding)
-    }
+    x_high <- validate_finite_evaluation_matrix(x_high, "x_high")
+    embedding <- validate_finite_evaluation_matrix(embedding, "embedding")
     if (nrow(x_high) != nrow(embedding)) {
         stop(
             "`x_high` and `embedding` must have the same row count.",
@@ -666,12 +682,17 @@ validate_evaluation_inputs <- function(x_high, embedding, labels, batch) {
 }
 
 normalize_evaluation_k <- function(k, primary_k) {
-    requested <- as.integer(k)
-    requested <- requested[is.finite(requested) & requested > 0L]
-    if (length(requested) == 0L) requested <- 15L
+    if (length(k) == 0L) {
+        requested <- 15L
+    } else {
+        requested <- vapply(k, integer_scalar, integer(1L))
+        if (anyNA(requested) || any(requested < 1L)) {
+            stop("`k` must contain positive integers.", call. = FALSE)
+        }
+    }
     if (!is.null(primary_k)) {
-        primary_k <- as.integer(primary_k[[1L]])
-        if (is.na(primary_k) || !is.finite(primary_k) || primary_k < 1L) {
+        primary_k <- integer_scalar(primary_k)
+        if (is.na(primary_k) || primary_k < 1L) {
             stop(
                 "`primary_k` must be NULL or a positive integer.",
                 call. = FALSE

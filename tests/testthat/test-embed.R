@@ -312,7 +312,8 @@ test_that("one-call KNN policy selects native CPU and Metal defaults", {
         fastEmbedR:::fastembedr_embedding_nn_policy("cpu", n = 1000L),
         list(
             backend = "cpu", method = "hnsw", tuning = "auto",
-            target_recall = 0.99
+            target_recall = NA_real_,
+            recall_status = "not_audited_fixed_heuristic"
         )
     )
     expect_equal(
@@ -326,7 +327,8 @@ test_that("one-call KNN policy selects native CPU and Metal defaults", {
         fastEmbedR:::fastembedr_embedding_nn_policy("cpu", n = 200000L),
         list(
             backend = "cpu", method = "hnsw", tuning = "auto",
-            target_recall = 0.99
+            target_recall = NA_real_,
+            recall_status = "not_audited_fixed_heuristic"
         )
     )
     expect_equal(

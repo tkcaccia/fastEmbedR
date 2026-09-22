@@ -760,7 +760,10 @@ Rcpp::List native_hnsw_knn_impl(SEXP data_sexp,
     Rcpp::Named("backend") = "cpu",
     Rcpp::Named("method") = "native_hnsw",
     Rcpp::Named("metric") = metric_name,
-    Rcpp::Named("target_recall") = target_recall,
+    Rcpp::Named("requested_recall") = target_recall,
+    Rcpp::Named("recall_audited") = false,
+    Rcpp::Named("target_met") = Rcpp::LogicalVector::get_na(),
+    Rcpp::Named("recall_status") = "not_audited_fixed_heuristic",
     Rcpp::Named("M") = m,
     Rcpp::Named("efConstruction") = ef_construction,
     Rcpp::Named("efSearch") = ef_search,
@@ -773,7 +776,7 @@ Rcpp::List native_hnsw_knn_impl(SEXP data_sexp,
   );
   result.attr("backend") = "cpu";
   result.attr("method") = "native_hnsw";
-  result.attr("target_recall") = target_recall;
+  result.attr("recall_audited") = false;
   result.attr("metric") = metric_name;
   return result;
 }
@@ -833,7 +836,10 @@ Rcpp::List native_hnsw_query_impl(SEXP data_sexp,
     Rcpp::Named("backend") = "cpu",
     Rcpp::Named("method") = "native_hnsw_query",
     Rcpp::Named("metric") = metric_name,
-    Rcpp::Named("target_recall") = target_recall,
+    Rcpp::Named("requested_recall") = target_recall,
+    Rcpp::Named("recall_audited") = false,
+    Rcpp::Named("target_met") = Rcpp::LogicalVector::get_na(),
+    Rcpp::Named("recall_status") = "not_audited_fixed_heuristic",
     Rcpp::Named("M") = m,
     Rcpp::Named("efConstruction") = ef_construction,
     Rcpp::Named("efSearch") = ef_search,
@@ -849,7 +855,7 @@ Rcpp::List native_hnsw_query_impl(SEXP data_sexp,
   );
   result.attr("backend") = "cpu";
   result.attr("method") = "native_hnsw_query";
-  result.attr("target_recall") = target_recall;
+  result.attr("recall_audited") = false;
   result.attr("metric") = metric_name;
   result.attr("exclude_self") = false;
   return result;

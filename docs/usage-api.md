@@ -337,7 +337,8 @@ fit <- landmark_umap(
 plot(fit)
 ```
 
-CPU projection uses native recall-tuned HNSW. Metal uses native exact search
+CPU projection uses native fixed-parameter HNSW and reports that recall was
+not audited at runtime. Metal uses native exact search
 for small references and recall-tuned IVF-Flat for larger references, followed
 by native fixed-reference transform kernels. CUDA uses native exact search for
 smaller references and IVF-Flat for larger references; its KNN result remains

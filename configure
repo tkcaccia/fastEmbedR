@@ -193,8 +193,10 @@ if is_true "$diagnostic_only"; then
 fi
 
 cuda_home=${CUDA_HOME:-${CUDA_PATH:-${CUDAToolkit_ROOT:-}}}
+cccl_home=${CCCL_HOME:-}
 nvcc=${NVCC:-}
 cuda_host_cxx=${CUDAHOSTCXX:-}
+cuda_cpp_flags=${FASTEMBEDR_CUDA_CPPFLAGS:-}
 cuda_extra_flags=${FASTEMBEDR_CUDA_FLAGS:-}
 
 if [ -z "$nvcc" ] && [ -n "$cuda_home" ] && \
@@ -284,6 +286,17 @@ if [ "$use_cuda" != "0" ] && [ -n "$nvcc" ] && \
         "$cuda_include_dirs" "$directory/cccl")
     fi
   done
+  if [ -n "$cccl_home" ]; then
+    for directory in \
+      "$cccl_home" \
+      "$cccl_home/include" \
+      "$cccl_home/include/cccl" \
+      "$cccl_home"/targets/*/include \
+      "$cccl_home"/targets/*/include/cccl; do
+      cuda_include_dirs=$(append_colon_dir \
+        "$cuda_include_dirs" "$directory")
+    done
+  fi
   for directory in \
     "$cuda_home/lib" \
     "$cuda_home/lib64" \
@@ -353,7 +366,8 @@ EOF_CUDA
     print_probe_failure "CUDA compile/link" \
       "$configure_tmp/cuda-link.log"
   else
-    if "$nvcc" -std=c++17 $cuda_host_flags $cuda_extra_flags \
+    if "$nvcc" -std=c++17 $cuda_host_flags $cuda_cpp_flags \
+       $cuda_extra_flags \
        $cuda_toolkit_include_flags \
        "$configure_tmp/cuda-link.cu" \
        $cuda_lib_flags -lcudart -lcufft -lcublas -lcusolver \
@@ -406,7 +420,8 @@ if [ "$cuda_probe_ok" = "1" ]; then
   done
   cuda_objects="embedding_cuda_impl.o embedding_cuda_kernels.o"
   graph_cuda_object="graph_clustering_cuda_kernels.o"
-  cppflags="$cppflags -DFASTEMBEDR_HAS_CUDA $cuda_include_flags"
+  cppflags="$cppflags -DFASTEMBEDR_HAS_CUDA"
+  cppflags="$cppflags $cuda_cpp_flags $cuda_include_flags"
   libs="$libs $cuda_lib_flags $cuda_rpath_flags"
   libs="$libs -lcudart -lcufft -lcublas -lcusolver"
 
@@ -434,6 +449,7 @@ EOF_FAISS
       r_blas=$("$r_binary" CMD config BLAS_LIBS 2>/dev/null || true)
       r_flibs=$("$r_binary" CMD config FLIBS 2>/dev/null || true)
       faiss_command="$r_cxx17 $r_cxx17flags -std=c++17"
+      faiss_command="$faiss_command $cuda_cpp_flags"
       faiss_command="$faiss_command $cuda_toolkit_include_flags"
       faiss_command="$faiss_command -I$faiss_include"
       faiss_command="$faiss_command $configure_tmp/faiss-link.cpp"
@@ -534,6 +550,7 @@ EOF_CUVS
       r_cxx17=$("$r_binary" CMD config CXX17)
       r_cxx17flags=$("$r_binary" CMD config CXX17FLAGS 2>/dev/null || true)
       cuvs_command="$r_cxx17 $r_cxx17flags -std=c++17"
+      cuvs_command="$cuvs_command $cuda_cpp_flags"
       cuvs_command="$cuvs_command $cuda_toolkit_include_flags"
       cuvs_command="$cuvs_command $cuvs_include_flags"
       cuvs_command="$cuvs_command $configure_tmp/cuvs-link.cpp"
@@ -606,6 +623,8 @@ EOF_CUVS
     raft_library_flags=$(library_flags_from_dirs "$prefix_library_dirs")
     raft_rpath_flags=$(rpath_flags_from_dirs "$prefix_library_dirs")
     cat > "$configure_tmp/raft-link.cu" <<'EOF_RAFT'
+#include <cstdint>
+
 #include <raft/core/handle.hpp>
 #include <raft/linalg/tsvd.cuh>
 
@@ -618,7 +637,7 @@ int main() {
 EOF_RAFT
     if "$nvcc" -std=c++17 --extended-lambda \
        --expt-relaxed-constexpr $cuda_host_flags \
-       $cuda_extra_flags \
+       $cuda_cpp_flags $cuda_extra_flags \
        $cuda_toolkit_include_flags $raft_include_flags \
        "$configure_tmp/raft-link.cu" \
        $cuda_lib_flags $raft_library_flags \
@@ -649,7 +668,7 @@ EOF_RAFT
   cuda_rule="
 all: \$(SHLIB)
 
-CUDA_NVCCFLAGS = -std=c++17 -x cu --extended-lambda --expt-relaxed-constexpr -DNDEBUG -Xcompiler -fPIC $cuda_host_flags $cuda_include_flags$cuda_arch_flags $cuda_extra_flags
+CUDA_NVCCFLAGS = -std=c++17 -x cu --extended-lambda --expt-relaxed-constexpr -DNDEBUG -Xcompiler -fPIC $cuda_host_flags $cuda_cpp_flags $cuda_include_flags$cuda_arch_flags $cuda_extra_flags
 
 embedding_cuda_kernels.o: embedding_cuda_kernels.cpp
 	\$(NVCC) \$(CUDA_NVCCFLAGS) -c \$< -o \$@
@@ -693,6 +712,7 @@ echo "  CUDA compiled:          $cuda_enabled"
 echo "  strict CUDA required:   $(is_true "$require_cuda" && echo yes || echo no)"
 if [ "$cuda_enabled" = "1" ]; then
   echo "  CUDA toolkit root:      $cuda_home"
+  echo "  CCCL root:              ${cccl_home:-toolkit bundled}"
   echo "  nvcc:                   $nvcc"
   echo "  CUDA host compiler:     ${cuda_host_cxx:-nvcc default}"
   echo "  CUDA include dirs:      $cuda_include_dirs"

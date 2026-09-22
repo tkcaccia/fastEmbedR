@@ -63,6 +63,11 @@ targets/<target>/include        targets/<target>/lib
 targets/<target>/include        targets/<target>/lib64
 ```
 
+For a split CCCL installation, set `CCCL_HOME`. Its root, `include`,
+`include/cccl`, and target-specific include directories are searched for CUB
+and Thrust. `FASTEMBEDR_CUDA_CPPFLAGS` and `FASTEMBEDR_CUDA_FLAGS` are applied
+consistently to compile/link probes and package CUDA translation units.
+
 Detection is not based on the presence of `nvcc` alone. Configure compiles and
 links a C++17 CUDA program that references the CUDA runtime, cuFFT, cuBLAS, and
 cuSOLVER, and verifies CUB and Thrust headers. It separately compiles and links

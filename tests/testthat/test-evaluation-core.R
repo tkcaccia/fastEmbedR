@@ -128,6 +128,40 @@ test_that("evaluate_embedding accepts float32 data and layouts", {
     expect_equal(metrics$local_sample_size, 30L)
 })
 
+test_that("evaluate_embedding rejects invalid values and integer controls", {
+    set.seed(106)
+    x <- matrix(rnorm(120L), 30L, 4L)
+    layout <- x[, 1:2, drop = FALSE]
+    nonfinite_x <- x
+    nonfinite_x[1L, 1L] <- Inf
+    nonfinite_layout <- layout
+    nonfinite_layout[2L, 2L] <- NA_real_
+
+    expect_error(
+        evaluate_embedding(nonfinite_x, layout),
+        "`x_high` must contain only finite values"
+    )
+    expect_error(
+        evaluate_embedding(x, nonfinite_layout),
+        "`embedding` must contain only finite values"
+    )
+    expect_error(
+        evaluate_embedding(matrix(letters[1:120], 30L), layout),
+        "`x_high` must be a numeric matrix"
+    )
+    expect_error(evaluate_embedding(x, layout, k = 3.5), "positive integers")
+    expect_error(
+        evaluate_embedding(x, layout, primary_k = 4.5),
+        "positive integer"
+    )
+    expect_error(
+        evaluate_embedding(
+            x, layout, sample_size_for_local_metrics = 10.5
+        ),
+        "Sample sizes must be positive integers"
+    )
+})
+
 test_that("seeded helpers preserve the caller RNG state", {
     set.seed(105)
     before <- .Random.seed
