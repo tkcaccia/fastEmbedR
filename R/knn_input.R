@@ -99,6 +99,13 @@ is_float32_matrix <- function(x) {
     inherits(x, "float32")
 }
 
+fastembedr_matrix_dimensions <- function(x) {
+    if (is_float32_matrix(x)) {
+        return(dim(methods::slot(x, "Data")))
+    }
+    dim(x)
+}
+
 public_core_config <- function(config) {
     if (!is.list(config)) {
         return(config)

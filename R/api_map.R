@@ -66,7 +66,7 @@ fastembedr_api_configuration_rows <- function() {
             "not applicable"
         ),
         fastembedr_api_row(
-            "pca", "canonical", "Backend-native randomized PCA/TSVD.",
+            "pca", "canonical", "Backend-native truncated PCA.",
             "matrix, data.frame, or float32", "fastEmbedR_pca", "yes", "yes",
             "yes", "randomized approximation",
             "accelerator intermediates; host R result"

@@ -157,8 +157,8 @@ run_embedding_pca <- function(x, rank, backend, seed) {
         seed = seed
     )
     fun <- switch(backend,
-        cuda = fastembedr_cuda_tsvd_pca,
-        metal = fastembedr_metal_tsvd_pca,
+        cuda = fastembedr_cuda_pca,
+        metal = fastembedr_metal_rsvd_pca,
         cpu = fastembedr_cpu_rsvd_pca
     )
     if (backend == "cpu") {
@@ -263,11 +263,11 @@ validate_pca_backend <- function(backend) {
     backend
 }
 
-fastembedr_metal_tsvd_pca <- function(data,
-                                        ncomp,
-                                        center = TRUE,
-                                        scale = FALSE,
-                                        seed = 4L) {
+fastembedr_metal_rsvd_pca <- function(data,
+                                      ncomp,
+                                      center = TRUE,
+                                      scale = FALSE,
+                                      seed = 4L) {
     x <- if (is_float32_matrix(data)) {
         data
     } else {
@@ -275,12 +275,18 @@ fastembedr_metal_tsvd_pca <- function(data,
         storage.mode(x) <- "double"
         x
     }
+    dimensions <- fastembedr_matrix_dimensions(x)
+    tuning <- fastembedr_rsvd_tuning(
+        dimensions[[1L]], dimensions[[2L]], as.integer(ncomp), "metal"
+    )
     fit <- pca_tsvd_metal_cpp(
         x,
         as.integer(ncomp),
         isTRUE(center),
         isTRUE(scale),
-        as.integer(seed)
+        as.integer(seed),
+        tuning$oversample,
+        tuning$power
     )
     out <- list(
         scores = fit$scores,
@@ -291,6 +297,7 @@ fastembedr_metal_tsvd_pca <- function(data,
         ncomp = as.integer(ncol(fit$scores)),
         method = fit$method,
         backend = fit$backend,
+        selection = "fixed_rsvd",
         backend_reason = NA_character_,
         engine = "native_metal_mps",
         precision = fit$precision,
@@ -303,16 +310,29 @@ fastembedr_metal_tsvd_pca <- function(data,
     out
 }
 
-fastembedr_cuda_tsvd_pca <- function(data,
-                                        ncomp,
-                                        center = TRUE,
-                                        scale = FALSE,
-                                        seed = 4L) {
+fastembedr_metal_tsvd_pca <- fastembedr_metal_rsvd_pca
+
+fastembedr_cuda_pca <- function(data,
+                                ncomp,
+                                center = TRUE,
+                                scale = FALSE,
+                                seed = 4L,
+                                method = c("auto", "rsvd", "tsvd")) {
+    method <- match.arg(method)
+    dimensions <- fastembedr_matrix_dimensions(data)
+    tuning <- fastembedr_rsvd_tuning(
+        dimensions[[1L]], dimensions[[2L]], as.integer(ncomp), "cuda"
+    )
+    method_code <- match(method, c("auto", "rsvd", "tsvd")) - 1L
     fit <- pca_tsvd_cuda_cpp(
         data,
         as.integer(ncomp),
         isTRUE(center),
-        isTRUE(scale)
+        isTRUE(scale),
+        as.integer(seed),
+        as.integer(method_code),
+        tuning$oversample,
+        tuning$power
     )
     colnames(fit$scores) <- paste0("PC", seq_len(ncol(fit$scores)))
     colnames(fit$loadings) <- paste0("PC", seq_len(ncol(fit$loadings)))
@@ -325,8 +345,13 @@ fastembedr_cuda_tsvd_pca <- function(data,
         ncomp = as.integer(ncol(fit$scores)),
         method = fit$method,
         backend = fit$backend,
+        selection = fit$selection,
         backend_reason = NA_character_,
-        engine = "native_cuda_raft",
+        engine = if (identical(fit$method, "rsvd")) {
+            "native_cuda_rsvd"
+        } else {
+            "native_cuda_raft"
+        },
         precision = fit$precision,
         oversample = fit$oversample,
         power = fit$power,
@@ -336,6 +361,8 @@ fastembedr_cuda_tsvd_pca <- function(data,
     class(out) <- "fastEmbedR_pca"
     out
 }
+
+fastembedr_cuda_tsvd_pca <- fastembedr_cuda_pca
 
 attach_opentsne_pca_init <- function(fit, requested) {
     if (!is.logical(requested) || length(requested) != 1L || is.na(requested)) {
@@ -535,7 +562,7 @@ prepare_cpu_pca_input <- function(data, ncomp) {
         }
         x
     }
-    dimensions <- dim(x)
+    dimensions <- fastembedr_matrix_dimensions(x)
     if (length(dimensions) != 2L || dimensions[[1L]] < 2L ||
         dimensions[[2L]] < 1L) {
         stop("`data` must have at least two rows and one column.",
@@ -634,8 +661,8 @@ run_pca_backend <- function(x, ncomp, center, scale, backend,
     )
     fun <- switch(backend,
         cpu = fastembedr_cpu_rsvd_pca,
-        metal = fastembedr_metal_tsvd_pca,
-        cuda = fastembedr_cuda_tsvd_pca
+        metal = fastembedr_metal_rsvd_pca,
+        cuda = fastembedr_cuda_pca
     )
     if (backend == "cpu") {
         args$n.cores <- n_threads
@@ -666,12 +693,13 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #'
 #' `pca()` computes principal component scores with a backend-native truncated
 #' decomposition. CPU uses a package-native float32 blocked randomized SVD
-#' (RSVD). Metal uses a package-native float32 block-subspace TSVD whose large
-#' matrix products are executed with Metal Performance Shaders while data and
-#' work buffers remain resident in unified GPU memory. CUDA uses native RAPIDS
-#' RAFT TSVD with float32 input, score, and loading buffers. CUDA requests fail
-#' explicitly when RAFT TSVD support is unavailable; they never fall back to
-#' CPU PCA.
+#' (rSVD). Metal uses a package-native float32 block-subspace rSVD whose large
+#' matrix products are executed with Metal Performance Shaders. CUDA selects
+#' between package-native float32 rSVD and RAPIDS RAFT TSVD from the matrix
+#' shape, requested rank, and estimated arithmetic cost. Wide, low-rank
+#' problems favor rSVD; smaller, narrower, or less-truncated problems favor
+#' TSVD. CUDA requests fail explicitly when the required native support is
+#' unavailable; they never fall back to CPU PCA.
 #'
 #' CPU matrix products and factorizations use the BLAS/LAPACK linked to R.
 #' Set `n.cores` to control their CPU core limit. The requested value is
@@ -696,8 +724,8 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #'   BLAS/OpenMP numerical kernels when `backend = "cpu"` and is ignored by
 #'   Metal and CUDA.
 #' @param seed Random seed for backends that use a Gaussian subspace sketch.
-#'   The native RAFT covariance-eigensolver route records this value for
-#'   provenance but does not consume random numbers.
+#'   The RAFT covariance-eigensolver route records this value but does not
+#'   consume random numbers.
 #' @param tsne_init If `TRUE`, add `tsne_init` to the returned PCA
 #'   object. This matrix is centered and rescaled so its largest component
 #'   standard deviation is `1e-4`, ready to pass as `Y_init` to [tsne()]
@@ -754,11 +782,11 @@ pca <- function(x,
 fastembedr_rsvd_tuning <- function(n, p, rank, backend) {
     backend <- if (is.null(backend)) "cpu" else backend
     if (identical(backend, "cuda")) {
-        oversample <- if (n * p >= 5e6) 16L else 10L
-        power <- if (rank <= 20L || p <= 128L) 2L else 1L
+        oversample <- 16L
+        power <- 2L
     } else if (identical(backend, "metal")) {
         oversample <- if (n * p >= 5e6) 16L else 10L
-        power <- if (rank <= 30L) 1L else 0L
+        power <- if (rank <= 20L) 1L else 2L
     } else {
         oversample <- 20L
         power <- if (rank <= 20L) 1L else 2L

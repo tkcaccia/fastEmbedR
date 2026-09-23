@@ -477,8 +477,8 @@ prepare_tsne_matrix_init <- function(x, knn_input, settings, n) {
         if (nrow(cuda_data) != n) {
             stop("`init_data` must have one row per input row.", call. = FALSE)
         }
-        info$method <- "pca_cuda_raft_tsvd_pca_device"
-        info$backend <- "cuda_raft_tsvd_device"
+        info$method <- "pca_cuda_auto_device"
+        info$backend <- "cuda_native_pca_device"
         return(list(Y_init = NULL, info = info, cuda_data = cuda_data))
     }
     init_backend <- if (settings$backend %in% c("metal", "cuda")) {

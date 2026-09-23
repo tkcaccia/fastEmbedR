@@ -110,6 +110,24 @@
       "notice_file": "inst/NOTICE"
     },
     {
+      "id": "fastpls-rsvd",
+      "name": "fastPLS CUDA resident rSVD",
+      "classification": "adapted_source",
+      "repository": "https://github.com/tkcaccia/fastPLS",
+      "revision": "82bbc48a0d69e4bd0d7c261fdcc8e636694133b1",
+      "version": null,
+      "license_spdx": "MIT",
+      "copyright": "Stefano Cacciatore",
+      "redistributed_source": false,
+      "redistributed_binary": false,
+      "linked": false,
+      "linkage": "The float32 resident CUDA rSVD workspace was adapted; the fastPLS R package is not imported, linked, or called.",
+      "package_files": ["src/pca_cuda_rsvd.cuh"],
+      "upstream_files": ["src/cuda_resident_rsvd.cuh"],
+      "license_file": "inst/LICENSES/FASTPLS-LICENSE",
+      "notice_file": "inst/NOTICE"
+    },
+    {
       "id": "applesiliconfft",
       "name": "AppleSiliconFFT",
       "classification": "adapted_source",

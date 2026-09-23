@@ -168,3 +168,54 @@ test_that("CUDA PCA preserves float32 input and never falls back", {
     expect_equal(prepared$preprocess$pca_backend, "cuda_raft_tsvd")
     expect_s4_class(prepared$data, "float32")
 })
+
+test_that("CUDA PCA selects rSVD for wide low-rank input", {
+    if (!isTRUE(fastEmbedR:::embedding_cuda_available_cpp())) {
+        skip("CUDA embedding backend is not available in this build.")
+    }
+
+    set.seed(73)
+    left <- matrix(rnorm(320L * 5L), nrow = 320L)
+    right <- matrix(rnorm(1536L * 5L), nrow = 1536L)
+    x <- left %*% t(right)
+    x <- x + matrix(rnorm(length(x), sd = 0.01), nrow = nrow(x))
+
+    fit <- fastEmbedR:::fastembedr_cuda_pca(
+        x, ncomp = 2L, seed = 73L, method = "auto"
+    )
+    reference <- fastEmbedR:::fastembedr_cuda_pca(
+        x, ncomp = 2L, seed = 73L, method = "tsvd"
+    )
+    repeated <- fastEmbedR:::fastembedr_cuda_pca(
+        x, ncomp = 2L, seed = 73L, method = "rsvd"
+    )
+
+    expect_identical(fit$backend, "cuda_native_rsvd")
+    expect_identical(fit$method, "rsvd")
+    expect_identical(fit$selection, "auto")
+    expect_equal(fit$scores, repeated$scores, tolerance = 1e-6)
+    agreement <- svd(
+        crossprod(qr.Q(qr(fit$loadings)), qr.Q(qr(reference$loadings))),
+        nu = 0L,
+        nv = 0L
+    )$d
+    expect_gte(min(agreement), 0.995)
+
+    embedding <- fastEmbedR::tsne(
+        x,
+        perplexity = 5,
+        backend = "cuda",
+        seed = 73L,
+        early_exaggeration_iter = 1L,
+        n_iter = 2L,
+        auto_config = FALSE
+    )
+    expect_identical(
+        embedding$parameters$initialization,
+        "pca_cuda_native_rsvd_device"
+    )
+    expect_identical(
+        embedding$parameters$initialization_requested,
+        "pca_cuda_auto_device"
+    )
+})

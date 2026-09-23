@@ -69,14 +69,16 @@ and Thrust. `FASTEMBEDR_CUDA_CPPFLAGS` and `FASTEMBEDR_CUDA_FLAGS` are applied
 consistently to compile/link probes and package CUDA translation units.
 
 Detection is not based on the presence of `nvcc` alone. Configure compiles and
-links a C++17 CUDA program that references the CUDA runtime, cuFFT, cuBLAS, and
-cuSOLVER, and verifies CUB and Thrust headers. It separately compiles and links
+links a C++17 CUDA program that references the CUDA runtime, cuFFT, cuBLAS,
+cuSOLVER, and cuRAND, and verifies CUB and Thrust headers. It separately compiles and links
 a cuVS program against `libcuvs_c` and `libcuvs`.
 
 The package's core CUDA KNN routes use cuVS brute force and IVF-Flat. FAISS GPU
 is optional and disabled by default. If explicitly enabled, its headers and
 library must pass an additional compile/link test. RAFT TSVD is likewise
-optional and receives its own NVCC compile/link test when requested.
+optional and receives its own NVCC compile/link test when requested. In a
+RAFT-enabled build, CUDA PCA automatically selects package-native rSVD or RAFT
+TSVD from matrix shape and requested rank.
 
 ## Compiler selection
 
@@ -111,7 +113,7 @@ R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 Strict mode fails configuration when native CUDA or cuVS cannot be built.
 `FASTEMBEDR_REQUIRE_CUDA=1` is an equivalent package-specific spelling.
 
-Optional RAFT TSVD:
+Optional automatic CUDA rSVD/RAFT TSVD PCA:
 
 ```sh
 FASTEMBEDR_USE_RAFT=1 \

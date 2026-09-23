@@ -242,8 +242,8 @@ test_that(paste(
         backend = "metal"
     )
     expect_equal(dim(metal_pca$data), c(60L, 4L))
-    expect_equal(metal_pca$preprocess$pca_backend, "metal_mps_tsvd")
-    expect_equal(metal_pca$preprocess$pca_method, "metal_mps_tsvd")
+    expect_equal(metal_pca$preprocess$pca_backend, "metal_mps_rsvd")
+    expect_equal(metal_pca$preprocess$pca_method, "rsvd")
 
     reference_layout <- cbind(rnorm(8L), rnorm(8L))
     projection_indices <- matrix(
@@ -393,7 +393,7 @@ test_that(paste(
     expect_equal(metal_sil, cpu_sil, tolerance = 1e-5)
 })
 
-test_that("native Metal MPS TSVD matches reference PCA", {
+test_that("native Metal MPS rSVD matches reference PCA", {
     skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
 
     set.seed(72)
@@ -409,8 +409,8 @@ test_that("native Metal MPS TSVD matches reference PCA", {
     )
 
     expect_s3_class(fit, "fastEmbedR_pca")
-    expect_identical(fit$backend, "metal_mps_tsvd")
-    expect_identical(fit$method, "metal_mps_tsvd")
+    expect_identical(fit$backend, "metal_mps_rsvd")
+    expect_identical(fit$method, "rsvd")
     expect_identical(fit$precision, "float32")
     expect_equal(dim(fit$scores), c(240L, 2L))
     expect_equal(dim(fit$loadings), c(20L, 2L))
@@ -498,7 +498,7 @@ test_that("native Metal MPS TSVD matches reference PCA", {
         backend = "metal",
         seed = 72L
     )
-    expect_identical(attr(init, "fastEmbedR_init_backend"), "metal_mps_tsvd")
-    expect_identical(attr(init, "fastEmbedR_init_method"), "pca_metal_mps_tsvd")
+    expect_identical(attr(init, "fastEmbedR_init_backend"), "metal_mps_rsvd")
+    expect_identical(attr(init, "fastEmbedR_init_method"), "pca_rsvd")
     expect_equal(max(apply(init, 2L, stats::sd)), 1e-4, tolerance = 1e-8)
 })

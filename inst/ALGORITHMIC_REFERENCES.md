@@ -413,12 +413,9 @@ Implemented locations:
 - RAFT repository: <https://github.com/rapidsai/raft>
 - License: Apache-2.0
 - Current use in `fastEmbedR`: optional CUDA builds link directly to the cuVS
-  C API for exact and IVF-Flat KNN. cuVS and RAFT TSVD material were
-  studied as design references for GPU-resident KNN, decomposition, graph, and
-  optimizer pipelines. The native Metal TSVD transfers the resident-workspace
-  and block-subspace organization, not RAPIDS source code. fastEmbedR does not
-  vendor RAPIDS source or call cuML UMAP/openTSNE at runtime. The package does
-  not link cuML; CUDA PCA uses RAFT TSVD directly.
+  C API for exact and IVF-Flat KNN. RAFT TSVD is used as one branch of the
+  automatic CUDA PCA selector. fastEmbedR does not vendor RAPIDS source or call
+  cuML UMAP/t-SNE at runtime. The package does not link cuML.
 
 Implemented locations:
 
@@ -448,7 +445,7 @@ Implemented locations:
 ## Apple Metal Performance Shaders Matrix
 
 - Documentation: <https://developer.apple.com/documentation/metalperformanceshaders/matrices_and_vectors>
-- Current use in `fastEmbedR`: package-native float32 block-subspace TSVD for
+- Current use in `fastEmbedR`: package-native float32 block-subspace rSVD for
   Metal PCA and t-SNE initialization. MPS matrix multiplication executes the
   large forward/back projections while buffers remain resident in Apple unified
   memory. A package-native float32 Jacobi eigensolver handles only the small
@@ -456,7 +453,7 @@ Implemented locations:
 
 Implemented location:
 
-- `src/embedding_metal_impl.mm::run_tsvd_pca_metal`
+- `src/embedding_metal_impl.mm::run_rsvd_pca_metal`
 
 ## Apple MPSGraph
 

@@ -80,7 +80,20 @@ Adapted or vendored source
              device matrices through the optional cuVS C API.
    License copy: LICENSES/DLPACK-LICENSE
 
-5. AppleSiliconFFT
+5. fastPLS
+
+   Repository: https://github.com/tkcaccia/fastPLS
+   Commit: 82bbc48a0d69e4bd0d7c261fdcc8e636694133b1
+   License: MIT
+   Copyright: Stefano Cacciatore
+   Package file: src/pca_cuda_rsvd.cuh
+   Upstream file: src/cuda_resident_rsvd.cuh
+   Boundary: the resident CUDA rSVD workspace was adapted and reduced to the
+             float32 dense PCA decomposition required by fastEmbedR. The
+             fastPLS R package is not imported, linked, or called.
+   License copy: LICENSES/FASTPLS-LICENSE
+
+6. AppleSiliconFFT
 
    Repository: https://github.com/aminems/AppleSiliconFFT
    Commit: 5d0d51dbd983691ee99822ed74bc3f9a47136511

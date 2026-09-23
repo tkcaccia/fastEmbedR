@@ -30,6 +30,8 @@
 #include <cub/cub.cuh>
 #include <thrust/iterator/counting_iterator.h>
 
+#include "pca_cuda_rsvd.cuh"
+
 #ifdef FASTEMBEDR_HAS_RAFT
 #include <R_ext/Print.h>
 #define printf REprintf
@@ -1377,6 +1379,17 @@ __global__ void tsvd_scores_to_rowmajor_init_kernel(const float* scores,
   const std::size_t base = static_cast<std::size_t>(row) * 2u;
   values[base] = isfinite(x) ? x : 0.0f;
   values[base + 1u] = isfinite(y) ? y : 0.0f;
+}
+
+__global__ void scale_rsvd_scores_kernel(float* scores,
+                                         const float* singular_values,
+                                         int n,
+                                         int n_components) {
+  const int item = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  const int total = n * n_components;
+  if (item >= total) return;
+  const int component = item / n;
+  scores[item] *= singular_values[component];
 }
 
 __global__ void finalize_tsne_pca_init_stats_kernel(const double* partial,
@@ -3407,6 +3420,27 @@ int scale_tsne_pca_device_init(float* d_values,
   return check_cuda(cudaGetLastError(), "scale_tsne_pca_init_kernel launch");
 }
 
+int select_cuda_pca_decomposition(int requested_method,
+                                  int n,
+                                  int p,
+                                  int n_components,
+                                  int oversample,
+                                  int power) {
+  if (requested_method != 0) return requested_method;
+  const int rank_limit = std::min(n - 1, p);
+  const int sketch = std::min(
+    rank_limit, n_components + std::max(0, oversample)
+  );
+  const std::size_t matrix_items = static_cast<std::size_t>(n) * p;
+  const std::size_t pass_factor =
+    static_cast<std::size_t>(2 * std::max(0, power) + 2);
+  const std::size_t crossover = 12u * pass_factor * sketch;
+  const bool truncated = sketch < rank_limit;
+  const bool enough_work = matrix_items >= 250000u;
+  return truncated && enough_work &&
+    static_cast<std::size_t>(p) >= crossover ? 1 : 2;
+}
+
 #ifdef FASTEMBEDR_HAS_RAFT
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
@@ -3424,7 +3458,12 @@ int raft_tsvd_scores_to_device(const HostT* values,
                                float* host_components_out = nullptr,
                                float* host_singular_out = nullptr,
                                float* host_center_out = nullptr,
-                               float* host_scale_out = nullptr) {
+                               float* host_scale_out = nullptr,
+                               int requested_method = 0,
+                               unsigned int seed = 4u,
+                               int requested_oversample = 16,
+                               int requested_power = 2,
+                               int* selected_method_out = nullptr) {
   if (values == nullptr || d_scores_out == nullptr) {
     set_embedding_error("null pointer in RAFT TSVD device PCA initialization");
     return 1;
@@ -3531,10 +3570,6 @@ int raft_tsvd_scores_to_device(const HostT* values,
     }
 
     raft::handle_t handle;
-    raft::linalg::paramsTSVD params;
-    params.algorithm = raft::linalg::solver::COV_EIG_DQ;
-    params.tol = 0.0f;
-    params.n_iterations = 15;
 
     auto input_view = raft::make_device_matrix_view<float, std::size_t, raft::col_major>(
       d_input, static_cast<std::size_t>(n), static_cast<std::size_t>(p));
@@ -3549,16 +3584,63 @@ int raft_tsvd_scores_to_device(const HostT* values,
     auto singular_view = raft::make_device_vector_view<float, std::size_t>(
       d_singular, static_cast<std::size_t>(n_components));
 
-    raft::linalg::tsvd_fit_transform(
-      handle,
-      params,
-      input_view,
-      scores_view,
-      components_view,
-      explained_view,
-      explained_ratio_view,
-      singular_view,
-      true);
+    const int rank_limit = std::min(n - 1, p);
+    const int selected_method = select_cuda_pca_decomposition(
+      requested_method, n, p, n_components,
+      requested_oversample, requested_power
+    );
+    if (selected_method != 1 && selected_method != 2) {
+      cleanup();
+      set_embedding_error("invalid CUDA PCA decomposition selector");
+      return 1;
+    }
+    if (selected_method_out != nullptr) {
+      *selected_method_out = selected_method;
+    }
+
+    if (selected_method == 1) {
+      const int oversample = std::min(
+        rank_limit - n_components,
+        std::max(0, requested_oversample)
+      );
+      const int power = std::max(0, requested_power);
+      fastembedr_pca::RsvdWorkspace rsvd(
+        n, p, n_components, oversample, power,
+        raft::resource::get_cuda_stream(handle).value()
+      );
+      rsvd.solve(
+        d_input, static_cast<unsigned long long>(seed),
+        d_scores_out, d_components, d_singular
+      );
+      rsvd.synchronize_and_validate();
+      const int score_items = n * n_components;
+      scale_rsvd_scores_kernel<<<(score_items + 255) / 256, 256>>>(
+        d_scores_out, d_singular, n, n_components
+      );
+      if (check_cuda(
+            cudaGetLastError(),
+            "scale_rsvd_scores_kernel launch"
+          )) {
+        cleanup();
+        return 1;
+      }
+    } else {
+      raft::linalg::paramsTSVD params;
+      params.algorithm = raft::linalg::solver::COV_EIG_DQ;
+      params.tol = 0.0f;
+      params.n_iterations = 15;
+      raft::linalg::tsvd_fit_transform(
+        handle,
+        params,
+        input_view,
+        scores_view,
+        components_view,
+        explained_view,
+        explained_ratio_view,
+        singular_view,
+        true
+      );
+    }
 
     if (check_cuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize(raft_tsvd device init)")) {
       cleanup();
@@ -4199,7 +4281,12 @@ extern "C" int fastembedr_cuda_raft_tsvd_pca_fit(const float* values,
                                                   float* components,
                                                   float* singular_values,
                                                   float* center_values,
-                                                  float* scale_values) {
+                                                  float* scale_values,
+                                                  int requested_method,
+                                                  unsigned int seed,
+                                                  int oversample,
+                                                  int power,
+                                                  int* selected_method) {
   embedding_last_error.clear();
 #ifndef FASTEMBEDR_HAS_RAFT
   set_embedding_error("fastEmbedR was not built with RAPIDS RAFT TSVD support.");
@@ -4248,7 +4335,12 @@ extern "C" int fastembedr_cuda_raft_tsvd_pca_fit(const float* values,
           components,
           singular_values,
           center_values,
-          scale_values
+          scale_values,
+          requested_method,
+          seed,
+          oversample,
+          power,
+          selected_method
         )) {
       return 1;
     }

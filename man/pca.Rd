@@ -37,8 +37,8 @@ BLAS/OpenMP numerical kernels when \code{backend = "cpu"} and is ignored by
 Metal and CUDA.}
 
 \item{seed}{Random seed for backends that use a Gaussian subspace sketch.
-The native RAFT covariance-eigensolver route records this value for
-provenance but does not consume random numbers.}
+The RAFT covariance-eigensolver route records this value but does not
+consume random numbers.}
 
 \item{tsne_init}{If \code{TRUE}, add \code{tsne_init} to the returned PCA
 object. This matrix is centered and rescaled so its largest component
@@ -58,12 +58,13 @@ float32. CPU results also record \code{n.cores_requested},
 \description{
 \code{pca()} computes principal component scores with a backend-native truncated
 decomposition. CPU uses a package-native float32 blocked randomized SVD
-(RSVD). Metal uses a package-native float32 block-subspace TSVD whose large
-matrix products are executed with Metal Performance Shaders while data and
-work buffers remain resident in unified GPU memory. CUDA uses native RAPIDS
-RAFT TSVD with float32 input, score, and loading buffers. CUDA requests fail
-explicitly when RAFT TSVD support is unavailable; they never fall back to
-CPU PCA.
+(rSVD). Metal uses a package-native float32 block-subspace rSVD whose large
+matrix products are executed with Metal Performance Shaders. CUDA selects
+between package-native float32 rSVD and RAPIDS RAFT TSVD from the matrix
+shape, requested rank, and estimated arithmetic cost. Wide, low-rank
+problems favor rSVD; smaller, narrower, or less-truncated problems favor
+TSVD. CUDA requests fail explicitly when the required native support is
+unavailable; they never fall back to CPU PCA.
 }
 \details{
 CPU matrix products and factorizations use the BLAS/LAPACK linked to R.

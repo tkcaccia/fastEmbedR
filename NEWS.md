@@ -13,6 +13,13 @@
 - Apply `FASTEMBEDR_CUDA_FLAGS` consistently to CUDA toolkit and RAPIDS RAFT
   configure probes as well as package translation units. This supports custom
   CCCL and CUDA toolchain include layouts without weakening strict detection.
+- Add native float32 CUDA rSVD adapted from the permissively licensed fastPLS
+  implementation. CUDA PCA and t-SNE initialization now select rSVD for
+  sufficiently wide, low-rank matrices and RAFT TSVD otherwise.
+- Use package-native float32 block-subspace rSVD for Metal PCA and t-SNE
+  initialization, with MPS matrix products and rank-aware power iterations.
+- Report the PCA method actually selected by GPU-resident CUDA t-SNE while
+  retaining the requested automatic policy as separate metadata.
 
 # fastEmbedR 0.99.17
 

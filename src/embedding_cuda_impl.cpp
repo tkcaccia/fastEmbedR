@@ -414,7 +414,12 @@ int fastembedr_cuda_raft_tsvd_pca_fit(const float* values,
                                       float* components,
                                       float* singular_values,
                                       float* center_values,
-                                      float* scale_values);
+                                      float* scale_values,
+                                      int requested_method,
+                                      unsigned int seed,
+                                      int oversample,
+                                      int power,
+                                      int* selected_method);
 }
 
 namespace {
@@ -1579,7 +1584,11 @@ NumericMatrix raft_tsvd_init_cuda_impl(NumericMatrix data,
 List pca_tsvd_cuda_impl(SEXP data,
                         int n_components,
                         bool center,
-                        bool scale) {
+                        bool scale,
+                        int seed,
+                        int requested_method,
+                        int oversample,
+                        int power) {
 #ifndef FASTEMBEDR_HAS_RAFT
   Rcpp::stop("fastEmbedR was not built with native RAPIDS RAFT TSVD support.");
 #else
@@ -1602,6 +1611,7 @@ List pca_tsvd_cuda_impl(SEXP data,
   std::vector<float> scale_values(p);
 
   const auto started = std::chrono::steady_clock::now();
+  int selected_method = 0;
   const int status = fastembedr_cuda_raft_tsvd_pca_fit(
     input.data(),
     n,
@@ -1613,10 +1623,15 @@ List pca_tsvd_cuda_impl(SEXP data,
     components.data(),
     singular_values.data(),
     center_values.data(),
-    scale_values.data()
+    scale_values.data(),
+    requested_method,
+    static_cast<unsigned int>(seed),
+    oversample,
+    power,
+    &selected_method
   );
   if (status != 0) {
-    Rcpp::stop("RAPIDS RAFT TSVD PCA failed: %s", cuda_embedding_error_message());
+    Rcpp::stop("Native CUDA PCA failed: %s", cuda_embedding_error_message());
   }
 
   std::vector<float> loadings(static_cast<std::size_t>(p) * n_components);
@@ -1624,10 +1639,12 @@ List pca_tsvd_cuda_impl(SEXP data,
     int pivot = 0;
     float largest = -1.0f;
     for (int row = 0; row < p; ++row) {
-      const float value = components[
+      const std::size_t source = selected_method == 1 ?
+        static_cast<std::size_t>(row) +
+          static_cast<std::size_t>(component) * p :
         static_cast<std::size_t>(component) +
-        static_cast<std::size_t>(row) * n_components
-      ];
+          static_cast<std::size_t>(row) * n_components;
+      const float value = components[source];
       loadings[
         static_cast<std::size_t>(row) +
         static_cast<std::size_t>(component) * p
@@ -1675,11 +1692,16 @@ List pca_tsvd_cuda_impl(SEXP data,
     Rcpp::Named("singular_values") = singular_out,
     Rcpp::Named("center") = center_out,
     Rcpp::Named("scale") = scale_out,
-    Rcpp::Named("backend") = "cuda_raft_tsvd",
-    Rcpp::Named("method") = "raft_tsvd",
+    Rcpp::Named("backend") = selected_method == 1 ?
+      "cuda_native_rsvd" : "cuda_raft_tsvd",
+    Rcpp::Named("method") = selected_method == 1 ?
+      "rsvd" : "raft_tsvd",
+    Rcpp::Named("selection") = requested_method == 0 ?
+      "auto" : "explicit",
     Rcpp::Named("precision") = "float32",
-    Rcpp::Named("oversample") = NA_INTEGER,
-    Rcpp::Named("power") = NA_INTEGER,
+    Rcpp::Named("oversample") = selected_method == 1 ?
+      oversample : NA_INTEGER,
+    Rcpp::Named("power") = selected_method == 1 ? power : NA_INTEGER,
     Rcpp::Named("timing") = NumericVector::create(
       Rcpp::Named("total") =
         std::chrono::duration<double>(finished - started).count()
@@ -2706,6 +2728,16 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
     result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);
     result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
   }
+  const int pca_rank_limit = use_device_pca ?
+    std::min(n - 1, pca_p) : 0;
+  const int pca_sketch = use_device_pca ?
+    std::min(pca_rank_limit, n_components + 16) : 0;
+  const std::size_t pca_crossover =
+    12u * 6u * static_cast<std::size_t>(pca_sketch);
+  const bool pca_selected_rsvd = use_device_pca &&
+    pca_sketch < pca_rank_limit &&
+    static_cast<std::size_t>(n) * pca_p >= 250000u &&
+    static_cast<std::size_t>(pca_p) >= pca_crossover;
   return List::create(
     Rcpp::Named("Y") = result,
     Rcpp::Named("costs") = NumericVector::create(),
@@ -2728,7 +2760,9 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
     Rcpp::Named("n_iter_actual") = n_iter,
     Rcpp::Named("max_iter_actual") = early_exaggeration_iter + n_iter,
     Rcpp::Named("initialization") = use_device_pca ?
-      "pca_cuda_raft_tsvd_pca_device" :
+      (pca_selected_rsvd ?
+        "pca_cuda_native_rsvd_device" :
+        "pca_cuda_raft_tsvd_device") :
       (init ? "host_supplied" : "cuda_random"),
     Rcpp::Named("init_residency") = use_device_pca ? "cuda_device" : (init ? "host_to_device" : "cuda_device"),
     Rcpp::Named("auto_kld_stop") = false,

@@ -61,7 +61,7 @@ ownership boundaries are:
 | --- | --- | --- | --- |
 | One-call KNN | Native float32 HNSW | Native exact or recall-tuned IVF-Flat | cuVS exact or IVF-Flat; optional FAISS GPU exact |
 | Reusable host KNN | plain `indices`/`distances` list | Same KNN-input API | Same host KNN-input API; one-call native KNN can remain device-resident |
-| PCA/t-SNE initialization | Native RSVD using BLAS-backed products | Float32 block-subspace TSVD using MPS matrix products | Native RAPIDS RAFT TSVD when compiled |
+| PCA/t-SNE initialization | Native rSVD using BLAS-backed products | Float32 block-subspace rSVD using MPS matrix products | Automatic native rSVD or RAPIDS RAFT TSVD |
 | t-SNE affinities | Native sparse C++ construction | Host construction followed by one graph upload | Native CUDA construction for resident one-call KNN |
 | UMAP graph | Native compact sparse graph | Prepared sparse graph uploaded once | Native CUDA construction for resident one-call KNN |
 | t-SNE optimization | Native C++ FFT-grid | Native Objective-C++/Metal FFT-grid | Native CUDA/cuFFT FFT-grid |
@@ -219,7 +219,8 @@ implementation rather than IRLBA:
   multiplication and a small CPU eigensolve of the projected Gram matrix.
   Float32 input is copied directly into unified Metal storage; a native Metal
   reduction validates, centers, and optionally scales every feature in place;
-- CUDA uses RAPIDS RAFT TSVD when that optional native backend is compiled.
+- CUDA selects package-native rSVD for sufficiently wide, low-rank matrices
+  and RAPIDS RAFT TSVD otherwise.
 
 Scores are centered and rescaled so the largest component standard deviation
 is `1e-4`. PCA timing is not included in the embedding-only results below;
@@ -232,9 +233,9 @@ no feature scaling, seed 4, and three repetitions:
 
 | Backend | Median PCA time, s | Precision | Engine |
 | --- | ---: | --- | --- |
-| CPU, 1 core, current warm path | 0.213 | float32 | Native blocked RSVD |
-| CPU, 4 cores, current warm path | 0.161 | float32 | Native blocked RSVD |
-| Metal, current warm path | 0.096 | float32 | Resident preprocessing plus MPS TSVD |
+| CPU, 1 core, current warm path | 0.213 | float32 | Native blocked rSVD |
+| CPU, 4 cores, current warm path | 0.161 | float32 | Native blocked rSVD |
+| Metal, current warm path | 0.096 | float32 | Resident preprocessing plus MPS rSVD |
 
 The current warm Metal path is 2.22 times faster than the one-core CPU path and
 1.68 times faster than the four-core CPU path in this float32 MNIST test. Its
@@ -247,7 +248,7 @@ constructing double R matrices and attaching float metadata. The 70,000 by 2
 score object occupies approximately 0.56 MB rather than the approximately
 1.12 MB double payload.
 
-Against the CPU RSVD reference, the current Metal loading subspace had minimum
+Against the CPU rSVD reference, the current Metal loading subspace had minimum
 canonical correlation 0.9980 (maximum principal angle 3.65 degrees), while
 pairwise distances between a deterministic sample of 2,000 score rows had
 Pearson correlation 0.9977. Three full t-SNE runs initialized by this path
@@ -258,11 +259,12 @@ inspection. The small-data test suite also compares Metal scores against
 `stats::prcomp()` and requires correlation of at least 0.99 for both
 components.
 
-The CUDA implementation is a distinct native RAFT TSVD path. In the accepted
-MNIST70k device-resident run, the complete CUDA initialization/preprocessing
-block required 0.279 seconds and produced a valid float32 initialization for
-the final t-SNE embedding. CUDA requests fail if RAFT TSVD is not compiled;
-they are not silently replaced by CPU PCA. The CPU/Metal comparison files are
+The CUDA implementation automatically selects a native float32 rSVD or RAFT
+TSVD path. The selector accounts for matrix size, width, target rank, sketch
+width, and estimated rSVD pass cost. It therefore avoids the large covariance
+cost for very wide, low-rank inputs while retaining TSVD for narrower or
+less-truncated problems. CUDA requests are not silently replaced by CPU PCA.
+The CPU/Metal comparison files are
 stored under `results/cpu_metal_optimization/pca_validation/`.
 
 ## Landmark Projection And Transform

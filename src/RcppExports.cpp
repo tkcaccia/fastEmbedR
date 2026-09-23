@@ -485,8 +485,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // pca_tsvd_cuda_cpp
-List pca_tsvd_cuda_cpp(SEXP data, int n_components, bool center, bool scale);
-RcppExport SEXP _fastEmbedR_pca_tsvd_cuda_cpp(SEXP dataSEXP, SEXP n_componentsSEXP, SEXP centerSEXP, SEXP scaleSEXP) {
+List pca_tsvd_cuda_cpp(SEXP data, int n_components, bool center, bool scale, int seed, int requested_method, int oversample, int power);
+RcppExport SEXP _fastEmbedR_pca_tsvd_cuda_cpp(SEXP dataSEXP, SEXP n_componentsSEXP, SEXP centerSEXP, SEXP scaleSEXP, SEXP seedSEXP, SEXP requested_methodSEXP, SEXP oversampleSEXP, SEXP powerSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -494,7 +494,11 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
     Rcpp::traits::input_parameter< bool >::type center(centerSEXP);
     Rcpp::traits::input_parameter< bool >::type scale(scaleSEXP);
-    rcpp_result_gen = Rcpp::wrap(pca_tsvd_cuda_cpp(data, n_components, center, scale));
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< int >::type requested_method(requested_methodSEXP);
+    Rcpp::traits::input_parameter< int >::type oversample(oversampleSEXP);
+    Rcpp::traits::input_parameter< int >::type power(powerSEXP);
+    rcpp_result_gen = Rcpp::wrap(pca_tsvd_cuda_cpp(data, n_components, center, scale, seed, requested_method, oversample, power));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -714,8 +718,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // pca_tsvd_metal_cpp
-List pca_tsvd_metal_cpp(SEXP data, int n_components, bool center, bool scale, int seed);
-RcppExport SEXP _fastEmbedR_pca_tsvd_metal_cpp(SEXP dataSEXP, SEXP n_componentsSEXP, SEXP centerSEXP, SEXP scaleSEXP, SEXP seedSEXP) {
+List pca_tsvd_metal_cpp(SEXP data, int n_components, bool center, bool scale, int seed, int oversample, int power);
+RcppExport SEXP _fastEmbedR_pca_tsvd_metal_cpp(SEXP dataSEXP, SEXP n_componentsSEXP, SEXP centerSEXP, SEXP scaleSEXP, SEXP seedSEXP, SEXP oversampleSEXP, SEXP powerSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -724,7 +728,9 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type center(centerSEXP);
     Rcpp::traits::input_parameter< bool >::type scale(scaleSEXP);
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
-    rcpp_result_gen = Rcpp::wrap(pca_tsvd_metal_cpp(data, n_components, center, scale, seed));
+    Rcpp::traits::input_parameter< int >::type oversample(oversampleSEXP);
+    Rcpp::traits::input_parameter< int >::type power(powerSEXP);
+    rcpp_result_gen = Rcpp::wrap(pca_tsvd_metal_cpp(data, n_components, center, scale, seed, oversample, power));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1870,7 +1876,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_silhouette_score_cuda_cpp", (DL_FUNC) &_fastEmbedR_silhouette_score_cuda_cpp, 3},
     {"_fastEmbedR_rsvd_multiply_cuda_cpp", (DL_FUNC) &_fastEmbedR_rsvd_multiply_cuda_cpp, 3},
     {"_fastEmbedR_raft_tsvd_init_cuda_cpp", (DL_FUNC) &_fastEmbedR_raft_tsvd_init_cuda_cpp, 2},
-    {"_fastEmbedR_pca_tsvd_cuda_cpp", (DL_FUNC) &_fastEmbedR_pca_tsvd_cuda_cpp, 4},
+    {"_fastEmbedR_pca_tsvd_cuda_cpp", (DL_FUNC) &_fastEmbedR_pca_tsvd_cuda_cpp, 8},
     {"_fastEmbedR_embedding_metal_available_cpp", (DL_FUNC) &_fastEmbedR_embedding_metal_available_cpp, 0},
     {"_fastEmbedR_spectral_knn_init_metal_cpp", (DL_FUNC) &_fastEmbedR_spectral_knn_init_metal_cpp, 5},
     {"_fastEmbedR_standardize_metal_cpp", (DL_FUNC) &_fastEmbedR_standardize_metal_cpp, 1},
@@ -1885,7 +1891,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_knn_embed_metal_csr_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_metal_csr_cpp, 12},
     {"_fastEmbedR_knn_umap_refine_rows_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_rows_metal_cpp, 10},
     {"_fastEmbedR_rsvd_multiply_metal_cpp", (DL_FUNC) &_fastEmbedR_rsvd_multiply_metal_cpp, 3},
-    {"_fastEmbedR_pca_tsvd_metal_cpp", (DL_FUNC) &_fastEmbedR_pca_tsvd_metal_cpp, 5},
+    {"_fastEmbedR_pca_tsvd_metal_cpp", (DL_FUNC) &_fastEmbedR_pca_tsvd_metal_cpp, 7},
     {"_fastEmbedR_transform_tsne_metal_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_metal_cpp, 19},
     {"_fastEmbedR_knn_tsne_opentsne_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_metal_cpp, 21},
     {"_fastEmbedR_pca_rsvd_cpu_cpp", (DL_FUNC) &_fastEmbedR_pca_rsvd_cpu_cpp, 7},

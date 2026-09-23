@@ -113,8 +113,8 @@ prepare_opentsne_initialization <- function(
         !is.null(cuda_init_data)) {
         return(list(
             Y_init = NULL,
-            method = "pca_cuda_raft_tsvd_pca_device",
-            backend = "cuda_raft_tsvd_device",
+            method = "pca_cuda_auto_device",
+            backend = "cuda_native_pca_device",
             spectral_n_iter = NA_integer_
         ))
     }
@@ -353,7 +353,8 @@ opentsne_result_controls <- function(
         final_momentum = args$final_momentum,
         min_gain = controls$min_gain,
         max_step_norm = controls$max_step_norm,
-        initialization = init_info$method,
+        initialization = out$initialization %||% init_info$method,
+        initialization_requested = init_info$method,
         initialization_spectral_n_iter = init_info$spectral_n_iter,
         negative_gradient_method = negative_gradient_method
     )

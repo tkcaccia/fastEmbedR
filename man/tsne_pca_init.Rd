@@ -43,13 +43,13 @@ returned as \code{float::float32} when the selected PCA backend preserves it.
 \code{\link[=tsne]{tsne()}} and \code{\link[=tsne_knn]{tsne_knn()}}. Supplying \code{cache_file} stores the result
 as an RDS file; later calls with the same path reuse the saved matrix instead
 of recomputing PCA. This is useful when comparing several KNN backends with
-exactly the same initialization. For \code{backend = "cuda"}, fastEmbedR requires
-native RAPIDS RAFT TSVD support compiled into the CUDA backend and fails
-loudly if that backend is unavailable. Metal uses fastEmbedR's native
-float32 block-subspace TSVD with native Metal centering/scaling, Metal
-Performance Shaders matrix products, and one resident GPU workspace. CPU
-uses fastEmbedR's native float32 blocked RSVD implementation. The package
-does not call Python or \code{reticulate} for PCA initialization.
+exactly the same initialization. For \code{backend = "cuda"}, fastEmbedR selects
+its native float32 rSVD or RAPIDS RAFT TSVD according to matrix shape and
+target rank. Metal uses fastEmbedR's native float32 block-subspace rSVD with
+Metal centering/scaling and Metal Performance Shaders matrix products. CPU
+uses the native float32 blocked rSVD implementation. The package does not
+call Python or \code{reticulate} for PCA initialization, and unavailable
+accelerators fail explicitly.
 }
 \examples{
 init <- tsne_pca_init(as.matrix(iris[, 1:4]), seed = 1)

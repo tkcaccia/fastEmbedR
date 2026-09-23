@@ -16,7 +16,7 @@ annotate_opentsne_pca_init <- function(pca, n_components) {
 }
 
 make_metal_opentsne_pca_init <- function(x, n_components, seed) {
-    pca <- fastembedr_metal_tsvd_pca(
+    pca <- fastembedr_metal_rsvd_pca(
         x,
         ncomp = n_components, center = TRUE, scale = FALSE, seed = seed
     )
@@ -28,23 +28,23 @@ make_metal_opentsne_pca_init <- function(x, n_components, seed) {
 make_cuda_opentsne_pca_init <- function(x, n_components, seed) {
     if (!exists("pca_tsvd_cuda_cpp", mode = "function")) {
         stop(
-            "CUDA PCA initialization requires native RAPIDS RAFT TSVD ",
-            "support, but the package was not built with that backend.",
+            "CUDA PCA initialization requires a native CUDA PCA backend, ",
+            "but the package was not built with that capability.",
             call. = FALSE
         )
     }
-    result <- capture_error(fastembedr_cuda_tsvd_pca(
+    result <- capture_error(fastembedr_cuda_pca(
         x,
         ncomp = n_components, center = TRUE, scale = FALSE, seed = seed
     ))
     if (is.null(result$value)) {
         stop(
-            "CUDA PCA initialization failed in native RAPIDS RAFT TSVD: ",
+            "CUDA PCA initialization failed in the native CUDA backend: ",
             result$error,
             call. = FALSE
         )
     }
-    result$value$package <- "RAPIDS RAFT TSVD"
+    result$value$package <- "fastEmbedR native CUDA PCA"
     result$value$package_version <- NA_character_
     annotate_opentsne_pca_init(result$value, n_components)
 }
@@ -102,13 +102,13 @@ make_opentsne_pca_init <- function(
 #' [tsne()] and [tsne_knn()]. Supplying `cache_file` stores the result
 #' as an RDS file; later calls with the same path reuse the saved matrix instead
 #' of recomputing PCA. This is useful when comparing several KNN backends with
-#' exactly the same initialization. For `backend = "cuda"`, fastEmbedR requires
-#' native RAPIDS RAFT TSVD support compiled into the CUDA backend and fails
-#' loudly if that backend is unavailable. Metal uses fastEmbedR's native
-#' float32 block-subspace TSVD with native Metal centering/scaling, Metal
-#' Performance Shaders matrix products, and one resident GPU workspace. CPU
-#' uses fastEmbedR's native float32 blocked RSVD implementation. The package
-#' does not call Python or `reticulate` for PCA initialization.
+#' exactly the same initialization. For `backend = "cuda"`, fastEmbedR selects
+#' its native float32 rSVD or RAPIDS RAFT TSVD according to matrix shape and
+#' target rank. Metal uses fastEmbedR's native float32 block-subspace rSVD with
+#' Metal centering/scaling and Metal Performance Shaders matrix products. CPU
+#' uses the native float32 blocked rSVD implementation. The package does not
+#' call Python or `reticulate` for PCA initialization, and unavailable
+#' accelerators fail explicitly.
 #'
 #' @param data Numeric matrix/data frame or `float::float32` matrix with
 #'   observations in rows.

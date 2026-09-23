@@ -359,11 +359,13 @@ layout_tsne_fixed_init <- tsne(
 )
 ```
 
-CPU PCA uses the package-native float32 blocked RSVD path. Metal uses a native
-float32 block-subspace TSVD with Metal Performance Shaders matrix products.
-CUDA uses native RAPIDS RAFT TSVD when that support is compiled. No backend
-calls Python or `reticulate`. Float32 CUDA input is passed to RAFT without an
-intermediate R double matrix, and float32 scores and loadings are preserved.
+CPU PCA uses the package-native float32 blocked rSVD path. Metal uses a native
+float32 block-subspace rSVD with Metal Performance Shaders matrix products.
+CUDA automatically selects package-native rSVD for sufficiently wide,
+low-rank problems and RAPIDS RAFT TSVD for narrower or less-truncated
+problems. No backend calls Python or `reticulate`. Float32 CUDA input is
+consumed without an intermediate R double matrix, and float32 scores and
+loadings are preserved.
 
 # Reusing a nearest-neighbor graph
 

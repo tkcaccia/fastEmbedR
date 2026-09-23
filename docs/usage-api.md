@@ -202,13 +202,14 @@ layout <- tsne_knn(knn, Y_init = Y_init, perplexity = 30)
 ```
 
 The public `pca()` helper is intentionally simple: there is no `irlba` or
-ARPACK method menu and no Python bridge. For t-SNE initialization, CUDA uses
-native RAPIDS RAFT TSVD compiled into the package CUDA backend and fails loudly
-if that support is unavailable. Float32 CUDA input is passed to the native fit
-without materializing an R double matrix, and float32 scores/loadings are
-returned. Metal uses a native float32 block-subspace TSVD
-with MPS matrix products and a resident workspace. CPU uses fastEmbedR's native
-float32 blocked RSVD, with a seeded Gaussian sketch, quality-preserving
+ARPACK method menu and no Python bridge. For t-SNE initialization, CUDA
+automatically selects package-native rSVD or RAPIDS RAFT TSVD from matrix shape
+and requested rank and fails loudly if the required support is unavailable.
+Float32 CUDA input is passed to the native fit without materializing an R
+double matrix, and float32 scores/loadings are returned. Metal uses a native
+float32 block-subspace rSVD with MPS matrix products and a resident workspace.
+CPU uses fastEmbedR's native
+float32 blocked rSVD, with a seeded Gaussian sketch, quality-preserving
 oversampling, and one or two subspace iterations according to requested rank.
 
 For `backend = "cpu"`, `n.cores` is a positive integer that temporarily

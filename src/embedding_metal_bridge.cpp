@@ -86,7 +86,9 @@ List pca_tsvd_metal_impl(SEXP data,
                          int n_components,
                          bool center,
                          bool scale,
-                         int seed);
+                         int seed,
+                         int oversample,
+                         int power);
 List transform_tsne_metal_impl(NumericMatrix reference_layout,
                                IntegerMatrix indices,
                                NumericMatrix distances,
@@ -315,8 +317,12 @@ List pca_tsvd_metal_cpp(SEXP data,
                         int n_components,
                         bool center = true,
                         bool scale = false,
-                        int seed = 4) {
-  return pca_tsvd_metal_impl(data, n_components, center, scale, seed);
+                        int seed = 4,
+                        int oversample = 16,
+                        int power = 1) {
+  return pca_tsvd_metal_impl(
+    data, n_components, center, scale, seed, oversample, power
+  );
 }
 
 // [[Rcpp::export]]

@@ -321,6 +321,8 @@ if [ "$use_cuda" != "0" ] && [ -n "$nvcc" ] && \
     "$cuda_library_dirs" cublas 2>/dev/null || true)
   cusolver_libdir=$(find_library_dir \
     "$cuda_library_dirs" cusolver 2>/dev/null || true)
+  curand_libdir=$(find_library_dir \
+    "$cuda_library_dirs" curand 2>/dev/null || true)
 
   missing_cuda=""
   [ -n "$cuda_header_dir" ] || missing_cuda="$missing_cuda cuda_runtime.h"
@@ -331,6 +333,7 @@ if [ "$use_cuda" != "0" ] && [ -n "$nvcc" ] && \
   [ -n "$cufft_libdir" ] || missing_cuda="$missing_cuda libcufft"
   [ -n "$cublas_libdir" ] || missing_cuda="$missing_cuda libcublas"
   [ -n "$cusolver_libdir" ] || missing_cuda="$missing_cuda libcusolver"
+  [ -n "$curand_libdir" ] || missing_cuda="$missing_cuda libcurand"
 
   cuda_toolkit_include_flags=$(include_flags_from_dirs "$cuda_include_dirs")
   cuda_lib_flags=$(library_flags_from_dirs "$cuda_library_dirs")
@@ -346,6 +349,7 @@ if [ "$use_cuda" != "0" ] && [ -n "$nvcc" ] && \
 #include <cublas_v2.h>
 #include <cub/cub.cuh>
 #include <cufft.h>
+#include <curand.h>
 #include <cusolverDn.h>
 #include <thrust/iterator/counting_iterator.h>
 
@@ -354,10 +358,12 @@ int main() {
     reinterpret_cast<const void*>(&cudaRuntimeGetVersion),
     reinterpret_cast<const void*>(&cublasCreate_v2),
     reinterpret_cast<const void*>(&cufftPlan1d),
+    reinterpret_cast<const void*>(&curandCreateGenerator),
     reinterpret_cast<const void*>(&cusolverDnCreate)
   };
   return symbols[0] == nullptr || symbols[1] == nullptr ||
-    symbols[2] == nullptr || symbols[3] == nullptr;
+    symbols[2] == nullptr || symbols[3] == nullptr ||
+    symbols[4] == nullptr;
 }
 EOF_CUDA
 
@@ -370,7 +376,7 @@ EOF_CUDA
        $cuda_extra_flags \
        $cuda_toolkit_include_flags \
        "$configure_tmp/cuda-link.cu" \
-       $cuda_lib_flags -lcudart -lcufft -lcublas -lcusolver \
+       $cuda_lib_flags -lcudart -lcufft -lcublas -lcusolver -lcurand \
        -o "$configure_tmp/cuda-link" \
        > "$configure_tmp/cuda-link.log" 2>&1; then
       cuda_probe_ok=1
@@ -423,7 +429,7 @@ if [ "$cuda_probe_ok" = "1" ]; then
   cppflags="$cppflags -DFASTEMBEDR_HAS_CUDA"
   cppflags="$cppflags $cuda_cpp_flags $cuda_include_flags"
   libs="$libs $cuda_lib_flags $cuda_rpath_flags"
-  libs="$libs -lcudart -lcufft -lcublas -lcusolver"
+  libs="$libs -lcudart -lcufft -lcublas -lcusolver -lcurand"
 
   faiss_home=${FAISS_HOME:-${RAPIDS_HOME:-${CONDA_PREFIX:-}}}
   if [ "$use_faiss_gpu" = "1" ] || \

@@ -33,6 +33,7 @@ URL: https://github.com/tkcaccia/fastEmbedR,
 BugReports: https://github.com/tkcaccia/fastEmbedR/issues
 Encoding: UTF-8
 Imports:
+    methods,
     Rcpp,
     withr
 Suggests:
@@ -49,9 +50,9 @@ SystemRequirements: C++17; optional Metal backend: Apple Silicon with macOS
     14 or later and Xcode 15 or later; the required Foundation, Accelerate,
     Metal, Metal Performance Shaders, and Metal Performance Shaders Graph
     frameworks are supplied by the Apple SDK; optional CUDA backend: CUDA
-    Toolkit with cuFFT, cuBLAS, cuSOLVER, and CUB/Thrust (CCCL), plus RAPIDS
+    Toolkit with cuFFT, cuBLAS, cuSOLVER, cuRAND, and CUB/Thrust (CCCL), plus RAPIDS
     cuVS for CUDA nearest-neighbor search; optional FAISS GPU exact search;
-    optional RAPIDS RAFT and RMM when CUDA TSVD initialization is enabled.
+    optional RAPIDS RAFT and RMM for the CUDA PCA selector's TSVD route.
 VignetteBuilder: knitr
 Roxygen: list(markdown = TRUE)
 Config/roxygen2/version: 8.1.0

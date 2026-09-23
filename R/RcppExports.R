@@ -101,8 +101,8 @@ raft_tsvd_init_cuda_cpp <- function(data, n_components) {
     .Call(`_fastEmbedR_raft_tsvd_init_cuda_cpp`, data, n_components)
 }
 
-pca_tsvd_cuda_cpp <- function(data, n_components, center, scale) {
-    .Call(`_fastEmbedR_pca_tsvd_cuda_cpp`, data, n_components, center, scale)
+pca_tsvd_cuda_cpp <- function(data, n_components, center, scale, seed, requested_method, oversample, power) {
+    .Call(`_fastEmbedR_pca_tsvd_cuda_cpp`, data, n_components, center, scale, seed, requested_method, oversample, power)
 }
 
 embedding_metal_available_cpp <- function() {
@@ -161,8 +161,8 @@ rsvd_multiply_metal_cpp <- function(left, right, transpose_left) {
     .Call(`_fastEmbedR_rsvd_multiply_metal_cpp`, left, right, transpose_left)
 }
 
-pca_tsvd_metal_cpp <- function(data, n_components, center = TRUE, scale = FALSE, seed = 4L) {
-    .Call(`_fastEmbedR_pca_tsvd_metal_cpp`, data, n_components, center, scale, seed)
+pca_tsvd_metal_cpp <- function(data, n_components, center = TRUE, scale = FALSE, seed = 4L, oversample = 16L, power = 1L) {
+    .Call(`_fastEmbedR_pca_tsvd_metal_cpp`, data, n_components, center, scale, seed, oversample, power)
 }
 
 transform_tsne_metal_cpp <- function(reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, seed) {
@@ -428,7 +428,6 @@ knn_tsne_opentsne_float_cpp <- function(indices, distances, y_init, init, n_comp
 transform_tsne_cpp <- function(reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, n_threads, seed, verbose) {
     .Call(`_fastEmbedR_transform_tsne_cpp`, reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, n_threads, seed, verbose)
 }
-
 fastembedr_walktrap_cpp <- function(from, to, weight, n_vertices, steps = 4L) {
     .Call(`_fastEmbedR_fastembedr_walktrap_cpp`, from, to, weight, n_vertices, steps)
 }

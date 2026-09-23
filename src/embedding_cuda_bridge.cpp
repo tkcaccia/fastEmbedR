@@ -224,7 +224,11 @@ NumericMatrix raft_tsvd_init_cuda_impl(NumericMatrix data,
 List pca_tsvd_cuda_impl(SEXP data,
                         int n_components,
                         bool center,
-                        bool scale);
+                        bool scale,
+                        int seed,
+                        int requested_method,
+                        int oversample,
+                        int power);
 
 // [[Rcpp::export]]
 List fastembedr_build_config_cpp() {
@@ -762,6 +766,13 @@ NumericMatrix raft_tsvd_init_cuda_cpp(NumericMatrix data,
 List pca_tsvd_cuda_cpp(SEXP data,
                        int n_components,
                        bool center,
-                       bool scale) {
-  return pca_tsvd_cuda_impl(data, n_components, center, scale);
+                       bool scale,
+                       int seed,
+                       int requested_method,
+                       int oversample,
+                       int power) {
+  return pca_tsvd_cuda_impl(
+    data, n_components, center, scale, seed,
+    requested_method, oversample, power
+  );
 }

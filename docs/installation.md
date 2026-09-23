@@ -47,13 +47,14 @@ for the toolkit/runtime used in that environment.
 
 Core CUDA embedding requires:
 
-- the CUDA runtime, cuFFT, cuBLAS, and cuSOLVER;
+- the CUDA runtime, cuFFT, cuBLAS, cuSOLVER, and cuRAND;
 - CUB and Thrust headers from CUDA Core Compute Libraries (CCCL);
 - RAPIDS cuVS C and C++ libraries for exact and IVF-Flat KNN.
 
 FAISS GPU is not required. It is an optional exact-search provider enabled only
-with `FASTEMBEDR_USE_FAISS_GPU=1`. RAFT/RMM are optional and needed only for the
-CUDA truncated singular-value decomposition (TSVD) PCA route.
+with `FASTEMBEDR_USE_FAISS_GPU=1`. RAFT/RMM provide the TSVD branch of the
+automatic CUDA PCA selector. The package-native CUDA rSVD branch additionally
+uses cuRAND.
 
 ## Strict CUDA installation
 
@@ -80,7 +81,7 @@ R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 CUDA test and a cuVS test during configuration. Installation fails if either
 test fails; it cannot produce a CPU fallback build.
 
-To enable CUDA TSVD PCA, also set:
+To enable automatic CUDA rSVD/TSVD PCA, also set:
 
 ```sh
 export RAFT_HOME=/opt/rapids

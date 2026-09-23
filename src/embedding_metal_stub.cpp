@@ -128,8 +128,10 @@ List pca_tsvd_metal_impl(SEXP,
                          int,
                          bool,
                          bool,
+                         int,
+                         int,
                          int) {
-  Rcpp::stop("Metal TSVD PCA is only available on macOS with Metal support.");
+  Rcpp::stop("Metal rSVD PCA is only available on macOS with Metal support.");
 }
 
 List transform_tsne_metal_impl(NumericMatrix,

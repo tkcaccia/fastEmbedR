@@ -32,10 +32,12 @@ The public package surface is deliberately small:
 - `tsne()` and `umap()` select native CPU/Metal KNN or direct cuVS CUDA KNN and
   then call the corresponding KNN entry point.
 - `pca()` computes backend-native truncated PCA scores and loadings. CPU uses
-  fastEmbedR's native blocked RSVD implementation, Metal uses a resident
-  float32 MPS TSVD path, and CUDA uses native RAPIDS RAFT TSVD. Float32 CUDA
-  input is passed to the native fit without an intermediate R double matrix;
-  unavailable RAFT support is an explicit error rather than a CPU fallback.
+  fastEmbedR's native blocked rSVD implementation, Metal uses a resident
+  float32 MPS block-subspace rSVD, and CUDA selects package-native rSVD or
+  RAPIDS RAFT TSVD from matrix shape and requested rank. Float32 CUDA input is
+  passed to the native fit without an intermediate R double matrix;
+  unavailable required CUDA support is an explicit error rather than a CPU
+  fallback.
 - `knn_graph()` builds one compact undirected graph from data, an embedding,
   or supplied neighbors; `graph_cluster()` applies native Louvain, Leiden,
   or Walktrap community detection.
@@ -232,11 +234,11 @@ use hardware-appropriate execution:
 
 | Backend | PCA implementation |
 | --- | --- |
-| CPU | Package-native float32 blocked RSVD. Centering/scaling and large matrix products run in C++; Apple builds use Accelerate SGEMM and other platforms use a threaded float32 kernel. `n.cores` controls the temporary numerical-library/thread limit. |
-| Metal | Package-native float32 block-subspace TSVD using MPS matrix multiplication and a resident unified-memory workspace. |
-| CUDA | Native C++/CUDA PCA through RAPIDS RAFT TSVD compiled into the CUDA backend. Float32 input is read from its payload without constructing an R double matrix; scores and loadings remain float32 until the requested R return boundary. |
+| CPU | Package-native float32 blocked rSVD. Centering/scaling and large matrix products run in C++; Apple builds use Accelerate SGEMM and other platforms use a threaded float32 kernel. `n.cores` controls the temporary numerical-library/thread limit. |
+| Metal | Package-native float32 block-subspace rSVD using MPS matrix multiplication and a resident unified-memory workspace. |
+| CUDA | Automatic package-native float32 rSVD for sufficiently wide, low-rank matrices or RAPIDS RAFT TSVD otherwise. Float32 input is read from its payload without constructing an R double matrix; scores and loadings remain float32 until the requested R return boundary. |
 
-The Metal path is deliberately different from the former R-orchestrated RSVD.
+The Metal path uses a backend-native block-subspace rSVD.
 It converts and centers the input once into a float32 buffer whose column-major
 R layout is viewed as a row-major transposed matrix. A deterministic Gaussian
 feature-space block is orthonormalized, two block power iterations are encoded
@@ -244,7 +246,7 @@ as MPS products, and only the small projected Gram matrix is returned to the
 CPU for a float32 symmetric eigensolve. Final loadings and scores are projected
 once on Metal. The input, projected block, basis, Gram matrix, loadings, and
 scores remain allocated for the complete call, eliminating the repeated
-full-matrix uploads and R intermediate matrices of the earlier Metal RSVD.
+full-matrix uploads and R intermediate matrices.
 
 The CPU route similarly avoids materializing repeated double-precision
 intermediates. Input is centered and optionally scaled once into contiguous
@@ -258,9 +260,11 @@ omitted.
 For t-SNE initialization, the input is mean-centered before decomposition
 and the resulting scores are centered and scaled to the small t-SNE
 initialization scale. CUDA acceleration for this step is native C++/CUDA
-through RAPIDS RAFT TSVD compiled in the package CUDA translation unit. If
-RAFT TSVD support is not compiled in, CUDA PCA initialization fails loudly
-rather than falling back to a different implementation.
+through the same automatic CUDA rSVD/RAFT TSVD selector used by `pca()`. The
+selector favors rSVD when only a small subspace is requested from a sufficiently
+wide matrix and favors TSVD when the sketch is not strongly truncated. If the
+required CUDA support is not compiled in, CUDA PCA initialization fails loudly
+rather than falling back to CPU.
 
 The public CPU API exposes `n.cores` directly. fastEmbedR applies the
 requested limit for the duration of the PCA call through standard numerical

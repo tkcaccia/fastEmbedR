@@ -35,6 +35,13 @@ Upstream: DLPack 1.0 commit
           bbd2f4d32427e548797929af08cfe2a9cbb3cf12
 License file: LICENSES/DLPACK-LICENSE
 
+Files: src/pca_cuda_rsvd.cuh
+Copyright: Stefano Cacciatore
+License: MIT
+Upstream: adapted from fastPLS commit
+          82bbc48a0d69e4bd0d7c261fdcc8e636694133b1
+License file: LICENSES/FASTPLS-LICENSE
+
 Files: src/embedding_metal_impl.mm
 Copyright: Mohamed Amine Bergach
            Stefano Cacciatore

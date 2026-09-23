@@ -299,6 +299,10 @@ NumericMatrix raft_tsvd_init_cuda_impl(NumericMatrix,
 List pca_tsvd_cuda_impl(SEXP,
                         int,
                         bool,
-                        bool) {
+                        bool,
+                        int,
+                        int,
+                        int,
+                        int) {
   Rcpp::stop("native RAPIDS RAFT TSVD PCA is available only when the package is built with CUDA and RAFT support.");
 }

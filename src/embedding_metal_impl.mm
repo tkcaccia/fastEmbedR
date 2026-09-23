@@ -4355,11 +4355,13 @@ void symmetric_jacobi_float(std::vector<float> matrix,
   eigenvectors.swap(sorted_vectors);
 }
 
-List run_tsvd_pca_metal(SEXP data_sexp,
+List run_rsvd_pca_metal(SEXP data_sexp,
                         int n_components,
                         bool center,
                         bool scale,
-                        int seed) {
+                        int seed,
+                        int oversample,
+                        int power_iterations) {
   using Clock = std::chrono::steady_clock;
   const auto started = Clock::now();
   const std::pair<int, int> dims = metal_matrix_dims(data_sexp, "data");
@@ -4368,11 +4370,16 @@ List run_tsvd_pca_metal(SEXP data_sexp,
   const int max_rank = std::min(n - 1, p);
   n_components = std::min(n_components, max_rank);
   if (n < 2 || p < 1 || n_components < 1) {
-    Rcpp::stop("Metal TSVD PCA requires at least two rows and one usable component.");
+    Rcpp::stop(
+      "Metal rSVD PCA requires at least two rows and one usable component."
+    );
   }
-  const int block_rank = max_rank <= 64 ? max_rank :
-    std::min(max_rank, std::max(12, n_components + 10));
-  const int power_iterations = 2;
+  oversample = std::max(0, oversample);
+  const int block_rank = max_rank <= 64 ? max_rank : std::min(
+    max_rank, n_components + oversample
+  );
+  if (block_rank == max_rank) power_iterations = 0;
+  power_iterations = std::max(0, power_iterations);
 
   @autoreleasepool {
     MetalEmbeddingState& state = metal_embedding_state();
@@ -4445,7 +4452,7 @@ List run_tsvd_pca_metal(SEXP data_sexp,
       [preprocess_encoder dispatchThreadgroups:MTLSizeMake(static_cast<NSUInteger>(p), 1, 1)
                          threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
       [preprocess_encoder endEncoding];
-      wait_for_command(preprocess_command, "Metal TSVD float32 centering");
+      wait_for_command(preprocess_command, "Metal rSVD float32 centering");
       const std::uint32_t invalid =
         *static_cast<const std::uint32_t*>([invalid_buffer contents]);
       if (invalid != 0u) {
@@ -4504,7 +4511,7 @@ List run_tsvd_pca_metal(SEXP data_sexp,
       newBufferWithLength:static_cast<std::size_t>(block_rank) * gram_stride * sizeof(float)
                  options:MTLResourceStorageModeShared];
     if (basis_buffer == nil || next_basis_buffer == nil || projected_buffer == nil || gram_buffer == nil) {
-      Rcpp::stop("Failed to allocate Metal TSVD work buffers.");
+      Rcpp::stop("Failed to allocate Metal rSVD work buffers.");
     }
     std::memset([basis_buffer contents], 0, static_cast<std::size_t>(p) * basis_stride * sizeof(float));
     std::memset([next_basis_buffer contents], 0, static_cast<std::size_t>(p) * basis_stride * sizeof(float));
@@ -4575,7 +4582,7 @@ List run_tsvd_pca_metal(SEXP data_sexp,
                                leftMatrix:data_matrix
                               rightMatrix:projected_matrix
                              resultMatrix:next_basis_matrix];
-      wait_for_command(command, "Metal TSVD subspace iteration");
+      wait_for_command(command, "Metal rSVD subspace iteration");
       float* next_values = static_cast<float*>([next_basis_buffer contents]);
       orthonormalize_float_columns(next_values, p, block_rank, static_cast<int>(basis_stride));
       std::swap(basis_buffer, next_basis_buffer);
@@ -4591,7 +4598,7 @@ List run_tsvd_pca_metal(SEXP data_sexp,
                              leftMatrix:projected_matrix
                             rightMatrix:projected_matrix
                            resultMatrix:gram_matrix];
-    wait_for_command(gram_command, "Metal TSVD Rayleigh projection");
+    wait_for_command(gram_command, "Metal rSVD Rayleigh projection");
     const auto subspace_done = Clock::now();
 
     const float* gram_values = static_cast<const float*>([gram_buffer contents]);
@@ -4664,7 +4671,7 @@ List run_tsvd_pca_metal(SEXP data_sexp,
                                   leftMatrix:data_matrix
                                  rightMatrix:loading_matrix
                                 resultMatrix:score_matrix];
-    wait_for_command(score_command, "Metal TSVD score projection");
+    wait_for_command(score_command, "Metal rSVD score projection");
     const auto scores_done = Clock::now();
 
     NumericVector singular_values(n_components);
@@ -4730,8 +4737,8 @@ List run_tsvd_pca_metal(SEXP data_sexp,
       Rcpp::Named("singular_values") = singular_values,
       Rcpp::Named("center") = centers,
       Rcpp::Named("scale") = scales,
-      Rcpp::Named("backend") = "metal_mps_tsvd",
-      Rcpp::Named("method") = "metal_mps_tsvd",
+      Rcpp::Named("backend") = "metal_mps_rsvd",
+      Rcpp::Named("method") = "rsvd",
       Rcpp::Named("precision") = "float32",
       Rcpp::Named("oversample") = block_rank - n_components,
       Rcpp::Named("power") = power_iterations,
@@ -5194,8 +5201,12 @@ List pca_tsvd_metal_impl(SEXP data,
                          int n_components,
                          bool center,
                          bool scale,
-                         int seed) {
-  return run_tsvd_pca_metal(data, n_components, center, scale, seed);
+                         int seed,
+                         int oversample,
+                         int power) {
+  return run_rsvd_pca_metal(
+    data, n_components, center, scale, seed, oversample, power
+  );
 }
 
 bool embedding_metal_available_impl() {
