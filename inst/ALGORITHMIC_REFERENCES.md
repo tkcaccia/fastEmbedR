@@ -468,5 +468,5 @@ Implemented locations:
 
 - `src/embedding_metal_impl.mm::metal_mpsgraph_fft_diagnostic_impl`
 - `src/embedding_metal_impl.mm::metal_mpsgraph_convolution_diagnostic_impl`
-- [`tools/diagnose_mpsgraph_fft.R`](https://github.com/tkcaccia/fastEmbedR-benchmark/blob/main/tools/diagnose_mpsgraph_fft.R)
-- [`tools/diagnose_mpsgraph_convolution.R`](https://github.com/tkcaccia/fastEmbedR-benchmark/blob/main/tools/diagnose_mpsgraph_convolution.R)
+- [`tools/diagnose_mpsgraph_fft.R`](https://github.com/tkcaccia/fastEmbedR-extra/blob/main/benchmarks/legacy/fastEmbedR-benchmark/tools/diagnose_mpsgraph_fft.R)
+- [`tools/diagnose_mpsgraph_convolution.R`](https://github.com/tkcaccia/fastEmbedR-extra/blob/main/benchmarks/legacy/fastEmbedR-benchmark/tools/diagnose_mpsgraph_convolution.R)

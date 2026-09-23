@@ -401,12 +401,12 @@ The following work is proposed, not yet claimed:
 ## Reproducing The Measurements
 
 The reusable scripts below are maintained in
-[`fastEmbedR-benchmark`](https://github.com/tkcaccia/fastEmbedR-benchmark).
-Clone that repository and run the MNIST benchmark command from its root:
+[`fastEmbedR-extra`](https://github.com/tkcaccia/fastEmbedR-extra).
+Clone that repository and run the MNIST benchmark from the migrated suite:
 
 ```bash
-git clone https://github.com/tkcaccia/fastEmbedR-benchmark.git
-cd fastEmbedR-benchmark
+git clone https://github.com/tkcaccia/fastEmbedR-extra.git
+cd fastEmbedR-extra/benchmarks/legacy/fastEmbedR-benchmark
 Rscript tools/benchmark_mnist70k_embedding_only_scaling.R \
   --data=/Users/stefano/Documents/fastEmbedR/Data/MNIST/MNIST.RData \
   --cache-dir=results/mnist70k_embedding_only_scaling_cache \

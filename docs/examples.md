@@ -234,7 +234,7 @@ Presentation assets:
 
 - [vector PDF](assets/mnist70k_presentation_runtime_20260801/mnist70k_runtime_linear_slide.pdf)
 - [plotted medians and IQRs](assets/mnist70k_presentation_runtime_20260801/mnist70k_runtime_linear_plot_data.csv)
-- [reproducible plotting script](https://github.com/tkcaccia/fastEmbedR-benchmark/blob/main/tools/make_mnist70k_presentation_runtime_plot.R)
+- [reproducible plotting script](https://github.com/tkcaccia/fastEmbedR-extra/blob/main/benchmarks/legacy/fastEmbedR-benchmark/tools/make_mnist70k_presentation_runtime_plot.R)
 
 The single-run example output remains below so that its table, machine
 description, and embedding panels stay tied to the executable R example.

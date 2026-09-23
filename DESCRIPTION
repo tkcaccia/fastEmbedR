@@ -29,7 +29,7 @@ Description: A native float32 UMAP implementation and a configurable
 License: MIT + file LICENSE
 URL: https://github.com/tkcaccia/fastEmbedR,
     https://tkcaccia.github.io/fastEmbedR/,
-    https://github.com/tkcaccia/fastEmbedR-benchmark
+    https://github.com/tkcaccia/fastEmbedR-extra
 BugReports: https://github.com/tkcaccia/fastEmbedR/issues
 Encoding: UTF-8
 Imports:

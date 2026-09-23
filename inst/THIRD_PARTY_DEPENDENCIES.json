@@ -470,11 +470,11 @@
       "notice_file": "inst/NOTICE"
     },
     {
-      "id": "fastembedr-benchmark",
-      "name": "fastEmbedR-benchmark",
+      "id": "fastembedr-extra",
+      "name": "fastEmbedR-extra",
       "classification": "benchmark_only",
-      "repository": "https://github.com/tkcaccia/fastEmbedR-benchmark",
-      "revision": "36c4e3a7dfab6a457d842bc18b5ccba0217be1d1",
+      "repository": "https://github.com/tkcaccia/fastEmbedR-extra",
+      "revision": "d43e0cac6cd1244ec013cc785350e9cd345a898a",
       "version": "revision audited locally",
       "license_spdx": "MIT",
       "copyright": "Stefano Cacciatore and fastEmbedR contributors",
@@ -485,7 +485,7 @@
       "package_files": ["DESCRIPTION"],
       "upstream_files": [],
       "license_file": null,
-      "license_url": "https://github.com/tkcaccia/fastEmbedR-benchmark/blob/36c4e3a7dfab6a457d842bc18b5ccba0217be1d1/LICENSE",
+      "license_url": "https://github.com/tkcaccia/fastEmbedR-extra/blob/d43e0cac6cd1244ec013cc785350e9cd345a898a/LICENSE",
       "notice_file": "inst/NOTICE"
     }
   ]

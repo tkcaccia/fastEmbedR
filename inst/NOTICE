@@ -188,7 +188,7 @@ production dependencies. In particular, GPL-3.0-or-later uwot source is not
 copied, linked, translated, or required by fastEmbedR.
 
 The separate benchmark repository is
-https://github.com/tkcaccia/fastEmbedR-benchmark and is licensed under MIT.
+https://github.com/tkcaccia/fastEmbedR-extra and is licensed under MIT.
 Its benchmark scripts do not relicense datasets or third-party programs;
 dataset-specific terms remain with the original providers.
 

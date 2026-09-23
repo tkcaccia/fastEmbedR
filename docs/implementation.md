@@ -81,7 +81,7 @@ CUDA/NVCC versions, and relevant environment flags.
 Because fastEmbedR implements the embedding path natively rather than calling
 Python openTSNE, the package includes a small reference-validation workflow.
 The script
-[`tools/validate_reference_implementations.R`](https://github.com/tkcaccia/fastEmbedR-benchmark/blob/main/tools/validate_reference_implementations.R)
+[`tools/validate_reference_implementations.R`](https://github.com/tkcaccia/fastEmbedR-extra/blob/main/benchmarks/legacy/fastEmbedR-benchmark/tools/validate_reference_implementations.R)
 uses exact KNN on iris, fixes the random seed, and compares package-native
 outputs with established R references.
 

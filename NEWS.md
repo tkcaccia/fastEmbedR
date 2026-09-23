@@ -190,7 +190,7 @@
   `options(fastEmbedR.backend = ...)`, and `FASTEMBEDR_BACKEND`. Explicit
   function arguments retain precedence and CPU remains the default.
 - Moves publication benchmark and validation workflows to the separate
-  `fastEmbedR-benchmark` repository, together with dataset acquisition and
+  `fastEmbedR-extra` repository, together with dataset acquisition and
   restricted-data instructions. Raw benchmark data and manuscript files are
   not distributed in either GitHub repository.
 - Reduces the vignette-enabled source archive to approximately 1 MB by

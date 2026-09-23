@@ -32,7 +32,7 @@ silent CPU fallback, dirty checkout, test failure, or backend identity mismatch
 fails the job.
 
 GitHub artifacts are not permanent. For each release, copy the three artifacts
-unchanged into the archival `fastEmbedR-benchmark` repository under:
+unchanged into the `fastEmbedR-extra` repository under:
 
 ```text
 hardware-validation/<git-commit>/{cpu,metal,cuda}/

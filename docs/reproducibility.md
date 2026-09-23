@@ -9,14 +9,14 @@
 [API](usage-api.md) |
 **Reproducibility** |
 [References](references.md) |
-[Benchmark repository](https://github.com/tkcaccia/fastEmbedR-benchmark)
+[Benchmark repository](https://github.com/tkcaccia/fastEmbedR-extra)
 
 This page records the reproducibility contract for the manuscript benchmarks.
 It is intentionally explicit because fastEmbedR benchmarks may involve R
 packages, native C++ code, optional Metal kernels, optional CUDA kernels, FAISS,
 and RAPIDS cuVS linked directly by optional CUDA builds. Benchmark code and
 dataset instructions are versioned independently at
-[`tkcaccia/fastEmbedR-benchmark`](https://github.com/tkcaccia/fastEmbedR-benchmark).
+[`tkcaccia/fastEmbedR-extra`](https://github.com/tkcaccia/fastEmbedR-extra).
 Reproducible reports must record both the package commit and benchmark commit.
 
 ## Release Snapshot
@@ -28,7 +28,7 @@ both repositories, for example:
 git tag -a v0.99.0-manuscript -m "fastEmbedR manuscript benchmark snapshot"
 git push origin v0.99.0-manuscript
 
-cd ../fastEmbedR-benchmark
+cd ../fastEmbedR-extra
 git tag -a v0.99.0-manuscript -m "fastEmbedR benchmark snapshot"
 git push origin v0.99.0-manuscript
 ```
@@ -49,8 +49,8 @@ directory. Do not invent a DOI before the archive exists.
 Run:
 
 ```bash
-git clone https://github.com/tkcaccia/fastEmbedR-benchmark.git
-cd fastEmbedR-benchmark
+git clone https://github.com/tkcaccia/fastEmbedR-extra.git
+cd fastEmbedR-extra/benchmarks/legacy/fastEmbedR-benchmark
 Rscript tools/write_manuscript_reproducibility.R \
   --out-dir=results/manuscript_reproducibility_current \
   --seed=4 \
@@ -111,7 +111,7 @@ but cannot attribute allocations made by another process, so publication GPU
 jobs request an exclusive device and retain all three values.
 
 The publication benchmark driver
-[`tools/hpc_embeddings/benchmark_embeddings_float32_publication.R`](https://github.com/tkcaccia/fastEmbedR-benchmark/blob/main/tools/hpc_embeddings/benchmark_embeddings_float32_publication.R)
+[`tools/hpc_embeddings/benchmark_embeddings_float32_publication.R`](https://github.com/tkcaccia/fastEmbedR-extra/blob/main/benchmarks/legacy/fastEmbedR-benchmark/tools/hpc_embeddings/benchmark_embeddings_float32_publication.R)
 also writes this bundle automatically into every HPC benchmark output
 directory.
 

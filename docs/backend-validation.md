@@ -15,7 +15,7 @@ CUDA use explicitly labelled self-hosted runners:
 The project-owned labels ensure that accelerator jobs are not scheduled on a
 machine without the requested hardware. Larger scientific benchmarks remain
 in the separate
-[`fastEmbedR-benchmark`](https://github.com/tkcaccia/fastEmbedR-benchmark)
+[`fastEmbedR-extra`](https://github.com/tkcaccia/fastEmbedR-extra)
 repository.
 
 Runner registration and custom labels follow GitHub's

@@ -35,7 +35,7 @@ Useful links:
 \itemize{
   \item \url{https://github.com/tkcaccia/fastEmbedR}
   \item \url{https://tkcaccia.github.io/fastEmbedR/}
-  \item \url{https://github.com/tkcaccia/fastEmbedR-benchmark}
+  \item \url{https://github.com/tkcaccia/fastEmbedR-extra}
   \item Report bugs at \url{https://github.com/tkcaccia/fastEmbedR/issues}
 }
 

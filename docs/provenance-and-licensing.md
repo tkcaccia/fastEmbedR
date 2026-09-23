@@ -45,7 +45,7 @@ their upstream licenses and remain subject to their respective platform terms.
 Software used only as a benchmark comparator or numerical reference remains
 outside the production call graph. Benchmark datasets retain their original
 licenses and access conditions. The separate
-[`fastEmbedR-benchmark`](https://github.com/tkcaccia/fastEmbedR-benchmark)
+[`fastEmbedR-extra`](https://github.com/tkcaccia/fastEmbedR-extra)
 repository licenses its scripts and documentation; it does not relicense
 third-party software or datasets.
 

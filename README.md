@@ -11,7 +11,7 @@
 [Reproducibility](docs/reproducibility.md) |
 [Development](docs/development.md) |
 [References](docs/references.md) |
-[Benchmark repository](https://github.com/tkcaccia/fastEmbedR-benchmark)
+[Benchmark repository](https://github.com/tkcaccia/fastEmbedR-extra)
 
 `fastEmbedR` is a native R/C++ package for fast dimensionality reduction from
 nearest-neighbor graphs. Its UMAP implementation is deliberately opinionated:
@@ -35,7 +35,7 @@ affinity support with `ceiling(perplexity)` non-self candidate neighbors.
 
 Publication benchmark scripts, dataset manifests, HPC launchers, and data
 acquisition instructions are maintained separately in
-[`tkcaccia/fastEmbedR-benchmark`](https://github.com/tkcaccia/fastEmbedR-benchmark).
+[`tkcaccia/fastEmbedR-extra`](https://github.com/tkcaccia/fastEmbedR-extra).
 The package repository does not distribute benchmark datasets or manuscript
 files.
 

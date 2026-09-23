@@ -9,10 +9,10 @@
 [API](usage-api.md) |
 [Reproducibility](reproducibility.md) |
 [References](references.md) |
-[Benchmark repository](https://github.com/tkcaccia/fastEmbedR-benchmark)
+[Benchmark repository](https://github.com/tkcaccia/fastEmbedR-extra)
 
 The complete publication benchmark is maintained in the separate
-[`fastEmbedR-benchmark`](https://github.com/tkcaccia/fastEmbedR-benchmark)
+[`fastEmbedR-extra`](https://github.com/tkcaccia/fastEmbedR-extra)
 repository. It contains scripts, manifests, preprocessing instructions,
 environment recipes, Slurm launchers, and validation code, but no raw
 benchmark data. Provider-controlled or restricted datasets must be obtained
@@ -88,7 +88,7 @@ and benchmark command lines recorded with each run.
 ## Reference Implementation Validation
 
 The validation script
-[`tools/validate_reference_implementations.R`](https://github.com/tkcaccia/fastEmbedR-benchmark/blob/main/tools/validate_reference_implementations.R)
+[`tools/validate_reference_implementations.R`](https://github.com/tkcaccia/fastEmbedR-extra/blob/main/benchmarks/legacy/fastEmbedR-benchmark/tools/validate_reference_implementations.R)
 checks the native implementation on a small deterministic problem. It is a
 correctness-oriented validation, not a performance benchmark.
 
@@ -96,8 +96,8 @@ The default run uses iris with exact Euclidean KNN, a fixed seed, and a fixed
 PCA initialization for t-SNE:
 
 ```bash
-git clone https://github.com/tkcaccia/fastEmbedR-benchmark.git
-cd fastEmbedR-benchmark
+git clone https://github.com/tkcaccia/fastEmbedR-extra.git
+cd fastEmbedR-extra/benchmarks/legacy/fastEmbedR-benchmark
 Rscript tools/validate_reference_implementations.R \
   --out-dir=results/reference_validation_current \
   --threads=2 \
