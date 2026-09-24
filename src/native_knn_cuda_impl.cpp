@@ -463,7 +463,7 @@ Rcpp::List native_cuda_knn_impl(SEXP data,
   if (matrix.nrow < 2) {
     Rcpp::stop("`data` must contain at least two rows and one column.");
   }
-  if (k < 1 || k >= input_nrow || k > kMaxNativeCudaK) {
+  if (k < 1 || k >= matrix.nrow || k > kMaxNativeCudaK) {
     Rcpp::stop("Native CUDA KNN requires k in [1, min(n - 1, %d)].", kMaxNativeCudaK);
   }
   if (!std::isfinite(target_recall) || target_recall < 0.8 || target_recall > 1.0) {
