@@ -17,8 +17,9 @@ Use \code{\link[=pca]{pca()}} for reusable backend-native PCA and request
 \code{tsne_init = TRUE} when a t-SNE-ready initialization is needed.
 Score embeddings with \code{\link[=evaluate_embedding]{evaluate_embedding()}}. Optional downstream graph
 utilities are available through \code{\link[=knn_graph]{knn_graph()}} and \code{\link[=graph_cluster]{graph_cluster()}}.
-Use \code{\link[=fastEmbedR_api]{fastEmbedR_api()}} for the complete canonical, advanced, diagnostic,
-secondary, and compatibility API map.
+Session defaults can be set with
+\code{options(backend = "cpu", n.cores = 4L)}; explicit function arguments take
+precedence over these options.
 }
 \details{
 UMAP exposes neighborhood, metric, graph mode, preprocessing, backend, seed,

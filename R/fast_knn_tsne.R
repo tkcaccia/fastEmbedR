@@ -70,9 +70,8 @@ validate_gpu_tsne_knn <- function(info, n_neighbors, perplexity) {
     }
     policy <- opentsne_neighbor_policy(info$n, perplexity, info$k)
     n_neighbors <- n_neighbors %||% policy$n_neighbors
-    n_neighbors <- as.integer(n_neighbors)
-    invalid <- length(n_neighbors) != 1L || is.na(n_neighbors) ||
-        !is.finite(n_neighbors) || n_neighbors < 1L ||
+    n_neighbors <- integer_scalar(n_neighbors)
+    invalid <- is.na(n_neighbors) || n_neighbors < 1L ||
         n_neighbors > info$k || n_neighbors >= info$n
     if (invalid) {
         stop(
@@ -520,6 +519,38 @@ validate_tsne_dots <- function(extra) {
     invisible(extra)
 }
 
+tsne_optimizer_settings <- function(
+    learning_rate, early_exaggeration_iter, early_exaggeration,
+    n_iter, exaggeration, initial_momentum, final_momentum,
+    max_step_norm, negative_gradient_method, record_costs, auto_config
+) {
+    list(
+        learning_rate = learning_rate,
+        early_exaggeration_iter = early_exaggeration_iter,
+        early_exaggeration = early_exaggeration, n_iter = n_iter,
+        exaggeration = exaggeration, initial_momentum = initial_momentum,
+        final_momentum = final_momentum, max_step_norm = max_step_norm,
+        negative_gradient_method = negative_gradient_method,
+        record_costs = record_costs, auto_config = auto_config
+    )
+}
+
+new_tsne_settings <- function(
+    perplexity, n_components, init_data, Y_init, standardize, pca_dims,
+    metric, seed, backend, keep_knn, verbose, n.cores, optimizer
+) {
+    list(
+        perplexity = perplexity,
+        n_components = validate_opentsne_n_components(
+            n_components, backend
+        ),
+        init_data = init_data, Y_init = Y_init,
+        standardize = standardize, pca_dims = pca_dims, metric = metric,
+        seed = seed, backend = backend, keep_knn = isTRUE(keep_knn),
+        verbose = verbose, n_threads = n.cores, optimizer = optimizer
+    )
+}
+
 tsne_matrix_metrics <- function(layout, x, knn, timings) {
     cfg <- attr(layout, "fastEmbedR_config")
     data.frame(
@@ -633,23 +664,23 @@ run_matrix_input_tsne <- function(data, nn, settings, extra, input_float) {
 #'   than two use CPU exact repulsion; the current Metal and CUDA
 #'   interpolation/FFT optimizers support only `2L`.
 #' @param init_data Optional original high-dimensional data matrix used only to
-#'   compute PCA initialization with [tsne_pca_init()]. It is not used for
+#'   compute PCA initialization. It is not used for
 #'   neighbor search or optimization.
-#' @param Y_init Optional explicit initial layout. Use [tsne_pca_init()] to
-#'   precompute and reuse a PCA initialization.
+#' @param Y_init Optional explicit initial layout. Use
+#'   `pca(data, tsne_init = TRUE)$tsne_init` to precompute and reuse a PCA
+#'   initialization.
 #' @param standardize Center and scale columns before KNN. Defaults to `FALSE`
 #'   so one-call results match a KNN object computed from the supplied matrix.
 #' @param pca_dims Optional PCA dimension before KNN.
 #' @param metric KNN distance metric for one-call matrix input: `"euclidean"`,
-#'   `"cosine"`, `"correlation"`, or `"inner_product"`.
+#'   `"cosine"`, or `"correlation"`.
 #' @param nn Optional precomputed KNN output when `data` is a data matrix.
 #' @param seed Random seed.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. CPU KNN
 #'   uses package-native HNSW. Metal uses package-native exact or recall-tuned
 #'   IVF-Flat search. CUDA uses cuVS brute-force exact search below 100,000
-#'   rows and cuVS IVF-Flat above that threshold; an explicitly enabled FAISS
-#'   GPU build may provide exact search. Device pointers pass directly to the
-#'   native CUDA t-SNE optimizer.
+#'   rows and cuVS IVF-Flat above that threshold. Device pointers pass directly
+#'   to the native CUDA t-SNE optimizer.
 #'   Unsupported GPU requests fail clearly and are not relabelled CPU runs.
 #' @param keep_knn If `TRUE`, retain KNN matrices in the returned object.
 #' @param verbose Print optimizer progress.
@@ -681,6 +712,21 @@ run_matrix_input_tsne <- function(data, nn, settings, extra, input_float) {
 #'   `"auto"` learning rate, chooses missing iteration limits, and enables
 #'   KLD-based early stopping only on CPU/small exact runs where the monitor is
 #'   not prohibitively expensive. Explicit user-supplied values are respected.
+#' @param landmarks `FALSE` (the default) embeds all observations. A fraction
+#'   in `(0, 1)`, a positive landmark count, or explicit row indices enables
+#'   landmark embedding followed by fixed-reference transformation of the
+#'   remaining rows.
+#' @param transform_k Number of landmark neighbors used to place non-landmark
+#'   observations. Used only when landmarking is enabled.
+#' @param transform_perplexity Perplexity used to transform non-landmark rows.
+#' @param transform_iter Number of normal transform iterations. Use zero for
+#'   projection without transform refinement.
+#' @param transform_early_exaggeration_iter Number of transform
+#'   early-exaggeration iterations.
+#' @param transform_n_negatives Number of sampled reference negatives used by
+#'   large fixed-reference transforms.
+#' @param initialization Initial placement for transformed rows: `"median"`,
+#'   `"weighted"`, or `"random"`.
 #' @param ... Additional low-level parameters passed to [tsne_knn()].
 #' @details
 #' The t-SNE API exposes the principal
@@ -694,8 +740,13 @@ run_matrix_input_tsne <- function(data, nn, settings, extra, input_float) {
 #' externally generated KNN object to [tsne_knn()] when search policy must be
 #' controlled independently. The resolved settings are returned in
 #' `fit$parameters`. Affinity construction always uses compact support with
-#' `k = ceiling(perplexity)` non-self neighbors.
-#' @return A `fastEmbedR_embedding` object.
+#' `k = ceiling(perplexity)` non-self neighbors. Landmark mode embeds the
+#' selected reference rows with the same t-SNE implementation and transforms
+#' all remaining rows while keeping the reference coordinates fixed.
+#' Precomputed KNN input and explicit `init_data` or `Y_init` cannot be combined
+#' with landmarking.
+#' @return A `fastEmbedR_embedding` object. Landmark fits also contain `model`,
+#'   which can be passed to [project_landmark_model()] for new observations.
 #' @examples
 #' fit <- tsne(
 #'     as.matrix(iris[, 1:4]),
@@ -709,39 +760,43 @@ tsne <- function(
     n_components = 2L,
     init_data = NULL, Y_init = NULL, standardize = FALSE,
     pca_dims = NULL,
-    metric = c("euclidean", "cosine", "correlation", "inner_product"),
+    metric = c("euclidean", "cosine", "correlation"),
     nn = NULL, seed = 4L, backend = NULL, keep_knn = FALSE,
     verbose = FALSE, n.cores = NULL, learning_rate = "auto",
     early_exaggeration_iter = NULL, early_exaggeration = "auto",
     n_iter = NULL, exaggeration = NULL, initial_momentum = 0.8,
     final_momentum = 0.8, max_step_norm = "auto",
     negative_gradient_method = "auto", record_costs = FALSE,
-    auto_config = TRUE, ...
+    auto_config = TRUE, landmarks = FALSE, transform_k = NULL,
+    transform_perplexity = 5, transform_iter = 250L,
+    transform_early_exaggeration_iter = 0L,
+    transform_n_negatives = NULL,
+    initialization = c("median", "weighted", "random"), ...
 ) {
     extra <- list(...)
     validate_tsne_dots(extra)
     backend <- resolve_embedding_backend(backend)
-    settings <- list(
-        perplexity = perplexity,
-        n_components = validate_opentsne_n_components(
-            n_components, backend
-        ),
-        init_data = init_data, Y_init = Y_init,
-        standardize = standardize, pca_dims = pca_dims, metric = metric,
-        seed = seed, backend = backend, keep_knn = isTRUE(keep_knn),
-        verbose = verbose, n_threads = n.cores,
-        optimizer = list(
-            learning_rate = learning_rate,
-            early_exaggeration_iter = early_exaggeration_iter,
-            early_exaggeration = early_exaggeration, n_iter = n_iter,
-            exaggeration = exaggeration,
-            initial_momentum = initial_momentum,
-            final_momentum = final_momentum,
-            max_step_norm = max_step_norm,
-            negative_gradient_method = negative_gradient_method,
-            record_costs = record_costs, auto_config = auto_config
-        )
+    optimizer <- tsne_optimizer_settings(
+        learning_rate, early_exaggeration_iter, early_exaggeration,
+        n_iter, exaggeration, initial_momentum, final_momentum,
+        max_step_norm, negative_gradient_method, record_costs, auto_config
     )
+    settings <- new_tsne_settings(
+        perplexity, n_components, init_data, Y_init, standardize, pca_dims,
+        metric, seed, backend, keep_knn, verbose, n.cores, optimizer
+    )
+    if (landmark_embedding_requested(landmarks)) {
+        controls <- list(
+            landmarks = landmarks, transform_k = transform_k,
+            transform_perplexity = transform_perplexity,
+            transform_iter = transform_iter,
+            transform_early_exaggeration_iter =
+                transform_early_exaggeration_iter,
+            transform_n_negatives = transform_n_negatives,
+            initialization = initialization
+        )
+        return(run_landmark_tsne(data, nn, settings, controls, extra))
+    }
     if (fastembedr_is_gpu_knn(data)) {
         return(run_gpu_input_tsne(data, nn, settings, extra))
     }

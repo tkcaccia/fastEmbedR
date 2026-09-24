@@ -17,13 +17,33 @@ landmark count, or explicit row indices.}
 \item{n.cores}{Number of CPU cores used for float32 selection features.}
 }
 \value{
-A \code{fastEmbedR_landmark_selection} object containing \code{indices} and
-\code{query_indices}.
+A \code{fastEmbedR_landmark_selection} object. \code{indices} identifies the
+landmark/reference rows, \code{query_indices} is its disjoint complement, and
+the remaining fields record the input dimensions, selected fraction,
+selection method, and seed.
 }
 \description{
-\code{select_landmarks()} separates row indices into a representative landmark
-reference and its complementary query set. It does not embed or project the
-data.
+\code{select_landmarks()} chooses a representative subset of observations and
+returns its row indices together with the complementary query rows. Selection
+is deterministic for a fixed seed. It uses standardized low-dimensional
+features formed from up to four original columns and four seeded random
+projections, then spreads landmarks across projection quantiles. For at most
+2,000 landmarks, quantile candidates are reduced with greedy farthest-point
+sampling; larger selections use the projection-quantile rows directly. The
+function selects rows only: it does not fit an embedding or project queries.
+}
+\details{
+With \code{landmarks = TRUE}, the automatic count is all rows for at
+most three observations, approximately half the rows up to 80 observations,
+at least 80 rows up to 1,000 observations, and at least 300 rows for larger
+data. Above 80 observations, the size grows as
+\code{ceiling(7 * sqrt(nrow(data)))} and never reaches the full data size.
+
+A scalar in \verb{(0, 1)} selects \code{ceiling(nrow(data) * landmarks)} rows. A
+scalar of at least one must be a whole-number count. A vector supplies
+explicit
+row indices, which are sorted and deduplicated. Requesting at least all
+rows returns every row as the reference and an empty query set.
 }
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))

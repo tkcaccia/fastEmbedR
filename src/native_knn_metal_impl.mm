@@ -1081,9 +1081,6 @@ Rcpp::List native_metal_knn_impl(SEXP data_sexp,
   using Clock = std::chrono::steady_clock;
   const auto t0 = Clock::now();
   const fastembedr::KnnMetric metric = fastembedr::parse_knn_metric(metric_name);
-  if (metric == fastembedr::KnnMetric::InnerProduct) {
-    Rcpp::stop("Native Metal KNN does not yet support raw inner-product distance.");
-  }
   fastembedr::FloatMatrix input = fastembedr::matrix_to_row_major_float(data_sexp, metric);
   std::vector<float>& data = input.values;
   const int n = input.nrow;
@@ -1577,11 +1574,6 @@ Rcpp::List native_metal_query_knn_impl(SEXP data_sexp,
   const auto t0 = Clock::now();
   const fastembedr::KnnMetric metric =
     fastembedr::parse_knn_metric(metric_name);
-  if (metric == fastembedr::KnnMetric::InnerProduct) {
-    Rcpp::stop(
-      "Native Metal query KNN does not yet support raw inner-product distance."
-    );
-  }
   fastembedr::FloatMatrix reference =
     fastembedr::matrix_to_row_major_float(data_sexp, metric);
   fastembedr::FloatMatrix query =

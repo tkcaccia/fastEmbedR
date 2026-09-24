@@ -41,15 +41,15 @@ resolve_opentsne_optimizer_backend <- function(backend) {
 }
 
 validate_opentsne_iteration_counts <- function(auto_params) {
-    early <- as.integer(auto_params$early_exaggeration_iter)
-    normal <- as.integer(auto_params$n_iter)
-    if (length(early) != 1L || is.na(early) || early < 0L) {
+    early <- integer_scalar(auto_params$early_exaggeration_iter)
+    normal <- integer_scalar(auto_params$n_iter)
+    if (is.na(early) || early < 0L) {
         stop(
             "`early_exaggeration_iter` must be a non-negative integer.",
             call. = FALSE
         )
     }
-    if (length(normal) != 1L || is.na(normal) || normal < 0L) {
+    if (is.na(normal) || normal < 0L) {
         stop("`n_iter` must be a non-negative integer.", call. = FALSE)
     }
     if (early + normal < 1L) {

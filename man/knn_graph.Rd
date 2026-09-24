@@ -12,7 +12,7 @@ knn_graph(
   weight = c("snn", "distance", "binary"),
   mutual = FALSE,
   prune = 0,
-  n.cores = 1L
+  n.cores = NULL
 )
 }
 \arguments{

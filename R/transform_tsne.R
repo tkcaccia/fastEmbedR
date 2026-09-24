@@ -183,10 +183,10 @@ prepare_tsne_transform_projection <- function(request, reference_layout) {
 }
 
 validate_tsne_transform_iterations <- function(request) {
-    n_iter <- as.integer(request$n_iter)
-    early <- as.integer(request$early_exaggeration_iter)
-    invalid <- length(n_iter) != 1L || is.na(n_iter) || n_iter < 0L ||
-        length(early) != 1L || is.na(early) || early < 0L ||
+    n_iter <- integer_scalar(request$n_iter)
+    early <- integer_scalar(request$early_exaggeration_iter)
+    invalid <- is.na(n_iter) || n_iter < 0L ||
+        is.na(early) || early < 0L ||
         n_iter + early < 1L
     if (invalid) {
         stop(
@@ -204,17 +204,17 @@ prepare_tsne_transform_controls <- function(request, reference_layout) {
         !is.finite(perplexity) || perplexity <= 0) {
         stop("`perplexity` must be a positive number.", call. = FALSE)
     }
-    n_threads <- request$n_threads %||% default_tsne_threads()
-    n_threads <- as.integer(n_threads)
-    if (length(n_threads) != 1L || is.na(n_threads) ||
-        !is.finite(n_threads) || n_threads < 0L) {
-        stop("`n.cores` must be NULL or a non-negative integer.",
+    n_threads <- normalize_nn_threads(
+        request$n_threads %||% default_tsne_threads()
+    )
+    iterations <- validate_tsne_transform_iterations(request)
+    threshold <- integer_scalar(request$exact_repulsion_threshold)
+    if (is.na(threshold) || threshold < 0L) {
+        stop(
+            "`exact_repulsion_threshold` must be a non-negative integer.",
             call. = FALSE
         )
     }
-    iterations <- validate_tsne_transform_iterations(request)
-    threshold <- as.integer(request$exact_repulsion_threshold)
-    if (length(threshold) != 1L || is.na(threshold)) threshold <- 4096L
     n_negatives <- request$n_negatives
     if (is.null(n_negatives)) {
         n_negatives <- if (nrow(reference_layout) <= threshold) {
@@ -223,9 +223,8 @@ prepare_tsne_transform_controls <- function(request, reference_layout) {
             min(256L, nrow(reference_layout))
         }
     }
-    n_negatives <- as.integer(n_negatives)
-    if (length(n_negatives) != 1L || is.na(n_negatives) ||
-        n_negatives < 1L) {
+    n_negatives <- integer_scalar(n_negatives)
+    if (is.na(n_negatives) || n_negatives < 1L) {
         stop("`n_negatives` must be NULL or a positive integer.",
             call. = FALSE
         )
@@ -510,7 +509,8 @@ landmark_projection_knn <- function(x_landmarks,
                                     landmark_layout = NULL,
                                     all_data = NULL,
                                     landmark_indices = NULL,
-                                    query_rows = NULL) {
+                                    query_rows = NULL,
+                                    metric = "euclidean") {
     backend <- as.character(backend)[1L]
     if (length(backend) != 1L || is.na(backend) || !nzchar(backend)) {
         backend <- "cpu"
@@ -526,7 +526,7 @@ landmark_projection_knn <- function(x_landmarks,
         x_landmarks,
         x_query,
         k = k,
-        metric = "euclidean",
+        metric = metric,
         output = fastembedr_knn_output_type(x_landmarks, policy$backend),
         n_threads = n_threads,
         target_recall = policy$target_recall,
@@ -779,16 +779,34 @@ resident_projection_result <- function(backend, k) {
 }
 
 normalize_landmark_tsne_request <- function(request) {
-    request$reference_method <- match.arg(
-        request$reference_method,
-        "tsne"
-    )
     request$initialization <- match.arg(
         request$initialization,
         c("median", "weighted", "random")
     )
-    request$backend <- resolve_embedding_backend(request$backend)
-    request$n_threads <- request$n.cores
+    iterations <- validate_landmark_transform_iterations(
+        request$transform_iter,
+        request$transform_early_exaggeration_iter
+    )
+    request$transform_iter <- iterations$iterations
+    request$transform_early_exaggeration_iter <- iterations$exaggeration
+    if (!is.null(request$transform_k)) {
+        request$transform_k <- transform_embedding_k(
+            request$transform_k,
+            .Machine$integer.max
+        )
+    }
+    if (!is.null(request$transform_n_negatives)) {
+        request$transform_n_negatives <- integer_scalar(
+            request$transform_n_negatives
+        )
+        if (is.na(request$transform_n_negatives) ||
+            request$transform_n_negatives < 1L) {
+            stop(
+                "`transform_n_negatives` must be a positive integer.",
+                call. = FALSE
+            )
+        }
+    }
     request
 }
 
@@ -801,7 +819,7 @@ prepare_landmark_tsne_data <- function(data, request) {
         backend = resolve_preprocess_backend(request$backend)
     ))
     x <- prepared$value$data
-    validate_landmark_tsne_neighbors(request$n_neighbors, nrow(x))
+    metric <- resolve_embedding_metric(request$metric, x)
     selection <- select_landmarks(
         x,
         request$landmarks,
@@ -813,26 +831,8 @@ prepare_landmark_tsne_data <- function(data, request) {
         n = nrow(x),
         prepared = prepared$value,
         preprocess_time = prepared$time,
-        selection = selection
+        selection = selection, metric = metric
     )
-}
-
-validate_landmark_tsne_neighbors <- function(n_neighbors, n) {
-    if (is.null(n_neighbors)) {
-        return(invisible(NULL))
-    }
-    n_neighbors <- as.integer(n_neighbors)
-    invalid <- length(n_neighbors) != 1L ||
-        is.na(n_neighbors) ||
-        n_neighbors < 1L ||
-        n_neighbors >= n
-    if (invalid) {
-        stop(
-            "`n_neighbors` must be positive and smaller than `nrow(data)`.",
-            call. = FALSE
-        )
-    }
-    invisible(NULL)
 }
 
 run_full_landmark_tsne <- function(state, request) {
@@ -842,13 +842,32 @@ run_full_landmark_tsne <- function(state, request) {
         n_components = request$n_components,
         standardize = FALSE,
         pca_dims = NULL,
+        metric = state$metric,
         seed = request$seed,
         backend = request$backend,
         keep_knn = request$keep_knn,
         verbose = request$verbose,
         n.cores = request$n_threads
     )
-    do.call(tsne, c(args, request$extra))
+    fit <- do.call(tsne, c(args, request$extra))
+    policy <- opentsne_neighbor_policy(
+        state$n, fit$parameters$perplexity
+    )
+    elapsed <- state$preprocess_time[["elapsed"]] +
+        fit$metrics$elapsed[[1L]]
+    fit$model <- new_landmark_projection_model(
+        "tsne", fit, state$x, state$selection, state$n,
+        policy$n_neighbors, policy$perplexity, state$metric, NA_character_,
+        request$backend, request$seed, request$n_threads, elapsed,
+        state$prepared$transform
+    )
+    fit$landmarks <- list(
+        indices = state$selection$indices,
+        layout = fit$layout,
+        reference_fit = fit$model$fit,
+        projection_knn = NULL
+    )
+    fit
 }
 
 partition_landmark_tsne <- function(state, request) {
@@ -874,18 +893,10 @@ landmark_tsne_reference_policy <- function(state, request) {
         perplexity = request$perplexity
     )
     perplexity <- request$perplexity %||% policy$perplexity
-    n_neighbors <- request$n_neighbors %||% policy$n_neighbors
+    n_neighbors <- policy$n_neighbors
     if (n_neighbors >= state$n_landmarks) {
         stop(
             "`n_neighbors` must be smaller than selected landmarks.",
-            call. = FALSE
-        )
-    }
-    required <- opentsne_support_width(perplexity)
-    if (n_neighbors != required) {
-        stop(
-            "Compact t-SNE affinity support requires `n_neighbors = ",
-            required, "` for this perplexity.",
             call. = FALSE
         )
     }
@@ -915,7 +926,8 @@ run_landmark_tsne_reference <- function(state, request, policy) {
         state$x_landmarks,
         k = policy$n_neighbors,
         backend = request$backend,
-        n_threads = request$n_threads
+        n_threads = request$n_threads,
+        metric = state$metric
     )
     layout <- do.call(
         tsne_knn,
@@ -944,16 +956,25 @@ landmark_tsne_reference_fit <- function(result, state, request, policy) {
         nn_backend = nn_backend,
         keep_knn = request$keep_knn
     ), config, list(preprocess = "none_precomputed_knn"))
-    list(
-        layout = result$value$layout,
-        metrics = landmark_tsne_reference_metrics(
-            state,
-            policy,
-            config,
-            result$time
-        ),
-        parameters = parameters,
-        knn = if (request$keep_knn) result$value$knn else NULL
+    metrics <- landmark_tsne_reference_metrics(
+        state, policy, config, result$time
+    )
+    new_embedding_result(
+        result$value$layout, "tsne", metrics, parameters,
+        rbind(embedding = result$time),
+        if (request$keep_knn) result$value$knn else NULL
+    )
+}
+
+landmark_tsne_projection_model <- function(state, request) {
+    elapsed <- state$preprocess_time[["elapsed"]] +
+        state$reference_time[["elapsed"]]
+    new_landmark_projection_model(
+        "tsne", state$reference_fit, state$x_landmarks,
+        state$selection, state$n, state$policy$n_neighbors,
+        state$policy$perplexity, state$metric, NA_character_,
+        request$backend, request$seed, request$n_threads, elapsed,
+        state$prepared$transform
     )
 }
 
@@ -1000,15 +1021,7 @@ landmark_tsne_transform_controls <- function(state, request) {
         transform_k <- ceiling(request$transform_perplexity)
         transform_k <- min(state$n_landmarks, transform_k)
     }
-    transform_iter <- as.integer(request$transform_iter)
-    if (length(transform_iter) != 1L ||
-        is.na(transform_iter) ||
-        transform_iter < 0L) {
-        stop(
-            "`transform_iter` must be a non-negative integer.",
-            call. = FALSE
-        )
-    }
+    transform_iter <- request$transform_iter
     threshold <- scalar_integer_or_default(
         request$extra,
         "exact_repulsion_threshold",
@@ -1085,7 +1098,8 @@ compute_landmark_tsne_projection_knn <- function(
         landmark_layout = state$reference_fit$layout,
         all_data = state$x,
         landmark_indices = state$landmark_indices,
-        query_rows = state$query_indices
+        query_rows = state$query_indices,
+        metric = state$metric
     )
 }
 
@@ -1345,7 +1359,6 @@ landmark_tsne_metrics <- function(state, request, timings) {
     reference <- landmark_tsne_reference_times(state)
     data.frame(
         method = "landmark_tsne",
-        reference_method = request$reference_method,
         n = state$n,
         p = ncol(state$x),
         n_neighbors = state$policy$n_neighbors,
@@ -1406,7 +1419,6 @@ landmark_tsne_parameters <- function(state, request) {
     projection <- state$projection
     base <- list(
         method = "landmark_tsne",
-        reference_method = request$reference_method,
         n = state$n,
         p = ncol(state$x),
         n_neighbors = state$policy$n_neighbors,
@@ -1425,6 +1437,7 @@ landmark_tsne_parameters <- function(state, request) {
         n_landmarks = state$n_landmarks,
         landmark_fraction = state$n_landmarks / state$n,
         landmark_selection = state$selection$method,
+        metric = state$metric,
         keep_knn = request$keep_knn,
         provenance = "landmark_tsne_fixed_reference_native_cpp"
     )
@@ -1456,6 +1469,7 @@ assemble_landmark_tsne_output <- function(state, request) {
         parameters = landmark_tsne_parameters(state, request),
         timings = timings,
         knn = NULL,
+        model = landmark_tsne_projection_model(state, request),
         landmarks = list(
             indices = state$landmark_indices,
             layout = state$reference_fit$layout,
@@ -1476,77 +1490,27 @@ assemble_landmark_tsne_output <- function(state, request) {
     out
 }
 
-#' Landmark t-SNE with fixed-reference transform
-#'
-#' `landmark_tsne()` embeds a subset of observations with [tsne()], then
-#' places the remaining observations with `transform_tsne()`. Projection KNN
-#' searches only the
-#' fixed landmark reference: CPU uses native HNSW, Metal uses native exact or
-#' recall-tuned IVF-Flat, and CUDA keeps native exact or IVF-Flat results
-#' resident on the device.
-#'
-#' @param data Numeric matrix/data frame with observations in rows.
-#' @param landmarks `TRUE` for an automatic subset, a fraction such as `0.5`, a
-#'   landmark count, or explicit row indices.
-#' @param reference_method Kept for compatibility. Only `"tsne"` is
-#'   accepted in the cleaned package API.
-#' @inheritParams tsne
-#' @param transform_k Number of landmark neighbors used to place non-landmarks.
-#' @param transform_perplexity Perplexity used by `transform_tsne()`.
-#' @param transform_iter Number of normal transform iterations. Use `0` for
-#'   projection-only landmarking with no transform refinement.
-#' @param n_neighbors Number of non-self neighbors used to embed the landmark
-#'   reference set. If `NULL`, it follows the same neighbor policy as
-#'   [tsne()]: `ceiling(perplexity)` under compact support.
-#' @param perplexity t-SNE perplexity for the landmark reference embedding. If
-#'   `NULL`, the optimizer chooses a safe value from the reference KNN width and
-#'   sample size.
-#' @param standardize Center and scale columns before landmark selection and
-#'   neighbor search. Unlike [tsne()], landmark t-SNE defaults to `TRUE`.
-#' @param transform_early_exaggeration_iter Number of transform early
-#'   exaggeration iterations.
-#' @param transform_n_negatives Number of sampled reference negatives used by
-#'   `transform_tsne()` on large landmark sets. GPU sampled transform repulsion
-#'   is native and experimental for large reference sets.
-#' @param initialization Initial placement for transformed observations.
-#' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`.
-#' @param n.cores Number of CPU cores used by CPU KNN and CPU
-#'   transform optimization. Native GPU stages ignore this argument.
-#' @return A `fastEmbedR_embedding` object.
-#' @examples
-#' fit <- landmark_tsne(
-#'     as.matrix(iris[, 1:4]),
-#'     landmarks = 0.5, perplexity = 5,
-#'     early_exaggeration_iter = 5, n_iter = 10,
-#'     transform_iter = 5, seed = 1
-#' )
-#' plot(fit, labels = iris$Species)
-#' @export
-landmark_tsne <- function(
-    data, landmarks = TRUE, reference_method = c("tsne"),
-    n_neighbors = NULL, perplexity = NULL,
-    n_components = 2L,
-    standardize = TRUE, pca_dims = NULL, seed = 4L, backend = NULL,
-    transform_k = NULL, transform_perplexity = 5,
-    transform_iter = 250L, transform_early_exaggeration_iter = 0L,
-    transform_n_negatives = NULL,
-    initialization = c("median", "weighted", "random"),
-    keep_knn = FALSE, verbose = FALSE, n.cores = NULL, ...
-) {
-    request <- list(
-        landmarks = landmarks, reference_method = reference_method,
-        n_neighbors = n_neighbors, perplexity = perplexity,
-        n_components = n_components,
-        standardize = standardize, pca_dims = pca_dims, seed = seed,
-        backend = backend, transform_k = transform_k,
-        transform_perplexity = transform_perplexity,
-        transform_iter = transform_iter,
-        transform_early_exaggeration_iter =
-            transform_early_exaggeration_iter,
-        transform_n_negatives = transform_n_negatives,
-        initialization = initialization, keep_knn = keep_knn,
-        verbose = verbose, n.cores = n.cores, extra = list(...)
-    )
+run_landmark_tsne <- function(data, nn, settings, controls, extra) {
+    invalid_data <- fastembedr_is_gpu_knn(data) || is_knn_input(data)
+    if (!is.null(nn) || invalid_data) {
+        stop("Landmark t-SNE requires matrix input without `nn`.",
+            call. = FALSE
+        )
+    }
+    if (!is.null(settings$init_data) || !is.null(settings$Y_init)) {
+        stop("Landmark t-SNE does not accept `init_data` or `Y_init`.",
+            call. = FALSE
+        )
+    }
+    request <- c(controls, list(
+        perplexity = settings$perplexity,
+        n_components = settings$n_components,
+        standardize = settings$standardize, pca_dims = settings$pca_dims,
+        metric = settings$metric, seed = settings$seed,
+        backend = settings$backend, keep_knn = settings$keep_knn,
+        verbose = settings$verbose, n_threads = settings$n_threads,
+        extra = c(settings$optimizer, extra)
+    ))
     request <- normalize_landmark_tsne_request(request)
     state <- prepare_landmark_tsne_data(data, request)
     if (!length(state$selection$query_indices)) {

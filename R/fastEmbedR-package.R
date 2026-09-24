@@ -11,8 +11,9 @@
 #' `tsne_init = TRUE` when a t-SNE-ready initialization is needed.
 #' Score embeddings with [evaluate_embedding()]. Optional downstream graph
 #' utilities are available through [knn_graph()] and [graph_cluster()].
-#' Use [fastEmbedR_api()] for the complete canonical, advanced, diagnostic,
-#' secondary, and compatibility API map.
+#' Session defaults can be set with
+#' `options(backend = "cpu", n.cores = 4L)`; explicit function arguments take
+#' precedence over these options.
 #'
 #' UMAP exposes neighborhood, metric, graph mode, preprocessing, backend, seed,
 #' output dimension, and CPU thread count. Epochs, minimum distance, spread,

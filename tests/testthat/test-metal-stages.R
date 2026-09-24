@@ -140,7 +140,7 @@ test_that(paste(
     set.seed(91)
     x <- matrix(rnorm(360L), nrow = 60L, ncol = 6L)
     options(fastEmbedR.landmark_umap_refine_epochs = 2L)
-    fit <- fastEmbedR::landmark_umap(
+    fit <- fastEmbedR::umap(
         x,
         landmarks = 0.5,
         n_neighbors = 8L,
@@ -454,12 +454,13 @@ test_that("native Metal MPS rSVD matches reference PCA", {
             2e-8
         )
 
-        float_init <- fastEmbedR::tsne_pca_init(
+        float_init <- fastEmbedR::pca(
             float_x,
-            n_components = 2L,
+            ncomp = 2L,
             backend = "metal",
-            seed = 72L
-        )
+            seed = 72L,
+            tsne_init = TRUE
+        )$tsne_init
         expect_s4_class(float_init, "float32")
         expect_lt(
             abs(max(apply(float::dbl(float_init), 2L, stats::sd)) - 1e-4),
@@ -469,15 +470,12 @@ test_that("native Metal MPS rSVD matches reference PCA", {
         cache_file <- tempfile(fileext = ".rds")
         on.exit(unlink(cache_file), add = TRUE)
         saveRDS(float_init, cache_file)
-        cached_init <- fastEmbedR::tsne_pca_init(
-            float_x,
-            n_components = 2L,
-            backend = "metal",
-            seed = 72L,
-            cache_file = cache_file
-        )
+        cached_init <- readRDS(cache_file)
         expect_s4_class(cached_init, "float32")
-        expect_true(isTRUE(attr(cached_init, "fastEmbedR_init_cache_hit")))
+        expect_equal(
+            float::dbl(cached_init), float::dbl(float_init),
+            tolerance = 0
+        )
 
         bad_x <- x
         bad_x[4L, 3L] <- Inf
@@ -492,12 +490,13 @@ test_that("native Metal MPS rSVD matches reference PCA", {
         )
     }
 
-    init <- fastEmbedR::tsne_pca_init(
+    init <- fastEmbedR::pca(
         x,
-        n_components = 2L,
+        ncomp = 2L,
         backend = "metal",
-        seed = 72L
-    )
+        seed = 72L,
+        tsne_init = TRUE
+    )$tsne_init
     expect_identical(attr(init, "fastEmbedR_init_backend"), "metal_mps_rsvd")
     expect_identical(attr(init, "fastEmbedR_init_method"), "pca_rsvd")
     expect_equal(max(apply(init, 2L, stats::sd)), 1e-4, tolerance = 1e-8)

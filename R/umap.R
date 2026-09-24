@@ -17,15 +17,14 @@
 #'   from the supplied matrix.
 #' @param pca_dims Optional PCA dimension before KNN.
 #' @param metric KNN distance metric for one-call matrix input: `"euclidean"`,
-#'   `"cosine"`, `"correlation"`, or `"inner_product"`.
+#'   `"cosine"`, or `"correlation"`.
 #' @param nn Optional precomputed KNN result when `data` is a matrix.
 #' @param seed Random seed.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. CPU KNN
 #'   uses package-native HNSW. Metal uses package-native exact or recall-tuned
 #'   IVF-Flat search. CUDA uses cuVS brute-force exact search below 100,000
-#'   rows and cuVS IVF-Flat above that threshold; an explicitly enabled FAISS
-#'   GPU build may provide exact search. The KNN result stays on the device
-#'   through graph construction and optimization.
+#'   rows and cuVS IVF-Flat above that threshold. The KNN result stays on the
+#'   device through graph construction and optimization.
 #'   GPU requests must resolve to a real native backend; the package does not
 #'   relabel CPU work as GPU.
 #' @param n.cores Requested CPU core count. For matrix input, the value is
@@ -63,7 +62,8 @@
 #' optimizer-mode sweeps should use a
 #' general-purpose UMAP implementation; fastEmbedR does not claim API or
 #' parameter interchangeability with those packages.
-#' @return A `fastEmbedR_embedding` object.
+#' @return A `fastEmbedR_embedding` object. Landmark fits also contain `model`,
+#'   which can be passed to [project_landmark_model()] for new observations.
 #' @examples
 #' x <- scale(as.matrix(iris[, 1:4]))
 #' fit <- umap(x, n_neighbors = 15, seed = 1)
@@ -227,16 +227,40 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
     )
 }
 
+#' @param landmarks `FALSE` (the default) embeds all observations. A fraction
+#'   in `(0, 1)`, a positive landmark count, or explicit row indices enables
+#'   landmark embedding followed by fixed-reference projection of the remaining
+#'   rows.
+#' @param transform_k Number of landmark neighbors used to project non-landmark
+#'   observations. Used only when `landmarks` enables landmarking and defaults
+#'   to `n_neighbors`.
+#' @details Landmark mode fits the requested fuzzy or binary UMAP graph on the
+#' landmark rows, projects the remaining rows with query-to-reference KNN, and
+#' optionally refines only projected rows while landmark coordinates remain
+#' fixed. Precomputed KNN input cannot be combined with landmarking.
+#' The returned `model` retains the fitted preprocessing transform so new data
+#' can be supplied in the same original feature space.
 #' @rdname umap
 #' @export
 umap <- function(data, n_neighbors = NULL, n_components = 2L,
                     standardize = FALSE, pca_dims = NULL,
-                    metric = c(
-                        "euclidean", "cosine", "correlation",
-                        "inner_product"
-                    ), nn = NULL, seed = 4L,
+                    metric = c("euclidean", "cosine", "correlation"),
+                    nn = NULL, seed = 4L,
                     backend = NULL, n.cores = NULL, keep_knn = FALSE,
-                    graph_mode = c("fuzzy", "binary"), verbose = FALSE) {
+                    graph_mode = c("fuzzy", "binary"), verbose = FALSE,
+                    landmarks = FALSE, transform_k = NULL) {
+    if (landmark_embedding_requested(landmarks)) {
+        if (!is.null(nn) || is_knn_input(data)) {
+            stop("Landmark UMAP requires matrix input without `nn`.",
+                call. = FALSE
+            )
+        }
+        return(run_landmark_umap(
+            data, landmarks, n_neighbors, n_components, standardize,
+            pca_dims, metric, seed, backend, transform_k, n.cores,
+            keep_knn, graph_mode, verbose
+        ))
+    }
     state <- validate_umap_request(
         backend, graph_mode, n_components, n.cores, keep_knn
     )
@@ -251,7 +275,8 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
     if (is.null(n_neighbors)) {
         n_neighbors <- auto_embedding_k(nrow(x), "umap", include_self = FALSE)
     }
-    state$n_neighbors <- as.integer(n_neighbors)
+    n_neighbors <- validate_umap_n_neighbors(n_neighbors, nrow(x))
+    state$n_neighbors <- n_neighbors
     knn_state <- compute_umap_matrix_knn(x, nn, n_neighbors, metric, state)
     embedding <- timed_do_call(fast_knn_umap, list(
         indices = knn_state$knn, n_components = state$n_components,
@@ -263,43 +288,13 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
     )
 }
 
-#' Run landmark UMAP from a data matrix
-#'
-#' `landmark_umap()` embeds a landmark subset with [umap()] and projects the
-#' remaining observations against the fixed landmark embedding using
-#' query-to-reference KNN, local affine placement, and optional fixed-reference
-#' refinement. It is an explicit landmark approximation: the UMAP objective
-#' and parameters for the landmark subset are unchanged.
-#'
-#' @inheritParams umap
-#' @param standardize Center and scale columns before landmark selection and
-#'   neighbor search. Unlike [umap()], landmark UMAP defaults to `TRUE`.
-#' @param landmarks `TRUE` for an automatic subset, a fraction such as `0.5`, a
-#'   landmark count, or explicit row indices.
-#' @param transform_k Number of landmark neighbors used to project
-#'   non-landmark observations. Defaults to `n_neighbors`.
-#' @param graph_mode Graph weighting mode passed unchanged to the reference
-#'   [umap()] fit. `"fuzzy"` (the default) uses standard UMAP fuzzy graph
-#'   weights; `"binary"` uses a symmetric unit-weight sensitivity graph. The
-#'   fixed-reference projection algorithm is shared, but the fitted reference
-#'   layout and its recorded metadata retain the selected graph mode.
-#' @return A `fastEmbedR_embedding` object containing the full layout,
-#'   landmark and query indices, timings, and resolved parameters.
-#' @examples
-#' x <- scale(as.matrix(iris[1:60, 1:4]))
-#' fit <- landmark_umap(x, landmarks = 0.5, n_neighbors = 10, seed = 1)
-#' plot(fit)
-#' @export
-landmark_umap <- function(data, landmarks = 0.5, n_neighbors = NULL,
-                            n_components = 2L, standardize = TRUE,
-                            pca_dims = NULL, seed = 4L, backend = NULL,
-                            transform_k = NULL, n.cores = NULL,
-                            keep_knn = FALSE,
-                            graph_mode = c("fuzzy", "binary"),
-                            verbose = FALSE) {
+run_landmark_umap <- function(data, landmarks, n_neighbors, n_components,
+                                standardize, pca_dims, metric, seed, backend,
+                                transform_k, n.cores, keep_knn, graph_mode,
+                                verbose) {
     state <- prepare_landmark_umap(
         data, landmarks, n_neighbors, n_components, standardize,
-        pca_dims, seed, backend, n.cores, graph_mode
+        pca_dims, metric, seed, backend, n.cores, graph_mode
     )
     if (state$all_landmarks) {
         return(run_full_landmark_umap(
@@ -321,16 +316,15 @@ landmark_umap <- function(data, landmarks = 0.5, n_neighbors = NULL,
     )
 }
 
-validate_landmark_umap_k <- function(n_neighbors, n) {
+validate_umap_n_neighbors <- function(n_neighbors, n) {
     if (is.null(n_neighbors)) {
         n_neighbors <- auto_embedding_k(
             n,
             method = "umap", include_self = FALSE
         )
     }
-    value <- as.integer(n_neighbors)
-    invalid <- length(value) != 1L || is.na(value) ||
-        value < 1L || value >= n
+    value <- integer_scalar(n_neighbors)
+    invalid <- is.na(value) || value < 1L || value >= n
     if (invalid) {
         stop(
             "`n_neighbors` must be positive and smaller than `nrow(data)`.",
@@ -342,7 +336,8 @@ validate_landmark_umap_k <- function(n_neighbors, n) {
 
 prepare_landmark_umap <- function(data, landmarks, n_neighbors,
                                     n_components, standardize, pca_dims,
-                                    seed, backend, n.cores, graph_mode) {
+                                    metric, seed, backend, n.cores,
+                                    graph_mode) {
     backend <- resolve_embedding_backend(backend)
     graph_mode <- match.arg(graph_mode, c("fuzzy", "binary"))
     n_components <- validate_n_components(n_components)
@@ -351,7 +346,8 @@ prepare_landmark_umap <- function(data, landmarks, n_neighbors,
         seed = seed, backend = backend
     ))
     x <- prepared$value$data
-    n_neighbors <- validate_landmark_umap_k(n_neighbors, nrow(x))
+    metric <- resolve_embedding_metric(metric, x)
+    n_neighbors <- validate_umap_n_neighbors(n_neighbors, nrow(x))
     selection <- select_landmarks(
         x, landmarks,
         seed = seed, n.cores = n.cores
@@ -371,19 +367,35 @@ prepare_landmark_umap <- function(data, landmarks, n_neighbors,
         all_landmarks = all_landmarks, n = nrow(x),
         n_neighbors = n_neighbors, n_components = n_components,
         backend = backend, n_threads = n.cores,
-        graph_mode = graph_mode, seed = seed
+        graph_mode = graph_mode, metric = metric, seed = seed
     )
 }
 
 run_full_landmark_umap <- function(state, seed, keep_knn, verbose) {
-    umap(
+    fit <- umap(
         state$x,
         n_neighbors = state$n_neighbors,
         n_components = state$n_components, standardize = FALSE,
-        pca_dims = NULL, seed = seed, backend = state$backend,
+        pca_dims = NULL, metric = state$metric,
+        seed = seed, backend = state$backend,
         n.cores = state$n_threads, keep_knn = keep_knn,
         graph_mode = state$graph_mode, verbose = verbose
     )
+    elapsed <- state$preprocess_time[["elapsed"]] +
+        fit$metrics$elapsed[[1L]]
+    fit$model <- new_landmark_projection_model(
+        "umap", fit, state$x, state$selection, state$n,
+        state$n_neighbors, NULL, state$metric, state$graph_mode,
+        state$backend, state$seed, state$n_threads, elapsed,
+        state$prepared$transform
+    )
+    fit$landmarks <- list(
+        indices = state$selection$indices,
+        layout = fit$layout,
+        reference_fit = fit$model$fit,
+        projection_knn = NULL
+    )
+    fit
 }
 
 fit_landmark_umap_reference <- function(state, seed, keep_knn, verbose) {
@@ -393,18 +405,30 @@ fit_landmark_umap_reference <- function(state, seed, keep_knn, verbose) {
         knn <- landmark_reference_knn(
             x_landmarks,
             k = k, backend = state$backend,
-            n_threads = state$n_threads
+            n_threads = state$n_threads, metric = state$metric
         )
         fit <- umap(
             x_landmarks,
             n_neighbors = k,
             n_components = state$n_components, standardize = FALSE,
-            pca_dims = NULL, seed = seed, backend = state$backend,
+            pca_dims = NULL, metric = state$metric,
+            seed = seed, backend = state$backend,
             nn = knn, n.cores = state$n_threads, keep_knn = keep_knn,
             graph_mode = state$graph_mode, verbose = verbose
         )
     })
     list(fit = fit, knn = knn, time = timed, n_neighbors = k)
+}
+
+landmark_umap_projection_model <- function(state, reference) {
+    elapsed <- state$preprocess_time[["elapsed"]] +
+        reference$time[["elapsed"]]
+    new_landmark_projection_model(
+        "umap", reference$fit, state$partition$landmarks,
+        state$selection, state$n, reference$n_neighbors, NULL,
+        state$metric, state$graph_mode, state$backend, state$seed,
+        state$n_threads, elapsed, state$prepared$transform
+    )
 }
 
 project_landmark_umap_host <- function(state, fit, knn) {
@@ -446,7 +470,8 @@ project_landmark_umap_rows <- function(state, fit, transform_k, seed) {
             seed = seed + 503L, n_threads = state$n_threads,
             landmark_layout = fit$layout, all_data = state$x,
             landmark_indices = state$selection$indices,
-            query_rows = state$selection$query_indices
+            query_rows = state$selection$query_indices,
+            metric = state$metric
         )
         resident <- identical(state$backend, "cuda") &&
             fastembedr_is_gpu_knn(knn)
@@ -674,7 +699,8 @@ landmark_umap_parameters <- function(state, reference, projection,
         n_landmarks = n_landmarks,
         landmark_fraction = n_landmarks / state$n,
         landmark_selection = state$selection$method,
-        graph_mode = state$graph_mode, transform_k = projection$transform_k,
+        graph_mode = state$graph_mode, metric = state$metric,
+        transform_k = projection$transform_k,
         landmark_refinement = if (refinement$epochs > 0L) {
             "fixed_landmark_umap_rows"
         } else {
@@ -705,6 +731,7 @@ assemble_landmark_umap_fit <- function(state, reference, projection,
         transform = zero_proc_time()
     )
     extras <- list(
+        model = landmark_umap_projection_model(state, reference),
         landmarks = list(
             indices = state$selection$indices,
             layout = reference$fit$layout,

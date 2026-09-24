@@ -291,11 +291,6 @@ NumericMatrix cuda_pca_init_cuda_impl(NumericMatrix,
   Rcpp::stop("native CUDA PCA initialization is available only when the package is built with CUDA support.");
 }
 
-NumericMatrix raft_tsvd_init_cuda_impl(NumericMatrix,
-                                       int) {
-  Rcpp::stop("native RAFT TruncatedSVD initialization is available only when the package is built with CUDA and RAFT support.");
-}
-
 List pca_tsvd_cuda_impl(SEXP,
                         int,
                         bool,

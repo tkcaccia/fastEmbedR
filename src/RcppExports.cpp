@@ -472,18 +472,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// raft_tsvd_init_cuda_cpp
-NumericMatrix raft_tsvd_init_cuda_cpp(NumericMatrix data, int n_components);
-RcppExport SEXP _fastEmbedR_raft_tsvd_init_cuda_cpp(SEXP dataSEXP, SEXP n_componentsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericMatrix >::type data(dataSEXP);
-    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
-    rcpp_result_gen = Rcpp::wrap(raft_tsvd_init_cuda_cpp(data, n_components));
-    return rcpp_result_gen;
-END_RCPP
-}
 // pca_tsvd_cuda_cpp
 List pca_tsvd_cuda_cpp(SEXP data, int n_components, bool center, bool scale, int seed, int requested_method, int oversample, int power);
 RcppExport SEXP _fastEmbedR_pca_tsvd_cuda_cpp(SEXP dataSEXP, SEXP n_componentsSEXP, SEXP centerSEXP, SEXP scaleSEXP, SEXP seedSEXP, SEXP requested_methodSEXP, SEXP oversampleSEXP, SEXP powerSEXP) {
@@ -1667,16 +1655,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// native_cuda_faiss_gpu_available_cpp
-bool native_cuda_faiss_gpu_available_cpp();
-RcppExport SEXP _fastEmbedR_native_cuda_faiss_gpu_available_cpp() {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    rcpp_result_gen = Rcpp::wrap(native_cuda_faiss_gpu_available_cpp());
-    return rcpp_result_gen;
-END_RCPP
-}
 // native_cuda_knn_cpp
 Rcpp::List native_cuda_knn_cpp(SEXP data, int k, std::string method, std::string metric, double target_recall, bool keep_gpu);
 RcppExport SEXP _fastEmbedR_native_cuda_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP metricSEXP, SEXP target_recallSEXP, SEXP keep_gpuSEXP) {
@@ -1875,7 +1853,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_knn_structure_score_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_structure_score_cuda_cpp, 6},
     {"_fastEmbedR_silhouette_score_cuda_cpp", (DL_FUNC) &_fastEmbedR_silhouette_score_cuda_cpp, 3},
     {"_fastEmbedR_rsvd_multiply_cuda_cpp", (DL_FUNC) &_fastEmbedR_rsvd_multiply_cuda_cpp, 3},
-    {"_fastEmbedR_raft_tsvd_init_cuda_cpp", (DL_FUNC) &_fastEmbedR_raft_tsvd_init_cuda_cpp, 2},
     {"_fastEmbedR_pca_tsvd_cuda_cpp", (DL_FUNC) &_fastEmbedR_pca_tsvd_cuda_cpp, 8},
     {"_fastEmbedR_embedding_metal_available_cpp", (DL_FUNC) &_fastEmbedR_embedding_metal_available_cpp, 0},
     {"_fastEmbedR_spectral_knn_init_metal_cpp", (DL_FUNC) &_fastEmbedR_spectral_knn_init_metal_cpp, 5},
@@ -1949,7 +1926,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_native_metal_knn_cpp", (DL_FUNC) &_fastEmbedR_native_metal_knn_cpp, 5},
     {"_fastEmbedR_native_metal_query_knn_cpp", (DL_FUNC) &_fastEmbedR_native_metal_query_knn_cpp, 6},
     {"_fastEmbedR_native_cuda_knn_available_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_available_cpp, 0},
-    {"_fastEmbedR_native_cuda_faiss_gpu_available_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_faiss_gpu_available_cpp, 0},
     {"_fastEmbedR_native_cuda_knn_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_cpp, 6},
     {"_fastEmbedR_native_cuda_query_knn_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_query_knn_cpp, 7},
     {"_fastEmbedR_native_cuda_knn_to_host_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_to_host_cpp, 1},

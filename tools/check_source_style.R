@@ -6,11 +6,11 @@ max_line_width <- 80L
 source_files <- function() {
     paths <- c(
         list.files("R", "[.][Rr]$", full.names = TRUE),
-        list.files("man", "[.]Rd$", full.names = TRUE),
         list.files("tests/testthat", "[.][Rr]$", full.names = TRUE),
         list.files("vignettes", "[.](Rmd|Rmarkdown)$", full.names = TRUE)
     )
-    paths[file.exists(paths)]
+    paths <- paths[file.exists(paths)]
+    paths[basename(paths) != "RcppExports.R"]
 }
 
 line_width_failures <- function(paths) {

@@ -1,11 +1,10 @@
-test_that("embed_knn runs native openTSNE from supplied neighbours", {
+test_that("tsne_knn runs native t-SNE from supplied neighbours", {
     set.seed(321)
     x <- matrix(rnorm(50L * 5L), 50L, 5L)
     knn <- test_exact_knn(x, k = 16L, backend = "cpu")
 
-    layout <- embed_knn(
+    layout <- tsne_knn(
         knn,
-        method = "tsne",
         perplexity = 5,
         early_exaggeration_iter = 3L,
         n_iter = 4L,
@@ -26,6 +25,35 @@ test_that("embed_knn runs native openTSNE from supplied neighbours", {
     expect_equal(cfg$learning_rate, "auto_opt_sne_n_over_early_exaggeration")
     expect_equal(cfg$learning_rate_early, nrow(x) / cfg$early_exaggeration)
     expect_equal(cfg$learning_rate_normal, nrow(x) / cfg$early_exaggeration)
+})
+
+test_that("t-SNE integer controls reject fractional values", {
+    set.seed(320)
+    x <- matrix(rnorm(30L * 4L), 30L, 4L)
+    knn <- test_exact_knn(x, k = 8L, backend = "cpu")
+
+    expect_error(
+        tsne_knn(knn, perplexity = 3, n_neighbors = 3.5),
+        "positive integer"
+    )
+    expect_error(
+        tsne_knn(
+            knn, perplexity = 3,
+            early_exaggeration_iter = 1L, n_iter = 2.5
+        ),
+        "n_iter"
+    )
+    expect_error(
+        transform_tsne(
+            matrix(rnorm(20), nrow = 10),
+            knn = list(
+                indices = matrix(1:6, nrow = 3L),
+                distances = matrix(0.1, nrow = 3L, ncol = 2L)
+            ),
+            k = 1.5, perplexity = 1
+        ),
+        "positive integer"
+    )
 })
 
 test_that("t-SNE auto configuration uses compact affinity support", {
@@ -60,23 +88,14 @@ test_that("t-SNE auto configuration uses compact affinity support", {
     expect_false(large_fft$auto_kld_stop)
 })
 
-test_that("unsupported embedding methods fail at the public KNN dispatcher", {
-    set.seed(320)
-    x <- matrix(rnorm(32L * 4L), 32L, 4L)
-    knn <- test_exact_knn(x, k = 10L, backend = "cpu")
-
-    expect_error(embed_knn(knn, method = "infotsne"), "tsne", fixed = TRUE)
-})
-
 test_that("t-SNE exposes FFT and exact negative-gradient choices", {
     set.seed(312)
     x <- matrix(rnorm(42L * 4L), 42L, 4L)
     knn <- test_exact_knn(x, k = 13L, backend = "cpu")
 
     expect_error(
-        embed_knn(
+        tsne_knn(
             knn,
-            method = "tsne",
             perplexity = 4,
             negative_gradient_method = "bh",
             early_exaggeration_iter = 2L,
@@ -87,9 +106,8 @@ test_that("t-SNE exposes FFT and exact negative-gradient choices", {
         "removed"
     )
     expect_error(
-        embed_knn(
+        tsne_knn(
             knn,
-            method = "tsne",
             perplexity = 4,
             negative_gradient_method = "sampled",
             early_exaggeration_iter = 2L,
@@ -100,9 +118,8 @@ test_that("t-SNE exposes FFT and exact negative-gradient choices", {
         "changes the optimization mathematics"
     )
 
-    exact <- embed_knn(
+    exact <- tsne_knn(
         knn,
-        method = "tsne",
         perplexity = 4,
         negative_gradient_method = "exact",
         early_exaggeration_iter = 2L,
@@ -112,9 +129,8 @@ test_that("t-SNE exposes FFT and exact negative-gradient choices", {
     )
     expect_equal(attr(exact, "fastEmbedR_config")$repulsion, "pair_symmetric")
 
-    fft <- embed_knn(
+    fft <- tsne_knn(
         knn,
-        method = "tsne",
         perplexity = 4,
         negative_gradient_method = "fft",
         early_exaggeration_iter = 2L,

@@ -26,6 +26,8 @@ jobs:
             any::covr
             any::testthat
           needs: coverage
+      - name: Enforce source size and style limits
+        run: Rscript tools/check_source_style.R
       - name: Generate component coverage evidence
         run: Rscript tools/report_test_coverage.R --output-dir coverage-evidence/host
       - name: Archive coverage evidence

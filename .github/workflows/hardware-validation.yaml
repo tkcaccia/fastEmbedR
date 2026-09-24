@@ -85,7 +85,6 @@ jobs:
         env:
           FASTEMBEDR_USE_CUDA: "1"
           FASTEMBEDR_USE_CUVS: "1"
-          FASTEMBEDR_USE_FAISS_GPU: "0"
           FASTEMBEDR_USE_RAFT: "1"
           FASTEMBEDR_REQUIRE_CUDA: "1"
           PACKAGE_REQUIRE_CUDA: "1"

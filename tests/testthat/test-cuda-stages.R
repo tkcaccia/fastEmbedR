@@ -33,9 +33,22 @@ test_that(paste(
         seed = 71L,
         backend = "cuda"
     )
+    raft_compiled <- isTRUE(
+        fastEmbedR:::fastembedr_build_config_cpp()$raft_compiled
+    )
+    expected_pca_backend <- if (raft_compiled) {
+        "cuda_raft_tsvd"
+    } else {
+        "cuda_native_rsvd"
+    }
+    expected_pca_method <- if (raft_compiled) {
+        "raft_tsvd"
+    } else {
+        "rsvd"
+    }
     expect_equal(dim(cuda_pca$data), c(60L, 4L))
-    expect_equal(cuda_pca$preprocess$pca_backend, "cuda_raft_tsvd")
-    expect_equal(cuda_pca$preprocess$pca_method, "raft_tsvd")
+    expect_equal(cuda_pca$preprocess$pca_backend, expected_pca_backend)
+    expect_equal(cuda_pca$preprocess$pca_method, expected_pca_method)
 
     reference_layout <- cbind(rnorm(8L), rnorm(8L))
     projection_indices <- matrix(
@@ -150,8 +163,17 @@ test_that("CUDA PCA preserves float32 input and never falls back", {
         seed = 72L
     )
 
-    expect_equal(fit$backend, "cuda_raft_tsvd")
-    expect_equal(fit$method, "raft_tsvd")
+    raft_compiled <- isTRUE(
+        fastEmbedR:::fastembedr_build_config_cpp()$raft_compiled
+    )
+    expected_backend <- if (raft_compiled) {
+        "cuda_raft_tsvd"
+    } else {
+        "cuda_native_rsvd"
+    }
+    expected_method <- if (raft_compiled) "raft_tsvd" else "rsvd"
+    expect_equal(fit$backend, expected_backend)
+    expect_equal(fit$method, expected_method)
     expect_equal(fit$precision, "float32")
     expect_s4_class(fit$scores, "float32")
     expect_s4_class(fit$loadings, "float32")
@@ -165,7 +187,7 @@ test_that("CUDA PCA preserves float32 input and never falls back", {
         seed = 72L,
         backend = "cuda"
     )
-    expect_equal(prepared$preprocess$pca_backend, "cuda_raft_tsvd")
+    expect_equal(prepared$preprocess$pca_backend, expected_backend)
     expect_s4_class(prepared$data, "float32")
 })
 
@@ -183,9 +205,6 @@ test_that("CUDA PCA selects rSVD for wide low-rank input", {
     fit <- fastEmbedR:::fastembedr_cuda_pca(
         x, ncomp = 2L, seed = 73L, method = "auto"
     )
-    reference <- fastEmbedR:::fastembedr_cuda_pca(
-        x, ncomp = 2L, seed = 73L, method = "tsvd"
-    )
     repeated <- fastEmbedR:::fastembedr_cuda_pca(
         x, ncomp = 2L, seed = 73L, method = "rsvd"
     )
@@ -194,12 +213,30 @@ test_that("CUDA PCA selects rSVD for wide low-rank input", {
     expect_identical(fit$method, "rsvd")
     expect_identical(fit$selection, "auto")
     expect_equal(fit$scores, repeated$scores, tolerance = 1e-6)
-    agreement <- svd(
-        crossprod(qr.Q(qr(fit$loadings)), qr.Q(qr(reference$loadings))),
-        nu = 0L,
-        nv = 0L
-    )$d
-    expect_gte(min(agreement), 0.995)
+    raft_compiled <- isTRUE(
+        fastEmbedR:::fastembedr_build_config_cpp()$raft_compiled
+    )
+    if (raft_compiled) {
+        reference <- fastEmbedR:::fastembedr_cuda_pca(
+            x, ncomp = 2L, seed = 73L, method = "tsvd"
+        )
+        agreement <- svd(
+            crossprod(
+                qr.Q(qr(fit$loadings)),
+                qr.Q(qr(reference$loadings))
+            ),
+            nu = 0L,
+            nv = 0L
+        )$d
+        expect_gte(min(agreement), 0.995)
+    } else {
+        expect_error(
+            fastEmbedR:::fastembedr_cuda_pca(
+                x, ncomp = 2L, seed = 73L, method = "tsvd"
+            ),
+            "RAFT TSVD was requested"
+        )
+    }
 
     embedding <- fastEmbedR::tsne(
         x,

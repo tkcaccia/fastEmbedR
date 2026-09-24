@@ -53,8 +53,9 @@ interpolation/FFT optimizers support only \code{2L}.}
 compute PCA initialization for KNN-input runs. It is not used for neighbor
 search or optimization.}
 
-\item{Y_init}{Optional explicit initial layout. Use \code{\link[=tsne_pca_init]{tsne_pca_init()}} to
-precompute and reuse a PCA initialization.}
+\item{Y_init}{Optional explicit initial layout. Use
+\code{pca(data, tsne_init = TRUE)$tsne_init} to precompute and reuse a PCA
+initialization.}
 
 \item{seed}{Random seed.}
 

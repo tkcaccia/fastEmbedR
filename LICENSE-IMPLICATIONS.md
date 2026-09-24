@@ -19,7 +19,7 @@ The intended permissive-license posture is:
   Metal, and CUDA sources;
 - GPL packages may be used only as optional benchmark/reference tools, not as
   Imports, LinkingTo dependencies, vendored source, or required runtime code;
-- optional external libraries such as FAISS, cuVS, CUDA, cuFFT, and Apple Metal
+- optional external libraries such as cuVS, CUDA, cuFFT, and Apple Metal
   are linked or used only when available and are reported explicitly.
 
 ## Package Core Versus Benchmark Code
@@ -45,7 +45,7 @@ The detailed provenance log is in `inst/NOTICE` and
 | UMAP paper / umap-learn | BSD-3-Clause implementation; algorithm paper | Mathematical reference | Compatible as algorithmic reference; no Python source vendored or called. |
 | `uwot` | GPL (>= 3) | External R benchmark and behavioural reference only | Do not copy, vendor, link, or require source/runtime code in MIT package core. |
 | `Rtsne` | BSD-style | KNN-input t-SNE validation/reference behaviour | Compatible as reference; old Barnes-Hut C++ files are not vendored. |
-| FAISS | MIT | CPU HNSW/Metal IVF derivative and optional direct FAISS GPU linkage | Compatible; exact derivative files and FAISS notice are retained. FAISS source/binaries are not bundled. |
+| FAISS | MIT | CPU HNSW and Metal IVF derivative | Compatible; exact derivative files and FAISS notice are retained. FAISS source/binaries are not bundled or linked. |
 | Faiss-mlx | Apache-2.0 | Metal fused list-scan/top-k derivative | Compatible; Apache-2.0 source-specific terms and notice remain in force. No MLX/Python runtime. |
 | `faissR` | MIT | Pinned source for the distilled native CUDA adapter | Compatible; `fastEmbedR` does not import, link, or call the `faissR` R package. |
 | RAPIDS cuVS | Apache-2.0 | Optional direct CUDA C API linkage | Compatible as an external linked dependency; source/binaries are not bundled. |

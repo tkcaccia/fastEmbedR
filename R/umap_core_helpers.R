@@ -58,25 +58,16 @@ profile_umap_knn_parameters <- function(cfg, indices, distances, knn) {
     apply_prepared_umap_policy(cfg, policy)
 }
 
-apply_umap_thread_override <- function(cfg,
-                                        n_threads,
-                                        argument = "n_threads") {
+apply_umap_thread_override <- function(cfg, n_threads) {
     if (is.null(n_threads)) {
-        cfg$n.cores_requested <- cfg$n_threads
-        cfg$n.cores_effective <- cfg$n_threads
-        return(cfg)
+        n_threads <- getOption("n.cores", NULL)
+        if (is.null(n_threads)) {
+            cfg$n.cores_requested <- cfg$n_threads
+            cfg$n.cores_effective <- cfg$n_threads
+            return(cfg)
+        }
     }
-    n_threads <- as.integer(n_threads)
-    invalid <- length(n_threads) != 1L ||
-        is.na(n_threads) ||
-        !is.finite(n_threads) ||
-        n_threads < 1L
-    if (invalid) {
-        stop(
-            sprintf("`%s` must be NULL or a positive integer.", argument),
-            call. = FALSE
-        )
-    }
+    n_threads <- resolve_n_cores(n_threads)
     cfg$n.cores_requested <- as.integer(n_threads)
     cfg$n_threads <- as.integer(max(1L, min(4L, n_threads)))
     cfg$n.cores_effective <- cfg$n_threads

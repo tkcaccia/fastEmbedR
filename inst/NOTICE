@@ -35,9 +35,8 @@ Adapted or vendored source
    Upstream files: faiss/impl/HNSW.{h,cpp}, faiss/IndexHNSW.{h,cpp},
                    faiss/IndexIVF.{h,cpp}, faiss/IndexIVFFlat.{h,cpp}
    Boundary: the CPU HNSW organization and Metal IVF organization are adapted
-             into native fastEmbedR source. The optional CUDA exact route
-             calls an installed FAISS GPU bfKnn API. FAISS source and binaries
-             are not bundled.
+             into native fastEmbedR source. FAISS source and binaries are not
+             bundled or linked.
    License copy: LICENSES/FAISS-LICENSE
 
 2. MLXPorts/Faiss-mlx
@@ -114,9 +113,8 @@ shared libraries. configure enables them only when their installed headers and
 libraries are found or explicitly requested. Exact installed versions belong
 in the build and hardware-validation manifest.
 
-* FAISS GPU (MIT): optional libfaiss linkage for bfKnn exact CUDA search.
 * RAPIDS cuVS (Apache-2.0): optional libcuvs_c/libcuvs linkage for CUDA
-  IVF-Flat search. License copy: LICENSES/CUVS-LICENSE.
+  exact and IVF-Flat search. License copy: LICENSES/CUVS-LICENSE.
 * RAPIDS RAFT (Apache-2.0): optional installed TSVD headers and runtime
   dependencies for resident CUDA PCA initialization.
 * RAPIDS RMM and rapids-logger (Apache-2.0): linked only with the optional

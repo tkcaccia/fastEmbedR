@@ -11,7 +11,9 @@ navbar:
 
 home:
   title: fastEmbedR
-  description: Native UMAP and interpolation-based t-SNE from data or precomputed nearest neighbors.
+  description: >-
+    Native UMAP and interpolation-based t-SNE from data or precomputed
+    nearest neighbors.
 
 articles:
   - title: Start Here
@@ -25,37 +27,28 @@ reference:
     contents:
       - tsne
       - tsne_knn
-      - tsne_pca_init
       - prepare_tsne_knn
-      - embed_knn
       - transform_tsne
-      - landmark_tsne
   - title: UMAP Embeddings
     desc: Native UMAP embedding from data or precomputed nearest neighbors.
     contents:
       - umap
       - umap_knn
       - prepare_umap_knn
-      - landmark_umap
-  - title: Backend Configuration and Initialization
-    desc: Select execution backends and construct package-native initializations.
+  - title: Initialization
+    desc: Construct package-native PCA and UMAP initializations.
     contents:
-      - fastEmbedR_backend
-      - fastEmbedR_capabilities
-      - fastEmbedR_api
       - pca
-      - tsne_pca_init
       - umap_init
   - title: Nearest-Neighbor Precomputation
     desc: Build reusable reference and query neighbor structures.
     contents:
       - precompute_knn
       - precompute_query_knn
-  - title: Landmark Models
-    desc: Select landmarks, fit reference embeddings, and project new samples.
+  - title: Landmark Utilities
+    desc: Select landmarks and project valid landmark models.
     contents:
       - select_landmarks
-      - fit_landmark_model
       - project_landmark_model
   - title: Graph Utilities
     desc: Construct and cluster graphs derived from data or embeddings.
@@ -66,3 +59,11 @@ reference:
     desc: Score local preservation, labels, and global structure.
     contents:
       - evaluate_embedding
+  - title: Object Methods
+    desc: Print and plot package result objects.
+    contents:
+      - plot.fastEmbedR_embedding
+      - print.fastEmbedR_embedding
+      - print.fastEmbedR_graph
+      - print.fastEmbedR_graph_cluster
+      - print.fastEmbedR_umap_initialization

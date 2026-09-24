@@ -13,11 +13,11 @@ expect_embedding <- function(layout, n) {
 test_that("public API is KNN and t-SNE focused", {
     exports <- getNamespaceExports("fastEmbedR")
     expect_true(all(c(
-        "umap", "umap_knn", "tsne", "tsne_knn", "embed_knn",
-        "evaluate_embedding", "transform_tsne", "landmark_tsne",
+        "umap", "umap_knn", "tsne", "tsne_knn",
+        "evaluate_embedding", "transform_tsne",
         "umap_init", "prepare_umap_knn", "prepare_tsne_knn", "precompute_knn",
-        "precompute_query_knn", "select_landmarks", "fit_landmark_model",
-        "project_landmark_model", "pca", "fastEmbedR_capabilities",
+        "precompute_query_knn", "select_landmarks",
+        "project_landmark_model", "pca",
         "knn_graph", "graph_cluster"
     ) %in% exports))
 
@@ -29,6 +29,12 @@ test_that("public API is KNN and t-SNE focused", {
     expect_true(all(c("n.cores", "seed", "tsne_init") %in% pca_args))
     expect_false("method" %in% pca_args)
     expect_identical(formals(pca)$tsne_init, FALSE)
+    removed_exports <- c(
+        "embed_knn", "fastEmbedR_api", "fastEmbedR_capabilities",
+        "fastEmbedR_backend", "fit_landmark_model", "tsne_pca_init",
+        "landmark_tsne", "landmark_umap"
+    )
+    expect_false(any(removed_exports %in% exports))
     expect_false(any(c(
         "supervised_umap", "infotsne", "pacmap", "trimap",
         "localmap", "transform_embedding",
@@ -36,6 +42,17 @@ test_that("public API is KNN and t-SNE focused", {
         "knn_fit", "predict_proba", "knn_recall", "faiss_available",
         "cuvs_available", "cuda_available", "metal_available", "backend_info"
     ) %in% exports))
+    removed_private <- c(
+        "backend_info", "fastembedr_cuda_tsvd_pca",
+        "fastembedr_metal_tsvd_pca", "raft_tsvd_init_cuda_cpp"
+    )
+    expect_false(any(vapply(
+        removed_private,
+        exists,
+        logical(1L),
+        envir = asNamespace("fastEmbedR"),
+        inherits = FALSE
+    )))
 
     expect_identical(
         names(formals(precompute_knn)),
@@ -44,11 +61,10 @@ test_that("public API is KNN and t-SNE focused", {
 
     expect_true("n.cores" %in% names(formals(tsne)))
     expect_true("n.cores" %in% names(formals(tsne_knn)))
-    expect_true("n.cores" %in% names(formals(tsne_pca_init)))
     expect_true("n.cores" %in% names(formals(umap)))
     expect_true("n.cores" %in% names(formals(umap_knn)))
-    expect_true("n.cores" %in% names(formals(embed_knn)))
-    expect_true("n.cores" %in% names(formals(landmark_tsne)))
+    expect_true("landmarks" %in% names(formals(tsne)))
+    expect_true("landmarks" %in% names(formals(umap)))
     expect_true("n.cores" %in% names(formals(transform_tsne)))
     expect_true("n.cores" %in% names(formals(evaluate_embedding)))
     expect_true("n.cores" %in% names(formals(knn_graph)))
@@ -66,41 +82,6 @@ test_that("core exported functions have tiny t-SNE smoke tests", {
     expect_length(fastEmbedR:::embedding_metal_available_cpp(), 1L)
     expect_type(fastEmbedR:::embedding_cuda_available_cpp(), "logical")
     expect_length(fastEmbedR:::embedding_cuda_available_cpp(), 1L)
-    info <- fastEmbedR_capabilities()
-    expect_s3_class(info, "data.frame")
-    expect_true(all(c(
-        "backend", "status", "build_mode", "compiled",
-        "cuda_core_compiled", "cuvs_compiled", "faiss_gpu_compiled",
-        "raft_compiled", "diagnostic_only", "available",
-        "knn_available", "embedding_available", "device", "knn_engine",
-        "precision", "runtime_libraries", "unavailable_reason"
-    ) %in% names(info)))
-    expect_true(all(c("cpu", "cuvs", "cuda", "metal") %in% info$backend))
-    expect_true(isTRUE(info$available[info$backend == "cpu"]))
-    expect_match(info$knn_engine[info$backend == "cpu"], "HNSW")
-    expect_match(info$precision[info$backend == "cpu"], "float32")
-    expect_false(is.na(info$device[info$backend == "cpu"]))
-    expect_true(all(is.na(info$unavailable_reason[info$available])))
-    expect_true(all(info$status %in% c(
-        "available_functional", "unavailable_not_built",
-        "unavailable_runtime", "diagnostic_only"
-    )))
-    if (isTRUE(info$diagnostic_only[[1L]])) {
-        expect_true(all(info$status == "diagnostic_only"))
-        expect_true(info$compiled[info$backend == "cpu"])
-        expect_false(any(info$compiled[info$backend != "cpu"]))
-    }
-    cuda <- info[info$backend == "cuda", , drop = FALSE]
-    if (identical(cuda$status, "available_functional")) {
-        expect_true(cuda$compiled)
-        expect_true(cuda$available)
-    }
-    if (identical(cuda$status, "unavailable_not_built")) {
-        expect_false(cuda$compiled)
-        expect_false(cuda$available)
-    }
-    expect_identical(info, fastEmbedR:::backend_info())
-
     knn <- test_exact_knn(x, backend = "cpu")
     expect_type(knn, "list")
     expected_dim <- c(
@@ -109,14 +90,14 @@ test_that("core exported functions have tiny t-SNE smoke tests", {
     expect_equal(dim(knn$indices), expected_dim)
     expect_equal(dim(knn$distances), expected_dim)
     expect_equal(attr(knn, "backend"), "test_exact")
-    layout <- embed_knn(
-        knn, method = "tsne", perplexity = 1,
+    layout <- tsne_knn(
+        knn, perplexity = 1,
         early_exaggeration_iter = 2L, n_iter = 3L
     )
     expect_embedding(layout, n)
     expect_equal(attr(layout, "fastEmbedR_config")$method, "tsne")
 
-    layout_umap <- embed_knn(knn, method = "umap")
+    layout_umap <- umap_knn(knn)
     expect_embedding(layout_umap, n)
     expect_equal(attr(layout_umap, "fastEmbedR_config")$method, "umap")
 

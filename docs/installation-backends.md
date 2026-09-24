@@ -4,16 +4,10 @@ This page defines the build contract for CPU, Metal, and CUDA installations.
 Backend names are strict: an unavailable requested accelerator raises an error
 and is never relabelled CPU work.
 
-## Capability states
+## Diagnostic-only builds
 
-`fastEmbedR_capabilities()` reports four distinct states:
-
-- `available_functional`: compiled code and a usable runtime device exist;
-- `unavailable_not_built`: the installed package lacks that backend;
-- `unavailable_runtime`: code was compiled but no usable runtime device exists;
-- `diagnostic_only`: the package was deliberately built without accelerators.
-
-The diagnostic-only build is intended for capability/error-path testing:
+The diagnostic-only build is intended for unavailable-backend error-path
+testing:
 
 ```sh
 FASTEMBEDR_DIAGNOSTIC_ONLY=1 R CMD INSTALL fastEmbedR_0.1.tar.gz
@@ -43,7 +37,9 @@ FASTEMBEDR_USE_CUDA=0 R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 ```
 
 ```r
-subset(fastEmbedR_capabilities(), backend == "metal")
+x <- matrix(runif(1024 * 16), nrow = 1024)
+fit <- fastEmbedR::umap(x, backend = "metal", n_neighbors = 15)
+stopifnot(identical(fit$parameters$backend, "metal"))
 ```
 
 ## CUDA discovery and validation
@@ -70,15 +66,13 @@ consistently to compile/link probes and package CUDA translation units.
 
 Detection is not based on the presence of `nvcc` alone. Configure compiles and
 links a C++17 CUDA program that references the CUDA runtime, cuFFT, cuBLAS,
-cuSOLVER, and cuRAND, and verifies CUB and Thrust headers. It separately compiles and links
-a cuVS program against `libcuvs_c` and `libcuvs`.
+cuSOLVER, and cuRAND, and verifies CUB and Thrust headers. It separately
+compiles and links a cuVS program against `libcuvs_c` and `libcuvs`.
 
-The package's core CUDA KNN routes use cuVS brute force and IVF-Flat. FAISS GPU
-is optional and disabled by default. If explicitly enabled, its headers and
-library must pass an additional compile/link test. RAFT TSVD is likewise
-optional and receives its own NVCC compile/link test when requested. In a
-RAFT-enabled build, CUDA PCA automatically selects package-native rSVD or RAFT
-TSVD from matrix shape and requested rank.
+The package's CUDA KNN routes use cuVS brute force and IVF-Flat. RAFT TSVD is
+optional and receives its own NVCC compile/link test when requested. CUDA PCA
+always has a package-native rSVD route; a RAFT-enabled build may select RAFT
+TSVD for matrix shapes where it is preferable.
 
 ## Compiler selection
 
@@ -102,7 +96,6 @@ OpenMP, and C++ runtime linkage.
 PACKAGE_REQUIRE_CUDA=1 \
 FASTEMBEDR_USE_CUDA=1 \
 FASTEMBEDR_USE_CUVS=1 \
-FASTEMBEDR_USE_FAISS_GPU=0 \
 FASTEMBEDR_CUDA_ARCH="80 86 89 90" \
 CUDA_HOME=/usr/local/cuda \
 CUVS_HOME=/opt/rapids \
@@ -113,7 +106,7 @@ R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 Strict mode fails configuration when native CUDA or cuVS cannot be built.
 `FASTEMBEDR_REQUIRE_CUDA=1` is an equivalent package-specific spelling.
 
-Optional automatic CUDA rSVD/RAFT TSVD PCA:
+Optional RAFT TSVD branch for automatic CUDA PCA:
 
 ```sh
 FASTEMBEDR_USE_RAFT=1 \
@@ -121,15 +114,8 @@ RAFT_HOME=/opt/rapids \
 RAPIDS_HOME=/opt/rapids
 ```
 
-Optional FAISS GPU exact search:
-
-```sh
-FASTEMBEDR_USE_FAISS_GPU=1 \
-FAISS_HOME=/opt/faiss
-```
-
-The architecture list affects fastEmbedR translation units only. cuVS, RAFT,
-and optional FAISS must also contain compatible kernels or PTX.
+The architecture list affects fastEmbedR translation units only. cuVS and
+RAFT must also contain compatible kernels or PTX.
 
 ## Runtime paths
 

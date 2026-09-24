@@ -32,7 +32,10 @@ body:
     id: capabilities
     attributes:
       label: Capabilities and session
-      description: Include fastEmbedR_capabilities(), packageVersion("fastEmbedR"), and sessionInfo().
+      description: >-
+        Include packageVersion("fastEmbedR"), the backend and n.cores
+        options, sessionInfo(), and returned backend metadata or the full
+        backend error.
       render: text
     validations:
       required: true

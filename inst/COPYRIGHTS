@@ -25,8 +25,8 @@ License: MIT
 Upstream: adapted from faissR commit
           f37ea97c5774200025b1480770b8ecbf1d2d7919
 License file: LICENSES/FAISSR-LICENSE
-Comment: Calls installed FAISS GPU and cuVS libraries; those libraries are not
-         redistributed in the package.
+Comment: Calls installed cuVS libraries; those libraries are not redistributed
+         in the package.
 
 Files: src/dlpack/dlpack.h
 Copyright: DMLC contributors

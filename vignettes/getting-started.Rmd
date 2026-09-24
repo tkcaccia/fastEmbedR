@@ -91,49 +91,39 @@ fit_cuda <- fastEmbedR::umap(x, backend = "cuda", seed = 4)
 native nearest-neighbor search and the CPU graph, affinity, and optimization
 stages that support parallel execution. For UMAP, the optimizer currently uses
 at most four workers and records the requested and effective values. When
-`n.cores` is omitted, KNN uses one worker, UMAP selects a size-aware default
-from one to four workers, and t-SNE uses its thread option, which defaults to
-four workers. Metal and CUDA execute on their respective accelerators and
-ignore `n.cores`; the argument does not control GPU concurrency.
+`n.cores` is omitted, `options(n.cores = ...)` is used when set. Otherwise KNN
+and PCA use one worker, UMAP selects a size-aware default from one to four
+workers, and t-SNE uses four workers. Metal and CUDA execute on their respective
+accelerators and ignore `n.cores`; the argument does not control GPU
+concurrency.
 
-For an interactive session, set a default once and omit `backend` from later
-calls:
+For an interactive session, set defaults once and omit `backend` and
+`n.cores` from later calls:
 
 ```r
-old_backend <- getOption("fastEmbedR.backend")
+old_options <- options(backend = "cpu", n.cores = 4L)
 
-fastEmbedR::fastEmbedR_backend("metal")
-fastEmbedR::fastEmbedR_backend()       # reports "metal"
-u <- fastEmbedR::umap(x)               # uses Metal
+u <- fastEmbedR::umap(x)
 t <- fastEmbedR::tsne(x, perplexity = 10)
 
 u.cpu <- fastEmbedR::umap(             # explicit arguments take precedence
     x,
     backend = "cpu",
-    n.cores = 4
+    n.cores = 2
 )
 
-options(fastEmbedR.backend = old_backend)
+options(old_options)
 ```
 
-The equivalent base-R setting is
-`options(fastEmbedR.backend = "cpu")`, `"metal"`, or `"cuda"`. For a batch
-job, set `FASTEMBEDR_BACKEND` before starting R, for example
+Set `options(backend = "metal")` or `options(backend = "cuda")` for an
+accelerator session. For a batch job, set `FASTEMBEDR_BACKEND` before starting
+R, for example
 `FASTEMBEDR_BACKEND=cuda Rscript analysis.R`. Resolution precedence is:
 
 1. the explicit `backend` function argument;
-2. `options(fastEmbedR.backend = ...)` or `fastEmbedR_backend()`;
+2. `options(backend = ...)`;
 3. the `FASTEMBEDR_BACKEND` environment variable;
 4. CPU when none of the above is set.
-
-Before requesting an accelerator, inspect the installed build and runtime
-device support:
-
-```r
-fastEmbedR::fastEmbedR_capabilities()[
-    , c("backend", "available", "device", "knn_engine", "unavailable_reason")
-]
-```
 
 The backend requested by the user and the backend that actually ran are also
 recorded in returned objects, for example
@@ -150,20 +140,9 @@ The public workflow is intentionally small:
 | Run interpolation-based t-SNE from a data matrix | `tsne()` |
 | Reuse a KNN graph | `umap_knn()` or `tsne_knn()` |
 | Compute reusable PCA scores or t-SNE initialization | `pca()` |
-| Approximate a very large run with landmarks | Landmark functions |
+| Approximate a very large run | `landmarks` in `tsne()` or `umap()` |
 | Place new observations in a fixed t-SNE reference | `transform_tsne()` |
 | Quantify embedding quality | `evaluate_embedding()` |
-
-`fastEmbedR_api()` is the normative inventory for the installed release. It
-separates these canonical workflows from advanced prepared-state interfaces,
-diagnostics, secondary graph utilities, and the compatibility dispatcher, and
-reports accepted/returned classes, backend support, residency, related methods,
-and lifecycle status.
-
-```{r api-map}
-api <- fastEmbedR::fastEmbedR_api()
-api[api$tier == "canonical", c("function", "purpose", "return_class")]
-```
 
 Because other R packages export generic names such as `umap()` and `pca()`, use
 `fastEmbedR::umap()` and `fastEmbedR::pca()` in scripts, package code, and
@@ -361,11 +340,11 @@ layout_tsne_fixed_init <- tsne(
 
 CPU PCA uses the package-native float32 blocked rSVD path. Metal uses a native
 float32 block-subspace rSVD with Metal Performance Shaders matrix products.
-CUDA automatically selects package-native rSVD for sufficiently wide,
-low-rank problems and RAPIDS RAFT TSVD for narrower or less-truncated
-problems. No backend calls Python or `reticulate`. Float32 CUDA input is
-consumed without an intermediate R double matrix, and float32 scores and
-loadings are preserved.
+CUDA always provides package-native rSVD and may select RAPIDS RAFT TSVD for
+narrower or less-truncated problems when that optional route is enabled. No
+backend calls Python or `reticulate`. Float32 CUDA input is consumed without
+an intermediate R double matrix, and float32 scores and loadings are
+preserved.
 
 # Reusing a nearest-neighbor graph
 
@@ -611,50 +590,11 @@ that reference. It is never activated silently by `umap()` or `tsne()`.
 The final layout still has one row per input observation. Reference and
 projection searches use fastEmbedR's native KNN routes.
 
-The staged API keeps selection, reference fitting, and projection separate.
-This is useful when the same landmark reference will be reused:
-
-```{r staged-landmarking}
-landmark_selection <- select_landmarks(
-    x,
-    landmarks = 0.5,
-    seed = 4,
-    n.cores = 2
-)
-
-umap_reference <- fit_landmark_model(
-    x,
-    landmark_selection,
-    method = "umap",
-    n_neighbors = 15,
-    graph_mode = "fuzzy",
-    backend = "cpu",
-    n.cores = 2,
-    seed = 4
-)
-
-umap_projected <- project_landmark_model(
-    umap_reference,
-    x,
-    refinement_epochs = 50,
-    n.cores = 2
-)
-```
-
-`fit_landmark_model()` invokes the ordinary production `umap()` or
-`tsne()` implementation on the reference rows. Consequently, UMAP
-`graph_mode`, optimizer settings, seed, and backend are explicit and
-consistent with a full-data fit. `project_landmark_model()` computes only the
-query-to-reference neighbors. It does not recompute neighbors among
-landmarks or among query observations. Passing a matrix of new observations
-instead of `x` projects those observations into the same fixed reference
-embedding.
-
-The one-call functions below perform the same workflow when the intermediate
-selection and model do not need to be retained.
+The one-call functions perform selection, reference fitting, query-to-reference
+neighbor search, projection, and optional fixed-reference refinement.
 
 ```{r landmarking}
-fit_landmark_umap <- landmark_umap(
+fit_landmark_umap <- umap(
     x,
     landmarks = 0.5,
     n_neighbors = 15,
@@ -664,7 +604,7 @@ fit_landmark_umap <- landmark_umap(
     seed = 4
 )
 
-fit_landmark_tsne <- landmark_tsne(
+fit_landmark_tsne <- tsne(
     x,
     landmarks = 0.5,
     perplexity = 10,
@@ -709,6 +649,11 @@ query search and keeps KNN, layouts, and refinement buffers resident on the
 GPU. The result records landmark count, fraction, projection backend, and
 separate reference, query-KNN, and transform timings so a landmark
 approximation cannot be mistaken for a full embedding.
+
+Each integrated landmark fit also retains a reusable model in `$model`.
+`project_landmark_model(fit$model, newdata)` applies the fitted preprocessing
+transform and projects genuinely new observations while keeping the reference
+coordinates fixed.
 
 # Measuring embedding quality
 
@@ -774,7 +719,7 @@ The backend argument has exactly three choices.
 | `"cuda"` | Exact or IVF-Flat | CUDA kernels |
 
 CPU t-SNE uses a fast Fourier transform (FFT) grid. Metal uses native
-Objective-C++ kernels. CUDA uses FAISS GPU or RAPIDS cuVS search and keeps
+Objective-C++ kernels. CUDA uses RAPIDS cuVS search and keeps
 embedding buffers resident on the device.
 
 GPU use is explicit:
@@ -851,8 +796,8 @@ stages rather than presenting them as ordinary full-data embeddings.
 An explicit accelerator request must execute on that backend or fail. Returned
 objects record the resolved embedding backend, nearest-neighbor route,
 precision,
-parameters, and stage timings. Backend availability and diagnostic reasons are
-reported by `fastEmbedR_capabilities()`.
+parameters, and stage timings. An unavailable explicit accelerator request
+raises an error rather than running on CPU.
 
 The package is distributed under the MIT license. Adapted source and linked
 library boundaries, upstream commits, SPDX identifiers, and retained notices

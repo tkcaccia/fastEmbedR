@@ -156,13 +156,17 @@ print_probe_failure() {
   fi
 }
 
+if [ "${FASTEMBEDR_USE_FAISS_GPU+set}" = "set" ]; then
+  fatal "FASTEMBEDR_USE_FAISS_GPU was removed; CUDA KNN uses cuVS."
+fi
+
 os_name=$(uname -s 2>/dev/null || echo unknown)
+package_root=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+package_src_dir="$package_root/src"
 use_cuda=$(normalize_switch "${FASTEMBEDR_USE_CUDA:-auto}" \
   FASTEMBEDR_USE_CUDA)
 use_cuvs=$(normalize_switch "${FASTEMBEDR_USE_CUVS:-auto}" \
   FASTEMBEDR_USE_CUVS)
-use_faiss_gpu=$(normalize_switch "${FASTEMBEDR_USE_FAISS_GPU:-0}" \
-  FASTEMBEDR_USE_FAISS_GPU)
 require_cuda=${FASTEMBEDR_REQUIRE_CUDA:-${PACKAGE_REQUIRE_CUDA:-0}}
 diagnostic_only=${FASTEMBEDR_DIAGNOSTIC_ONLY:-0}
 
@@ -189,7 +193,6 @@ fi
 if is_true "$diagnostic_only"; then
   use_cuda=0
   use_cuvs=0
-  use_faiss_gpu=0
 fi
 
 cuda_home=${CUDA_HOME:-${CUDA_PATH:-${CUDAToolkit_ROOT:-}}}
@@ -244,7 +247,6 @@ libs="-pthread"
 objcxxflags=""
 metal_enabled=0
 cuda_enabled=0
-enable_faiss_gpu=0
 enable_cuvs=0
 enable_raft=0
 build_mode=cpu_only
@@ -431,58 +433,6 @@ if [ "$cuda_probe_ok" = "1" ]; then
   libs="$libs $cuda_lib_flags $cuda_rpath_flags"
   libs="$libs -lcudart -lcufft -lcublas -lcusolver -lcurand"
 
-  faiss_home=${FAISS_HOME:-${RAPIDS_HOME:-${CONDA_PREFIX:-}}}
-  if [ "$use_faiss_gpu" = "1" ] || \
-     { [ "$use_faiss_gpu" = "auto" ] && [ -n "$faiss_home" ]; }; then
-    collect_prefix_dirs "$faiss_home"
-    faiss_include=$(find_header_dir \
-      "$prefix_include_dirs" faiss/gpu/GpuDistance.h 2>/dev/null || true)
-    faiss_libdir=$(find_library_dir \
-      "$prefix_library_dirs" faiss 2>/dev/null || true)
-    if [ -n "$faiss_include" ] && [ -n "$faiss_libdir" ]; then
-      cat > "$configure_tmp/faiss-link.cpp" <<'EOF_FAISS'
-#include <faiss/gpu/GpuDistance.h>
-#include <faiss/gpu/StandardGpuResources.h>
-
-int main() {
-  faiss::gpu::StandardGpuResources resources;
-  return resources.getDefaultStream(0) == nullptr ? 0 : 0;
-}
-EOF_FAISS
-      r_cxx17=$("$r_binary" CMD config CXX17)
-      r_cxx17flags=$("$r_binary" CMD config CXX17FLAGS 2>/dev/null || true)
-      r_lapack=$("$r_binary" CMD config LAPACK_LIBS 2>/dev/null || true)
-      r_blas=$("$r_binary" CMD config BLAS_LIBS 2>/dev/null || true)
-      r_flibs=$("$r_binary" CMD config FLIBS 2>/dev/null || true)
-      faiss_command="$r_cxx17 $r_cxx17flags -std=c++17"
-      faiss_command="$faiss_command $cuda_cpp_flags"
-      faiss_command="$faiss_command $cuda_toolkit_include_flags"
-      faiss_command="$faiss_command -I$faiss_include"
-      faiss_command="$faiss_command $configure_tmp/faiss-link.cpp"
-      faiss_command="$faiss_command $cuda_lib_flags -L$faiss_libdir"
-      faiss_command="$faiss_command -lfaiss -lcudart -lcublas"
-      faiss_command="$faiss_command $r_lapack $r_blas $r_flibs"
-      faiss_command="$faiss_command -o $configure_tmp/faiss-link"
-      if eval "$faiss_command" \
-         > "$configure_tmp/faiss-link.log" 2>&1; then
-        enable_faiss_gpu=1
-        cppflags="$cppflags -DFASTEMBEDR_HAS_FAISS_GPU -I$faiss_include"
-        cuda_include_flags="$cuda_include_flags"
-        cuda_include_flags="$cuda_include_flags -DFASTEMBEDR_HAS_FAISS_GPU"
-        cuda_include_flags="$cuda_include_flags -I$faiss_include"
-        libs="$libs -L$faiss_libdir"
-        libs="$libs $(rpath_flags_from_dirs "$faiss_libdir") -lfaiss"
-      else
-        print_probe_failure "FAISS GPU compile/link" \
-          "$configure_tmp/faiss-link.log"
-      fi
-    fi
-    if [ "$enable_faiss_gpu" != "1" ] && \
-       [ "$use_faiss_gpu" = "1" ]; then
-      fatal "FAISS GPU headers or a linkable libfaiss were not found under FAISS_HOME='$faiss_home'."
-    fi
-  fi
-
   cuvs_home=${CUVS_HOME:-${RAPIDS_HOME:-${CONDA_PREFIX:-}}}
   if [ "$use_cuvs" = "1" ] || \
      { [ "$use_cuvs" = "auto" ] && [ -n "$cuvs_home" ]; }; then
@@ -498,8 +448,10 @@ EOF_FAISS
     cuvs_distance_include=$(find_header_dir \
       "$prefix_include_dirs" cuvs/distance/distance.h \
       2>/dev/null || true)
+    dlpack_search_dirs=$(append_colon_dir \
+      "$prefix_include_dirs" "$package_src_dir")
     dlpack_include=$(find_header_dir \
-      "$prefix_include_dirs" dlpack/dlpack.h 2>/dev/null || true)
+      "$dlpack_search_dirs" dlpack/dlpack.h 2>/dev/null || true)
     cuvs_libdir=$(find_library_dir \
       "$prefix_library_dirs" cuvs_c 2>/dev/null || true)
     cuvs_cpp_libdir=$(find_library_dir \
@@ -654,8 +606,8 @@ EOF_RAFT
       enable_raft=1
       cppflags="$cppflags -DFASTEMBEDR_HAS_RAFT"
       cppflags="$cppflags $raft_include_flags"
-    cuda_include_flags="$cuda_include_flags -DFASTEMBEDR_HAS_RAFT"
-    cuda_include_flags="$cuda_include_flags $raft_system_include_flags"
+      cuda_include_flags="$cuda_include_flags -DFASTEMBEDR_HAS_RAFT"
+      cuda_include_flags="$cuda_include_flags $raft_system_include_flags"
       libs="$libs $raft_library_flags $raft_rpath_flags"
       libs="$libs -lraft -lrmm -lrapids_logger"
       libs="$libs -lcublasLt -lcusparse -lcurand"
@@ -724,7 +676,6 @@ if [ "$cuda_enabled" = "1" ]; then
   echo "  CUDA include dirs:      $cuda_include_dirs"
   echo "  CUDA library dirs:      $cuda_library_dirs"
   echo "  CUDA architectures:     ${FASTEMBEDR_CUDA_ARCH:-nvcc default}"
-  echo "  FAISS GPU linked:       $enable_faiss_gpu"
   echo "  cuVS linked:            $enable_cuvs"
   echo "  RAFT linked:            $enable_raft"
 elif [ "$use_cuda" = "auto" ]; then

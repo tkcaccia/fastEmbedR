@@ -13,9 +13,9 @@
 
 This page records the reproducibility contract for the manuscript benchmarks.
 It is intentionally explicit because fastEmbedR benchmarks may involve R
-packages, native C++ code, optional Metal kernels, optional CUDA kernels, FAISS,
-and RAPIDS cuVS linked directly by optional CUDA builds. Benchmark code and
-dataset instructions are versioned independently at
+packages, native C++ code, optional Metal kernels, optional CUDA kernels, and
+RAPIDS cuVS linked directly by optional CUDA builds. Benchmark code and dataset
+instructions are versioned independently at
 [`tkcaccia/fastEmbedR-extra`](https://github.com/tkcaccia/fastEmbedR-extra).
 Reproducible reports must record both the package commit and benchmark commit.
 
@@ -87,7 +87,7 @@ The manifest records:
 - CUDA information from `nvcc --version`, `CUDA_HOME`, `CUDAHOSTCXX`,
   `FASTEMBEDR_CUDA_ARCH`, `FASTEMBEDR_CUDA_FLAGS`, `LD_LIBRARY_PATH`, and
   fastEmbedR native-backend probes;
-- directly linked FAISS GPU/cuVS availability recorded by fastEmbedR;
+- directly linked cuVS availability recorded by fastEmbedR;
 - paths to the benchmark driver and wrapper scripts.
 
 Release-locked runs additionally require the reviewed package tag and commit,
@@ -175,7 +175,7 @@ The lightweight R-side environment file is:
 tools/reproducibility/benchmark_environment.yml
 ```
 
-FAISS, RAPIDS cuVS, CUDA, cuFFT, and GPU driver versions are system-level
+RAPIDS cuVS, CUDA, cuFFT, and GPU driver versions are system-level
 dependencies owned by the CUDA installation. They are therefore
 not vendored into `fastEmbedR`; the exact versions actually used in a run are
 captured in `reproducibility_manifest.txt` and `reproducibility_manifest.json`.
@@ -190,7 +190,7 @@ controlled algorithm comparison even when they run on the same physical CPU.
 
 The package does not require or recommend global `-march=native`,
 `-ffast-math`, or `-O3`. CUDA deployment architectures are recorded
-separately because package kernels and linked FAISS/cuVS/RAFT libraries must
+separately because package kernels and linked cuVS/RAFT libraries must
 all support the target GPU. See
 [Installation And Native Compiler Configuration](installation-backends.md)
 for the complete build contract.

@@ -37,8 +37,8 @@ when they influenced design, benchmarking, or backend engineering.
 
 - `uwot` and `Rtsne` are benchmark/reference implementations only. Their source
   code is not vendored into `fastEmbedR`.
-- fastEmbedR contains the compact native CPU/Metal and optional direct
-  FAISS/cuVS CUDA KNN routes needed by one-call embeddings. The CUDA adapter
+- fastEmbedR contains the compact native CPU/Metal and optional direct cuVS
+  CUDA KNN routes needed by one-call embeddings. The CUDA adapter
   was distilled from the pinned faissR commit recorded in `inst/COPYRIGHTS`,
   but fastEmbedR does not invoke that R package.
 - openTSNE, FIt-SNE, t-SNE-CUDA, and opt-SNE informed the t-SNE optimization

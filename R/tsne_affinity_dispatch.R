@@ -10,9 +10,8 @@ normalize_opentsne_knn_input <- function(
     if (is.null(n_neighbors)) {
         n_neighbors <- available
     } else {
-        n_neighbors <- as.integer(n_neighbors)
-        if (length(n_neighbors) != 1L || is.na(n_neighbors) ||
-            !is.finite(n_neighbors) || n_neighbors < 1L || n_neighbors >= n) {
+        n_neighbors <- integer_scalar(n_neighbors)
+        if (is.na(n_neighbors) || n_neighbors < 1L || n_neighbors >= n) {
             stop(
                 "`n_neighbors` must be a positive integer smaller than ",
                 "the number of rows.",

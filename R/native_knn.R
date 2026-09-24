@@ -1,12 +1,5 @@
 normalize_nn_threads <- function(n_threads) {
-    if (is.null(n_threads)) {
-        return(1L)
-    }
-    n_threads <- integer_scalar(n_threads)
-    if (length(n_threads) != 1L || is.na(n_threads) || n_threads < 1L) {
-        stop("`n_threads` must be a positive integer.", call. = FALSE)
-    }
-    n_threads
+    resolve_n_cores(n_threads)
 }
 
 fastembedr_optional_namespace_available <- function(package) {
@@ -212,17 +205,10 @@ fastembedr_query_nn_policy <- function(embedding_backend,
 
 fastembedr_nn_policy_engine <- function(policy, keep_gpu = FALSE) {
     if (is.list(policy) && identical(policy$backend, "cuda")) {
-        exact <- !identical(policy$method %||% "auto", "ivf")
-        has_faiss <- isTRUE(fastembedr_build_config_cpp()$faiss_gpu_compiled)
-        provider <- if (!exact || !has_faiss) {
-            "native_cuvs"
-        } else {
-            "native_faiss"
-        }
         prefix <- if (isTRUE(keep_gpu)) {
-            paste0(provider, "_gpu_")
+            "native_cuvs_gpu_"
         } else {
-            paste0(provider, "_cuda_host_")
+            "native_cuvs_cuda_host_"
         }
         return(paste0(prefix, policy$method %||% "auto"))
     }
@@ -311,9 +297,8 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' @param data Numeric matrix, numeric data frame, or a `float::float32` matrix
 #'   with observations in rows.
 #' @param k Number of non-self nearest neighbors to return.
-#' @param metric Distance metric: `"euclidean"`, `"cosine"`,
-#'   `"correlation"`, or `"inner_product"`. Raw inner product is available only
-#'   in CUDA builds that support it.
+#' @param metric Distance metric: `"euclidean"`, `"cosine"`, or
+#'   `"correlation"`.
 #' @param backend Search backend: `"cpu"`, `"cuda"`, or `"metal"`.
 #' @param n.cores Number of CPU cores. Native GPU backends ignore
 #'   this argument.
@@ -323,10 +308,9 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' size-aware search parameters; its recall is not audited at runtime. Metal
 #' uses native exact search for small inputs and recall-tuned IVF-Flat for
 #' larger inputs. CUDA uses RAPIDS cuVS brute-force exact search below 100,000
-#' observations and cuVS IVF-Flat above that threshold. A build may explicitly
-#' enable FAISS GPU as an alternative exact-search provider, but FAISS is not
-#' required. Approximate Metal and CUDA routes use an internal recall target
-#' of 0.99 and report whether their pilot audit met it.
+#' observations and cuVS IVF-Flat above that threshold. Approximate Metal and
+#' CUDA routes use an internal recall target of 0.99 and report whether their
+#' pilot audit met it.
 #'
 #' The CUDA result remains on the GPU and can be passed directly to
 #' [umap_knn()] or [tsne_knn()] with `backend = "cuda"`. CPU and Metal
@@ -344,10 +328,7 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' @export
 precompute_knn <- function(data,
                             k = 30L,
-                            metric = c(
-                                "euclidean", "cosine", "correlation",
-                                "inner_product"
-                            ),
+                            metric = c("euclidean", "cosine", "correlation"),
                             backend = NULL,
                             n.cores = NULL) {
     backend <- resolve_embedding_backend(backend)
@@ -434,9 +415,7 @@ run_precompute_query_knn <- function(reference, query, k, metric,
 #' between a native query-only exact kernel and recall-tuned IVF-Flat from the
 #' estimated reference-query distance workload. CUDA routes between cuVS
 #' brute-force exact search and cuVS IVF-Flat using the reference size, query
-#' batch size, and feature count. An explicitly enabled FAISS GPU build may
-#' provide exact search.
-#' CUDA results remain device-resident for direct
+#' batch size, and feature count. CUDA results remain device-resident for direct
 #' consumption by landmark UMAP and t-SNE transformations.
 #'
 #' @return A `fastEmbedR_knn` object with one row per query observation and
@@ -451,8 +430,7 @@ precompute_query_knn <- function(reference,
                                     query,
                                     k = 30L,
                                     metric = c(
-                                        "euclidean", "cosine", "correlation",
-                                        "inner_product"
+                                        "euclidean", "cosine", "correlation"
                                     ),
                                     backend = NULL,
                                     n.cores = NULL) {
@@ -487,39 +465,6 @@ precompute_query_knn <- function(reference,
     out$n_query <- as.integer(nrow(query))
     out$n_reference <- as.integer(nrow(reference))
     out
-}
-
-#' Print a precomputed nearest-neighbor object
-#'
-#' @param x A `fastEmbedR_knn` object.
-#' @param ... Unused.
-#' @return `x`, invisibly.
-#' @export
-print.fastEmbedR_knn <- function(x, ...) {
-    cat("<fastEmbedR_knn>\n")
-    cat("  observations: ", x$n %||% x$n_query %||% nrow(x$indices), "\n",
-        sep = ""
-    )
-    cat("  neighbors:    ", x$k %||% ncol(x$indices), " (non-self)\n", sep = "")
-    cat("  metric:       ", x$metric %||% attr(x, "metric") %||% "unknown",
-        "\n",
-        sep = ""
-    )
-    backend <- x$execution_backend %||% attr(x, "backend") %||% "unknown"
-    engine <- x$engine %||% x$method %||% attr(x, "method") %||% "unknown"
-    residency <- x$result_residency %||%
-        attr(x, "result_residency") %||%
-        "host"
-    cat("  backend:      ", backend, "\n", sep = "")
-    cat("  engine:       ", engine, "\n", sep = "")
-    cat("  residency:    ", residency, "\n", sep = "")
-    if (!is.null(x$elapsed_sec) && is.finite(x$elapsed_sec)) {
-        cat("  elapsed:      ", format(round(x$elapsed_sec, 3L), nsmall = 3L),
-            " s\n",
-            sep = ""
-        )
-    }
-    invisible(x)
 }
 
 run_native_cuda_knn <- function(data, k, method, metric, output,
@@ -643,16 +588,11 @@ fastembedr_nn_without_self <- function(data,
     )
 }
 
-fastembedr_native_query_knn <- function(data,
-                                        query,
-                                        k,
-                                        metric = "euclidean",
-                                        n_threads = NULL,
+fastembedr_native_query_knn <- function(data, query, k,
+                                        metric = "euclidean", n_threads = NULL,
                                         target_recall = 0.99,
-                                        output = "double",
-                                        backend = "cpu",
-                                        method = "auto",
-                                        keep_gpu = FALSE) {
+                                        output = "double", backend = "cpu",
+                                        method = "auto", keep_gpu = FALSE) {
     k <- integer_scalar(k)
     if (is.na(k) || k < 1L) {
         stop("`k` must be a positive integer.", call. = FALSE)

@@ -294,11 +294,8 @@ finalize_embedding_layout <- function(layout, prefix, return_float32 = FALSE) {
 }
 
 validate_n_components <- function(n_components) {
-    n_components <- as.integer(n_components)
-    invalid <- length(n_components) != 1L ||
-        is.na(n_components) ||
-        !is.finite(n_components) ||
-        n_components < 1L
+    n_components <- integer_scalar(n_components)
+    invalid <- is.na(n_components) || n_components < 1L
     if (invalid) {
         stop("`n_components` must be a positive integer.", call. = FALSE)
     }

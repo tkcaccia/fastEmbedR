@@ -5,9 +5,9 @@
  * Native CUDA KNN provider adapted from faissR commit
  * f37ea97c5774200025b1480770b8ecbf1d2d7919 (MIT), principally
  * src/nn_cuvs_impl.cpp, src/nn_cuda_impl.cpp, and src/nn_cuda_kernels.cpp.
- * Exact search calls the installed FAISS GPU bfKnn API; IVF-Flat calls the
- * installed RAPIDS cuVS C API. No FAISS, cuVS, or RAFT source or binary is
- * redistributed by fastEmbedR. See inst/NOTICE and inst/LICENSES/.
+ * Exact and IVF-Flat search call the installed RAPIDS cuVS C API. No cuVS or
+ * RAFT source or binary is redistributed by fastEmbedR. See inst/NOTICE and
+ * inst/LICENSES/.
  */
 
 #include <Rcpp.h>
@@ -21,19 +21,12 @@
 #include <cuvs/neighbors/ivf_flat.h>
 #include <dlpack/dlpack.h>
 
-#ifdef FASTEMBEDR_HAS_FAISS_GPU
-#include <faiss/MetricType.h>
-#include <faiss/gpu/GpuDistance.h>
-#include <faiss/gpu/StandardGpuResources.h>
-#endif
-
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -70,34 +63,6 @@ namespace {
 
 constexpr int kMaxNativeCudaK = 256;
 constexpr int kExactRowThreshold = 100000;
-
-bool float32_column_major_view(SEXP data,
-                               int& nrow,
-                               int& ncol,
-                               const float*& values) {
-  if (!fastembedr::is_float32_matrix(data)) return false;
-  Rcpp::S4 object(data);
-  SEXP payload = object.slot("Data");
-  if (TYPEOF(payload) != INTSXP || !Rf_isMatrix(payload)) return false;
-  SEXP dimensions = Rf_getAttrib(payload, R_DimSymbol);
-  if (TYPEOF(dimensions) != INTSXP || Rf_length(dimensions) != 2) return false;
-  nrow = INTEGER(dimensions)[0];
-  ncol = INTEGER(dimensions)[1];
-  static_assert(sizeof(int) == sizeof(float),
-                "float32 payload must use 32-bit storage");
-  values = reinterpret_cast<const float*>(INTEGER(payload));
-  return nrow > 0 && ncol > 0;
-}
-
-#ifdef FASTEMBEDR_HAS_FAISS_GPU
-faiss::gpu::StandardGpuResources& reusable_faiss_gpu_resources() {
-  static thread_local std::unique_ptr<faiss::gpu::StandardGpuResources> resources;
-  if (resources == nullptr) {
-    resources.reset(new faiss::gpu::StandardGpuResources());
-  }
-  return *resources;
-}
-#endif
 
 void cuda_check(cudaError_t status, const char* context) {
   if (status == cudaSuccess) return;
@@ -374,14 +339,7 @@ double query_pilot_recall(const std::vector<int64_t>& reference,
 
 int distance_mode(fastembedr::KnnMetric metric) {
   if (metric == fastembedr::KnnMetric::Euclidean) return 0;
-  if (metric == fastembedr::KnnMetric::Cosine ||
-      metric == fastembedr::KnnMetric::Correlation) return 1;
-  return 2;
-}
-
-auto cuvs_metric(fastembedr::KnnMetric metric) -> decltype(L2Expanded) {
-  return metric == fastembedr::KnnMetric::InnerProduct ?
-    InnerProduct : L2Expanded;
+  return 1;
 }
 
 struct NativeCudaKnnHandle {
@@ -436,19 +394,7 @@ Rcpp::List make_gpu_result(NativeCudaKnnHandle* handle,
   SEXP indices_ptr = PROTECT(R_MakeExternalPtr(handle->indices, R_NilValue, owner));
   SEXP distances_ptr = PROTECT(R_MakeExternalPtr(handle->distances, R_NilValue, owner));
   const std::string backend_used = exact ?
-#ifdef FASTEMBEDR_HAS_FAISS_GPU
-    "native_cuda_faiss_gpu_bfknn_l2" :
-#else
-    "native_cuda_cuvs_exact" :
-#endif
-    "native_cuda_cuvs_ivf_flat";
-  const std::string gpu_provider = exact ?
-#ifdef FASTEMBEDR_HAS_FAISS_GPU
-    "fastEmbedR_native_faiss_gpu" :
-#else
-    "fastEmbedR_native_cuvs" :
-#endif
-    "fastEmbedR_native_cuvs";
+    "native_cuda_cuvs_exact" : "native_cuda_cuvs_ivf_flat";
   Rcpp::List out = Rcpp::List::create(
     Rcpp::Named("handle") = owner,
     Rcpp::Named("indices_ptr") = indices_ptr,
@@ -467,7 +413,7 @@ Rcpp::List make_gpu_result(NativeCudaKnnHandle* handle,
     Rcpp::Named("backend_used") = backend_used,
     Rcpp::Named("method") = method,
     Rcpp::Named("accelerator") = "cuda",
-    Rcpp::Named("gpu_provider") = gpu_provider,
+    Rcpp::Named("gpu_provider") = "fastEmbedR_native_cuvs",
     Rcpp::Named("device") = handle->device,
     Rcpp::Named("exact") = exact,
     Rcpp::Named("exclude_self") = exclude_self,
@@ -478,12 +424,7 @@ Rcpp::List make_gpu_result(NativeCudaKnnHandle* handle,
     Rcpp::Named("nlist") = exact ? NA_INTEGER : tuning.nlist,
     Rcpp::Named("nprobe") = exact ? NA_INTEGER : tuning.nprobe,
     Rcpp::Named("tuning_rule") = exact ?
-#ifdef FASTEMBEDR_HAS_FAISS_GPU
-      "faiss_gpu_bfknn_exact_below_100k" :
-#else
-      "cuvs_exact_below_100k" :
-#endif
-      tuning.rule,
+      "cuvs_exact_below_100k" : tuning.rule,
     Rcpp::Named("search_batch_size") = search_batch_size,
     Rcpp::Named("input_type") = "float32",
     Rcpp::Named("device_to_host_result_copies") = 0,
@@ -507,14 +448,6 @@ bool native_cuda_knn_available_impl() {
   return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
 }
 
-bool native_cuda_faiss_gpu_available_impl() {
-#ifdef FASTEMBEDR_HAS_FAISS_GPU
-  return native_cuda_knn_available_impl();
-#else
-  return false;
-#endif
-}
-
 Rcpp::List native_cuda_knn_impl(SEXP data,
                                 int k,
                                 const std::string& method,
@@ -525,19 +458,9 @@ Rcpp::List native_cuda_knn_impl(SEXP data,
     Rcpp::stop("No CUDA device is available for native cuVS KNN.");
   }
   const fastembedr::KnnMetric parsed_metric = fastembedr::parse_knn_metric(metric);
-  int direct_nrow = 0;
-  int direct_ncol = 0;
-  const float* direct_values = nullptr;
-  const bool direct_float32 =
-    (parsed_metric == fastembedr::KnnMetric::Euclidean ||
-     parsed_metric == fastembedr::KnnMetric::InnerProduct) &&
-    float32_column_major_view(data, direct_nrow, direct_ncol, direct_values);
-  fastembedr::FloatMatrix matrix;
-  if (!direct_float32) {
-    matrix = fastembedr::matrix_to_row_major_float(data, parsed_metric);
-  }
-  const int input_nrow = direct_float32 ? direct_nrow : matrix.nrow;
-  if (input_nrow < 2) {
+  fastembedr::FloatMatrix matrix =
+    fastembedr::matrix_to_row_major_float(data, parsed_metric);
+  if (matrix.nrow < 2) {
     Rcpp::stop("`data` must contain at least two rows and one column.");
   }
   if (k < 1 || k >= input_nrow || k > kMaxNativeCudaK) {
@@ -551,21 +474,13 @@ Rcpp::List native_cuda_knn_impl(SEXP data,
   std::transform(resolved.begin(), resolved.end(), resolved.begin(),
                  [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
   if (resolved == "auto") {
-    resolved = input_nrow < kExactRowThreshold ? "exact" : "ivf";
+    resolved = matrix.nrow < kExactRowThreshold ? "exact" : "ivf";
   }
   if (resolved == "flat" || resolved == "bruteforce") resolved = "exact";
   if (resolved != "exact" && resolved != "ivf") {
     Rcpp::stop("Native CUDA KNN supports only internal `exact`, `ivf`, or `auto` routes.");
   }
   const bool exact = resolved == "exact";
-  const bool direct_column_major = direct_float32 && exact;
-  if (direct_column_major) {
-    matrix.nrow = direct_nrow;
-    matrix.ncol = direct_ncol;
-    matrix.input_float32 = true;
-  } else if (direct_float32) {
-    matrix = fastembedr::matrix_to_row_major_float(data, parsed_metric);
-  }
   if (matrix.nrow < 2 || matrix.ncol < 1) {
     Rcpp::stop("`data` must contain at least two rows and one column.");
   }
@@ -575,14 +490,7 @@ Rcpp::List native_cuda_knn_impl(SEXP data,
   const std::size_t final_items =
     static_cast<std::size_t>(matrix.nrow) * k;
 
-  bool needs_cuvs_resources = !exact;
-#ifndef FASTEMBEDR_HAS_FAISS_GPU
-  needs_cuvs_resources = true;
-#endif
-  std::unique_ptr<CuvsResources> resources;
-  if (needs_cuvs_resources) {
-    resources.reset(new CuvsResources());
-  }
+  CuvsResources resources;
   CudaBuffer dataset(data_items * sizeof(float));
   CudaBuffer output_indices(final_items * sizeof(int));
   CudaBuffer output_distances(final_items * sizeof(float));
@@ -606,21 +514,19 @@ Rcpp::List native_cuda_knn_impl(SEXP data,
   }
   cuda_check(
     cudaMemcpy(dataset.get(),
-               direct_column_major ? direct_values : matrix.values.data(),
+               matrix.values.data(),
                data_items * sizeof(float),
                cudaMemcpyHostToDevice),
     "cudaMemcpy(native CUDA KNN dataset H2D)"
   );
-  if (!direct_column_major) {
-    matrix.values.clear();
-    matrix.values.shrink_to_fit();
-  }
+  matrix.values.clear();
+  matrix.values.shrink_to_fit();
 
   int64_t dataset_shape[2] = {matrix.nrow, matrix.ncol};
   DLManagedTensor dataset_tensor = make_tensor(
     dataset.get(), dataset_shape, 2, kDLCUDA, kDLFloat, 32
   );
-  const auto distance = cuvs_metric(parsed_metric);
+  const auto distance = L2Expanded;
   IvfTuning tuning = tune_ivf(matrix.nrow, matrix.ncol, k, target_recall);
   int search_batch_size = matrix.nrow;
   double measured_pilot_recall = exact ? 1.0 : 0.0;
@@ -656,37 +562,6 @@ Rcpp::List native_cuda_knn_impl(SEXP data,
       static_cast<std::size_t>(matrix.nrow) * search_k;
     CudaBuffer raw_indices(result_items * sizeof(int64_t));
     CudaBuffer raw_distances(result_items * sizeof(float));
-#ifdef FASTEMBEDR_HAS_FAISS_GPU
-    int device = 0;
-    cuda_check(cudaGetDevice(&device), "cudaGetDevice(FAISS GPU exact)");
-    faiss::gpu::GpuDistanceParams arguments;
-    arguments.metric = parsed_metric == fastembedr::KnnMetric::InnerProduct ?
-      faiss::METRIC_INNER_PRODUCT : faiss::METRIC_L2;
-    arguments.k = search_k;
-    arguments.dims = matrix.ncol;
-    arguments.vectors = dataset.get();
-    arguments.vectorType = faiss::gpu::DistanceDataType::F32;
-    arguments.vectorsRowMajor = !direct_column_major;
-    arguments.numVectors = matrix.nrow;
-    arguments.queries = dataset.get();
-    arguments.queryType = faiss::gpu::DistanceDataType::F32;
-    arguments.queriesRowMajor = !direct_column_major;
-    arguments.numQueries = matrix.nrow;
-    arguments.outDistances = static_cast<float*>(raw_distances.get());
-    arguments.outIndicesType = faiss::gpu::IndicesDataType::I64;
-    arguments.outIndices = raw_indices.get();
-    arguments.device = device;
-    arguments.use_cuvs = true;
-    try {
-      faiss::gpu::bfKnn(&reusable_faiss_gpu_resources(), arguments);
-    } catch (const std::exception& error) {
-      Rcpp::stop("FAISS GPU bfKnn failed: %s", error.what());
-    }
-    cuda_check(
-      cudaDeviceSynchronize(),
-      "cudaDeviceSynchronize(FAISS GPU bfKnn)"
-    );
-#else
     int64_t output_shape[2] = {matrix.nrow, search_k};
     DLManagedTensor neighbors_tensor = make_tensor(
       raw_indices.get(), output_shape, 2, kDLCUDA, kDLInt, 64
@@ -697,19 +572,21 @@ Rcpp::List native_cuda_knn_impl(SEXP data,
     BruteForceIndex index;
     cuvs_check(
       cuvsBruteForceBuild(
-        resources->get(), &dataset_tensor, distance, 0.0f, index.get()
+        resources.get(), &dataset_tensor, distance, 0.0f, index.get()
       ),
       "cuvsBruteForceBuild"
     );
     cuvs_check(
       cuvsBruteForceSearch(
-        resources->get(), index.get(), &dataset_tensor,
+        resources.get(), index.get(), &dataset_tensor,
         &neighbors_tensor, &distances_tensor, no_filter()
       ),
       "cuvsBruteForceSearch"
     );
-    cuvs_check(cuvsStreamSync(resources->get()), "cuvsStreamSync(brute-force search)");
-#endif
+    cuvs_check(
+      cuvsStreamSync(resources.get()),
+      "cuvsStreamSync(brute-force search)"
+    );
     finalize_batch(raw_indices, raw_distances, matrix.nrow, 0);
   } else {
     IvfFlatIndexParams index_params;
@@ -723,7 +600,7 @@ Rcpp::List native_cuda_knn_impl(SEXP data,
     IvfFlatIndex index;
     cuvs_check(
       cuvsIvfFlatBuild(
-        resources->get(), index_params.get(), &dataset_tensor, index.get()
+        resources.get(), index_params.get(), &dataset_tensor, index.get()
       ),
       "cuvsIvfFlatBuild"
     );
@@ -759,19 +636,22 @@ Rcpp::List native_cuda_knn_impl(SEXP data,
     BruteForceIndex pilot_reference_index;
     cuvs_check(
       cuvsBruteForceBuild(
-        resources->get(), &dataset_tensor, distance, 0.0f,
+        resources.get(), &dataset_tensor, distance, 0.0f,
         pilot_reference_index.get()
       ),
       "cuvsBruteForceBuild(IVF pilot oracle)"
     );
     cuvs_check(
       cuvsBruteForceSearch(
-        resources->get(), pilot_reference_index.get(), &pilot_query_tensor,
+        resources.get(), pilot_reference_index.get(), &pilot_query_tensor,
         &pilot_exact_indices_tensor, &pilot_exact_distances_tensor, no_filter()
       ),
       "cuvsBruteForceSearch(IVF pilot oracle)"
     );
-    cuvs_check(cuvsStreamSync(resources->get()), "cuvsStreamSync(IVF pilot oracle)");
+    cuvs_check(
+      cuvsStreamSync(resources.get()),
+      "cuvsStreamSync(IVF pilot oracle)"
+    );
     std::vector<int64_t> pilot_reference(pilot_items);
     std::vector<int64_t> pilot_observed(pilot_items);
     cuda_check(
@@ -790,13 +670,16 @@ Rcpp::List native_cuda_knn_impl(SEXP data,
       search_params.get()->n_probes = static_cast<uint32_t>(probe);
       cuvs_check(
         cuvsIvfFlatSearch(
-          resources->get(), search_params.get(), index.get(),
+          resources.get(), search_params.get(), index.get(),
           &pilot_query_tensor, &pilot_ivf_indices_tensor,
           &pilot_ivf_distances_tensor, no_filter()
         ),
         "cuvsIvfFlatSearch(recall pilot)"
       );
-      cuvs_check(cuvsStreamSync(resources->get()), "cuvsStreamSync(IVF recall pilot)");
+      cuvs_check(
+        cuvsStreamSync(resources.get()),
+        "cuvsStreamSync(IVF recall pilot)"
+      );
       cuda_check(
         cudaMemcpy(pilot_observed.data(), pilot_ivf_indices.get(),
                    pilot_items * sizeof(int64_t), cudaMemcpyDeviceToHost),
@@ -833,12 +716,15 @@ Rcpp::List native_cuda_knn_impl(SEXP data,
       );
       cuvs_check(
         cuvsIvfFlatSearch(
-          resources->get(), search_params.get(), index.get(),
+          resources.get(), search_params.get(), index.get(),
           &query_tensor, &neighbors_tensor, &distances_tensor, no_filter()
         ),
         "cuvsIvfFlatSearch"
       );
-      cuvs_check(cuvsStreamSync(resources->get()), "cuvsStreamSync(IVF-Flat search)");
+      cuvs_check(
+        cuvsStreamSync(resources.get()),
+        "cuvsStreamSync(IVF-Flat search)"
+      );
       finalize_batch(raw_indices, raw_distances, current, offset);
     }
   }
@@ -939,12 +825,7 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
       pilot_values.data() + static_cast<std::size_t>(row) * queries.ncol
     );
   }
-  bool needs_cuvs_resources = !exact;
-#ifndef FASTEMBEDR_HAS_FAISS_GPU
-  needs_cuvs_resources = true;
-#endif
-  std::unique_ptr<CuvsResources> resources;
-  if (needs_cuvs_resources) resources.reset(new CuvsResources());
+  CuvsResources resources;
 
   const std::size_t reference_items =
     static_cast<std::size_t>(reference.nrow) * reference.ncol;
@@ -981,7 +862,7 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
   DLManagedTensor query_tensor = make_tensor(
     query_device.get(), query_shape, 2, kDLCUDA, kDLFloat, 32
   );
-  const auto distance = cuvs_metric(parsed_metric);
+  const auto distance = L2Expanded;
   const int distance_conversion = distance_mode(parsed_metric);
   IvfTuning tuning = tune_ivf(
     reference.nrow, reference.ncol, k, target_recall
@@ -1014,37 +895,6 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
   if (exact) {
     CudaBuffer raw_indices(final_items * sizeof(int64_t));
     CudaBuffer raw_distances(final_items * sizeof(float));
-#ifdef FASTEMBEDR_HAS_FAISS_GPU
-    int device = 0;
-    cuda_check(cudaGetDevice(&device), "cudaGetDevice(FAISS GPU query)");
-    faiss::gpu::GpuDistanceParams arguments;
-    arguments.metric = parsed_metric == fastembedr::KnnMetric::InnerProduct ?
-      faiss::METRIC_INNER_PRODUCT : faiss::METRIC_L2;
-    arguments.k = k;
-    arguments.dims = reference.ncol;
-    arguments.vectors = reference_device.get();
-    arguments.vectorType = faiss::gpu::DistanceDataType::F32;
-    arguments.vectorsRowMajor = true;
-    arguments.numVectors = reference.nrow;
-    arguments.queries = query_device.get();
-    arguments.queryType = faiss::gpu::DistanceDataType::F32;
-    arguments.queriesRowMajor = true;
-    arguments.numQueries = queries.nrow;
-    arguments.outDistances = static_cast<float*>(raw_distances.get());
-    arguments.outIndicesType = faiss::gpu::IndicesDataType::I64;
-    arguments.outIndices = raw_indices.get();
-    arguments.device = device;
-    arguments.use_cuvs = true;
-    try {
-      faiss::gpu::bfKnn(&reusable_faiss_gpu_resources(), arguments);
-    } catch (const std::exception& error) {
-      Rcpp::stop("FAISS GPU query bfKnn failed: %s", error.what());
-    }
-    cuda_check(
-      cudaDeviceSynchronize(),
-      "cudaDeviceSynchronize(FAISS GPU query bfKnn)"
-    );
-#else
     int64_t output_shape[2] = {queries.nrow, k};
     DLManagedTensor neighbors_tensor = make_tensor(
       raw_indices.get(), output_shape, 2, kDLCUDA, kDLInt, 64
@@ -1055,22 +905,21 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
     BruteForceIndex index;
     cuvs_check(
       cuvsBruteForceBuild(
-        resources->get(), &reference_tensor, distance, 0.0f, index.get()
+        resources.get(), &reference_tensor, distance, 0.0f, index.get()
       ),
       "cuvsBruteForceBuild(query reference)"
     );
     cuvs_check(
       cuvsBruteForceSearch(
-        resources->get(), index.get(), &query_tensor,
+        resources.get(), index.get(), &query_tensor,
         &neighbors_tensor, &distances_tensor, no_filter()
       ),
       "cuvsBruteForceSearch(query)"
     );
     cuvs_check(
-      cuvsStreamSync(resources->get()),
+      cuvsStreamSync(resources.get()),
       "cuvsStreamSync(brute-force query search)"
     );
-#endif
     finalize_batch(raw_indices, raw_distances, queries.nrow, 0);
   } else {
     IvfFlatIndexParams index_params;
@@ -1084,7 +933,7 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
     IvfFlatIndex index;
     cuvs_check(
       cuvsIvfFlatBuild(
-        resources->get(), index_params.get(), &reference_tensor, index.get()
+        resources.get(), index_params.get(), &reference_tensor, index.get()
       ),
       "cuvsIvfFlatBuild(query reference)"
     );
@@ -1124,20 +973,20 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
     BruteForceIndex pilot_reference_index;
     cuvs_check(
       cuvsBruteForceBuild(
-        resources->get(), &reference_tensor, distance, 0.0f,
+        resources.get(), &reference_tensor, distance, 0.0f,
         pilot_reference_index.get()
       ),
       "cuvsBruteForceBuild(query IVF pilot oracle)"
     );
     cuvs_check(
       cuvsBruteForceSearch(
-        resources->get(), pilot_reference_index.get(), &pilot_query_tensor,
+        resources.get(), pilot_reference_index.get(), &pilot_query_tensor,
         &pilot_exact_indices_tensor, &pilot_exact_distances_tensor, no_filter()
       ),
       "cuvsBruteForceSearch(query IVF pilot oracle)"
     );
     cuvs_check(
-      cuvsStreamSync(resources->get()),
+      cuvsStreamSync(resources.get()),
       "cuvsStreamSync(query IVF pilot oracle)"
     );
     std::vector<int64_t> pilot_reference(pilot_items);
@@ -1160,14 +1009,14 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
       search_params.get()->n_probes = static_cast<uint32_t>(probe);
       cuvs_check(
         cuvsIvfFlatSearch(
-          resources->get(), search_params.get(), index.get(),
+          resources.get(), search_params.get(), index.get(),
           &pilot_query_tensor, &pilot_ivf_indices_tensor,
           &pilot_ivf_distances_tensor, no_filter()
         ),
         "cuvsIvfFlatSearch(query recall pilot)"
       );
       cuvs_check(
-        cuvsStreamSync(resources->get()),
+        cuvsStreamSync(resources.get()),
         "cuvsStreamSync(query recall pilot)"
       );
       cuda_check(
@@ -1212,14 +1061,14 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
       );
       cuvs_check(
         cuvsIvfFlatSearch(
-          resources->get(), search_params.get(), index.get(),
+          resources.get(), search_params.get(), index.get(),
           &batch_query_tensor, &neighbors_tensor,
           &distances_tensor, no_filter()
         ),
         "cuvsIvfFlatSearch(query)"
       );
       cuvs_check(
-        cuvsStreamSync(resources->get()),
+        cuvsStreamSync(resources.get()),
         "cuvsStreamSync(IVF query search)"
       );
       finalize_batch(raw_indices, raw_distances, current, offset);

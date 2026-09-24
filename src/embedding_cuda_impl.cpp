@@ -399,27 +399,22 @@ int fastembedr_cuda_matrix_multiply(const double* left,
                                     int right_cols,
                                     int transpose_left,
                                     double* out);
-int fastembedr_cuda_raft_tsvd_pca_init(const double* values,
-                                       int n,
-                                       int p,
-                                       int n_components,
-                                       float* out);
-int fastembedr_cuda_raft_tsvd_pca_fit(const float* values,
-                                      int n,
-                                      int p,
-                                      int n_components,
-                                      int center,
-                                      int scale,
-                                      float* scores,
-                                      float* components,
-                                      float* singular_values,
-                                      float* center_values,
-                                      float* scale_values,
-                                      int requested_method,
-                                      unsigned int seed,
-                                      int oversample,
-                                      int power,
-                                      int* selected_method);
+int fastembedr_cuda_pca_fit(const float* values,
+                            int n,
+                            int p,
+                            int n_components,
+                            int center,
+                            int scale,
+                            float* scores,
+                            float* components,
+                            float* singular_values,
+                            float* center_values,
+                            float* scale_values,
+                            int requested_method,
+                            unsigned int seed,
+                            int oversample,
+                            int power,
+                            int* selected_method);
 }
 
 namespace {
@@ -1549,38 +1544,6 @@ NumericMatrix cuda_pca_init_cuda_impl(NumericMatrix data,
 #endif
 }
 
-NumericMatrix raft_tsvd_init_cuda_impl(NumericMatrix data,
-                                       int n_components) {
-#ifndef FASTEMBEDR_HAS_RAFT
-  Rcpp::stop("fastEmbedR was not built with native RAPIDS RAFT TSVD support.");
-#else
-  if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
-  const int n = data.nrow();
-  const int p = data.ncol();
-  if (n < 2 || p < 2) {
-    Rcpp::stop("RAPIDS RAFT TSVD initialization requires at least two rows and two columns.");
-  }
-  n_components = std::max(1, std::min(n_components, std::min(n, p)));
-
-  std::vector<float> h_scores(static_cast<std::size_t>(n) * n_components);
-  const int status = fastembedr_cuda_raft_tsvd_pca_init(
-    data.begin(), n, p, n_components, h_scores.data()
-  );
-  if (status != 0) {
-    Rcpp::stop("RAPIDS RAFT TSVD initialization failed: %s", cuda_embedding_error_message());
-  }
-
-  NumericMatrix out(n, n_components);
-  for (int j = 0; j < n_components; ++j) {
-    const std::size_t col = static_cast<std::size_t>(j) * n;
-    for (int i = 0; i < n; ++i) {
-      out(i, j) = static_cast<double>(h_scores[col + i]);
-    }
-  }
-  return out;
-#endif
-}
-
 List pca_tsvd_cuda_impl(SEXP data,
                         int n_components,
                         bool center,
@@ -1589,9 +1552,6 @@ List pca_tsvd_cuda_impl(SEXP data,
                         int requested_method,
                         int oversample,
                         int power) {
-#ifndef FASTEMBEDR_HAS_RAFT
-  Rcpp::stop("fastEmbedR was not built with native RAPIDS RAFT TSVD support.");
-#else
   if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
   const std::pair<int, int> dims = cuda_matrix_dims(data, "data");
   const int n = dims.first;
@@ -1599,7 +1559,10 @@ List pca_tsvd_cuda_impl(SEXP data,
   const int max_rank = std::min(n - 1, p);
   n_components = std::min(n_components, max_rank);
   if (n < 2 || p < 2 || n_components < 1) {
-    Rcpp::stop("RAPIDS RAFT TSVD requires at least two rows, two columns, and one usable component.");
+    Rcpp::stop(
+      "CUDA PCA requires at least two rows, two columns, and one usable "
+      "component."
+    );
   }
 
   const bool float32_output = cuda_is_float32_s4(data);
@@ -1612,7 +1575,7 @@ List pca_tsvd_cuda_impl(SEXP data,
 
   const auto started = std::chrono::steady_clock::now();
   int selected_method = 0;
-  const int status = fastembedr_cuda_raft_tsvd_pca_fit(
+  const int status = fastembedr_cuda_pca_fit(
     input.data(),
     n,
     p,
@@ -1707,7 +1670,6 @@ List pca_tsvd_cuda_impl(SEXP data,
         std::chrono::duration<double>(finished - started).count()
     )
   );
-#endif
 }
 
 NumericMatrix spectral_knn_init_cuda_impl(IntegerMatrix indices,
@@ -2734,10 +2696,13 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
     std::min(pca_rank_limit, n_components + 16) : 0;
   const std::size_t pca_crossover =
     12u * 6u * static_cast<std::size_t>(pca_sketch);
-  const bool pca_selected_rsvd = use_device_pca &&
+  bool pca_selected_rsvd = use_device_pca &&
     pca_sketch < pca_rank_limit &&
     static_cast<std::size_t>(n) * pca_p >= 250000u &&
     static_cast<std::size_t>(pca_p) >= pca_crossover;
+#ifndef FASTEMBEDR_HAS_RAFT
+  pca_selected_rsvd = use_device_pca;
+#endif
   return List::create(
     Rcpp::Named("Y") = result,
     Rcpp::Named("costs") = NumericVector::create(),

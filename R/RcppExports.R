@@ -97,10 +97,6 @@ rsvd_multiply_cuda_cpp <- function(left, right, transpose_left) {
     .Call(`_fastEmbedR_rsvd_multiply_cuda_cpp`, left, right, transpose_left)
 }
 
-raft_tsvd_init_cuda_cpp <- function(data, n_components) {
-    .Call(`_fastEmbedR_raft_tsvd_init_cuda_cpp`, data, n_components)
-}
-
 pca_tsvd_cuda_cpp <- function(data, n_components, center, scale, seed, requested_method, oversample, power) {
     .Call(`_fastEmbedR_pca_tsvd_cuda_cpp`, data, n_components, center, scale, seed, requested_method, oversample, power)
 }
@@ -393,10 +389,6 @@ native_cuda_knn_available_cpp <- function() {
     .Call(`_fastEmbedR_native_cuda_knn_available_cpp`)
 }
 
-native_cuda_faiss_gpu_available_cpp <- function() {
-    .Call(`_fastEmbedR_native_cuda_faiss_gpu_available_cpp`)
-}
-
 native_cuda_knn_cpp <- function(data, k, method = "auto", metric = "euclidean", target_recall = 0.99, keep_gpu = TRUE) {
     .Call(`_fastEmbedR_native_cuda_knn_cpp`, data, k, method, metric, target_recall, keep_gpu)
 }
@@ -428,6 +420,7 @@ knn_tsne_opentsne_float_cpp <- function(indices, distances, y_init, init, n_comp
 transform_tsne_cpp <- function(reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, n_threads, seed, verbose) {
     .Call(`_fastEmbedR_transform_tsne_cpp`, reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, n_threads, seed, verbose)
 }
+
 fastembedr_walktrap_cpp <- function(from, to, weight, n_vertices, steps = 4L) {
     .Call(`_fastEmbedR_fastembedr_walktrap_cpp`, from, to, weight, n_vertices, steps)
 }

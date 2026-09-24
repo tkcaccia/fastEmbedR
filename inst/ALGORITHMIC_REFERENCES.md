@@ -174,7 +174,7 @@ Ideas/code behaviour used:
   FFT-grid in the MNIST 70k benchmark. The Metal backend has a package-native
   FFT-grid path. The CUDA backend uses package-native kernels plus cuFFT for
   the FFT-grid convolution.
-- Expose `tsne()` and `embed_knn(method = "tsne")` as a separate native C++
+- Expose `tsne()` and `tsne_knn()` as a separate native C++
   path with two-phase early-exaggeration and normal optimization,
   automatic learning-rate selection, momentum/gain updates, and max-step
   clipping.
@@ -393,8 +393,7 @@ Ideas reviewed:
 - Current use in `fastEmbedR`: package-native float32 CPU HNSW distilled from
   FAISS's HNSW organization, plus native Metal exact and IVF-Flat search. The
   Metal fused list-scan/top-k structure was adapted from FAISS and Faiss-mlx.
-  The package does not link FAISS or MLX for CPU/Metal paths; optional CUDA
-  builds may link installed FAISS GPU directly.
+  The package does not link FAISS or MLX.
 
 Implemented locations:
 

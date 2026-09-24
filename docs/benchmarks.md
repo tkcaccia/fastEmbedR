@@ -82,7 +82,7 @@ total elapsed runtime because Rtsne, FIt-SNE, umap, uwot, and fastEmbedR expose
 different computational boundaries.
 
 See [Reproducibility](reproducibility.md) for the exact commit, release-tag
-policy, archival DOI field, hardware/session metadata, CUDA/FAISS/cuVS probes,
+policy, archival DOI field, hardware/session metadata, CUDA/cuVS probes,
 and benchmark command lines recorded with each run.
 
 ## Reference Implementation Validation

@@ -68,8 +68,8 @@ split_landmark_data <- function(x,
 }
 
 transform_embedding_k <- function(k, max_k) {
-    k <- as.integer(k)
-    if (length(k) != 1L || is.na(k) || !is.finite(k) || k < 1L) {
+    k <- integer_scalar(k)
+    if (is.na(k) || k < 1L) {
         stop("`k` must be NULL or a positive integer.", call. = FALSE)
     }
     if (k > max_k) {

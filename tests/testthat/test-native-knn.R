@@ -328,6 +328,9 @@ test_that("native KNN rejects fractional integer controls", {
 })
 
 test_that("one-call routing uses native CPU and Metal KNN", {
+    expect_false(
+        "faiss_gpu_compiled" %in% names(fastembedr_build_config_cpp())
+    )
     expect_identical(
         fastembedr_embedding_nn_policy("cpu", 70000L)$method, "hnsw"
     )
@@ -343,19 +346,12 @@ test_that("one-call routing uses native CPU and Metal KNN", {
     expect_identical(
         fastembedr_embedding_nn_policy("cuda", 100000L)$method, "ivf"
     )
-    expected_exact_engine <- if (
-        isTRUE(fastembedr_build_config_cpp()$faiss_gpu_compiled)
-    ) {
-        "native_faiss_gpu_exact"
-    } else {
-        "native_cuvs_gpu_exact"
-    }
     expect_identical(
         fastembedr_nn_policy_engine(
             fastembedr_embedding_nn_policy("cuda", 70000L),
             keep_gpu = TRUE
         ),
-        expected_exact_engine
+        "native_cuvs_gpu_exact"
     )
 })
 
@@ -426,4 +422,49 @@ test_that(paste(
     expect_identical(dim(observed$indices), c(256L, 10L))
     expect_equal(knn_recall_test(observed, truth), 1, tolerance = 1e-8)
     expect_true(all(is.finite(observed$distances)))
+})
+
+test_that("native CUDA exact KNN preserves float32 matrix layout", {
+    skip_if_not_installed("float")
+    skip_if_not(
+        isTRUE(native_cuda_knn_available_cpp()),
+        "native CUDA KNN is unavailable"
+    )
+    set.seed(41)
+    x <- matrix(rnorm(192 * 4096), nrow = 192)
+    truth <- exact_knn_reference(x, 12L)
+    float_x <- float::fl(x)
+
+    device_knn <- native_cuda_knn_cpp(
+        float_x, 12L, "exact", "euclidean", 0.99,
+        keep_gpu = TRUE
+    )
+    observed <- native_cuda_knn_to_host_cpp(device_knn)
+
+    expect_identical(dim(observed$indices), c(192L, 12L))
+    expect_equal(knn_recall_test(observed, truth), 1, tolerance = 1e-8)
+    expect_true(all(is.finite(observed$distances)))
+    expect_false(isTRUE(device_knn$cpu_fallback))
+})
+
+test_that("native CUDA exact query KNN matches the CPU oracle", {
+    skip_if_not(
+        isTRUE(native_cuda_knn_available_cpp()),
+        "native CUDA KNN is unavailable"
+    )
+    set.seed(42)
+    reference <- matrix(rnorm(320 * 24), nrow = 320)
+    query <- matrix(rnorm(32 * 24), nrow = 32)
+    truth <- test_exact_knn(reference, query, k = 15L)
+
+    device_knn <- native_cuda_query_knn_cpp(
+        reference, query, 15L, "exact", "euclidean", 0.99,
+        keep_gpu = TRUE
+    )
+    observed <- native_cuda_knn_to_host_cpp(device_knn)
+
+    expect_identical(dim(observed$indices), c(32L, 15L))
+    expect_equal(knn_recall_test(observed, truth), 1, tolerance = 1e-8)
+    expect_true(all(is.finite(observed$distances)))
+    expect_false(isTRUE(device_knn$cpu_fallback))
 })

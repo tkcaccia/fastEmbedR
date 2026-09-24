@@ -20,7 +20,7 @@ graph_build_settings <- function(k, backend, metric, weight,
         ),
         mutual = mutual,
         prune = prune,
-        n_threads = graph_positive_integer(n.cores, "n.cores")
+        n_threads = resolve_n_cores(n.cores)
     )
 }
 
@@ -158,7 +158,7 @@ knn_graph <- function(x,
                         weight = c("snn", "distance", "binary"),
                         mutual = FALSE,
                         prune = 0,
-                        n.cores = 1L) {
+                        n.cores = NULL) {
     if (inherits(x, "fastEmbedR_graph")) {
         return(validate_fastembedr_graph(x))
     }
@@ -415,15 +415,11 @@ graph_backend_name <- function(primary, fallback) {
     if (valid(primary)) as.character(primary) else as.character(fallback)
 }
 
-#' Print graph and graph-clustering results
+#' Print a nearest-neighbor graph
 #'
-#' @param x A `fastEmbedR_graph` or `fastEmbedR_graph_cluster` object.
+#' @param x A `fastEmbedR_graph` object.
 #' @param ... Unused.
 #' @return `x`, invisibly.
-#' @name fastEmbedR_graph_methods
-NULL
-
-#' @rdname fastEmbedR_graph_methods
 #' @export
 print.fastEmbedR_graph <- function(x, ...) {
     cat("fastEmbedR KNN graph\n")
@@ -437,7 +433,11 @@ print.fastEmbedR_graph <- function(x, ...) {
     invisible(x)
 }
 
-#' @rdname fastEmbedR_graph_methods
+#' Print a graph-clustering result
+#'
+#' @param x A `fastEmbedR_graph_cluster` object.
+#' @param ... Unused.
+#' @return `x`, invisibly.
 #' @export
 print.fastEmbedR_graph_cluster <- function(x, ...) {
     cat("fastEmbedR graph clustering\n")

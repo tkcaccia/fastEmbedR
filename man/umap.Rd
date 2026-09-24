@@ -10,14 +10,16 @@ umap(
   n_components = 2L,
   standardize = FALSE,
   pca_dims = NULL,
-  metric = c("euclidean", "cosine", "correlation", "inner_product"),
+  metric = c("euclidean", "cosine", "correlation"),
   nn = NULL,
   seed = 4L,
   backend = NULL,
   n.cores = NULL,
   keep_knn = FALSE,
   graph_mode = c("fuzzy", "binary"),
-  verbose = FALSE
+  verbose = FALSE,
+  landmarks = FALSE,
+  transform_k = NULL
 )
 }
 \arguments{
@@ -38,7 +40,7 @@ from the supplied matrix.}
 \item{pca_dims}{Optional PCA dimension before KNN.}
 
 \item{metric}{KNN distance metric for one-call matrix input: \code{"euclidean"},
-\code{"cosine"}, \code{"correlation"}, or \code{"inner_product"}.}
+\code{"cosine"}, or \code{"correlation"}.}
 
 \item{nn}{Optional precomputed KNN result when \code{data} is a matrix.}
 
@@ -47,9 +49,8 @@ from the supplied matrix.}
 \item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. CPU KNN
 uses package-native HNSW. Metal uses package-native exact or recall-tuned
 IVF-Flat search. CUDA uses cuVS brute-force exact search below 100,000
-rows and cuVS IVF-Flat above that threshold; an explicitly enabled FAISS
-GPU build may provide exact search. The KNN result stays on the device
-through graph construction and optimization.
+rows and cuVS IVF-Flat above that threshold. The KNN result stays on the
+device through graph construction and optimization.
 GPU requests must resolve to a real native backend; the package does not
 relabel CPU work as GPU.}
 
@@ -67,9 +68,19 @@ as an adjacency-only sensitivity approximation; it is not standard UMAP
 or necessarily faster.}
 
 \item{verbose}{Print progress.}
+
+\item{landmarks}{\code{FALSE} (the default) embeds all observations. A fraction
+in \verb{(0, 1)}, a positive landmark count, or explicit row indices enables
+landmark embedding followed by fixed-reference projection of the remaining
+rows.}
+
+\item{transform_k}{Number of landmark neighbors used to project non-landmark
+observations. Used only when \code{landmarks} enables landmarking and defaults
+to \code{n_neighbors}.}
 }
 \value{
-A \code{fastEmbedR_embedding} object.
+A \code{fastEmbedR_embedding} object. Landmark fits also contain \code{model},
+which can be passed to \code{\link[=project_landmark_model]{project_landmark_model()}} for new observations.
 }
 \description{
 \code{umap()} is a small convenience wrapper. If \code{data} is already a list of KNN
@@ -101,6 +112,13 @@ Arbitrary \code{min_dist}, \code{spread}, epoch, learning-rate, negative-samplin
 optimizer-mode sweeps should use a
 general-purpose UMAP implementation; fastEmbedR does not claim API or
 parameter interchangeability with those packages.
+
+Landmark mode fits the requested fuzzy or binary UMAP graph on the
+landmark rows, projects the remaining rows with query-to-reference KNN, and
+optionally refines only projected rows while landmark coordinates remain
+fixed. Precomputed KNN input cannot be combined with landmarking.
+The returned \code{model} retains the fitted preprocessing transform so new data
+can be supplied in the same original feature space.
 }
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))

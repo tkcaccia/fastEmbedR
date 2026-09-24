@@ -48,10 +48,7 @@
 #' @export
 umap_init <- function(x, distances = NULL, n_neighbors = NULL,
                         n_components = 2L,
-                        metric = c(
-                            "euclidean", "cosine", "correlation",
-                            "inner_product"
-                        ),
+                        metric = c("euclidean", "cosine", "correlation"),
                         backend = NULL, seed = 4L, n.cores = NULL,
                         graph_mode = c("fuzzy", "binary")) {
     graph_mode_missing <- missing(graph_mode)

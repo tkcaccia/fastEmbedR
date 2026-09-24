@@ -60,9 +60,14 @@ Metal, and CUDA runners and archive all commit-named evidence artifacts.
 
 - Use `n.cores` for public CPU thread controls.
 - Use American spelling, including “nearest-neighbor.”
-- Keep R code readable under 80 columns where practical.
+- Keep authored lines at 80 columns or fewer and R functions at 50 lines or
+  fewer.
 - Prefer small native helpers with explicit ownership of buffers and backend
   dispatch over adding more branches to already large functions.
+- Extend an existing execution path where possible. A new path must have a
+  caller, visible metadata, and a focused test; remove the path it replaces.
+- Do not add silent fallbacks, unused compatibility aliases, or benchmark-only
+  branches to production code.
 - Format new C++ with the surrounding file's style and compile as C++17.
 
 ## Pull requests

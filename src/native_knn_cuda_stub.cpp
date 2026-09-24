@@ -6,10 +6,6 @@ bool native_cuda_knn_available_impl() {
   return false;
 }
 
-bool native_cuda_faiss_gpu_available_impl() {
-  return false;
-}
-
 Rcpp::List native_cuda_knn_impl(SEXP,
                                 int,
                                 const std::string&,

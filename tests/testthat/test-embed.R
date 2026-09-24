@@ -22,11 +22,15 @@ test_that("embedding metrics expose the supported native choices", {
         fastEmbedR:::resolve_embedding_metric("correlation"),
         "correlation"
     )
-    expect_equal(
-        fastEmbedR:::resolve_embedding_metric("inner_product"),
-        "inner_product"
-    )
     expect_error(fastEmbedR:::resolve_embedding_metric("manhattan"), "arg")
+})
+
+test_that("umap rejects fractional neighbor counts", {
+    x <- matrix(rnorm(80), nrow = 20)
+    expect_error(
+        umap(x, n_neighbors = 5.5, backend = "cpu"),
+        "positive and smaller"
+    )
 })
 
 test_that("preprocessing PCA uses package-native RSVD", {
@@ -385,8 +389,8 @@ test_that("CUDA KNN bridge consumes native GPU-resident output", {
         structure(
             list(
                 handle = "mock",
-                backend_used = "native_cuda_faiss_gpu_bfknn_l2",
-                gpu_provider = "fastEmbedR_native_faiss_gpu",
+                backend_used = "native_cuda_cuvs_exact",
+                gpu_provider = "fastEmbedR_native_cuvs",
                 metric = metric,
                 n_query = nrow(data),
                 k = k,
@@ -400,7 +404,6 @@ test_that("CUDA KNN bridge consumes native GPU-resident output", {
     }
     with_mocked_bindings(
         native_cuda_knn_available_cpp = function() TRUE,
-        native_cuda_faiss_gpu_available_cpp = function() TRUE,
         native_cuda_knn_cpp = native_mock,
         {
             out <- fastEmbedR:::fastembedr_nn_without_self(
@@ -413,15 +416,6 @@ test_that("CUDA KNN bridge consumes native GPU-resident output", {
                 keep_gpu = TRUE
             )
 
-            out_gpu <- fastEmbedR:::fastembedr_nn_without_self(
-                x,
-                k = 2L,
-                backend = "cuda",
-                method = "auto",
-                metric = "inner_product",
-                target_recall = 0.99,
-                keep_gpu = TRUE
-            )
         },
         .package = "fastEmbedR"
     )
@@ -431,10 +425,8 @@ test_that("CUDA KNN bridge consumes native GPU-resident output", {
     expect_equal(captured$method, "auto")
     expect_equal(captured$target_recall, 0.99)
     expect_s3_class(out, "fastEmbedR_gpu_knn")
-    expect_equal(out$backend_used, "native_cuda_faiss_gpu_bfknn_l2")
+    expect_equal(out$backend_used, "native_cuda_cuvs_exact")
     expect_equal(out$metric, "correlation")
-    expect_s3_class(out_gpu, "fastEmbedR_gpu_knn")
-    expect_equal(out_gpu$metric, "inner_product")
 })
 
 test_that("external GPU KNN objects require explicit user materialization", {
@@ -444,7 +436,7 @@ test_that("external GPU KNN objects require explicit user materialization", {
             distances_ptr = new.env(parent = emptyenv()),
             backend_used = "external_cuda",
             result_residency = "cuda",
-            metric = "inner_product",
+            metric = "cosine",
             n_query = 4L,
             k = 2L
         ),
@@ -728,16 +720,17 @@ test_that("tsne convenience wrapper runs the automatic KNN workflow", {
 test_that("tsne PCA initialization uses native CPU RSVD", {
     set.seed(44)
     x <- matrix(rnorm(160L), 40L, 4L)
-    init <- tsne_pca_init(x, n_components = 2L, seed = 44L, backend = "cpu")
+    fit <- pca(
+        x, ncomp = 2L, seed = 44L, backend = "cpu",
+        tsne_init = TRUE
+    )
+    init <- fit$tsne_init
 
     expect_equal(dim(init), c(40L, 2L))
     expect_true(all(is.finite(init)))
     expect_equal(attr(init, "fastEmbedR_init_method"), "pca_rsvd")
     expect_equal(attr(init, "fastEmbedR_init_backend"), "cpu_rsvd")
-    expect_equal(
-        attr(init, "fastEmbedR_init_package"),
-        "fastEmbedR native CPU RSVD"
-    )
+    expect_identical(attr(init, "fastEmbedR_init_seed"), 44L)
 })
 
 test_that("public PCA API uses randomized SVD", {

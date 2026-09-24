@@ -728,9 +728,6 @@ Rcpp::List native_hnsw_knn_impl(SEXP data_sexp,
   using Clock = std::chrono::steady_clock;
   const auto start = Clock::now();
   const fastembedr::KnnMetric metric = fastembedr::parse_knn_metric(metric_name);
-  if (metric == fastembedr::KnnMetric::InnerProduct) {
-    Rcpp::stop("Native CPU HNSW does not support raw inner-product distance.");
-  }
   fastembedr::FloatMatrix input = fastembedr::matrix_to_row_major_float(data_sexp, metric);
   const auto converted = Clock::now();
   const int n = input.nrow;
@@ -790,9 +787,6 @@ Rcpp::List native_hnsw_query_impl(SEXP data_sexp,
   using Clock = std::chrono::steady_clock;
   const auto start = Clock::now();
   const fastembedr::KnnMetric metric = fastembedr::parse_knn_metric(metric_name);
-  if (metric == fastembedr::KnnMetric::InnerProduct) {
-    Rcpp::stop("Native CPU HNSW does not support raw inner-product distance.");
-  }
   fastembedr::FloatMatrix input =
     fastembedr::matrix_to_row_major_float(data_sexp, metric);
   fastembedr::FloatMatrix query =

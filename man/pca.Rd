@@ -11,7 +11,7 @@ pca(
   center = TRUE,
   scale = FALSE,
   backend = NULL,
-  n.cores = 1L,
+  n.cores = NULL,
   seed = 4L,
   tsne_init = FALSE
 )
@@ -60,11 +60,11 @@ float32. CPU results also record \code{n.cores_requested},
 decomposition. CPU uses a package-native float32 blocked randomized SVD
 (rSVD). Metal uses a package-native float32 block-subspace rSVD whose large
 matrix products are executed with Metal Performance Shaders. CUDA selects
-between package-native float32 rSVD and RAPIDS RAFT TSVD from the matrix
-shape, requested rank, and estimated arithmetic cost. Wide, low-rank
-problems favor rSVD; smaller, narrower, or less-truncated problems favor
-TSVD. CUDA requests fail explicitly when the required native support is
-unavailable; they never fall back to CPU PCA.
+between package-native float32 rSVD and, when enabled, RAPIDS RAFT TSVD
+from the matrix shape, requested rank, and estimated arithmetic cost.
+Wide, low-rank problems favor rSVD; smaller, narrower, or less-truncated
+problems favor TSVD. Without RAFT, CUDA uses native rSVD. CUDA requests
+fail explicitly when CUDA is unavailable; they never fall back to CPU PCA.
 }
 \details{
 CPU matrix products and factorizations use the BLAS/LAPACK linked to R.

@@ -36,7 +36,7 @@ auto_embedding_k <- function(x, method = "tsne", include_self = FALSE) {
 }
 
 resolve_embedding_metric <- function(metric, data = NULL) {
-    match.arg(metric, c("euclidean", "cosine", "correlation", "inner_product"))
+    match.arg(metric, c("euclidean", "cosine", "correlation"))
 }
 
 coerce_embedding_data <- function(data) {
@@ -109,7 +109,7 @@ try_accelerated_standardization <- function(x, backend) {
 
 standardize_embedding_data <- function(x, metadata, backend, float32) {
     if (!metadata$standardize) {
-        return(list(data = x, metadata = metadata))
+        return(list(data = x, metadata = metadata, transform = NULL))
     }
     if (float32) {
         result <- standardize_float32_cpp(x)
@@ -117,30 +117,37 @@ standardize_embedding_data <- function(x, metadata, backend, float32) {
         metadata$preprocess_backend <- "cpu_float32"
         metadata$preprocess_backend_reason <-
             "native_float32_column_standardization"
-        return(list(data = result$data, metadata = metadata))
+        return(list(
+            data = result$data, metadata = metadata,
+            transform = result[c("center", "scale")]
+        ))
     }
     accelerated <- try_accelerated_standardization(x, backend)
     if (!is.null(accelerated$value)) {
         metadata$standardize_backend <- backend
         metadata$preprocess_backend <- backend
-        return(list(data = accelerated$value$data, metadata = metadata))
+        result <- accelerated$value
+        return(list(
+            data = result$data, metadata = metadata,
+            transform = result[c("center", "scale")]
+        ))
     }
     metadata$preprocess_backend_reason <- accelerated$error
     result <- standardize_cpu_cpp(x)
     metadata$standardize_backend <- "cpu"
     metadata$preprocess_backend <- "cpu"
-    list(data = result$data, metadata = metadata)
+    list(
+        data = result$data, metadata = metadata,
+        transform = result[c("center", "scale")]
+    )
 }
 
 validate_embedding_pca_dims <- function(pca_dims, x) {
     if (is.null(pca_dims)) {
         return(NULL)
     }
-    pca_dims <- as.integer(pca_dims)
-    if (length(pca_dims) != 1L ||
-        is.na(pca_dims) ||
-        !is.finite(pca_dims) ||
-        pca_dims < 1L) {
+    pca_dims <- integer_scalar(pca_dims)
+    if (is.na(pca_dims) || pca_dims < 1L) {
         stop("`pca_dims` must be NULL or a positive integer.",
             call. = FALSE
         )
@@ -170,7 +177,7 @@ run_embedding_pca <- function(x, rank, backend, seed) {
 apply_embedding_pca <- function(x, metadata, pca_dims, backend, seed) {
     rank <- validate_embedding_pca_dims(pca_dims, x)
     if (is.null(rank) || rank < 1L || rank >= ncol(x)) {
-        return(list(data = x, metadata = metadata))
+        return(list(data = x, metadata = metadata, transform = NULL))
     }
     fit <- run_embedding_pca(x, rank, backend, seed)
     metadata$pca_dims <- as.integer(ncol(fit$scores))
@@ -183,7 +190,12 @@ apply_embedding_pca <- function(x, metadata, pca_dims, backend, seed) {
         metadata$standardize_backend,
         fit$backend
     )
-    list(data = fit$scores, metadata = metadata)
+    transform <- list(
+        loadings = fit$loadings,
+        center = fit$center,
+        scale = fit$scale
+    )
+    list(data = fit$scores, metadata = metadata, transform = transform)
 }
 
 prepare_embedding_data <- function(data,
@@ -209,7 +221,15 @@ prepare_embedding_data <- function(data,
         backend,
         seed
     )
-    list(data = reduced$data, preprocess = reduced$metadata)
+    transform <- list(
+        input_p = as.integer(ncol(input$data)),
+        standardize = standardized$transform,
+        pca = reduced$transform
+    )
+    list(
+        data = reduced$data, preprocess = reduced$metadata,
+        transform = transform
+    )
 }
 
 resolve_preprocess_backend <- function(backend) {
@@ -264,10 +284,10 @@ validate_pca_backend <- function(backend) {
 }
 
 fastembedr_metal_rsvd_pca <- function(data,
-                                      ncomp,
-                                      center = TRUE,
-                                      scale = FALSE,
-                                      seed = 4L) {
+    ncomp,
+    center = TRUE,
+    scale = FALSE,
+    seed = 4L) {
     x <- if (is_float32_matrix(data)) {
         data
     } else {
@@ -309,8 +329,6 @@ fastembedr_metal_rsvd_pca <- function(data,
     class(out) <- "fastEmbedR_pca"
     out
 }
-
-fastembedr_metal_tsvd_pca <- fastembedr_metal_rsvd_pca
 
 fastembedr_cuda_pca <- function(data,
                                 ncomp,
@@ -361,8 +379,6 @@ fastembedr_cuda_pca <- function(data,
     class(out) <- "fastEmbedR_pca"
     out
 }
-
-fastembedr_cuda_tsvd_pca <- fastembedr_cuda_pca
 
 attach_opentsne_pca_init <- function(fit, requested) {
     if (!is.logical(requested) || length(requested) != 1L || is.na(requested)) {
@@ -448,7 +464,7 @@ project_pca_test_scores <- function(xtest, fit) {
     } else {
         project_pca_double_scores(input$data, fit)
     }
-    colnames(scores) <- colnames(fit$scores)
+    colnames(scores) <- colnames(fit$loadings)
     scores
 }
 
@@ -460,12 +476,7 @@ finalize_pca_fit <- function(fit, xtest, tsne_init) {
 }
 
 normalize_pca_threads <- function(n.cores) {
-    n.cores <- integer_scalar(n.cores)
-    if (length(n.cores) != 1L || is.na(n.cores) ||
-        !is.finite(n.cores) || n.cores < 1L) {
-        stop("`n.cores` must be a positive integer.", call. = FALSE)
-    }
-    n.cores
+    resolve_n_cores(n.cores)
 }
 
 set_pca_thread_environment <- function(n_threads) {
@@ -676,11 +687,8 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
         is.na(tsne_init)) {
         stop("`tsne_init` must be TRUE or FALSE.", call. = FALSE)
     }
-    ncomp <- as.integer(ncomp)
-    if (length(ncomp) != 1L ||
-        is.na(ncomp) ||
-        !is.finite(ncomp) ||
-        ncomp < 1L) {
+    ncomp <- integer_scalar(ncomp)
+    if (is.na(ncomp) || ncomp < 1L) {
         stop("`ncomp` must be a positive integer.", call. = FALSE)
     }
     list(
@@ -695,11 +703,11 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' decomposition. CPU uses a package-native float32 blocked randomized SVD
 #' (rSVD). Metal uses a package-native float32 block-subspace rSVD whose large
 #' matrix products are executed with Metal Performance Shaders. CUDA selects
-#' between package-native float32 rSVD and RAPIDS RAFT TSVD from the matrix
-#' shape, requested rank, and estimated arithmetic cost. Wide, low-rank
-#' problems favor rSVD; smaller, narrower, or less-truncated problems favor
-#' TSVD. CUDA requests fail explicitly when the required native support is
-#' unavailable; they never fall back to CPU PCA.
+#' between package-native float32 rSVD and, when enabled, RAPIDS RAFT TSVD
+#' from the matrix shape, requested rank, and estimated arithmetic cost.
+#' Wide, low-rank problems favor rSVD; smaller, narrower, or less-truncated
+#' problems favor TSVD. Without RAFT, CUDA uses native rSVD. CUDA requests
+#' fail explicitly when CUDA is unavailable; they never fall back to CPU PCA.
 #'
 #' CPU matrix products and factorizations use the BLAS/LAPACK linked to R.
 #' Set `n.cores` to control their CPU core limit. The requested value is
@@ -756,7 +764,7 @@ pca <- function(x,
                 center = TRUE,
                 scale = FALSE,
                 backend = NULL,
-                n.cores = 1L,
+                n.cores = NULL,
                 seed = 4L,
                 tsne_init = FALSE) {
     backend <- validate_pca_backend(resolve_embedding_backend(backend))
@@ -875,11 +883,8 @@ trim_supplied_knn <- function(knn, n_neighbors) {
     if (is.null(n_neighbors)) {
         n_neighbors <- ncol(knn$indices)
     } else {
-        n_neighbors <- as.integer(n_neighbors)
-        invalid_n_neighbors <- length(n_neighbors) != 1L ||
-            is.na(n_neighbors) ||
-            !is.finite(n_neighbors) ||
-            n_neighbors < 1L
+        n_neighbors <- integer_scalar(n_neighbors)
+        invalid_n_neighbors <- is.na(n_neighbors) || n_neighbors < 1L
         if (invalid_n_neighbors) {
             stop("`n_neighbors` must be NULL or a positive integer.",
                 call. = FALSE
@@ -1031,10 +1036,13 @@ resolve_landmark_count <- function(value, n) {
     if (!is.finite(value) || value <= 0) {
         landmark_argument_error()
     }
-    count <- if (value < 1) {
-        ceiling(n * value)
+    if (value < 1) {
+        count <- ceiling(n * value)
     } else {
-        as.integer(round(value))
+        count <- integer_scalar(value)
+        if (is.na(count)) {
+            stop("A landmark count must be a whole number.", call. = FALSE)
+        }
     }
     if (count < 2L) {
         stop("Landmark mode requires at least two landmarks.",
@@ -1048,7 +1056,13 @@ resolve_landmark_indices <- function(landmarks, n) {
     if (!is.numeric(landmarks)) {
         landmark_argument_error()
     }
-    idx <- sort(unique(as.integer(landmarks)))
+    idx <- vapply(
+        landmarks,
+        integer_scalar,
+        integer(1L),
+        default = NA_integer_
+    )
+    idx <- sort(unique(idx))
     invalid <- length(idx) < 2L ||
         any(is.na(idx)) ||
         any(idx < 1L) ||
@@ -1255,26 +1269,11 @@ sampled_score_indices <- function(x,
     out
 }
 
-#' Print or plot an embedding result
-#'
-#' These methods summarize a `fastEmbedR_embedding` object or plot its first
-#' two layout dimensions.
+#' Print an embedding result
 #'
 #' @param x A `fastEmbedR_embedding` object.
-#' @param labels Optional labels used to color plotted observations.
-#' @param pch Plotting symbol passed to [graphics::plot()].
-#' @param bg Point background colors. When `NULL`, integer colors are derived
-#'   from `labels`, or white is used when labels are absent.
-#' @param col Point border or foreground color.
-#' @param xlab,ylab Axis labels.
-#' @param main Plot title. `NULL` derives a title from the fitted method.
-#' @param ... Additional arguments passed to [graphics::plot()] by the plot
-#'   method. The print method ignores them.
+#' @param ... Unused.
 #' @return The input object, invisibly.
-#' @name fastEmbedR_embedding_methods
-NULL
-
-#' @rdname fastEmbedR_embedding_methods
 #' @export
 print.fastEmbedR_embedding <- function(x, ...) {
     cat("fastEmbedR embedding\n")
@@ -1316,7 +1315,18 @@ print.fastEmbedR_embedding <- function(x, ...) {
     invisible(x)
 }
 
-#' @rdname fastEmbedR_embedding_methods
+#' Plot an embedding result
+#'
+#' @param x A `fastEmbedR_embedding` object.
+#' @param labels Optional labels used to color plotted observations.
+#' @param pch Plotting symbol passed to [graphics::plot()].
+#' @param bg Point background colors. When `NULL`, integer colors are derived
+#'   from `labels`, or white is used when labels are absent.
+#' @param col Point border or foreground color.
+#' @param xlab,ylab Axis labels.
+#' @param main Plot title. `NULL` derives a title from the fitted method.
+#' @param ... Additional arguments passed to [graphics::plot()].
+#' @return The input object, invisibly.
 #' @export
 plot.fastEmbedR_embedding <- function(x,
                                         labels = x$labels,

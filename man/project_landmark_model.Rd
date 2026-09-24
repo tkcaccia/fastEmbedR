@@ -22,14 +22,17 @@ project_landmark_model(
 )
 }
 \arguments{
-\item{model}{A model returned by \code{\link[=fit_landmark_model]{fit_landmark_model()}}.}
+\item{model}{The \code{model} element returned by \code{\link[=umap]{umap()}} or \code{\link[=tsne]{tsne()}} when
+landmarking is enabled.}
 
-\item{data}{The original full data matrix for a model fitted on a strict
-landmark subset, or a matrix containing only new query observations in the
-same feature space. A model fitted with all training rows as references
-always treats \code{data} as new query observations.}
+\item{data}{New query observations in the original feature space used for
+fitting. The stored standardization and PCA transforms are applied before
+query-to-reference search.}
 
-\item{query_indices}{Optional rows of \code{data} to project.}
+\item{query_indices}{Optional rows of \code{data} to project. To reconstruct the
+original training layout explicitly, pass the original matrix and
+\code{model$selection$query_indices}. With \code{NULL}, every supplied row is treated
+as a genuinely new query, even when its row count matches the training set.}
 
 \item{transform_k}{Number of reference neighbors.}
 
@@ -54,9 +57,9 @@ always treats \code{data} as new query observations.}
 \item{...}{Low-level t-SNE transform controls.}
 }
 \value{
-A \code{fastEmbedR_embedding}. For a strict landmark-subset model, passing
-the original full matrix reassembles \code{layout} in original row order.
-Otherwise \code{layout} contains only the supplied query rows. The returned
+A \code{fastEmbedR_embedding}. Explicit original-query indices reassemble
+\code{layout} in training row order; otherwise it contains only query rows. The
+returned
 parameters record \code{projection_scope} as \code{"original_reconstruction"} or
 \code{"held_out_query"}.
 }
@@ -68,10 +71,9 @@ fixed.
 }
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))
-selection <- select_landmarks(x, 0.5, seed = 1)
-model <- fit_landmark_model(
-    x, selection,
-    method = "umap", n_neighbors = 10, seed = 1
+fit <- umap(x, n_neighbors = 10, landmarks = 0.5, seed = 1)
+query <- x[1:3, , drop = FALSE]
+projected <- project_landmark_model(
+    fit$model, query, transform_k = 10, refinement_epochs = 0
 )
-fit <- project_landmark_model(model, x, refinement_epochs = 2)
 }

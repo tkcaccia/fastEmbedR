@@ -45,16 +45,19 @@ metapackage. Install a compatible toolkit in a separate prefix, or use a
 controlled container with NVIDIA GPU passthrough. The driver must be new enough
 for the toolkit/runtime used in that environment.
 
-Core CUDA embedding requires:
+Package-native CUDA embedding and rSVD require:
 
 - the CUDA runtime, cuFFT, cuBLAS, cuSOLVER, and cuRAND;
-- CUB and Thrust headers from CUDA Core Compute Libraries (CCCL);
-- RAPIDS cuVS C and C++ libraries for exact and IVF-Flat KNN.
+- CUB and Thrust headers from CUDA Core Compute Libraries (CCCL).
 
-FAISS GPU is not required. It is an optional exact-search provider enabled only
-with `FASTEMBEDR_USE_FAISS_GPU=1`. RAFT/RMM provide the TSVD branch of the
-automatic CUDA PCA selector. The package-native CUDA rSVD branch additionally
-uses cuRAND.
+Those components are supplied by a normal CUDA toolkit installation. Complete
+one-call CUDA workflows starting from a data matrix additionally require the
+RAPIDS cuVS C and C++ libraries for exact and IVF-Flat KNN. CUDA embedding from
+a precomputed KNN object does not require cuVS.
+
+RAFT/RMM provide an optional TSVD branch of the automatic CUDA PCA selector.
+Package-native CUDA rSVD remains available without RAFT and uses cuBLAS,
+cuSOLVER, and cuRAND from the CUDA toolkit.
 
 ## Strict CUDA installation
 
@@ -72,7 +75,6 @@ export FASTEMBEDR_CUDA_ARCH="89"
 PACKAGE_REQUIRE_CUDA=1 \
 FASTEMBEDR_USE_CUDA=1 \
 FASTEMBEDR_USE_CUVS=1 \
-FASTEMBEDR_USE_FAISS_GPU=0 \
 R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 ```
 
@@ -81,7 +83,7 @@ R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 CUDA test and a cuVS test during configuration. Installation fails if either
 test fails; it cannot produce a CPU fallback build.
 
-To enable automatic CUDA rSVD/TSVD PCA, also set:
+To enable the optional RAFT TSVD branch of CUDA PCA, also set:
 
 ```sh
 export RAFT_HOME=/opt/rapids
@@ -89,8 +91,8 @@ export RAPIDS_HOME=/opt/rapids
 export FASTEMBEDR_USE_RAFT=1
 ```
 
-To opt into FAISS GPU exact search, set `FAISS_HOME` and
-`FASTEMBEDR_USE_FAISS_GPU=1`. This is optional and disabled by default.
+Without these RAFT settings, CUDA PCA and CUDA t-SNE PCA initialization use
+the package-native rSVD implementation; they do not fall back to CPU.
 
 ## Discovery variables
 
@@ -111,10 +113,10 @@ When CUDA Core Compute Libraries (CCCL) are installed separately, set
 `CCCL_HOME`. Configuration searches its root, `include`, `include/cccl`, and
 the corresponding `targets/*/include` directories for CUB and Thrust.
 
-Use `CUVS_HOME`, `RAFT_HOME`, `RAPIDS_HOME`, and optional `FAISS_HOME` for
-external prefixes. Configure records runtime search paths for detected CUDA,
-cuVS, RAFT/RMM, and optional FAISS libraries. A matching `LD_LIBRARY_PATH` may
-still be needed for transitive dependencies:
+Use `CUVS_HOME`, `RAFT_HOME`, and `RAPIDS_HOME` for external prefixes.
+Configure records runtime search paths for detected CUDA, cuVS, and RAFT/RMM
+libraries. A matching `LD_LIBRARY_PATH` may still be needed for transitive
+dependencies:
 
 `FASTEMBEDR_CUDA_CPPFLAGS` supplies CUDA preprocessor and include flags.
 `FASTEMBEDR_CUDA_FLAGS` supplies general NVCC flags. Both are applied to CUDA
@@ -130,30 +132,21 @@ export LD_LIBRARY_PATH=/opt/rapids/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-
 ```r
 library(fastEmbedR)
 
-cap <- fastEmbedR_capabilities()
-print(cap)
-cuda <- cap[cap$backend == "cuda", ]
-stopifnot(
-    identical(cuda$status, "available_functional"),
-    isTRUE(cuda$compiled),
-    isTRUE(cuda$knn_available),
-    isTRUE(cuda$embedding_available)
-)
-
 set.seed(1)
 x <- matrix(runif(2048 * 32), nrow = 2048)
 knn <- precompute_knn(x, k = 15, backend = "cuda")
+fit <- umap_knn(knn, backend = "cuda")
 stopifnot(
     inherits(knn, "fastEmbedR_gpu_knn"),
     identical(knn$result_residency, "cuda"),
     identical(knn$device_to_host_result_copies, 0),
-    !isTRUE(knn$cpu_fallback)
+    !isTRUE(knn$cpu_fallback),
+    identical(attr(fit, "fastEmbedR_config")$backend, "cuda")
 )
 ```
 
-The capability status distinguishes a functional accelerator, a backend that
-was not built, a compiled backend unavailable at runtime, and a package built
-in diagnostic-only mode.
+The strict explicit request and returned backend metadata prevent a CPU result
+from being accepted as CUDA evidence.
 
 ## Common failures
 

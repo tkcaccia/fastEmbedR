@@ -7,7 +7,6 @@
 [Examples](docs/examples.md) |
 [Benchmarks](docs/benchmarks.md) |
 [API](docs/usage-api.md) |
-[API Map](docs/api-map.md) |
 [Reproducibility](docs/reproducibility.md) |
 [Development](docs/development.md) |
 [References](docs/references.md) |
@@ -25,8 +24,7 @@ primary contributions are:
 - float32 input/output support with float32 native optimizer buffers;
 - explicit backend reporting, with no silent CPU fallback labelled as GPU;
 - native CPU HNSW and Apple Metal exact/IVF-Flat KNN for one-call embeddings;
-- optional GPU-resident CUDA KNN through RAPIDS cuVS, with FAISS GPU as an
-  explicit optional exact-search provider.
+- optional GPU-resident exact/IVF-Flat CUDA KNN through RAPIDS cuVS.
 
 The t-SNE implementation combines sparse perplexity affinities, two-phase
 optimization, interpolation/FFT repulsion, and fixed-reference transformation
@@ -99,6 +97,15 @@ knn <- fastEmbedR::precompute_knn(
 y_from_knn <- fastEmbedR::umap_knn(knn, backend = "cpu", seed = 1)
 ```
 
+Set session defaults with base R options when several calls should use the
+same backend and CPU limit. Explicit function arguments still take precedence.
+
+```r
+old_options <- options(backend = "cpu", n.cores = 4L)
+fit <- fastEmbedR::umap(x)
+options(old_options)
+```
+
 `umap()` and `umap_knn()` use the standard fuzzy UMAP graph by default. Set
 `graph_mode = "binary"` only for the explicit adjacency-only sensitivity mode.
 The public UMAP API exposes `n_neighbors`, metric, graph mode, preprocessing,
@@ -116,10 +123,6 @@ and quality metrics without changing the stored layout.
 
 ## Main Functions
 
-The complete class, backend, residency, method, and lifecycle inventory is
-available from `fastEmbedR::fastEmbedR_api()` and in the
-[public API map](docs/api-map.md).
-
 | Function | Purpose |
 | --- | --- |
 | `precompute_knn()` | Native non-self KNN search on CPU, Metal, or CUDA, with backend-specific algorithm selection kept internal. |
@@ -130,9 +133,7 @@ available from `fastEmbedR::fastEmbedR_api()` and in the
 | `umap()` | One-call KNN plus UMAP. |
 | `pca()` | Backend-native truncated PCA; CPU calls expose `n.cores`, and `tsne_init = TRUE` returns a ready-to-use t-SNE initialization. |
 | `select_landmarks()` | Select and retain a reusable landmark/reference split. |
-| `fit_landmark_model()` | Fit ordinary UMAP or t-SNE on the landmark reference. |
-| `project_landmark_model()` | Project held-out or new observations into the fixed reference. |
-| `landmark_tsne()` / `landmark_umap()` | One-call landmark embedding and projection workflows. |
+| `tsne(..., landmarks = ...)` / `umap(..., landmarks = ...)` | Landmark embedding and fixed-reference projection workflows. |
 | `evaluate_embedding()` | Trustworthiness, neighbor preservation, label accuracy, and related metrics. |
 
 ### Optional Downstream Graph Utilities
@@ -165,8 +166,7 @@ R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 ```
 
 See [Installation](docs/installation.md) for `fastEmbedR` CPU, Metal, and CUDA
-embedding builds, including RAPIDS cuVS linkage for CUDA KNN. FAISS GPU is
-optional and disabled unless explicitly requested at configuration time.
+embedding builds, including RAPIDS cuVS linkage for CUDA KNN.
 The portable CPU build requires R, Rcpp, and a C++17 compiler. Accelerator
 libraries are optional and are detected during source installation.
 

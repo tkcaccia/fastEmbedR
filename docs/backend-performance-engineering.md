@@ -59,9 +59,9 @@ ownership boundaries are:
 
 | Stage | CPU | Metal | CUDA |
 | --- | --- | --- | --- |
-| One-call KNN | Native float32 HNSW | Native exact or recall-tuned IVF-Flat | cuVS exact or IVF-Flat; optional FAISS GPU exact |
+| One-call KNN | Native float32 HNSW | Native exact or recall-tuned IVF-Flat | cuVS exact or IVF-Flat |
 | Reusable host KNN | plain `indices`/`distances` list | Same KNN-input API | Same host KNN-input API; one-call native KNN can remain device-resident |
-| PCA/t-SNE initialization | Native rSVD using BLAS-backed products | Float32 block-subspace rSVD using MPS matrix products | Automatic native rSVD or RAPIDS RAFT TSVD |
+| PCA/t-SNE initialization | Native rSVD using BLAS-backed products | Float32 block-subspace rSVD using MPS matrix products | Native rSVD; optional RAPIDS RAFT TSVD |
 | t-SNE affinities | Native sparse C++ construction | Host construction followed by one graph upload | Native CUDA construction for resident one-call KNN |
 | UMAP graph | Native compact sparse graph | Prepared sparse graph uploaded once | Native CUDA construction for resident one-call KNN |
 | t-SNE optimization | Native C++ FFT-grid | Native Objective-C++/Metal FFT-grid | Native CUDA/cuFFT FFT-grid |
@@ -87,7 +87,7 @@ R methods in the same environment and archive `R CMD config CXX17`,
 
 CUDA packages must also distinguish source flags from dependency
 architectures. `FASTEMBEDR_CUDA_ARCH="75 89"` creates package kernels for a T4
-and L40S, but linked FAISS/cuVS/RAFT libraries must independently contain
+and L40S, but linked cuVS/RAFT libraries must independently contain
 compatible kernels. A CUDA build made only for the build-host GPU is not a
 valid multi-machine benchmark artifact.
 
@@ -220,7 +220,8 @@ implementation rather than IRLBA:
   Float32 input is copied directly into unified Metal storage; a native Metal
   reduction validates, centers, and optionally scales every feature in place;
 - CUDA selects package-native rSVD for sufficiently wide, low-rank matrices
-  and RAPIDS RAFT TSVD otherwise.
+  and, when RAFT is enabled, RAPIDS RAFT TSVD otherwise. Without RAFT, the
+  package-native rSVD route is used.
 
 Scores are centered and rescaled so the largest component standard deviation
 is `1e-4`. PCA timing is not included in the embedding-only results below;
@@ -259,11 +260,12 @@ inspection. The small-data test suite also compares Metal scores against
 `stats::prcomp()` and requires correlation of at least 0.99 for both
 components.
 
-The CUDA implementation automatically selects a native float32 rSVD or RAFT
-TSVD path. The selector accounts for matrix size, width, target rank, sketch
-width, and estimated rSVD pass cost. It therefore avoids the large covariance
-cost for very wide, low-rank inputs while retaining TSVD for narrower or
-less-truncated problems. CUDA requests are not silently replaced by CPU PCA.
+The CUDA implementation always provides native float32 rSVD and may select an
+optional RAFT TSVD path when RAFT is enabled. The selector accounts for matrix
+size, width, target rank, sketch width, and estimated rSVD pass cost. It avoids
+the large covariance cost for very wide, low-rank inputs while retaining TSVD
+for narrower or less-truncated problems in RAFT-enabled builds. CUDA requests
+are not silently replaced by CPU PCA.
 The CPU/Metal comparison files are
 stored under `results/cpu_metal_optimization/pca_validation/`.
 

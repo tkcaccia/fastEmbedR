@@ -243,9 +243,9 @@ fast_knn_umap_cuda_gpu_core <- function(
 #' Precompute reusable UMAP graph state from KNN
 #'
 #' `prepare_umap_knn()` builds the CSR graph once from a KNN object or index
-#' and distance matrices. The result can be passed to [umap_knn()] or
-#' [embed_knn()] repeatedly with different seeds without rebuilding the graph
-#' or recomputing `epochs_per_sample`.
+#' and distance matrices. The result can be passed to [umap_knn()] repeatedly
+#' with different seeds without rebuilding the graph or recomputing
+#' `epochs_per_sample`.
 #'
 #' @inheritParams umap_knn
 #' @return A prepared UMAP object containing the KNN, CSR graph, and resolved
@@ -379,7 +379,7 @@ prepare_umap_knn <- function(indices,
         error = function(e) list(error = conditionMessage(e))
     )
     cfg <- apply_prepared_umap_policy(cfg, policy)
-    cfg <- apply_umap_thread_override(cfg, n.cores, "n.cores")
+    cfg <- apply_umap_thread_override(cfg, n.cores)
     cfg <- prepared_umap_metadata(cfg, knn, graph_mode)
     built <- build_prepared_umap_graph(knn, cfg, graph_mode)
     out <- list(

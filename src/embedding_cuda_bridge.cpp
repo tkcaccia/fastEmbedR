@@ -219,8 +219,6 @@ NumericMatrix rsvd_multiply_cuda_impl(NumericMatrix left,
                                       bool transpose_left);
 NumericMatrix cuda_pca_init_cuda_impl(NumericMatrix data,
                                       int n_components);
-NumericMatrix raft_tsvd_init_cuda_impl(NumericMatrix data,
-                                       int n_components);
 List pca_tsvd_cuda_impl(SEXP data,
                         int n_components,
                         bool center,
@@ -242,11 +240,6 @@ List fastembedr_build_config_cpp() {
 #else
   const bool cuvs_compiled = false;
 #endif
-#ifdef FASTEMBEDR_HAS_FAISS_GPU
-  const bool faiss_gpu_compiled = true;
-#else
-  const bool faiss_gpu_compiled = false;
-#endif
 #ifdef FASTEMBEDR_HAS_RAFT
   const bool raft_compiled = true;
 #else
@@ -265,7 +258,6 @@ List fastembedr_build_config_cpp() {
   return List::create(
     Rcpp::Named("cuda_compiled") = cuda_compiled,
     Rcpp::Named("cuvs_compiled") = cuvs_compiled,
-    Rcpp::Named("faiss_gpu_compiled") = faiss_gpu_compiled,
     Rcpp::Named("raft_compiled") = raft_compiled,
     Rcpp::Named("metal_compiled") = metal_compiled,
     Rcpp::Named("diagnostic_only") = diagnostic_only
@@ -754,12 +746,6 @@ NumericMatrix rsvd_multiply_cuda_cpp(NumericMatrix left,
                                      NumericMatrix right,
                                      bool transpose_left) {
   return rsvd_multiply_cuda_impl(left, right, transpose_left);
-}
-
-// [[Rcpp::export]]
-NumericMatrix raft_tsvd_init_cuda_cpp(NumericMatrix data,
-                                      int n_components) {
-  return raft_tsvd_init_cuda_impl(data, n_components);
 }
 
 // [[Rcpp::export]]

@@ -187,8 +187,8 @@ resolve_opentsne_auto_parameters <- function(
         identical(tolower(learning_rate), "auto")
     list(
         perplexity = as.numeric(perplexity),
-        early_exaggeration_iter = as.integer(early_exaggeration_iter),
-        n_iter = as.integer(n_iter),
+        early_exaggeration_iter = early_exaggeration_iter,
+        n_iter = n_iter,
         opt_sne_learning_rate = opt_sne_learning_rate,
         learning_rate_value = as.numeric(auto$learning_rate %||% NA_real_),
         auto_config = isTRUE(auto_config),
@@ -202,13 +202,7 @@ resolve_opentsne_auto_parameters <- function(
 }
 
 default_tsne_threads <- function() {
-    value <- getOption("fastEmbedR.tsne_threads", 4L)
-    value <- integer_scalar(value)
-    if (length(value) != 1L || is.na(value) || !is.finite(value) ||
-        value < 0L) {
-        return(4L)
-    }
-    value
+    resolve_n_cores(default = 4L)
 }
 
 metal_opentsne_exact_dense_threshold <- function() {

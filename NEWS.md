@@ -1,5 +1,31 @@
 # fastEmbedR 0.1
 
+* Remove the generic `embed_knn()` dispatcher, API/capability inventory
+  helpers, KNN print method, backend setter/getter, and staged landmark fitter.
+  Use `tsne_knn()` or `umap_knn()` explicitly and configure session defaults
+  with `options(backend = ..., n.cores = ...)`.
+* Remove `tsne_pca_init()`. Use `pca(..., tsne_init = TRUE)$tsne_init` so one
+  PCA call returns both the ordinary fit and the t-SNE-ready initialization.
+* Remove the `inner_product` KNN metric and its CUDA-specific implementation.
+  The supported distance metrics are Euclidean, cosine, and correlation.
+* Integrate landmark workflows into `tsne()` and `umap()`. Landmarking is off
+  by default and is enabled with a fraction, count, or explicit row indices in
+  the `landmarks` argument; the separate landmark wrappers are removed.
+* Removed unused internal PCA aliases and the obsolete host-returning RAFT
+  TSVD entry point. Repository rules and CI now reject oversized R functions,
+  long authored lines, hidden fallbacks, and caller-free routes.
+* Clarified the installation tiers in `SystemRequirements`. CPU builds need
+  only the R C++17 toolchain; Apple frameworks come from the Apple SDK; CUDA
+  embedding and native rSVD use the CUDA toolkit, while cuVS and RAFT/RMM are
+  separate optional capabilities.
+* Removed the optional FAISS GPU linkage and exact-search branch. CUDA exact
+  and IVF-Flat KNN now use one direct RAPIDS cuVS implementation.
+* Removed the accidental RAFT compile-time gate from package-native CUDA rSVD
+  and device-resident t-SNE PCA initialization. RAFT remains optional and is
+  used only when its TSVD route is available and selected.
+* CUDA configuration now uses the vendored DLPack C ABI header for cuVS
+  probes instead of requiring a duplicate external DLPack installation.
+
 - Prepare the package for CRAN submission with a portable CPU build and
   optional Metal and CUDA capabilities.
 - Remove the `Biobase` dependency and its vignette-only expression-data
@@ -43,10 +69,10 @@
 
 - List Stefano Cacciatore as the sole package author and maintainer.
 - Clarify the build contract: CPU installation needs only C++17 and Rcpp;
-  Apple accelerator frameworks are supplied by the Apple SDK; FAISS GPU and
-  cuVS are linked only by CUDA nearest-neighbor builds; and RAFT/RMM are needed
-  only when optional CUDA TSVD initialization is enabled. The package-native
-  CPU HNSW and Metal exact/IVF-Flat implementations do not link FAISS.
+  Apple accelerator frameworks are supplied by the Apple SDK; cuVS is linked
+  only by CUDA nearest-neighbor builds; and RAFT/RMM are needed only when
+  optional CUDA TSVD initialization is enabled. The package-native CPU HNSW
+  and Metal exact/IVF-Flat implementations do not link FAISS.
 
 # fastEmbedR 0.99.14
 
@@ -58,9 +84,9 @@
 
 - Rename the canonical public interpolation-based t-SNE API to `tsne()`,
   `tsne_knn()`, `landmark_tsne()`, and `transform_tsne()`. Related prepared-KNN
-  and PCA-initialization helpers now use `prepare_tsne_knn()`,
-  `tsne_pca_init()`, and `tsne_init`; result method tags and benchmark IDs use
-  `tsne` consistently. Compiled implementation symbols remain private.
+  helpers now use `prepare_tsne_knn()` and `tsne_init`; result method tags and
+  benchmark IDs use `tsne` consistently. Compiled implementation symbols
+  remain private.
 - Apply the Bioconductor four-space source style across R, namespace, manual,
   and vignette sources; wrap all checked lines to 80 columns; and replace
   constructed `paste0()` condition messages with direct `sprintf()` signals.
@@ -215,13 +241,13 @@
   compaction and graph coarsening between levels. No cuGraph source, library,
   Python module, or runtime symbol is required. Exact Pons-Latapy Walktrap
   remains CPU-only, and unsupported accelerator requests fail explicitly.
-- Adds package-native float32 CPU HNSW, Apple Metal exact/recall-tuned IVF-Flat,
-  direct FAISS GPU exact search, and direct RAPIDS cuVS CUDA IVF-Flat for one-call
-  embeddings. CUDA results remain device-resident through graph or affinity
-  construction and optimization; no faissR or CPU fallback is used.
+- Adds package-native float32 CPU HNSW, Apple Metal exact/recall-tuned
+  IVF-Flat, and direct RAPIDS cuVS CUDA exact/IVF-Flat for one-call embeddings.
+  CUDA results remain device-resident through graph or affinity construction
+  and optimization; no faissR or CPU fallback is used.
 - Distils the CUDA KNN adapter from the MIT-licensed faissR implementation into
-  fastEmbedR. Exact search calls installed FAISS GPU directly; approximate
-  search calls the installed Apache-2.0 cuVS C API. The package strips
+  fastEmbedR. Exact and approximate search call the installed Apache-2.0 cuVS
+  C API. The package strips
   self-neighbours and packs int32/float32 output on device, and bounds IVF raw
   search storage to 32,768-query batches. `umap_knn()` and `opentsne_knn()`
   continue to accept reusable KNN results from any compatible provider.

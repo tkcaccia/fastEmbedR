@@ -15,15 +15,13 @@ namespace fastembedr {
 enum class KnnMetric {
   Euclidean,
   Cosine,
-  Correlation,
-  InnerProduct
+  Correlation
 };
 
 inline KnnMetric parse_knn_metric(const std::string& metric) {
   if (metric == "euclidean") return KnnMetric::Euclidean;
   if (metric == "cosine") return KnnMetric::Cosine;
   if (metric == "correlation") return KnnMetric::Correlation;
-  if (metric == "inner_product") return KnnMetric::InnerProduct;
   Rcpp::stop("Unsupported native KNN metric `%s`.", metric.c_str());
 }
 
@@ -122,7 +120,7 @@ inline float output_distance(float internal_distance, KnnMetric metric) {
   if (metric == KnnMetric::Cosine || metric == KnnMetric::Correlation) {
     return 0.5f * std::max(0.0f, internal_distance);
   }
-  return std::max(0.0f, internal_distance);
+  Rcpp::stop("Unsupported native KNN metric.");
 }
 
 } // namespace fastembedr

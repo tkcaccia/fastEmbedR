@@ -18,9 +18,8 @@ probabilistic neighbor-embedding objective of van der Maaten and Hinton [1],
 with modern interpolation-based optimization ideas from FIt-SNE and openTSNE [3-4].
 The package is intentionally KNN-first. fastEmbedR implements its CPU HNSW and
 Apple Metal exact/IVF-Flat one-call KNN paths natively. CUDA builds link to the
-Apache-2.0 RAPIDS cuVS C API for exact and IVF-Flat search; FAISS GPU is an
-optional exact-search provider. They do not call another R package, Python, or
-`reticulate`. Graph/affinity construction,
+Apache-2.0 RAPIDS cuVS C API for exact and IVF-Flat search. They do not call
+another R package, Python, or `reticulate`. Graph/affinity construction,
 initialization, stochastic optimization, native fixed-reference transforms,
 backend reporting, and quality metrics remain inside fastEmbedR.
 
@@ -33,11 +32,10 @@ The public package surface is deliberately small:
   then call the corresponding KNN entry point.
 - `pca()` computes backend-native truncated PCA scores and loadings. CPU uses
   fastEmbedR's native blocked rSVD implementation, Metal uses a resident
-  float32 MPS block-subspace rSVD, and CUDA selects package-native rSVD or
-  RAPIDS RAFT TSVD from matrix shape and requested rank. Float32 CUDA input is
-  passed to the native fit without an intermediate R double matrix;
-  unavailable required CUDA support is an explicit error rather than a CPU
-  fallback.
+  float32 MPS block-subspace rSVD, and CUDA uses package-native rSVD with an
+  optional RAPIDS RAFT TSVD route. Float32 CUDA input is passed to the native
+  fit without an intermediate R double matrix; unavailable required CUDA
+  support is an explicit error rather than a CPU fallback.
 - `knn_graph()` builds one compact undirected graph from data, an embedding,
   or supplied neighbors; `graph_cluster()` applies native Louvain, Leiden,
   or Walktrap community detection.
@@ -65,9 +63,9 @@ CUDA translation units are compiled by NVCC as C++17 with extended lambdas,
 relaxed `constexpr`, and position-independent host code. The deployment
 architectures are explicit through `FASTEMBEDR_CUDA_ARCH`. `CUDAHOSTCXX`
 selects an R-ABI-compatible host compiler when CUDA and R come from different
-toolchain prefixes. cuVS, optional FAISS GPU, RAFT, and their CUDA dependencies
-must be built for the same devices; adding an architecture to fastEmbedR cannot
-add missing kernels to a linked library.
+toolchain prefixes. cuVS, RAFT, and their CUDA dependencies must be built for
+the same devices; adding an architecture to fastEmbedR cannot add missing
+kernels to a linked library.
 
 The complete commands, architecture examples, diagnostics, and failure modes
 are documented in
@@ -156,16 +154,13 @@ and a small/large data policy:
 - CPU one-call embeddings use native HNSW. Metal uses native exact KNN below
   4,096 observations and recall-tuned IVF-Flat for larger inputs.
 - CUDA one-call embeddings use cuVS brute force below 100,000 samples and
-  recall-tuned cuVS IVF-Flat at or above 100,000 samples. An explicitly enabled
-  FAISS GPU build may provide exact search. Exact float32 input is uploaded in
-  its existing R column-major layout, removing a full host transpose and its
-  temporary buffer without changing distances or neighbors. IVF starts from a
+  recall-tuned cuVS IVF-Flat at or above 100,000 samples. Input is converted
+  once to the row-major float32 layout expected by cuVS. IVF starts from a
   deterministic shape rule, compares evenly spaced pilot queries against a
   cuVS exact oracle, and expands `nprobe` until it reaches the requested recall
   tier with a small safety margin. It records pilot recall, `nlist`, `nprobe`,
   and the number of tuning attempts.
-- cuVS, and optional FAISS GPU, write int64 row-major search output on the
-  device. One package CUDA
+- cuVS writes int64 row-major search output on the device. One package CUDA
   kernel removes self-neighbors, converts indices to int32/one-based form,
   transforms squared distances, and packs the result directly into the
   column-major device layout consumed by UMAP and t-SNE. No KNN matrix is
@@ -236,7 +231,7 @@ use hardware-appropriate execution:
 | --- | --- |
 | CPU | Package-native float32 blocked rSVD. Centering/scaling and large matrix products run in C++; Apple builds use Accelerate SGEMM and other platforms use a threaded float32 kernel. `n.cores` controls the temporary numerical-library/thread limit. |
 | Metal | Package-native float32 block-subspace rSVD using MPS matrix multiplication and a resident unified-memory workspace. |
-| CUDA | Automatic package-native float32 rSVD for sufficiently wide, low-rank matrices or RAPIDS RAFT TSVD otherwise. Float32 input is read from its payload without constructing an R double matrix; scores and loadings remain float32 until the requested R return boundary. |
+| CUDA | Package-native float32 rSVD, with optional RAPIDS RAFT TSVD selected for suitable matrix shapes when RAFT is enabled. Float32 input is read from its payload without constructing an R double matrix; scores and loadings remain float32 until the requested R return boundary. |
 
 The Metal path uses a backend-native block-subspace rSVD.
 It converts and centers the input once into a float32 buffer whose column-major
@@ -260,11 +255,12 @@ omitted.
 For t-SNE initialization, the input is mean-centered before decomposition
 and the resulting scores are centered and scaled to the small t-SNE
 initialization scale. CUDA acceleration for this step is native C++/CUDA
-through the same automatic CUDA rSVD/RAFT TSVD selector used by `pca()`. The
+through the same CUDA PCA selector used by `pca()`. Native rSVD is always
+available in a CUDA build; RAFT TSVD is considered only when enabled. The
 selector favors rSVD when only a small subspace is requested from a sufficiently
-wide matrix and favors TSVD when the sketch is not strongly truncated. If the
-required CUDA support is not compiled in, CUDA PCA initialization fails loudly
-rather than falling back to CPU.
+wide matrix and favors TSVD when the sketch is not strongly truncated. If CUDA
+support is not compiled in, CUDA PCA initialization fails loudly rather than
+falling back to CPU.
 
 The public CPU API exposes `n.cores` directly. fastEmbedR applies the
 requested limit for the duration of the PCA call through standard numerical
@@ -278,10 +274,9 @@ Set `tsne_init = TRUE` in `pca()` to retain the ordinary PCA fit and add an
 `tsne_init` matrix derived from those same scores. The added matrix is
 centered and rescaled so the maximum component standard deviation is `1e-4`,
 matching the small-scale initialization expected by t-SNE/t-SNE optimizers
-[1,3-4]. No second decomposition is performed. `tsne_pca_init()` remains a
-compact helper for users who need only the initialization matrix or an RDS
-cache. Either result can be passed as `Y_init` to `tsne_knn()` or
-`tsne()`.
+[1,3-4]. No second decomposition is performed. The returned `tsne_init`
+matrix can be passed as `Y_init` to `tsne_knn()` or `tsne()` and saved with
+`saveRDS()` when a persistent initialization is needed.
 
 ## UMAP From KNN
 
@@ -393,7 +388,7 @@ KNN-input validation style used by R t-SNE tooling [11].
 PCA initialization is explicit. Use:
 
 ```r
-Y_init <- tsne_pca_init(x, backend = "cpu")
+Y_init <- pca(x, backend = "cpu", tsne_init = TRUE)$tsne_init
 y <- tsne_knn(knn, Y_init = Y_init)
 ```
 

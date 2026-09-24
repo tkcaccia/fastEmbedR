@@ -4,38 +4,36 @@ This page states what each backend does and what it does not do. The central
 rule is simple: if a function is requested with `backend = "metal"` or
 `backend = "cuda"`, it must run a real native GPU path or fail clearly.
 
-Inspect the capabilities of the installed build through the stable public API:
+Verify an installed accelerator by running a small calculation and inspecting
+the backend recorded in its result:
 
 ```r
-capabilities <- fastEmbedR_capabilities()
-capabilities[, c("backend", "available", "device", "precision",
-                 "knn_engine", "runtime_libraries",
-                 "unavailable_reason")]
+set.seed(1)
+x <- matrix(runif(2048 * 16), nrow = 2048)
+fit <- fastEmbedR::umap(x, backend = "cuda", n_neighbors = 15)
+stopifnot(identical(fit$parameters$backend, "cuda"))
 ```
 
-The `cuvs` row describes the CUDA nearest-neighbor component; public backend
-arguments continue to accept only `"cpu"`, `"cuda"`, or `"metal"`. Device-name
-queries are best effort. The compiled native probes, not `nvidia-smi` or
-`system_profiler`, determine whether a backend is available.
+Public backend arguments accept only `"cpu"`, `"cuda"`, or `"metal"`. An
+unavailable explicit accelerator request raises an error.
 
 ## Capability Matrix
 
 | Function | CPU | Metal | CUDA | Notes |
 | --- | --- | --- | --- | --- |
-| `precompute_knn()` / internal one-call KNN | native float32 HNSW | native exact or recall-tuned IVF-Flat | cuVS brute-force exact or IVF-Flat; optional FAISS GPU exact | KNN selection remains internal; the public function exposes only `k`, metric, backend, and CPU thread count. CUDA results stay device-resident. |
+| `precompute_knn()` / internal one-call KNN | native float32 HNSW | native exact or recall-tuned IVF-Flat | cuVS brute-force exact or IVF-Flat | KNN selection remains internal; the public function exposes only `k`, metric, backend, and CPU thread count. CUDA results stay device-resident. |
 | `umap_init()` | native sparse graph initialization | native Metal initialization from prepared graph state | native CUDA initialization when compiled | Returns reusable graph and initial coordinates; a raw CUDA diagnostic call may materialize KNN on the host, whereas ordinary one-call CUDA UMAP remains resident. |
 | `umap_knn()` | native C++ CSR graph and optimizer | native Metal `atomic_inplace` optimizer | native CUDA pure-atomic optimizer | Metal/CUDA optimizers use the supplied graph; unavailable GPU backends fail clearly. |
-| `umap()` | native HNSW, then `umap_knn()` | native exact/IVF-Flat, then native Metal UMAP | native cuVS device KNN, then native CUDA UMAP | Optional FAISS GPU may provide exact search. CUDA KNN is not copied through R. Metal IVF exact-reranks candidates in the original dimensions and records its pilot recall. |
+| `umap()` | native HNSW, then `umap_knn()` | native exact/IVF-Flat, then native Metal UMAP | native cuVS device KNN, then native CUDA UMAP | CUDA KNN is not copied through R. Metal IVF exact-reranks candidates in the original dimensions and records its pilot recall. |
 | `tsne_knn()` | native C++ FFT-grid optimizer | native Metal FFT-grid optimizer | native CUDA FFT-grid optimizer using cuFFT | Use `Y_init` or `init_data` for explicit PCA initialization. |
-| `tsne()` | native HNSW, then `tsne_knn()` | native exact/IVF-Flat, then Metal t-SNE | native cuVS device KNN, then CUDA t-SNE | Optional FAISS GPU may provide exact search. The package does not call Python openTSNE in public functions. |
-| `pca()` / t-SNE PCA init | native float32 blocked rSVD | native float32 MPS block-subspace rSVD | automatic package-native rSVD or RAPIDS RAFT TSVD | CUDA selects from matrix shape and rank; GPU requests never silently fall back to CPU. |
+| `tsne()` | native HNSW, then `tsne_knn()` | native exact/IVF-Flat, then Metal t-SNE | native cuVS device KNN, then CUDA t-SNE | The package does not call Python openTSNE in public functions. |
+| `pca()` / t-SNE PCA init | native float32 blocked rSVD | native float32 MPS block-subspace rSVD | package-native rSVD; optional RAPIDS RAFT TSVD | CUDA selects from matrix shape and rank when RAFT is enabled, and otherwise uses native rSVD. GPU requests never silently fall back to CPU. |
 | `transform_tsne()` | native fixed-reference transform | native Metal projection/transform kernels where available | native CUDA projection/transform kernels where built | Used by t-SNE landmarking. |
 | `select_landmarks()` | native selection | shared selection | shared selection | Selection is independent of the embedding method and can be reused. |
-| `fit_landmark_model()` | ordinary CPU UMAP/t-SNE reference fit | ordinary Metal UMAP/t-SNE reference fit | ordinary CUDA UMAP/t-SNE reference fit | UMAP graph mode and optimizer parameters are preserved explicitly. |
 | `precompute_query_knn()` | native HNSW reference-query search | native exact/recall-tuned IVF-Flat reference-query search | native exact/IVF-Flat reference-query search | Searches only the fixed reference; CUDA output remains device resident. |
 | `project_landmark_model()` | native projection/transform/refinement | native Metal projection/transform/refinement | native CUDA resident projection/transform/refinement | Projects held-out or genuinely new observations while reference coordinates remain fixed. |
-| `landmark_umap()` | one-call landmark embed/project/refine | one-call Metal path | one-call CUDA path | Convenience wrapper; landmarking remains an explicit approximation. |
-| `landmark_tsne()` | one-call landmark embed plus transform | one-call Metal path | one-call CUDA path | Convenience wrapper; projection quality is tracked separately. |
+| `umap(..., landmarks = ...)` | landmark embed/project/refine | native Metal path | native CUDA path | Landmarking remains an explicit approximation. |
+| `tsne(..., landmarks = ...)` | landmark embed plus transform | native Metal path | native CUDA path | Projection quality is tracked separately. |
 | `knn_graph()` | native C++ graph construction | Metal KNN followed by native CPU graph construction | CUDA KNN followed by native CPU graph construction | A GPU label applies to neighbor search only; graph conversion is never reported as GPU work. |
 | `graph_cluster()` | native C++ Louvain, Leiden, and Pons-Latapy Walktrap | native Metal Louvain and Leiden | native CUDA Louvain and Leiden | GPU local moving/refinement uses float32 CSR; graph compaction/coarsening is package-owned C++. Walktrap is CPU-only. Unsupported requests fail without fallback. |
 | `evaluate_embedding()` | native/R quality metrics | CPU metrics after final layout transfer | CPU metrics after final layout transfer | Metrics are not labelled as GPU work. |
@@ -44,10 +42,9 @@ queries are best effort. The compiled native probes, not `nvidia-smi` or
 
 | Metric | CPU | Metal | CUDA | Notes |
 | --- | --- | --- | --- | --- |
-| `euclidean` | native HNSW | native exact/IVF-Flat | cuVS exact/IVF-Flat; optional FAISS GPU exact | Validated default for UMAP/t-SNE. |
+| `euclidean` | native HNSW | native exact/IVF-Flat | cuVS exact/IVF-Flat | Validated default for UMAP/t-SNE. |
 | `cosine` | row normalization plus native HNSW | row normalization plus native exact/IVF-Flat | row normalization plus native cuVS | Candidate selection is approximate; returned distances use the transformed full-dimensional vectors. |
 | `correlation` | row centering/normalization plus native HNSW | row centering/normalization plus native exact/IVF-Flat | row centering/normalization plus native cuVS | Correlation is represented by Euclidean distance on centered unit rows. |
-| `inner_product` | not supported | not supported | native CUDA route | Explicit unsupported requests fail; they do not fall back to another backend. |
 
 ## Backend Labels
 
@@ -120,14 +117,14 @@ tests did not justify exposing them as package features.
 
 CUDA support is optional at build time. The package can use:
 
-- RAPIDS cuVS C API for brute-force exact KNN and IVF-Flat;
-- optional FAISS GPU `bfKnn` when explicitly enabled at build time;
+- RAPIDS cuVS C API for matrix-input brute-force exact KNN and IVF-Flat;
 - native CUDA UMAP kernels;
 - native CUDA FFT-grid t-SNE kernels with cuFFT.
 
-cuVS, CUDA, and cuFFT are not vendored into the package. They must be installed
-on the CUDA machine and matched to the driver/toolkit stack. FAISS GPU is
-optional. If CUDA is not available, explicit CUDA requests fail clearly.
+CUDA and cuFFT are not vendored into the package. cuVS is an additional
+dependency only for CUDA KNN from matrix input. These components must be
+installed on the CUDA machine and matched to the driver/toolkit stack. If CUDA
+is not available, explicit CUDA requests fail clearly.
 
 CUDA evidence is device-specific. A configured architecture or embedded
 `sm_*`/PTX target establishes build-level compatibility only. Strict hardware
@@ -142,5 +139,5 @@ the current numerical diagnostic has also executed on an RTX 5060 Ti
 `fastEmbedR` does not vendor the full FAISS or RAPIDS libraries. It contains a
 small FAISS-derived HNSW implementation and a native Metal IVF design informed
 by FAISS and Faiss-mlx; their permissive licenses and pinned source commits are
-installed under `inst/LICENSES/`. Installed FAISS GPU and cuVS libraries are
-linked directly by optional CUDA builds; fastEmbedR does not vendor them.
+installed under `inst/LICENSES/`. Installed cuVS libraries are linked directly
+by optional CUDA builds; fastEmbedR does not vendor them.

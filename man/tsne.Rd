@@ -12,7 +12,7 @@ tsne(
   Y_init = NULL,
   standardize = FALSE,
   pca_dims = NULL,
-  metric = c("euclidean", "cosine", "correlation", "inner_product"),
+  metric = c("euclidean", "cosine", "correlation"),
   nn = NULL,
   seed = 4L,
   backend = NULL,
@@ -30,6 +30,13 @@ tsne(
   negative_gradient_method = "auto",
   record_costs = FALSE,
   auto_config = TRUE,
+  landmarks = FALSE,
+  transform_k = NULL,
+  transform_perplexity = 5,
+  transform_iter = 250L,
+  transform_early_exaggeration_iter = 0L,
+  transform_n_negatives = NULL,
+  initialization = c("median", "weighted", "random"),
   ...
 )
 }
@@ -46,11 +53,12 @@ than two use CPU exact repulsion; the current Metal and CUDA
 interpolation/FFT optimizers support only \code{2L}.}
 
 \item{init_data}{Optional original high-dimensional data matrix used only to
-compute PCA initialization with \code{\link[=tsne_pca_init]{tsne_pca_init()}}. It is not used for
+compute PCA initialization. It is not used for
 neighbor search or optimization.}
 
-\item{Y_init}{Optional explicit initial layout. Use \code{\link[=tsne_pca_init]{tsne_pca_init()}} to
-precompute and reuse a PCA initialization.}
+\item{Y_init}{Optional explicit initial layout. Use
+\code{pca(data, tsne_init = TRUE)$tsne_init} to precompute and reuse a PCA
+initialization.}
 
 \item{standardize}{Center and scale columns before KNN. Defaults to \code{FALSE}
 so one-call results match a KNN object computed from the supplied matrix.}
@@ -58,7 +66,7 @@ so one-call results match a KNN object computed from the supplied matrix.}
 \item{pca_dims}{Optional PCA dimension before KNN.}
 
 \item{metric}{KNN distance metric for one-call matrix input: \code{"euclidean"},
-\code{"cosine"}, \code{"correlation"}, or \code{"inner_product"}.}
+\code{"cosine"}, or \code{"correlation"}.}
 
 \item{nn}{Optional precomputed KNN output when \code{data} is a data matrix.}
 
@@ -67,9 +75,8 @@ so one-call results match a KNN object computed from the supplied matrix.}
 \item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. CPU KNN
 uses package-native HNSW. Metal uses package-native exact or recall-tuned
 IVF-Flat search. CUDA uses cuVS brute-force exact search below 100,000
-rows and cuVS IVF-Flat above that threshold; an explicitly enabled FAISS
-GPU build may provide exact search. Device pointers pass directly to the
-native CUDA t-SNE optimizer.
+rows and cuVS IVF-Flat above that threshold. Device pointers pass directly
+to the native CUDA t-SNE optimizer.
 Unsupported GPU requests fail clearly and are not relabelled CPU runs.}
 
 \item{keep_knn}{If \code{TRUE}, retain KNN matrices in the returned object.}
@@ -116,10 +123,33 @@ C++ opt-SNE-inspired policy. The policy uses \code{n / early_exaggeration} for
 KLD-based early stopping only on CPU/small exact runs where the monitor is
 not prohibitively expensive. Explicit user-supplied values are respected.}
 
+\item{landmarks}{\code{FALSE} (the default) embeds all observations. A fraction
+in \verb{(0, 1)}, a positive landmark count, or explicit row indices enables
+landmark embedding followed by fixed-reference transformation of the
+remaining rows.}
+
+\item{transform_k}{Number of landmark neighbors used to place non-landmark
+observations. Used only when landmarking is enabled.}
+
+\item{transform_perplexity}{Perplexity used to transform non-landmark rows.}
+
+\item{transform_iter}{Number of normal transform iterations. Use zero for
+projection without transform refinement.}
+
+\item{transform_early_exaggeration_iter}{Number of transform
+early-exaggeration iterations.}
+
+\item{transform_n_negatives}{Number of sampled reference negatives used by
+large fixed-reference transforms.}
+
+\item{initialization}{Initial placement for transformed rows: \code{"median"},
+\code{"weighted"}, or \code{"random"}.}
+
 \item{...}{Additional low-level parameters passed to \code{\link[=tsne_knn]{tsne_knn()}}.}
 }
 \value{
-A \code{fastEmbedR_embedding} object.
+A \code{fastEmbedR_embedding} object. Landmark fits also contain \code{model},
+which can be passed to \code{\link[=project_landmark_model]{project_landmark_model()}} for new observations.
 }
 \description{
 \code{tsne()} computes or reuses a KNN graph, then runs the package-native
@@ -142,7 +172,11 @@ parameters: it uses the backend router with target recall 0.99. Supply an
 externally generated KNN object to \code{\link[=tsne_knn]{tsne_knn()}} when search policy must be
 controlled independently. The resolved settings are returned in
 \code{fit$parameters}. Affinity construction always uses compact support with
-\code{k = ceiling(perplexity)} non-self neighbors.
+\code{k = ceiling(perplexity)} non-self neighbors. Landmark mode embeds the
+selected reference rows with the same t-SNE implementation and transforms
+all remaining rows while keeping the reference coordinates fixed.
+Precomputed KNN input and explicit \code{init_data} or \code{Y_init} cannot be combined
+with landmarking.
 }
 \examples{
 fit <- tsne(

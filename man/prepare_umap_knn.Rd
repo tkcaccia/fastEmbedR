@@ -38,9 +38,9 @@ UMAP graph schedule.
 }
 \description{
 \code{prepare_umap_knn()} builds the CSR graph once from a KNN object or index
-and distance matrices. The result can be passed to \code{\link[=umap_knn]{umap_knn()}} or
-\code{\link[=embed_knn]{embed_knn()}} repeatedly with different seeds without rebuilding the graph
-or recomputing \code{epochs_per_sample}.
+and distance matrices. The result can be passed to \code{\link[=umap_knn]{umap_knn()}} repeatedly
+with different seeds without rebuilding the graph or recomputing
+\code{epochs_per_sample}.
 }
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))

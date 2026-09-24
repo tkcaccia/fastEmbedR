@@ -72,7 +72,6 @@ elif [[ "$backend" == "metal" ]]; then
 else
   export FASTEMBEDR_USE_CUDA=1
   export FASTEMBEDR_USE_CUVS=1
-  export FASTEMBEDR_USE_FAISS_GPU="${FASTEMBEDR_USE_FAISS_GPU:-0}"
   export FASTEMBEDR_USE_RAFT="${FASTEMBEDR_USE_RAFT:-1}"
   export FASTEMBEDR_REQUIRE_CUDA=1
   export PACKAGE_REQUIRE_CUDA=1

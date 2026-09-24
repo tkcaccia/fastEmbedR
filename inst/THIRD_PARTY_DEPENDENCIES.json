@@ -31,8 +31,8 @@
       "copyright": "Meta Platforms, Inc. and affiliates",
       "redistributed_source": false,
       "redistributed_binary": false,
-      "linked": true,
-      "linkage": "Optional FAISS GPU library; CPU HNSW and Metal IVF organization are adapted into package source.",
+      "linked": false,
+      "linkage": "CPU HNSW and Metal IVF organization are adapted into package source; no FAISS library is linked.",
       "package_files": [
         "src/native_knn_hnsw.cpp",
         "src/native_knn_metal_impl.mm"
@@ -45,8 +45,7 @@
         "faiss/IndexIVF.h",
         "faiss/IndexIVF.cpp",
         "faiss/IndexIVFFlat.h",
-        "faiss/IndexIVFFlat.cpp",
-        "faiss/gpu/GpuDistance.h"
+        "faiss/IndexIVFFlat.cpp"
       ],
       "license_file": "inst/LICENSES/FAISS-LICENSE",
       "notice_file": "inst/NOTICE"

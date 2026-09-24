@@ -16,7 +16,7 @@ RAPIDS_LIB="$RAPIDS/lib"
 CUSTOM_CCCL="$TMP/custom-cccl"
 CUSTOM_CCCL_INCLUDE="$CUSTOM_CCCL/include"
 mkdir -p "$INCLUDE/cuvs/core" "$INCLUDE/cuvs/neighbors"
-mkdir -p "$INCLUDE/cuvs/distance" "$INCLUDE/dlpack" "$LIB"
+mkdir -p "$INCLUDE/cuvs/distance" "$LIB"
 mkdir -p "$RAPIDS_INCLUDE/raft/core" "$RAPIDS_INCLUDE/raft/linalg"
 mkdir -p "$RAPIDS_LIB" "$CUSTOM_CCCL_INCLUDE/cub"
 mkdir -p "$CUSTOM_CCCL_INCLUDE/thrust/iterator"
@@ -65,10 +65,20 @@ int cusolverDnCreate(cusolverDnHandle_t* handle);
 }
 #endif
 EOF
+cat > "$INCLUDE/curand.h" <<'EOF'
+#pragma once
+#ifdef __cplusplus
+extern "C" {
+#endif
+typedef void* curandGenerator_t;
+int curandCreateGenerator(curandGenerator_t* generator, int rng_type);
+#ifdef __cplusplus
+}
+#endif
+EOF
 printf '#pragma once\n' > "$CUSTOM_CCCL_INCLUDE/cub/cub.cuh"
 printf '#pragma once\n' \
   > "$CUSTOM_CCCL_INCLUDE/thrust/iterator/counting_iterator.h"
-printf '#pragma once\n' > "$INCLUDE/dlpack/dlpack.h"
 printf '#pragma once\n' > "$INCLUDE/cuvs/neighbors/brute_force.h"
 printf '#pragma once\n' > "$INCLUDE/cuvs/distance/distance.h"
 printf '#pragma once\n' \
@@ -147,6 +157,13 @@ int cusolverDnCreate(void** handle) {
   return 0;
 }
 EOF
+cat > "$TMP/curand.c" <<'EOF'
+int curandCreateGenerator(void** generator, int rng_type) {
+  (void)rng_type;
+  if (generator) *generator = 0;
+  return 0;
+}
+EOF
 cat > "$TMP/cuvs.c" <<'EOF'
 int cuvsResourcesCreate(void** resources) {
   if (resources) *resources = 0;
@@ -164,9 +181,10 @@ cc -shared -fPIC "$TMP/cudart.c" -o "$LIB/libcudart.so"
 cc -shared -fPIC "$TMP/cublas.c" -o "$LIB/libcublas.so"
 cc -shared -fPIC "$TMP/cufft.c" -o "$LIB/libcufft.so"
 cc -shared -fPIC "$TMP/cusolver.c" -o "$LIB/libcusolver.so"
+cc -shared -fPIC "$TMP/curand.c" -o "$LIB/libcurand.so"
 cc -shared -fPIC "$TMP/cuvs.c" -o "$LIB/libcuvs_c.so"
 cc -shared -fPIC "$TMP/cuvs_cpp.c" -o "$LIB/libcuvs.so"
-for library in cublasLt cusparse curand; do
+for library in cublasLt cusparse; do
   cc -shared -fPIC "$TMP/cuvs_cpp.c" -o "$LIB/lib${library}.so"
 done
 for library in raft rmm rapids_logger; do
@@ -194,8 +212,10 @@ EOF
 chmod +x "$TOOLKIT/bin/nvcc"
 
 GOOD="$TMP/good"
-mkdir -p "$GOOD/src"
+mkdir -p "$GOOD/src/dlpack"
+GOOD=$(CDPATH= cd -- "$GOOD" && pwd -P)
 cp "$ROOT/configure" "$GOOD/configure"
+cp "$ROOT/src/dlpack/dlpack.h" "$GOOD/src/dlpack/dlpack.h"
 chmod +x "$GOOD/configure"
 : > "$TMP/nvcc.log"
 if ! (
@@ -210,7 +230,6 @@ if ! (
   NVCC="$TOOLKIT/bin/nvcc" \
   CUDAHOSTCXX="$TEST_CXX" \
   PACKAGE_REQUIRE_CUDA=1 \
-  FASTEMBEDR_USE_FAISS_GPU=0 \
   FASTEMBEDR_USE_RAFT=1 \
   FASTEMBEDR_CUDA_CPPFLAGS="-DFASTEMBEDR_CUSTOM_CPPFLAG=1" \
   FASTEMBEDR_CUDA_FLAGS="-DFASTEMBEDR_CUSTOM_NVCC_FLAG=1" \
@@ -226,6 +245,7 @@ grep -F -- "-Wl,-rpath,$LIB" "$GOOD/src/Makevars"
 grep -F -- "-DFASTEMBEDR_HAS_CUDA" "$GOOD/src/Makevars"
 grep -F -- "-DFASTEMBEDR_HAS_CUVS" "$GOOD/src/Makevars"
 grep -F -- "-DFASTEMBEDR_HAS_RAFT" "$GOOD/src/Makevars"
+grep -F -- "-I$GOOD/src" "$GOOD/src/Makevars"
 grep -F -- "-I$CUSTOM_CCCL_INCLUDE" "$GOOD/src/Makevars"
 grep -F -- "-DFASTEMBEDR_CUSTOM_CPPFLAG=1" "$GOOD/src/Makevars"
 grep -F -- "-DFASTEMBEDR_CUSTOM_NVCC_FLAG=1" "$GOOD/src/Makevars"
@@ -266,13 +286,27 @@ if (
   NVCC="$BROKEN/cuda/bin/nvcc" \
   CUDAHOSTCXX="$TEST_CXX" \
   PACKAGE_REQUIRE_CUDA=1 \
-  FASTEMBEDR_USE_FAISS_GPU=0 \
   ./configure > "$TMP/broken.log" 2>&1
 ); then
   echo "Strict CUDA unexpectedly accepted a broken toolkit." >&2
   exit 1
 fi
 grep -F "toolkit compile/link probe failed" "$TMP/broken.log"
+
+REMOVED_FAISS="$TMP/removed-faiss"
+mkdir -p "$REMOVED_FAISS/src"
+cp "$ROOT/configure" "$REMOVED_FAISS/configure"
+chmod +x "$REMOVED_FAISS/configure"
+if (
+  cd "$REMOVED_FAISS"
+  FASTEMBEDR_USE_FAISS_GPU=1 ./configure \
+    > "$TMP/removed-faiss.log" 2>&1
+); then
+  echo "The removed FAISS GPU switch was unexpectedly accepted." >&2
+  exit 1
+fi
+grep -F "FASTEMBEDR_USE_FAISS_GPU was removed" \
+  "$TMP/removed-faiss.log"
 
 DIAGNOSTIC="$TMP/diagnostic"
 mkdir -p "$DIAGNOSTIC/src"

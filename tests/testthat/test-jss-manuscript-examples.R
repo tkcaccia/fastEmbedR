@@ -9,5 +9,5 @@ test_that("JSS manuscript examples execute against the installed package", {
     expect_s3_class(example_env$fit_tsne, "fastEmbedR_embedding")
     expect_s3_class(example_env$fit_umap, "fastEmbedR_embedding")
     expect_s3_class(example_env$knn, "fastEmbedR_knn")
-    expect_s3_class(example_env$model, "fastEmbedR_landmark_model")
+    expect_s3_class(example_env$landmark_fit, "fastEmbedR_embedding")
 })

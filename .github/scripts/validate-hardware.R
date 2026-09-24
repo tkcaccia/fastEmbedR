@@ -1,6 +1,9 @@
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) != 2L) {
-  stop("usage: validate-hardware.R <cpu|metal|cuda> <output-directory>", call. = FALSE)
+  stop(
+    "usage: validate-hardware.R <cpu|metal|cuda> <output-directory>",
+    call. = FALSE
+  )
 }
 
 backend <- match.arg(args[[1L]], c("cpu", "metal", "cuda"))
@@ -9,21 +12,15 @@ out_dir <- normalizePath(args[[2L]], mustWork = TRUE)
 suppressPackageStartupMessages(library(fastEmbedR))
 
 writeLines(capture.output(sessionInfo()), file.path(out_dir, "sessionInfo.txt"))
-capabilities <- fastEmbedR_capabilities()
-utils::write.csv(capabilities, file.path(out_dir, "capabilities.csv"), row.names = FALSE)
-
-row <- capabilities[capabilities$backend == backend, , drop = FALSE]
-if (nrow(row) != 1L || !isTRUE(row$knn_available) ||
-    !isTRUE(row$embedding_available) || !isTRUE(row$clustering_available)) {
-  stop("Requested backend is not fully available: ", backend, call. = FALSE)
-}
-if (!identical(row$status, "available_functional") ||
-    !isTRUE(row$compiled)) {
-  stop("Requested backend is not a functional compiled backend.", call. = FALSE)
-}
-if (backend == "cuda" && !identical(row$build_mode, "cuda")) {
-  stop("Strict CUDA validation loaded a non-CUDA build.", call. = FALSE)
-}
+utils::write.csv(
+  data.frame(
+    package_version = as.character(packageVersion("fastEmbedR")),
+    backend_requested = backend,
+    stringsAsFactors = FALSE
+  ),
+  file.path(out_dir, "validation-request.csv"),
+  row.names = FALSE
+)
 
 seed <- 20260822L
 set.seed(seed)
@@ -118,31 +115,23 @@ tsne_knn_run <- elapsed("tsne_knn", tsne_knn(
 ))
 
 selection <- select_landmarks(x, landmarks = 0.5, seed = seed)
-landmark_umap_run <- elapsed("landmark_umap", {
-  model <- fit_landmark_model(
-    x, selection, method = "umap", n_neighbors = 15L,
-    backend = backend, n.cores = 4L, seed = seed,
-    graph_mode = "fuzzy"
-  )
-  project_landmark_model(
-    model, x, transform_k = 15L, refinement_epochs = 5L,
-    n.cores = 4L
-  )
-})
-landmark_tsne_run <- elapsed("landmark_tsne", {
-  model <- fit_landmark_model(
-    x, selection, method = "tsne", perplexity = 15,
-    backend = backend, n.cores = 4L, seed = seed,
-    early_exaggeration_iter = 10L, n_iter = 20L,
-    auto_config = FALSE, negative_gradient_method = "fft"
-  )
-  project_landmark_model(
-    model, x, transform_k = 15L, transform_perplexity = 5,
-    transform_iter = 10L, n.cores = 4L
-  )
-})
+landmark_umap_run <- elapsed("landmark_umap", landmark_umap(
+  x, landmarks = selection$indices, n_neighbors = 15L,
+  backend = backend, n.cores = 4L, seed = seed,
+  transform_k = 15L, graph_mode = "fuzzy"
+))
+landmark_tsne_run <- elapsed("landmark_tsne", landmark_tsne(
+  x, landmarks = selection$indices, perplexity = 15,
+  backend = backend, n.cores = 4L, seed = seed,
+  transform_k = 15L, transform_perplexity = 5,
+  transform_iter = 10L, early_exaggeration_iter = 10L,
+  n_iter = 20L, auto_config = FALSE,
+  negative_gradient_method = "fft"
+))
 
-graph <- knn_graph(knn_run$value, weight = "snn", backend = backend, n.cores = 4L)
+graph <- knn_graph(
+  knn_run$value, weight = "snn", backend = backend, n.cores = 4L
+)
 cluster_run <- elapsed("leiden", graph_cluster(
   graph, method = "leiden", backend = backend, n_iterations = 3L,
   n_runs = 1L, seed = seed
@@ -162,8 +151,12 @@ umap_knn_backend <- attr(
 tsne_knn_backend <- attr(
   tsne_knn_run$value, "fastEmbedR_config"
 )$backend
-if (!identical(umap_backend, backend)) stop("UMAP backend mismatch", call. = FALSE)
-if (!identical(tsne_backend, backend)) stop("t-SNE backend mismatch", call. = FALSE)
+if (!identical(umap_backend, backend)) {
+  stop("UMAP backend mismatch", call. = FALSE)
+}
+if (!identical(tsne_backend, backend)) {
+  stop("t-SNE backend mismatch", call. = FALSE)
+}
 if (!identical(umap_knn_backend, backend)) {
   stop("precomputed-KNN UMAP backend mismatch", call. = FALSE)
 }
@@ -225,7 +218,10 @@ summary <- data.frame(
   seed = seed,
   stringsAsFactors = FALSE
 )
-utils::write.csv(summary, file.path(out_dir, "hardware-benchmark.csv"), row.names = FALSE)
+utils::write.csv(
+  summary, file.path(out_dir, "hardware-benchmark.csv"),
+  row.names = FALSE
+)
 
 cat("All public operations used the requested", backend, "backend.\n")
 print(summary)

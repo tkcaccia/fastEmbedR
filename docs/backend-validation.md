@@ -48,7 +48,7 @@ Each hardware run records:
 
 - the exact Git commit;
 - UTC timestamp and backend requested;
-- `fastEmbedR_capabilities()` and `sessionInfo()`;
+- `sessionInfo()` and returned backend metadata from strict smoke calls;
 - whether the requested backend was available;
 - the evidence class, explicitly marked as hardware smoke/correctness rather
   than a full performance benchmark;

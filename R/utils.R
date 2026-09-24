@@ -59,6 +59,17 @@ integer_scalar <- function(x, default = NA_integer_) {
     as.integer(rounded)
 }
 
+resolve_n_cores <- function(n.cores = NULL, default = 1L) {
+    if (is.null(n.cores)) {
+        n.cores <- getOption("n.cores", default)
+    }
+    n.cores <- integer_scalar(n.cores)
+    if (length(n.cores) != 1L || is.na(n.cores) || n.cores < 1L) {
+        stop("`n.cores` must be a positive integer.", call. = FALSE)
+    }
+    n.cores
+}
+
 set_local_seed <- function(seed) {
     had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
     old_seed <- if (had_seed) {

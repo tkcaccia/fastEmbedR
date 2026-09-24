@@ -16,8 +16,7 @@ Description: A native float32 UMAP implementation and a configurable
     matrices or precomputed nearest-neighbor indices and distances. One-call
     workflows use package-native CPU HNSW and Apple Metal exact or IVF-Flat
     search. Optional CUDA support links to the RAPIDS cuVS C API while
-    retaining nearest-neighbor results on the device; FAISS GPU is an
-    optional exact-search provider, not a required dependency.
+    retaining nearest-neighbor results on the device.
     Preprocessing, graph or affinity construction, fixed-reference transform,
     and layout optimization use native code with explicit CPU, Metal, and CUDA
     backend reporting. UMAP exposes neighborhood, metric, graph mode, backend,
@@ -46,13 +45,11 @@ Suggests:
     testthat
 LinkingTo:
     Rcpp
-SystemRequirements: C++17; optional Metal backend: Apple Silicon with macOS
-    14 or later and Xcode 15 or later; the required Foundation, Accelerate,
-    Metal, Metal Performance Shaders, and Metal Performance Shaders Graph
-    frameworks are supplied by the Apple SDK; optional CUDA backend: CUDA
-    Toolkit with cuFFT, cuBLAS, cuSOLVER, cuRAND, and CUB/Thrust (CCCL), plus RAPIDS
-    cuVS for CUDA nearest-neighbor search; optional FAISS GPU exact search;
-    optional RAPIDS RAFT and RMM for the CUDA PCA selector's TSVD route.
+SystemRequirements: C++17, optional acceleration uses either the Apple SDK
+    Metal frameworks on Apple Silicon (macOS 14 or later and Xcode 15 or
+    later), or an NVIDIA CUDA Toolkit. RAPIDS cuVS is needed only for CUDA
+    nearest-neighbor search from matrix inputs. RAPIDS RAFT/RMM is an optional
+    extension, not a core installation requirement.
 VignetteBuilder: knitr
 Roxygen: list(markdown = TRUE)
 Config/roxygen2/version: 8.1.0

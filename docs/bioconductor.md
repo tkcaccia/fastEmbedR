@@ -74,7 +74,7 @@ rewritten so the coding-practice check passes.
 | System library | C++17 compiler | Native CPU code and numerical helper compilation. | yes |
 | System library | Apple Metal framework | Native Metal KNN and embedding backends on macOS. | optional |
 | System library | CUDA Toolkit, cuFFT, cuBLAS, cuSOLVER, and RAPIDS cuVS | Native CUDA KNN and embedding backend. | optional |
-| System library | RAPIDS RAFT/RMM or FAISS GPU | CUDA PCA selector's TSVD branch or alternative exact KNN, respectively. | optional |
+| System library | RAPIDS RAFT/RMM | CUDA PCA selector's optional TSVD branch. | optional |
 
 Reference packages such as `Rtsne`, `uwot`, and `umap` are installed only in
 the separate benchmark environment; they are not part of the package

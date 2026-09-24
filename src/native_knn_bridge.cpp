@@ -26,7 +26,6 @@ Rcpp::List native_metal_query_knn_impl(SEXP data,
                                        const std::string& metric,
                                        double target_recall);
 bool native_cuda_knn_available_impl();
-bool native_cuda_faiss_gpu_available_impl();
 Rcpp::List native_cuda_knn_impl(SEXP data,
                                 int k,
                                 const std::string& method,
@@ -92,11 +91,6 @@ Rcpp::List native_metal_query_knn_cpp(SEXP data,
 // [[Rcpp::export]]
 bool native_cuda_knn_available_cpp() {
   return native_cuda_knn_available_impl();
-}
-
-// [[Rcpp::export]]
-bool native_cuda_faiss_gpu_available_cpp() {
-  return native_cuda_faiss_gpu_available_impl();
 }
 
 // [[Rcpp::export]]

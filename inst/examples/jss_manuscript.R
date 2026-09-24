@@ -2,10 +2,7 @@ library("fastEmbedR")
 
 x <- scale(as.matrix(iris[, 1:4]))
 
-capabilities <- fastEmbedR::fastEmbedR_capabilities()
-old_backend <- fastEmbedR::fastEmbedR_backend()
-fastEmbedR::fastEmbedR_backend("cpu")
-options(fastEmbedR.backend = "cuda")
+old_options <- options(backend = "cpu", n.cores = 1L)
 
 fit_tsne <- fastEmbedR::tsne(
     x, perplexity = 5, backend = "cpu", n.cores = 1,
@@ -43,25 +40,18 @@ fit <- fastEmbedR::tsne(
     backend = "cpu", n.cores = 1, seed = 4
 )
 
-sel <- fastEmbedR::select_landmarks(
-    x, landmarks = 0.5, seed = 4
-)
-model <- fastEmbedR::fit_landmark_model(
-    x, sel, method = "umap", backend = "cpu", n.cores = 1,
-    n_neighbors = 15, seed = 4
-)
-projected <- fastEmbedR::project_landmark_model(
-    model, x, backend = "cpu", n.cores = 1
+landmark_fit <- fastEmbedR::umap(
+    x, landmarks = 0.5, n_neighbors = 15,
+    backend = "cpu", n.cores = 1, seed = 4
 )
 
-fastEmbedR::fastEmbedR_backend(old_backend)
+options(old_options)
 
 stopifnot(
-    nrow(capabilities) >= 1L,
     identical(dim(fit_tsne$layout), c(150L, 2L)),
     identical(dim(fit_umap$layout), c(150L, 2L)),
     identical(dim(y_umap), c(150L, 2L)),
     identical(dim(y_tsne), c(150L, 2L)),
     identical(dim(fit$layout), c(150L, 2L)),
-    identical(dim(projected$layout), c(150L, 2L))
+    identical(dim(landmark_fit$layout), c(150L, 2L))
 )

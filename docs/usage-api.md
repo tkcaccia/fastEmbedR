@@ -12,11 +12,6 @@
 
 This page gives the main KNN-first workflows and the public API.
 
-The normative, machine-readable inventory is returned by
-`fastEmbedR::fastEmbedR_api()`. The corresponding [public API map](api-map.md)
-lists accepted classes, returned classes, CPU/Metal/CUDA support, numerical
-role, device residency, related methods, and lifecycle status for every export.
-
 ## Which Function Should I Use?
 
 | Situation | Use |
@@ -24,16 +19,14 @@ role, device residency, related methods, and lifecycle status for every export.
 | You want to precompute fastEmbedR's native neighbors | `precompute_knn()` |
 | You already computed nearest neighbors | `umap_knn()` or `tsne_knn()` |
 | You want one call from a data matrix | `umap()` or `tsne()` |
-| You want reusable PCA scores or t-SNE initialization | `pca()` or `tsne_pca_init()` |
+| You want reusable PCA scores or t-SNE initialization | `pca()` |
 | You want to compare UMAP and t-SNE fairly | compute one host KNN list once, then reuse it |
 | You want Apple GPU | set `backend = "metal"` explicitly |
 | You want NVIDIA GPU | build with CUDA/cuVS, then set embedding `backend = "cuda"` |
-| You want a fast approximation for very large data | use `landmark_umap()` or `landmark_tsne()` and report it as landmarking |
+| You want a fast approximation for very large data | set `landmarks` in `umap()` or `tsne()` and report it as landmarking |
 | You want quality metrics | `evaluate_embedding(x, layout)` |
 | You want a clustering graph | `knn_graph()` |
 | You want native graph communities | `graph_cluster(graph, method = "leiden")` |
-| You want to inspect compiled backend support | `fastEmbedR_capabilities()` |
-| You want to inspect the stable API and lifecycle tiers | `fastEmbedR_api()` |
 
 
 The recommended workflow is KNN first:
@@ -57,9 +50,8 @@ The one-call functions and `precompute_knn()` intentionally hide the KNN
 algorithm choice. Their `backend` accepts only `"cpu"`, `"metal"`, or
 `"cuda"`. CPU KNN uses native HNSW; Metal uses native exact/IVF-Flat; CUDA
 uses RAPIDS cuVS exact or IVF-Flat search and keeps its output resident on the
-device. An explicitly enabled FAISS GPU build may provide exact search. A CUDA
-KNN object should therefore be reused with a
-CUDA embedding backend. A host KNN result from another tool may still be
+device. A CUDA KNN object should therefore be reused with a CUDA embedding
+backend. A host KNN result from another tool may still be
 supplied as a plain list containing `indices` and `distances`; fastEmbedR never
 calls that tool itself.
 
@@ -84,7 +76,6 @@ Current metric support is deliberately explicit:
 | `euclidean` | native CPU/Metal and optional direct CUDA/cuVS | Recommended default for large UMAP/t-SNE benchmarks. |
 | `cosine` | native CPU/Metal and compiled CUDA | Rows are normalized internally. |
 | `correlation` | native CPU/Metal and compiled CUDA | Rows are centered and normalized internally. |
-| `inner_product` | compiled CUDA only | Unsupported CPU/Metal requests fail explicitly. |
 
 ## Parameter Philosophy And Scope
 
@@ -167,7 +158,8 @@ The KNN must contain at least `ceiling(perplexity)` non-self columns. t-SNE
 uses exactly that compact support width and ignores additional KNN columns.
 
 ```r
-Y_init <- tsne_pca_init(x, seed = 1)
+pca_fit <- pca(x, ncomp = 2, seed = 1, tsne_init = TRUE)
+Y_init <- pca_fit$tsne_init
 layout_tsne <- tsne_knn(
   knn,
   Y_init = Y_init,
@@ -202,9 +194,9 @@ layout <- tsne_knn(knn, Y_init = Y_init, perplexity = 30)
 ```
 
 The public `pca()` helper is intentionally simple: there is no `irlba` or
-ARPACK method menu and no Python bridge. For t-SNE initialization, CUDA
-automatically selects package-native rSVD or RAPIDS RAFT TSVD from matrix shape
-and requested rank and fails loudly if the required support is unavailable.
+ARPACK method menu and no Python bridge. For t-SNE initialization, CUDA uses
+package-native rSVD and may select RAPIDS RAFT TSVD when that optional route is
+enabled. It fails loudly if the requested CUDA backend is unavailable.
 Float32 CUDA input is passed to the native fit without materializing an R
 double matrix, and float32 scores/loadings are returned. Metal uses a native
 float32 block-subspace rSVD with MPS matrix products and a resident workspace.
@@ -275,46 +267,20 @@ matrix is quadratic; use Leiden or Louvain for large graphs.
 
 ## Landmark Workflow
 
-For reusable landmark models, keep the three stages explicit:
-
-```r
-selection <- select_landmarks(x, landmarks = 0.5, seed = 1)
-
-model <- fit_landmark_model(
-  x,
-  selection,
-  method = "umap",
-  n_neighbors = 30,
-  graph_mode = "fuzzy",
-  backend = "cpu",
-  n.cores = 4,
-  seed = 1
-)
-
-fit <- project_landmark_model(
-  model,
-  x,
-  refinement_epochs = 50,
-  n.cores = 4
-)
-```
-
-The reference fit uses the same `umap()` implementation, graph construction,
-optimizer, and parameter values as an ordinary full UMAP run. For t-SNE,
-set `method = "tsne"` and pass `perplexity`. The resulting model can also
-project a separate matrix of new observations in the same feature space.
+Set `landmarks` in `umap()` or `tsne()` for explicit landmark
+approximations. Both functions select a reference subset, fit the ordinary
+embedding implementation on that subset, and project the remaining rows.
 
 `precompute_query_knn(reference, query, ...)` exposes the query-only search
 used by the projection stage. It searches the fixed reference only and avoids
 constructing unnecessary query-to-query neighbors.
 
-The one-call wrapper remains available:
+The integrated t-SNE call accepts the landmark selection directly:
 
 ```r
-fit <- landmark_tsne(
+fit <- tsne(
   x,
   landmarks = 0.5,
-  n_neighbors = 30,
   perplexity = 10,
   early_exaggeration_iter = 100,
   n_iter = 250,
@@ -327,7 +293,7 @@ plot(fit)
 UMAP has the same landmark pattern:
 
 ```r
-fit <- landmark_umap(
+fit <- umap(
   x,
   landmarks = 0.5,
   n_neighbors = 30,
@@ -337,6 +303,22 @@ fit <- landmark_umap(
 )
 plot(fit)
 ```
+
+Both integrated landmark calls return a reusable fixed-reference model in
+`fit$model`. New observations are supplied in the original feature space; the
+stored standardization and PCA transforms are reused before projection:
+
+```r
+new_layout <- project_landmark_model(
+  fit$model,
+  newdata,
+  transform_k = 15
+)$layout
+```
+
+To reconstruct the original training rows, pass the complementary rows as
+`query_indices = fit$model$selection$query_indices`. With no indices, every
+supplied row is treated as a genuinely new observation.
 
 CPU projection uses native fixed-parameter HNSW and reports that recall was
 not audited at runtime. Metal uses native exact search
@@ -372,12 +354,11 @@ supplied neighbor graph.
 | `umap_knn()` | UMAP from a supplied KNN object or matrices. |
 | `umap()` | One-call preprocessing, KNN, and UMAP embedding. |
 | `pca()` | Backend-native truncated PCA scores/loadings. |
-| `embed_knn()` | KNN dispatcher; UMAP by default, t-SNE with `method = "tsne"`. |
 | `tsne_knn()` | Direct native interpolation-based t-SNE optimizer from KNN. |
 | `tsne()` | One-call preprocessing, KNN, and interpolation-based t-SNE embedding. |
 | `transform_tsne()` | Fixed-reference interpolation-based t-SNE transform for query points. |
-| `landmark_tsne()` | Embed landmarks, then transform remaining rows. |
-| `landmark_umap()` | Embed landmarks with UMAP, then project/refine remaining rows. |
+| `tsne(..., landmarks = ...)` | Embed landmarks, then transform remaining rows. |
+| `umap(..., landmarks = ...)` | Embed landmarks, then project/refine remaining rows. |
 | `evaluate_embedding()` | Embedding quality metrics. |
 | `knn_graph()` | Compact graph from data, an embedding, or supplied KNN. |
 | `graph_cluster()` | Native Louvain, Leiden, or Pons-Latapy Walktrap communities. |

@@ -220,7 +220,7 @@ test_that("transform_tsne reports GPU transform backends honestly", {
     expect_equal(cfg$repulsion, "sampled_reference_metal")
 })
 
-test_that("landmark_tsne returns a compact full embedding object", {
+test_that("tsne landmark mode returns a compact full embedding object", {
     set.seed(402)
     x <- rbind(
         matrix(rnorm(60L, 0, 0.25), 20L, 3L),
@@ -228,10 +228,9 @@ test_that("landmark_tsne returns a compact full embedding object", {
     )
     labels <- rep(1:2, each = 20L)
 
-    fit <- landmark_tsne(
+    fit <- tsne(
         x,
-        landmarks = 20L,
-        reference_method = "tsne",
+        landmarks = 0.5,
         perplexity = 4,
         early_exaggeration_iter = 2L,
         n_iter = 3L,
@@ -330,7 +329,7 @@ test_that("native affine landmark projection returns finite local placements", {
     expect_equal(projected_parallel$n_threads, 2L)
 })
 
-test_that("landmark_tsne uses native HNSW for CPU projection KNN", {
+test_that("tsne landmark mode uses native HNSW for CPU projection KNN", {
     old <- options(
         fastEmbedR.landmark_projection = "auto",
         fastEmbedR.landmark_projection_min_rows = 1L,
@@ -344,7 +343,7 @@ test_that("landmark_tsne uses native HNSW for CPU projection KNN", {
         matrix(rnorm(90L, 2, 0.25), 30L, 3L)
     )
 
-    fit <- landmark_tsne(
+    fit <- tsne(
         x,
         landmarks = 30L,
         perplexity = 4,
@@ -370,7 +369,7 @@ test_that("landmark_tsne uses native HNSW for CPU projection KNN", {
     expect_true(is.list(attr(fit$landmarks$projection_knn, "approximation")))
 })
 
-test_that("landmark_tsne uses the native Metal reference-query KNN", {
+test_that("tsne landmark mode uses native Metal reference-query KNN", {
     skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
     skip_if_not(fastEmbedR:::metal_opentsne_native_available())
 
@@ -380,10 +379,9 @@ test_that("landmark_tsne uses the native Metal reference-query KNN", {
         matrix(rnorm(72L, 2, 0.25), 24L, 3L)
     )
 
-    fit <- landmark_tsne(
+    fit <- tsne(
         x,
         landmarks = 24L,
-        n_neighbors = 3L,
         perplexity = 3,
         early_exaggeration_iter = 1L,
         n_iter = 1L,
@@ -410,7 +408,7 @@ test_that("landmark_tsne uses the native Metal reference-query KNN", {
     )
 })
 
-test_that("landmark_tsne keeps Metal query search and transform native", {
+test_that("tsne landmark mode keeps Metal search and transform native", {
     skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
     skip_if_not(fastEmbedR:::metal_opentsne_native_available())
 
@@ -420,10 +418,9 @@ test_that("landmark_tsne keeps Metal query search and transform native", {
         matrix(rnorm(72L, 2, 0.25), 24L, 3L)
     )
 
-    fit <- landmark_tsne(
+    fit <- tsne(
         x,
         landmarks = 24L,
-        n_neighbors = 3L,
         perplexity = 3,
         early_exaggeration_iter = 1L,
         n_iter = 1L,
