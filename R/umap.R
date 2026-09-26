@@ -21,10 +21,11 @@
 #' @param nn Optional precomputed KNN result when `data` is a matrix.
 #' @param seed Random seed.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. CPU KNN
-#'   uses package-native HNSW. Metal uses package-native exact or recall-tuned
-#'   IVF-Flat search. CUDA uses cuVS brute-force exact search below 100,000
-#'   rows and cuVS IVF-Flat above that threshold. The KNN result stays on the
-#'   device through graph construction and optimization.
+#'   uses package-native exact search below 5,000 rows and HNSW otherwise.
+#'   Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
+#'   cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
+#'   that threshold. The KNN result stays on the device through graph
+#'   construction and optimization.
 #'   GPU requests must resolve to a real native backend; the package does not
 #'   relabel CPU work as GPU.
 #' @param n.cores Requested CPU core count. For matrix input, the value is
@@ -655,7 +656,7 @@ landmark_umap_metrics <- function(state, reference, projection, refinement) {
         state$preprocess_time, reference$time,
         projection$time, refinement$time
     )
-    data.frame(
+    metrics <- data.frame(
         method = "landmark_umap", n = state$n, p = ncol(state$x),
         n_neighbors = state$n_neighbors,
         elapsed = sum(vapply(times, function(x) x[["elapsed"]], numeric(1))),
@@ -673,6 +674,11 @@ landmark_umap_metrics <- function(state, reference, projection, refinement) {
         local_trustworthiness = NA_real_, local_continuity = NA_real_,
         structure_score = NA_real_, embedding_knn_accuracy = NA_real_
     )
+    memory <- landmark_memory_estimate(
+        state$n, nrow(state$partition$landmarks), state$n_neighbors,
+        projection$transform_k, state$n_components
+    )
+    cbind(metrics, as.data.frame(memory))
 }
 
 landmark_umap_parameters <- function(state, reference, projection,
@@ -686,6 +692,10 @@ landmark_umap_parameters <- function(state, reference, projection,
         NA_character_
     }
     n_landmarks <- nrow(state$partition$landmarks)
+    memory <- landmark_memory_estimate(
+        state$n, n_landmarks, state$n_neighbors,
+        projection$transform_k, state$n_components
+    )
     c(list(
         method = "landmark_umap", n = state$n, p = ncol(state$x),
         n_neighbors = state$n_neighbors,
@@ -714,7 +724,7 @@ landmark_umap_parameters <- function(state, reference, projection,
         },
         keep_knn = keep_knn,
         provenance = "UMAP_landmark_projection_native_cpp"
-    ), state$prepared$preprocess)
+    ), memory, state$prepared$preprocess)
 }
 
 assemble_landmark_umap_fit <- function(state, reference, projection,

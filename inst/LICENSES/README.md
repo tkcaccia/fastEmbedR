@@ -12,6 +12,8 @@ and `../THIRD_PARTY_DEPENDENCIES.json`.
 | `FAISS-LICENSE` | FAISS 1.14.3 | `0ca9df4792b173d573044ee14ca0704780176e82` | CPU HNSW and Metal IVF derivative |
 | `FAISS-MLX-LICENSE` | MLXPorts/Faiss-mlx | `d092af559375144fc719cd88a10e414f92c625fa` | Metal list-scan/top-k derivative |
 | `FAISSR-LICENSE` | faissR 0.99.15 | `f37ea97c5774200025b1480770b8ecbf1d2d7919` | Native CUDA adapter derivative |
+| `FAISSR-LICENSE` | faissR 0.99.48 | `09f4c88fe8af431053a35a945db809a1da22033e` | CPU HNSW tuning-policy derivative |
+| `FAISSR-LICENSE` | faissR 0.99.48 | `09f4c88fe8af431053a35a945db809a1da22033e` | CPU exact-search behavior derivative |
 | `DLPACK-LICENSE` | DLPack 1.0 | `bbd2f4d32427e548797929af08cfe2a9cbb3cf12` | Reduced vendored C ABI header |
 | `APPLESILICONFFT-LICENSE` | AppleSiliconFFT | `5d0d51dbd983691ee99822ed74bc3f9a47136511` | Metal 512-point Stockham derivative |
 | `NETWORKIT-LICENSE` | NetworKit | `7b74f6af90bc0865c6c0937a206df63df331b712` | Conservatively retained design-reference notice |

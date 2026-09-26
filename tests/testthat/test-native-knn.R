@@ -17,6 +17,18 @@ knn_recall_test <- function(observed, expected) {
     }, numeric(1)))
 }
 
+metric_knn_reference <- function(x, k, metric) {
+    if (identical(metric, "correlation")) {
+        x <- x - rowMeans(x)
+    }
+    if (!identical(metric, "euclidean")) {
+        norm <- sqrt(rowSums(x * x))
+        norm[norm == 0] <- 1
+        x <- x / norm
+    }
+    exact_knn_reference(x, k)
+}
+
 test_that("native CPU HNSW reaches its recall tier", {
     set.seed(4)
     x <- matrix(rnorm(600 * 12), nrow = 600)
@@ -31,7 +43,44 @@ test_that("native CPU HNSW reaches its recall tier", {
     expect_true(is.na(observed$target_met))
     expect_identical(
         observed$recall_status,
-        "not_audited_fixed_heuristic"
+        "calibration_informed_not_runtime_audited"
+    )
+    expect_equal(observed$target_recall, 0.99)
+    expect_identical(observed$tuning_shape_group, "small_n")
+    expect_identical(observed$tuning_k_bucket, 15L)
+    expect_identical(observed$M, 12L)
+    expect_identical(observed$efConstruction, 60L)
+    expect_identical(observed$efSearch, 45L)
+    expect_match(observed$tuning_source, "faissR_0.99.48")
+})
+
+test_that("native CPU HNSW applies metric-aware recall-0.99 tuning", {
+    set.seed(45)
+    x <- matrix(rnorm(450 * 14), nrow = 450)
+    expected <- list(
+        euclidean = c(12L, 60L, 45L),
+        cosine = c(24L, 160L, 120L),
+        correlation = c(48L, 320L, 400L)
+    )
+    for (metric in names(expected)) {
+        truth <- metric_knn_reference(x, 10L, metric)
+        observed <- native_hnsw_knn_cpp(
+            x, 10L, 2L, metric, 0.99
+        )
+        expect_gte(knn_recall_test(observed, truth), 0.99)
+        expect_identical(
+            c(observed$M, observed$efConstruction, observed$efSearch),
+            expected[[metric]]
+        )
+        expect_match(observed$tuning_rule, paste0("_", metric, "_"))
+    }
+})
+
+test_that("native CPU HNSW rejects unsupported recall tiers", {
+    x <- matrix(rnorm(120), nrow = 30)
+    expect_error(
+        native_hnsw_knn_cpp(x, 5L, 1L, "euclidean", 0.95),
+        "supports target_recall = 0.99"
     )
 })
 
@@ -43,6 +92,34 @@ test_that("native CPU HNSW construction is invariant to thread count", {
 
     expect_identical(parallel$indices, serial$indices)
     expect_identical(parallel$distances, serial$distances)
+})
+
+test_that("native CPU exact search matches exhaustive references", {
+    set.seed(46)
+    x <- matrix(rnorm(180 * 11), nrow = 180)
+    for (metric in c("euclidean", "cosine", "correlation")) {
+        truth <- metric_knn_reference(x, 9L, metric)
+        serial <- native_exact_knn_cpp(x, 9L, 1L, metric, 0.99)
+        parallel <- native_exact_knn_cpp(x, 9L, 3L, metric, 0.99)
+        expect_equal(knn_recall_test(serial, truth), 1)
+        expect_identical(parallel$indices, serial$indices)
+        expect_identical(parallel$distances, serial$distances)
+        expect_true(serial$exact)
+        expect_true(serial$exact_recall_by_construction)
+        expect_true(serial$target_met)
+        expect_identical(serial$backend_used, "native_cpu_exact")
+        expect_identical(serial$recall_status, "exact_by_construction")
+    }
+})
+
+test_that("native CPU exact search handles zero normalized rows", {
+    x <- rbind(c(0, 0), c(0, 0), c(1, 0), c(-1, 0))
+    observed <- native_exact_knn_cpp(x, 2L, 2L, "cosine", 0.99)
+
+    expect_identical(observed$indices[1L, 1L], 2L)
+    expect_equal(observed$distances[1L, ], c(0, 1))
+    expect_identical(observed$indices[2L, 1L], 1L)
+    expect_equal(observed$distances[2L, ], c(0, 1))
 })
 
 test_that(paste(
@@ -61,16 +138,18 @@ test_that(paste(
     expect_identical(dim(observed$indices), c(240L, 12L))
     expect_identical(dim(observed$distances), c(240L, 12L))
     expect_false(any(observed$indices == row(observed$indices)))
-    expect_gte(knn_recall_test(observed, truth), 0.99)
+    expect_equal(knn_recall_test(observed, truth), 1)
     expect_identical(observed$backend_requested, "cpu")
     expect_identical(observed$execution_backend, "cpu")
-    expect_identical(observed$engine, "native_cpu_hnsw")
+    expect_identical(observed$engine, "native_cpu_exact")
     expect_identical(observed$result_residency, "host")
-    expect_null(observed$target_recall)
-    expect_false(observed$recall_audited)
+    expect_equal(observed$target_recall, 0.99)
+    expect_true(observed$recall_audited)
+    expect_true(observed$target_met)
+    expect_true(observed$exact)
     expect_identical(
         observed$recall_status,
-        "not_audited_fixed_heuristic"
+        "exact_by_construction"
     )
     expect_true(is.finite(observed$elapsed_sec))
     expect_identical(attr(observed, "exclude_self"), TRUE)
@@ -144,6 +223,45 @@ test_that("native CPU HNSW supports query-to-reference search", {
     expect_gte(knn_recall_test(observed, truth), 0.99)
     expect_identical(attr(observed, "backend"), "cpu")
     expect_identical(observed$method, "native_hnsw_query")
+    expect_equal(observed$target_recall, 0.99)
+    expect_false(observed$recall_audited)
+    expect_identical(observed$tuning_shape_group, "small_n")
+    expect_identical(observed$tuning_k_bucket, 15L)
+    expect_identical(c(
+        observed$M,
+        observed$efConstruction,
+        observed$efSearch
+    ), c(12L, 60L, 45L))
+
+    public <- precompute_query_knn(
+        reference,
+        query,
+        k = 12L,
+        backend = "cpu",
+        n.cores = 2L
+    )
+    expect_equal(public$target_recall, 0.99)
+    expect_true(public$recall_audited)
+    expect_true(public$target_met)
+    expect_identical(public$method, "native_exact_query")
+    expect_identical(public$engine, "native_cpu_exact")
+    expect_identical(public$tuning_policy, "exact_below_5000")
+    expect_equal(knn_recall_test(public, truth), 1)
+})
+
+test_that("native CPU exact query search matches an exhaustive reference", {
+    set.seed(47)
+    reference <- matrix(rnorm(120 * 8), nrow = 120)
+    query <- matrix(rnorm(30 * 8), nrow = 30)
+    truth <- test_exact_knn(reference, query, k = 7L)
+    observed <- native_exact_query_cpp(
+        reference, query, 7L, 3L, "euclidean", 0.99
+    )
+
+    expect_identical(observed$indices, truth$indices)
+    expect_equal(observed$distances, truth$distances, tolerance = 1e-5)
+    expect_identical(observed$method, "native_exact_query")
+    expect_true(observed$exact_recall_by_construction)
 })
 
 test_that("fastEmbedR has no faissR package dependency or runtime bridge", {
@@ -333,6 +451,20 @@ test_that("one-call routing uses native CPU and Metal KNN", {
     )
     expect_identical(
         fastembedr_embedding_nn_policy("cpu", 70000L)$method, "hnsw"
+    )
+    expect_identical(
+        fastembedr_embedding_nn_policy("cpu", 4999L)$method, "exact"
+    )
+    expect_identical(
+        fastembedr_embedding_nn_policy("cpu", 5000L)$method, "hnsw"
+    )
+    expect_identical(
+        fastembedr_query_nn_policy("cpu", 4999L, 10L, 4L)$method,
+        "exact"
+    )
+    expect_identical(
+        fastembedr_query_nn_policy("cpu", 5000L, 10L, 4L)$method,
+        "hnsw"
     )
     expect_identical(
         fastembedr_embedding_nn_policy("metal", 70000L)$method, "ivf"

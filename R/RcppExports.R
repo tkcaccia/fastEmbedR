@@ -373,6 +373,14 @@ native_hnsw_query_cpp <- function(data, query, k, n_threads = 1L, metric = "eucl
     .Call(`_fastEmbedR_native_hnsw_query_cpp`, data, query, k, n_threads, metric, target_recall)
 }
 
+native_exact_knn_cpp <- function(data, k, n_threads = 1L, metric = "euclidean", target_recall = 0.99) {
+    .Call(`_fastEmbedR_native_exact_knn_cpp`, data, k, n_threads, metric, target_recall)
+}
+
+native_exact_query_cpp <- function(data, query, k, n_threads = 1L, metric = "euclidean", target_recall = 0.99) {
+    .Call(`_fastEmbedR_native_exact_query_cpp`, data, query, k, n_threads, metric, target_recall)
+}
+
 native_metal_knn_available_cpp <- function() {
     .Call(`_fastEmbedR_native_metal_knn_available_cpp`)
 }
@@ -389,8 +397,8 @@ native_cuda_knn_available_cpp <- function() {
     .Call(`_fastEmbedR_native_cuda_knn_available_cpp`)
 }
 
-native_cuda_knn_cpp <- function(data, k, method = "auto", metric = "euclidean", target_recall = 0.99, keep_gpu = TRUE) {
-    .Call(`_fastEmbedR_native_cuda_knn_cpp`, data, k, method, metric, target_recall, keep_gpu)
+native_cuda_knn_cpp <- function(data, k, method = "auto", metric = "euclidean", target_recall = 0.99, keep_gpu = TRUE, retain_data = FALSE) {
+    .Call(`_fastEmbedR_native_cuda_knn_cpp`, data, k, method, metric, target_recall, keep_gpu, retain_data)
 }
 
 native_cuda_query_knn_cpp <- function(data, query, k, method = "auto", metric = "euclidean", target_recall = 0.99, keep_gpu = TRUE) {

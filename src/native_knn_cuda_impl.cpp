@@ -345,7 +345,9 @@ int distance_mode(fastembedr::KnnMetric metric) {
 struct NativeCudaKnnHandle {
   int* indices = nullptr;
   float* distances = nullptr;
+  float* data = nullptr;
   int n = 0;
+  int n_features = 0;
   int k = 0;
   int device = 0;
 };
@@ -357,6 +359,7 @@ void native_cuda_knn_finalizer(SEXP pointer) {
   cudaSetDevice(handle->device);
   if (handle->indices != nullptr) cudaFree(handle->indices);
   if (handle->distances != nullptr) cudaFree(handle->distances);
+  if (handle->data != nullptr) cudaFree(handle->data);
   delete handle;
   R_ClearExternalPtr(pointer);
 }
@@ -393,14 +396,17 @@ Rcpp::List make_gpu_result(NativeCudaKnnHandle* handle,
   R_RegisterCFinalizerEx(owner, native_cuda_knn_finalizer, TRUE);
   SEXP indices_ptr = PROTECT(R_MakeExternalPtr(handle->indices, R_NilValue, owner));
   SEXP distances_ptr = PROTECT(R_MakeExternalPtr(handle->distances, R_NilValue, owner));
+  SEXP data_ptr = PROTECT(R_MakeExternalPtr(handle->data, R_NilValue, owner));
   const std::string backend_used = exact ?
     "native_cuda_cuvs_exact" : "native_cuda_cuvs_ivf_flat";
   Rcpp::List out = Rcpp::List::create(
     Rcpp::Named("handle") = owner,
     Rcpp::Named("indices_ptr") = indices_ptr,
     Rcpp::Named("distances_ptr") = distances_ptr,
+    Rcpp::Named("data_ptr") = data_ptr,
     Rcpp::Named("n_query") = handle->n,
     Rcpp::Named("n") = handle->n,
+    Rcpp::Named("n_features") = handle->n_features,
     Rcpp::Named("k") = handle->k,
     Rcpp::Named("index_base") = 1,
     Rcpp::Named("indices_type") = "int32",
@@ -408,6 +414,12 @@ Rcpp::List make_gpu_result(NativeCudaKnnHandle* handle,
     Rcpp::Named("indices_residency") = "cuda_device",
     Rcpp::Named("distance_residency") = "cuda_device",
     Rcpp::Named("result_residency") = "cuda",
+    Rcpp::Named("data_residency") = handle->data == nullptr ?
+      "unavailable" : "cuda_device",
+    Rcpp::Named("data_layout") = handle->data == nullptr ?
+      "unavailable" : "row_major_observation_by_feature",
+    Rcpp::Named("pca_data_compatible") =
+      handle->data != nullptr && metric == "euclidean",
     Rcpp::Named("layout") = "column_major_query_by_k",
     Rcpp::Named("metric") = metric,
     Rcpp::Named("backend_used") = backend_used,
@@ -437,7 +449,7 @@ Rcpp::List make_gpu_result(NativeCudaKnnHandle* handle,
   out.attr("backend_used") = backend_used;
   out.attr("result_residency") = "cuda";
   out.attr("exclude_self") = exclude_self;
-  UNPROTECT(3);
+  UNPROTECT(4);
   return out;
 }
 
@@ -453,7 +465,8 @@ Rcpp::List native_cuda_knn_impl(SEXP data,
                                 const std::string& method,
                                 const std::string& metric,
                                 double target_recall,
-                                bool keep_gpu) {
+                                bool keep_gpu,
+                                bool retain_data) {
   if (!native_cuda_knn_available_impl()) {
     Rcpp::stop("No CUDA device is available for native cuVS KNN.");
   }
@@ -733,14 +746,21 @@ Rcpp::List native_cuda_knn_impl(SEXP data,
   auto* handle = new NativeCudaKnnHandle();
   handle->indices = static_cast<int*>(output_indices.release());
   handle->distances = static_cast<float*>(output_distances.release());
+  if (retain_data) {
+    handle->data = static_cast<float*>(dataset.release());
+  }
   handle->n = matrix.nrow;
+  handle->n_features = matrix.ncol;
   handle->k = k;
   cuda_check(cudaGetDevice(&handle->device), "cudaGetDevice(native CUDA KNN)");
   Rcpp::List result = make_gpu_result(
     handle, resolved, metric, target_recall, exact, tuning, search_batch_size
   );
-  result["resident_result_bytes"] = static_cast<double>(final_items) *
-    static_cast<double>(sizeof(int) + sizeof(float));
+  result["resident_result_bytes"] =
+    static_cast<double>(final_items) *
+      static_cast<double>(sizeof(int) + sizeof(float)) +
+    (handle->data == nullptr ? 0.0 :
+      static_cast<double>(data_items) * sizeof(float));
   const double raw_batch_bytes =
     static_cast<double>(search_batch_size) * static_cast<double>(search_k) *
     static_cast<double>(sizeof(int64_t) + sizeof(float));

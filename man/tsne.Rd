@@ -73,10 +73,11 @@ so one-call results match a KNN object computed from the supplied matrix.}
 \item{seed}{Random seed.}
 
 \item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. CPU KNN
-uses package-native HNSW. Metal uses package-native exact or recall-tuned
-IVF-Flat search. CUDA uses cuVS brute-force exact search below 100,000
-rows and cuVS IVF-Flat above that threshold. Device pointers pass directly
-to the native CUDA t-SNE optimizer.
+uses package-native exact search below 5,000 rows and HNSW otherwise.
+Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
+cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
+that threshold. Device pointers pass directly to the native CUDA t-SNE
+optimizer.
 Unsupported GPU requests fail clearly and are not relabelled CPU runs.}
 
 \item{keep_knn}{If \code{TRUE}, retain KNN matrices in the returned object.}

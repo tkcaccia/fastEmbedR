@@ -95,6 +95,15 @@ fastembedr_convert_knn_distances <- function(knn, output) {
     knn
 }
 
+fastembedr_cpu_knn_method <- function(n) {
+    n <- integer_scalar(n %||% NA_integer_)
+    if (length(n) == 1L && !is.na(n) && n < 5000L) {
+        "exact"
+    } else {
+        "hnsw"
+    }
+}
+
 fastembedr_embedding_nn_policy <- function(embedding_backend, n = NULL) {
     embedding_backend <- resolve_embedding_backend(embedding_backend)
     n <- integer_scalar(n %||% NA_integer_)
@@ -118,10 +127,15 @@ fastembedr_embedding_nn_policy <- function(embedding_backend, n = NULL) {
             target_recall = 0.99
         ))
     }
+    method <- fastembedr_cpu_knn_method(n)
     list(
-        backend = "cpu", method = "hnsw", tuning = "auto",
-        target_recall = NA_real_,
-        recall_status = "not_audited_fixed_heuristic"
+        backend = "cpu", method = method,
+        target_recall = 0.99,
+        recall_status = if (identical(method, "exact")) {
+            "exact_by_construction"
+        } else {
+            "calibration_informed_not_runtime_audited"
+        }
     )
 }
 
@@ -196,10 +210,15 @@ fastembedr_query_nn_policy <- function(embedding_backend,
             target_recall = 0.99
         ))
     }
+    method <- fastembedr_cpu_knn_method(n_reference)
     list(
-        backend = "cpu", method = "hnsw", tuning = "auto",
-        target_recall = NA_real_,
-        recall_status = "not_audited_fixed_heuristic"
+        backend = "cpu", method = method,
+        target_recall = 0.99,
+        recall_status = if (identical(method, "exact")) {
+            "exact_by_construction"
+        } else {
+            "calibration_informed_not_runtime_audited"
+        }
     )
 }
 
@@ -248,11 +267,12 @@ finish_precomputed_knn <- function(out, metadata, policy, elapsed) {
     out$execution_backend <- metadata$backend
     out$engine <- fastembedr_nn_policy_engine(policy, keep_gpu)
     out$elapsed_sec <- unname(elapsed[["elapsed"]])
-    if (identical(policy$backend, "cpu")) {
-        out$target_recall <- NULL
+    if (identical(policy$backend, "cpu") &&
+        !identical(policy$method, "exact")) {
+        out$target_recall <- policy$target_recall
         out$target_met <- NA
         out$recall_audited <- FALSE
-        out$recall_status <- policy$recall_status
+        out$recall_status <- out$recall_status %||% policy$recall_status
     } else {
         out$target_recall <- policy$target_recall
     }
@@ -304,13 +324,15 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #'   this argument.
 #'
 #' @details
-#' CPU search uses a package-native HNSW implementation with fixed,
-#' size-aware search parameters; its recall is not audited at runtime. Metal
-#' uses native exact search for small inputs and recall-tuned IVF-Flat for
-#' larger inputs. CUDA uses RAPIDS cuVS brute-force exact search below 100,000
-#' observations and cuVS IVF-Flat above that threshold. Approximate Metal and
-#' CUDA routes use an internal recall target of 0.99 and report whether their
-#' pilot audit met it.
+#' CPU uses native exhaustive float32 search below 5,000 observations and HNSW
+#' otherwise. HNSW applies a metric-, shape-, and `k`-aware policy calibrated
+#' for target recall 0.99; its recall is not audited during each call.
+#' `tuning_reference_target_met` describes the faissR calibration cell and is
+#' not measured recall for the current call. Metal uses native exact search for
+#' small inputs and recall-tuned IVF-Flat for larger inputs. CUDA uses RAPIDS
+#' cuVS brute-force exact search below 100,000 observations and cuVS IVF-Flat
+#' above that threshold. Approximate Metal and CUDA routes use an internal
+#' recall target of 0.99 and report whether their pilot audit met it.
 #'
 #' The CUDA result remains on the GPU and can be passed directly to
 #' [umap_knn()] or [tsne_knn()] with `backend = "cuda"`. CPU and Metal
@@ -410,13 +432,16 @@ run_precompute_query_knn <- function(reference, query, k, metric,
 #' @inheritParams precompute_knn
 #'
 #' @details
-#' CPU uses a native HNSW reference-query path with fixed, size-aware search
-#' parameters and does not claim an audited recall target. Metal routes
-#' between a native query-only exact kernel and recall-tuned IVF-Flat from the
-#' estimated reference-query distance workload. CUDA routes between cuVS
-#' brute-force exact search and cuVS IVF-Flat using the reference size, query
-#' batch size, and feature count. CUDA results remain device-resident for direct
-#' consumption by landmark UMAP and t-SNE transformations.
+#' CPU uses exhaustive reference-query search when the reference has fewer than
+#' 5,000 rows and HNSW otherwise. HNSW uses metric-, shape-, and `k`-aware
+#' target-0.99 parameters and does not claim a per-call recall audit.
+#' `tuning_reference_target_met` describes the faissR calibration cell and is
+#' not measured recall for the current call. Metal routes between a native
+#' query-only exact kernel and recall-tuned IVF-Flat from the estimated
+#' reference-query distance workload. CUDA routes between cuVS brute-force
+#' exact search and cuVS IVF-Flat using the reference size, query batch size,
+#' and feature count. CUDA results remain device-resident for direct consumption
+#' by landmark UMAP and t-SNE transformations.
 #'
 #' @return A `fastEmbedR_knn` object with one row per query observation and
 #'   one-based indices into `reference`.
@@ -468,7 +493,7 @@ precompute_query_knn <- function(reference,
 }
 
 run_native_cuda_knn <- function(data, k, method, metric, output,
-                                target_recall, keep_gpu) {
+                                target_recall, keep_gpu, retain_data) {
     allowed <- c("auto", "exact", "flat", "bruteforce", "ivf")
     if (!method %in% allowed) {
         stop("CUDA native KNN supports `auto`, `exact`, and `ivf`.",
@@ -486,24 +511,33 @@ run_native_cuda_knn <- function(data, k, method, metric, output,
         method = method,
         metric = metric,
         target_recall = target_recall,
-        keep_gpu = isTRUE(keep_gpu)
+        keep_gpu = isTRUE(keep_gpu),
+        retain_data = isTRUE(retain_data)
     )
     if (keep_gpu) out else fastembedr_convert_knn_distances(out, output)
 }
 
 run_native_cpu_knn <- function(data, k, method, metric, output,
                                 target_recall, n_threads) {
-    if (!method %in% c("auto", "hnsw")) {
-        stop("Native CPU KNN supports only the HNSW route.",
+    if (!method %in% c("auto", "exact", "hnsw")) {
+        stop("Native CPU KNN supports `exact` and `hnsw`.",
             call. = FALSE
         )
     }
     if (!metric %in% c("euclidean", "cosine", "correlation")) {
-        stop("Native CPU HNSW does not support this metric.",
+        stop("Native CPU KNN does not support this metric.",
             call. = FALSE
         )
     }
-    out <- native_hnsw_knn_cpp(
+    if (identical(method, "auto")) {
+        method <- fastembedr_cpu_knn_method(nrow(data))
+    }
+    native <- if (identical(method, "exact")) {
+        native_exact_knn_cpp
+    } else {
+        native_hnsw_knn_cpp
+    }
+    out <- native(
         data,
         k = k,
         n_threads = normalize_nn_threads(n_threads),
@@ -511,7 +545,7 @@ run_native_cpu_knn <- function(data, k, method, metric, output,
         target_recall = target_recall
     )
     attr(out, "backend") <- "cpu"
-    attr(out, "method") <- "native_hnsw"
+    attr(out, "method") <- out$method
     attr(out, "exclude_self") <- TRUE
     fastembedr_convert_knn_distances(out, output)
 }
@@ -568,7 +602,8 @@ fastembedr_nn_without_self <- function(data,
                                         n_threads = NULL,
                                         tuning = "auto",
                                         target_recall = NULL,
-                                        keep_gpu = FALSE) {
+                                        keep_gpu = FALSE,
+                                        retain_data = FALSE) {
     k <- integer_scalar(k)
     if (is.na(k) || k < 1L) {
         stop("`k` must be a positive integer.", call. = FALSE)
@@ -576,7 +611,8 @@ fastembedr_nn_without_self <- function(data,
     target_recall <- target_recall %||% 0.99
     switch(backend,
         cuda = run_native_cuda_knn(
-            data, k, method, metric, output, target_recall, keep_gpu
+            data, k, method, metric, output, target_recall, keep_gpu,
+            retain_data
         ),
         cpu = run_native_cpu_knn(
             data, k, method, metric, output, target_recall, n_threads
@@ -586,6 +622,37 @@ fastembedr_nn_without_self <- function(data,
         ),
         stop("Unknown native KNN backend: ", backend, call. = FALSE)
     )
+}
+
+run_native_cpu_query_knn <- function(data, query, k, method, metric,
+                                        output, target_recall, n_threads) {
+    if (!method %in% c("auto", "exact", "hnsw")) {
+        stop("Native CPU query KNN supports `exact` and `hnsw`.",
+            call. = FALSE
+        )
+    }
+    if (!metric %in% c("euclidean", "cosine", "correlation")) {
+        stop("Native CPU query KNN does not support this metric.",
+            call. = FALSE
+        )
+    }
+    if (identical(method, "auto")) {
+        method <- fastembedr_cpu_knn_method(nrow(data))
+    }
+    native <- if (identical(method, "exact")) {
+        native_exact_query_cpp
+    } else {
+        native_hnsw_query_cpp
+    }
+    out <- native(
+        data, query, k = k,
+        n_threads = normalize_nn_threads(n_threads),
+        metric = metric, target_recall = target_recall
+    )
+    attr(out, "backend") <- "cpu"
+    attr(out, "method") <- out$method
+    attr(out, "exclude_self") <- FALSE
+    fastembedr_convert_knn_distances(out, output)
 }
 
 fastembedr_native_query_knn <- function(data, query, k,
@@ -626,14 +693,8 @@ fastembedr_native_query_knn <- function(data, query, k,
         attr(out, "exclude_self") <- FALSE
         return(fastembedr_convert_knn_distances(out, output))
     }
-    out <- native_hnsw_query_cpp(
-        data, query,
-        k = k,
-        n_threads = normalize_nn_threads(n_threads), metric = metric,
-        target_recall = target_recall
+    run_native_cpu_query_knn(
+        data, query, k, method, metric, output,
+        target_recall, n_threads
     )
-    attr(out, "backend") <- "cpu"
-    attr(out, "method") <- "native_hnsw_query"
-    attr(out, "exclude_self") <- FALSE
-    fastembedr_convert_knn_distances(out, output)
 }

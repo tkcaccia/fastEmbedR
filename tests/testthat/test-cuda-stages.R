@@ -196,6 +196,7 @@ test_that("CUDA PCA selects rSVD for wide low-rank input", {
         skip("CUDA embedding backend is not available in this build.")
     }
 
+    withr::local_envvar(FASTEMBEDR_CUDA_GRAPH_CAPTURE = "1")
     set.seed(73)
     left <- matrix(rnorm(320L * 5L), nrow = 320L)
     right <- matrix(rnorm(1536L * 5L), nrow = 1536L)
@@ -255,4 +256,78 @@ test_that("CUDA PCA selects rSVD for wide low-rank input", {
         embedding$parameters$initialization_requested,
         "pca_cuda_auto_device"
     )
+    expect_identical(
+        embedding$parameters$cuda_allocator,
+        "cuda_async_default_mempool"
+    )
+    expect_identical(
+        embedding$parameters$cuda_fft_plan_cache,
+        "thread_local_by_grid_size"
+    )
+    expect_true(isTRUE(embedding$parameters$cuda_graph_capture))
+})
+
+test_that("CUDA UMAP reports pooled allocation and graph capture", {
+    if (!isTRUE(fastEmbedR:::embedding_cuda_available_cpp())) {
+        skip("CUDA embedding backend is not available in this build.")
+    }
+    if (!isTRUE(fastEmbedR:::native_cuda_knn_available_cpp())) {
+        skip("Native CUDA KNN is not available in this build.")
+    }
+
+    withr::local_envvar(FASTEMBEDR_CUDA_GRAPH_CAPTURE = "1")
+    set.seed(74)
+    x <- matrix(rnorm(256L * 8L), nrow = 256L)
+    fit <- fastEmbedR::umap(
+        x,
+        n_neighbors = 10L,
+        backend = "cuda",
+        seed = 74L
+    )
+
+    expect_identical(
+        fit$parameters$cuda_allocator,
+        "cuda_async_default_mempool"
+    )
+    expect_true(isTRUE(fit$parameters$cuda_graph_capture))
+    expect_identical(
+        fit$parameters$cuda_graph_scope,
+        "complete_umap_epoch_loop"
+    )
+    expect_identical(fit$parameters$knn_residency, "cuda_device")
+
+    withr::local_envvar(FASTEMBEDR_CUDA_GRAPH_CAPTURE = "0")
+    ordinary <- fastEmbedR::umap(
+        x,
+        n_neighbors = 10L,
+        backend = "cuda",
+        seed = 74L
+    )
+    expect_false(isTRUE(ordinary$parameters$cuda_graph_capture))
+    expect_true(all(is.finite(as.matrix(ordinary))))
+})
+
+test_that("CUDA landmark t-SNE returns every projected row", {
+    if (!isTRUE(fastEmbedR:::embedding_cuda_available_cpp())) {
+        skip("CUDA embedding backend is not available in this build.")
+    }
+
+    x <- scale(as.matrix(iris[, 1:4]))
+    fit <- fastEmbedR::tsne(
+        x,
+        perplexity = 5,
+        backend = "cuda",
+        n.cores = 1L,
+        landmarks = 0.2,
+        transform_perplexity = 5,
+        early_exaggeration_iter = 2L,
+        n_iter = 3L,
+        transform_iter = 2L,
+        seed = 4L
+    )
+
+    expect_equal(dim(fit$layout), c(nrow(x), 2L))
+    expect_true(all(is.finite(fit$layout)))
+    expect_identical(fit$parameters$backend, "cuda")
+    expect_identical(fit$parameters$transform_backend, "cuda")
 })

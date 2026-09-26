@@ -793,7 +793,7 @@ resolve_embedding_evaluation_reference <- function(sample, backend,
         backend <- "cpu"
         reason <- append_metric_backend_reason(reason, attempt$error)
         args$backend <- "cpu"
-        args$method <- "hnsw"
+        args$method <- fastembedr_cpu_knn_method(sample$n)
         raw <- do.call(fastembedr_nn_without_self, args)
     }
     list(

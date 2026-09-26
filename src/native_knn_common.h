@@ -18,6 +18,14 @@ enum class KnnMetric {
   Correlation
 };
 
+inline int adaptive_worker_count(int requested, int work_items) {
+  if (work_items <= 1) return 1;
+  requested = std::max(1, requested);
+  const int cap = work_items < 256 ? 1 :
+    work_items < 2048 ? 2 : requested;
+  return std::max(1, std::min(std::min(requested, cap), work_items));
+}
+
 inline KnnMetric parse_knn_metric(const std::string& metric) {
   if (metric == "euclidean") return KnnMetric::Euclidean;
   if (metric == "cosine") return KnnMetric::Cosine;
@@ -111,6 +119,42 @@ inline FloatMatrix matrix_to_row_major_float(SEXP data, KnnMetric metric) {
   if (metric == KnnMetric::Cosine) normalize_rows(result, false);
   if (metric == KnnMetric::Correlation) normalize_rows(result, true);
   return result;
+}
+
+inline void require_finite_matrix(const FloatMatrix& matrix) {
+  for (float value : matrix.values) {
+    if (!std::isfinite(value)) {
+      Rcpp::stop("Native KNN requires finite input.");
+    }
+  }
+}
+
+inline float squared_l2_distance(const float* lhs,
+                                 const float* rhs,
+                                 int p) {
+  float sum0 = 0.0f;
+  float sum1 = 0.0f;
+  float sum2 = 0.0f;
+  float sum3 = 0.0f;
+  int d = 0;
+  for (; d + 15 < p; d += 16) {
+    for (int offset = 0; offset < 16; offset += 4) {
+      const float x0 = lhs[d + offset] - rhs[d + offset];
+      const float x1 = lhs[d + offset + 1] - rhs[d + offset + 1];
+      const float x2 = lhs[d + offset + 2] - rhs[d + offset + 2];
+      const float x3 = lhs[d + offset + 3] - rhs[d + offset + 3];
+      sum0 += x0 * x0;
+      sum1 += x1 * x1;
+      sum2 += x2 * x2;
+      sum3 += x3 * x3;
+    }
+  }
+  float sum = (sum0 + sum1) + (sum2 + sum3);
+  for (; d < p; ++d) {
+    const float delta = lhs[d] - rhs[d];
+    sum += delta * delta;
+  }
+  return sum;
 }
 
 inline float output_distance(float internal_distance, KnnMetric metric) {

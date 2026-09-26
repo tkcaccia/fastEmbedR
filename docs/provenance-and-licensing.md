@@ -31,15 +31,15 @@ file mapping, SPDX header, notice, or license copy is missing.
 ## Adapted And Linked Components
 
 The native nearest-neighbor implementation retains notices for FAISS-derived
-HNSW and IVF organization. Metal list scanning retains the Faiss-mlx
-Apache-2.0 notice. Reduced DLPack declarations and the AppleSiliconFFT-derived
-Stockham organization retain their upstream notices. The precise upstream
-commits and package-file mappings are recorded in the inventory and notice
-files above.
+HNSW and IVF organization and the exact-search behavior adapted from faissR.
+Metal list scanning retains the Faiss-mlx Apache-2.0 notice. Reduced DLPack
+declarations and the AppleSiliconFFT-derived Stockham organization retain
+their upstream notices. The precise upstream commits and package-file mappings
+are recorded in the inventory and notice files above.
 
 CUDA libraries and Apple system frameworks are resolved from the build or
 runtime environment and are not redistributed as package binaries. Optional
-FAISS, cuVS, RAFT, RMM, CUDA, Metal, MPS, and Accelerate components retain
+cuVS, RAFT, RMM, CUDA, Metal, MPS, and Accelerate components retain
 their upstream licenses and remain subject to their respective platform terms.
 
 Software used only as a benchmark comparator or numerical reference remains

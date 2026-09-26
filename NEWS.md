@@ -1,5 +1,16 @@
 # fastEmbedR 0.1
 
+* Report landmark reference-stage memory ratios and query-to-reference KNN
+  payload estimates separately from timing. These estimates distinguish
+  optimizer memory reduction from total peak RSS.
+* Reduce CUDA setup and transfer costs with the CUDA asynchronous default
+  memory pool, thread-local CUDA library handles, cached cuFFT plans, and CUDA
+  Graph execution. One-call CUDA t-SNE now reuses the feature matrix retained
+  for KNN as device-resident PCA input instead of uploading a second copy.
+* Use package-native exhaustive float32 CPU KNN below 5,000 observations and
+  HNSW otherwise. The exact route supports Euclidean, cosine, and correlation
+  distances, deterministic multithreaded top-k selection, and
+  query-to-reference search without linking FAISS or importing faissR.
 * Remove the generic `embed_knn()` dispatcher, API/capability inventory
   helpers, KNN print method, backend setter/getter, and staged landmark fitter.
   Use `tsne_knn()` or `umap_knn()` explicitly and configure session defaults

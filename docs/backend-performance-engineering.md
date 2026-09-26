@@ -59,13 +59,13 @@ ownership boundaries are:
 
 | Stage | CPU | Metal | CUDA |
 | --- | --- | --- | --- |
-| One-call KNN | Native float32 HNSW | Native exact or recall-tuned IVF-Flat | cuVS exact or IVF-Flat |
+| One-call KNN | Native float32 exact below 5,000 rows; HNSW otherwise | Native exact or recall-tuned IVF-Flat | cuVS exact or IVF-Flat |
 | Reusable host KNN | plain `indices`/`distances` list | Same KNN-input API | Same host KNN-input API; one-call native KNN can remain device-resident |
 | PCA/t-SNE initialization | Native rSVD using BLAS-backed products | Float32 block-subspace rSVD using MPS matrix products | Native rSVD; optional RAPIDS RAFT TSVD |
 | t-SNE affinities | Native sparse C++ construction | Host construction followed by one graph upload | Native CUDA construction for resident one-call KNN |
 | UMAP graph | Native compact sparse graph | Prepared sparse graph uploaded once | Native CUDA construction for resident one-call KNN |
 | t-SNE optimization | Native C++ FFT-grid | Native Objective-C++/Metal FFT-grid | Native CUDA/cuFFT FFT-grid |
-| UMAP optimization | Native C++ stochastic optimizer | Native Metal atomic in-place optimizer | Native CUDA atomic optimizer |
+| UMAP optimization | Native C++ stochastic optimizer | Native Metal atomic in-place optimizer | Row-major CUDA warp optimizer with CUDA Graph capture |
 | Returned data | Final R layout | Final layout copied after optimization | Final layout copied after optimization |
 
 ## Compiler-Controlled Performance
@@ -146,6 +146,28 @@ The retained CPU optimizations are implementation-only changes:
 The same executor is also used by `transform_tsne()`, where fixed-reference
 query transformations are independent by query row.
 
+### Adaptive CPU scheduling
+
+CPU stages apply a workload-aware worker cap rather than creating the
+requested number of workers for every operation. Small stages use one worker,
+small-to-medium stages use two or four, and larger stages can use the
+requested limit. The cap is applied independently to t-SNE, UMAP graph
+construction, and UMAP optimization work so that short reductions and small
+edge batches do not pay thread start-up and synchronization costs.
+
+The CPU t-SNE repulsive pair calculation uses persistent thread-local
+gradient buffers. Each worker accumulates its own contribution and the main
+thread performs one reduction, avoiding atomics on the dense pairwise path.
+Sparse attractive rows are owned by one worker at a time. CPU KNN and PCA
+inputs use contiguous row-major float32 blocks where the native path accepts
+float32; the distance kernel is unrolled for SIMD-friendly accumulation.
+
+When package workers are active on Linux, BLAS, OpenMP, and RcppParallel are
+limited to one thread. This prevents nested parallelism from oversubscribing
+the CPU. On macOS, the Accelerate-backed matrix products receive the requested
+core limit because they are the package's matrix-multiplication stage. The
+limits are restored when the call returns.
+
 ### Metal t-SNE
 
 The Metal path in `src/embedding_metal_impl.mm` is native Objective-C++ and
@@ -179,15 +201,31 @@ is accepted only when end-to-end repeated timing improves.
 
 The CUDA path in `src/embedding_cuda_kernels.cpp` keeps float32 layout,
 affinities, optimizer state, grid fields, and cuFFT work buffers on the selected
-device. cuFFT plans and work arrays are created once per run. Native one-call
-KNN may remain device-resident through graph construction, so only the final
-layout needs to cross the R boundary.
+device. A thread-local execution stream, cuFFT plan cache, and CUDA library
+handle caches are reused between calls. Large temporary regions are carved
+from one workspace obtained from the CUDA default asynchronous memory pool.
+The cuFFT cache is keyed by device and grid size; each call supplies pooled
+work storage to the cached plans.
+
+Native one-call KNN keeps both its neighbor result and original float32 feature
+matrix on the device. t-SNE affinity construction consumes the resident KNN,
+and PCA initialization reads the same resident feature buffer. The feature
+matrix is therefore not copied back to R, centered on the host, or uploaded a
+second time. Only small diagnostics and the final layout cross the R boundary.
 
 The retained CUDA optimization captures 25 unchanged iterations in each CUDA
 Graph. Separate graph executables represent the early-exaggeration phase, the
 normal phase, and any shorter tail. This reduces repeated host launch overhead
 without fusing or reordering the mathematical operations inside an iteration.
 The validated complex-to-complex cuFFT formulation remains in use.
+
+Small operations are fused only where no global dependency intervenes. One
+kernel clears and initializes the FFT fields, one applies all spectral
+products, and the optimizer update also produces the partial centering
+reduction. The layout-bounds reduction stores only the four extrema needed to
+define the grid; unused per-iteration coordinate sums are not materialized.
+The normalization and centering stages remain separate because each requires a
+completed global reduction.
 
 ## Native UMAP Pipeline
 
@@ -202,10 +240,19 @@ The CPU path builds compact sparse graph arrays and precomputes sampling
 schedules. The Metal and CUDA paths upload or construct the graph once, retain
 the float32 layout and optimizer state on device, generate negative samples in
 their native kernels, and return only the final coordinates. The validated
-Metal implementation is the atomic in-place optimizer; the CUDA implementation
-uses the package-native atomic optimizer. This performance pass did not change
-the UMAP objective or scheduler. Full-MNIST smoke timings are reported below
-to demonstrate that the t-SNE changes did not regress UMAP.
+Metal implementation is the atomic in-place optimizer. CUDA stores edges
+row-major and assigns one warp to each head row. Coalesced neighbor reads and
+warp aggregation reduce head conflicts before tail atomics. The same kernel
+combines attraction, device-side negative sampling, repulsion, and coordinate
+updates. CUDA captures the complete epoch sequence as one graph when capture is
+supported; the graph contains the same epoch-specific parameters and kernel
+order as ordinary launch mode.
+
+A cooperative persistent-kernel variant was benchmarked on flow18 but was
+approximately 21 percent slower than the retained CUDA-Graph path. It was not
+kept in production. CUDA Graph capture therefore reduces multi-epoch launch
+overhead without trading away the measured optimizer speed.
+This performance pass did not change the UMAP objective or scheduler.
 
 ## PCA Initialization
 
@@ -221,7 +268,8 @@ implementation rather than IRLBA:
   reduction validates, centers, and optionally scales every feature in place;
 - CUDA selects package-native rSVD for sufficiently wide, low-rank matrices
   and, when RAFT is enabled, RAPIDS RAFT TSVD otherwise. Without RAFT, the
-  package-native rSVD route is used.
+  package-native rSVD route is used. One-call CUDA t-SNE reuses the resident
+  feature matrix produced for KNN instead of creating a second host copy.
 
 Scores are centered and rescaled so the largest component standard deviation
 is `1e-4`. PCA timing is not included in the embedding-only results below;
@@ -285,6 +333,14 @@ approximation explicit:
 
 Full UMAP and t-SNE never switch to landmarking silently.
 
+The returned landmark metrics also separate memory stages. The reference-fit
+estimate compares graph and layout state for all `n` observations with the
+state for `m` landmarks. A separate estimate reports the query-to-reference
+KNN payload, which grows with `n - m` and the projection neighbor count. These
+are float32 working-set estimates, not peak-RSS measurements. Landmarking can
+therefore lower optimizer memory while providing little total-memory benefit
+when projection neighbors, the input matrix or the final layout are retained.
+
 ## Measured Improvements
 
 ### Benchmark protocol
@@ -341,24 +397,27 @@ is small and timing variance is proportionally large, these values are used as
 a regression check rather than a speed claim. The visual comparison is stored
 at `results/cpu_metal_optimization/metref/comparison.png`.
 
-### CUDA graph result
+### CUDA setup-cost validation
 
-The CUDA optimization was measured separately on an NVIDIA T4 with full
-MNIST70k flattened input. With the same KNN and optimization mathematics,
-capturing 25 iterations per CUDA Graph changed median t-SNE embedding time
-from 3.293 to 2.534 seconds (23.1%) and median full-call time from 5.234 to
-4.534 seconds (13.4%). Agreement with the accepted baseline was:
+The retained setup changes were measured on an NVIDIA GeForce RTX 5060 Ti with
+driver 595.84 and the CUDA 13.2 toolchain. The input was the complete float32
+MNIST70k matrix. t-SNE used 250 early-exaggeration and 750 normal iterations.
+Two warm repetitions gave the following medians:
 
-- coordinate correlation: 0.999691;
-- normalized Procrustes RMSD: 0.024861;
-- neighborhood overlap@15: 0.903091;
-- sampled distance Pearson/Spearman correlations: 0.999287/0.999268.
+| Route | Previous, seconds | Retained, seconds | Change |
+| --- | ---: | ---: | ---: |
+| t-SNE embedding | 1.828 | 1.361 | -25.5% |
+| t-SNE complete call | 4.298 | 3.830 | -10.9% |
+| Fuzzy UMAP embedding | 0.085 | 0.085 | no material change |
+| Fuzzy UMAP complete call | 2.531 | 2.530 | no material change |
 
-Baseline-to-baseline CUDA overlap@15 was 0.905777, confirming that the retained
-result is inside normal atomic-run variability. The final one-off full-call
-run required 4.897 seconds: 2.088 seconds for KNN and 2.582 seconds for
-embedding. The corresponding CUDA UMAP runs were 2.317 seconds (fuzzy) and
-2.307 seconds (binary).
+The t-SNE improvement combines resident PCA input, pooled allocation, cached
+library handles, and cached cuFFT plans. Enabling or disabling graph capture
+alone changed warm-run time only slightly on this workload. UMAP is unchanged
+because its optimizer already takes about 0.085 seconds while KNN takes about
+2.36 seconds. Repeated UMAP layouts vary because atomic update order is not
+bitwise deterministic; graph-captured layouts remained within that existing
+run-to-run variation.
 
 ## Experiments Tested And Removed
 

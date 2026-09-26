@@ -40,13 +40,16 @@ policy as \code{\link[=precompute_knn]{precompute_knn()}}, but does not compute 
 reference-to-reference or query-to-query neighbors.
 }
 \details{
-CPU uses a native HNSW reference-query path with fixed, size-aware search
-parameters and does not claim an audited recall target. Metal routes
-between a native query-only exact kernel and recall-tuned IVF-Flat from the
-estimated reference-query distance workload. CUDA routes between cuVS
-brute-force exact search and cuVS IVF-Flat using the reference size, query
-batch size, and feature count. CUDA results remain device-resident for direct
-consumption by landmark UMAP and t-SNE transformations.
+CPU uses exhaustive reference-query search when the reference has fewer than
+5,000 rows and HNSW otherwise. HNSW uses metric-, shape-, and \code{k}-aware
+target-0.99 parameters and does not claim a per-call recall audit.
+\code{tuning_reference_target_met} describes the faissR calibration cell and is
+not measured recall for the current call. Metal routes between a native
+query-only exact kernel and recall-tuned IVF-Flat from the estimated
+reference-query distance workload. CUDA routes between cuVS brute-force
+exact search and cuVS IVF-Flat using the reference size, query batch size,
+and feature count. CUDA results remain device-resident for direct consumption
+by landmark UMAP and t-SNE transformations.
 }
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))

@@ -217,8 +217,6 @@ double silhouette_score_cuda_impl(NumericMatrix layout,
 NumericMatrix rsvd_multiply_cuda_impl(NumericMatrix left,
                                       NumericMatrix right,
                                       bool transpose_left);
-NumericMatrix cuda_pca_init_cuda_impl(NumericMatrix data,
-                                      int n_components);
 List pca_tsvd_cuda_impl(SEXP data,
                         int n_components,
                         bool center,

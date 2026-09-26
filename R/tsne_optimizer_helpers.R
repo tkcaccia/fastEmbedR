@@ -380,8 +380,9 @@ opentsne_result_runtime <- function(
         output_precision = if (return_float32) "float32" else "double",
         probabilities = out$probabilities %||% "symmetric_sparse_knn_cpu",
         n_negatives = out$n_negatives %||% NA_integer_,
-        n.cores = out$n_threads,
+        n.cores = out$n_threads_requested %||% out$n_threads,
         n.cores_requested = out$n_threads_requested %||% out$n_threads,
+        n.cores_effective = out$n_threads,
         affinity_elapsed_sec = out$affinity_elapsed_sec %||% NA_real_,
         optimization_elapsed_sec =
             out$optimization_elapsed_sec %||% NA_real_,
@@ -393,6 +394,12 @@ opentsne_result_runtime <- function(
         } else {
             "host"
         },
+        pca_input_residency = out$pca_input_residency %||% "not_reported",
+        cuda_allocator = out$cuda_allocator %||% NA_character_,
+        cuda_fft_plan_cache = out$cuda_fft_plan_cache %||% NA_character_,
+        cuda_handle_cache = out$cuda_handle_cache %||% NA_character_,
+        cuda_graph_capture = out$cuda_graph_capture %||% NA,
+        cuda_graph_scope = out$cuda_graph_scope %||% NA_character_,
         provenance = opentsne_provenance(optimizer_backend)
     )
 }

@@ -479,18 +479,21 @@ normalize_pca_threads <- function(n.cores) {
     resolve_n_cores(n.cores)
 }
 
-set_pca_thread_environment <- function(n_threads) {
-    variables <- c(
+set_pca_thread_environment <- function(blas_threads) {
+    blas_variables <- c(
         "OMP_NUM_THREADS",
         "OPENBLAS_NUM_THREADS",
         "MKL_NUM_THREADS",
         "VECLIB_MAXIMUM_THREADS",
-        "BLIS_NUM_THREADS",
-        "RCPP_PARALLEL_NUM_THREADS"
+        "BLIS_NUM_THREADS"
     )
+    variables <- c(blas_variables, "RCPP_PARALLEL_NUM_THREADS")
     previous <- Sys.getenv(variables, unset = NA_character_)
     values <- stats::setNames(
-        rep(list(as.character(n_threads)), length(variables)),
+        as.list(c(
+            rep(as.character(blas_threads), length(blas_variables)),
+            "1"
+        )),
         variables
     )
     do.call(Sys.setenv, values)
@@ -509,7 +512,7 @@ restore_pca_thread_environment <- function(previous) {
     invisible(NULL)
 }
 
-set_pca_rhpc_threads <- function(n_threads) {
+set_pca_rhpc_threads <- function(blas_threads) {
     if (!requireNamespace("RhpcBLASctl", quietly = TRUE)) {
         return(list(
             control = "environment",
@@ -525,8 +528,8 @@ set_pca_rhpc_threads <- function(n_threads) {
         RhpcBLASctl::omp_get_max_threads(),
         error = function(e) NA_integer_
     )
-    try(RhpcBLASctl::blas_set_num_threads(n_threads), silent = TRUE)
-    try(RhpcBLASctl::omp_set_num_threads(n_threads), silent = TRUE)
+    try(RhpcBLASctl::blas_set_num_threads(blas_threads), silent = TRUE)
+    try(RhpcBLASctl::omp_set_num_threads(blas_threads), silent = TRUE)
     effective <- tryCatch(
         as.integer(RhpcBLASctl::blas_get_num_procs()),
         error = function(e) NA_integer_
@@ -552,14 +555,17 @@ restore_pca_rhpc_threads <- function(blas, omp) {
 
 with_pca_cpu_threads <- function(n_threads, code) {
     n_threads <- normalize_pca_threads(n_threads)
-    restore_env <- set_pca_thread_environment(n_threads)
+    is_linux <- identical(Sys.info()[["sysname"]], "Linux")
+    blas_threads <- if (is_linux) 1L else n_threads
+    restore_env <- set_pca_thread_environment(blas_threads)
     on.exit(restore_env(), add = TRUE)
-    control <- set_pca_rhpc_threads(n_threads)
+    control <- set_pca_rhpc_threads(blas_threads)
     on.exit(control$restore(), add = TRUE)
     list(
         value = force(code),
         control = control$control,
-        effective = control$effective
+        effective = control$effective,
+        blas_threads = blas_threads
     )
 }
 
@@ -634,6 +640,7 @@ finish_cpu_pca_fit <- function(fit, seed) {
         precision = "float32",
         oversample = as.integer(fit$oversample),
         power = as.integer(fit$power),
+        n_threads = as.integer(fit$n_threads),
         seed = as.integer(seed),
         timing = fit$timing
     )
@@ -728,8 +735,10 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' @param scale If `TRUE`, scale centered columns to unit sample standard
 #'   deviation before decomposition.
 #' @param backend PCA backend: `"cpu"`, `"cuda"`, or `"metal"`.
-#' @param n.cores Positive integer CPU core limit. It controls the linked
-#'   BLAS/OpenMP numerical kernels when `backend = "cpu"` and is ignored by
+#' @param n.cores Positive integer CPU worker limit. Small stages use fewer
+#'   workers automatically. On Linux, BLAS and OpenMP are limited to one
+#'   thread while native workers are active to prevent nested parallelism.
+#'   On macOS, Accelerate may use the requested limit. It is ignored by
 #'   Metal and CUDA.
 #' @param seed Random seed for backends that use a Gaussian subspace sketch.
 #'   The RAFT covariance-eigensolver route records this value but does not
@@ -744,8 +753,7 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #'   contains `tsne_init`; when `xtest` is supplied, it also contains
 #'   `scores_test`. Metal and CUDA preserve `float::float32` scores, loadings,
 #'   initialization, and compatible test projections when the input is
-#'   float32. CPU results also record `n.cores_requested`,
-#'   `n.cores_effective`, and `core_control`.
+#'   float32. CPU results also record the worker and BLAS limits.
 #' @examples
 #' fit <- pca(
 #'     as.matrix(iris[, 1:4]),
@@ -782,7 +790,9 @@ pca <- function(x,
     threaded <- with_pca_cpu_threads(request$n_threads, run_pca())
     fit <- threaded$value
     fit$n.cores_requested <- request$n_threads
-    fit$n.cores_effective <- threaded$effective
+    fit$n.cores_effective <- fit$n_threads %||% request$n_threads
+    fit$blas.n.cores <- threaded$effective
+    fit$blas.n.cores_requested <- threaded$blas_threads
     fit$core_control <- threaded$control
     fit
 }

@@ -85,7 +85,9 @@ class ReusableBarrier {
 
 int effective_cpu_threads(const int n_threads, const int n_items) {
   if (n_items <= 1) return 1;
-  return std::max(1, std::min(std::min(n_threads, 4), n_items));
+  const int work_cap = n_items < 256 ? 1 :
+    n_items < 2048 ? 2 : 4;
+  return std::max(1, std::min(std::min(n_threads, work_cap), n_items));
 }
 
 template <typename Worker>

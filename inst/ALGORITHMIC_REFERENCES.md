@@ -390,8 +390,11 @@ Ideas reviewed:
 - Faiss-mlx repository: <https://github.com/MLXPorts/Faiss-mlx>
 - Faiss-mlx source commit: `d092af559375144fc719cd88a10e414f92c625fa`
 - Faiss-mlx license: Apache-2.0
-- Current use in `fastEmbedR`: package-native float32 CPU HNSW distilled from
-  FAISS's HNSW organization, plus native Metal exact and IVF-Flat search. The
+- Current use in `fastEmbedR`: package-native exhaustive float32 CPU search
+  below 5,000 observations and HNSW otherwise, plus native Metal exact and
+  IVF-Flat search. The CPU exact route adapts faissR's metric preprocessing,
+  deterministic top-k, and zero-row behavior without linking FAISS or faissR.
+  The larger-data CPU route is distilled from FAISS's HNSW organization. The
   Metal fused list-scan/top-k structure was adapted from FAISS and Faiss-mlx.
   The package does not link FAISS or MLX.
 

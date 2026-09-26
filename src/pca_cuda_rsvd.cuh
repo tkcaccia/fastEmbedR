@@ -61,6 +61,70 @@ __global__ void collect_solver_status(const int* info, int* invalid) {
   if (*info != 0) atomicExch(invalid, 1);
 }
 
+class RsvdHandleCache {
+ public:
+  RsvdHandleCache() {
+    try {
+      require_blas(cublasCreate(&blas_), "cublasCreate(rSVD cache)");
+      require_blas(
+        cublasSetMathMode(blas_, CUBLAS_PEDANTIC_MATH),
+        "cublasSetMathMode(rSVD cache)"
+      );
+      require_solver(
+        cusolverDnCreate(&solver_), "cusolverDnCreate(rSVD cache)"
+      );
+      require_random(
+        curandCreateGenerator(&random_, CURAND_RNG_PSEUDO_DEFAULT),
+        "curandCreateGenerator(rSVD cache)"
+      );
+    } catch (...) {
+      release();
+      throw;
+    }
+  }
+
+  RsvdHandleCache(const RsvdHandleCache&) = delete;
+  RsvdHandleCache& operator=(const RsvdHandleCache&) = delete;
+
+  ~RsvdHandleCache() { release(); }
+
+  void release() noexcept {
+    if (random_ != nullptr) curandDestroyGenerator(random_);
+    if (solver_ != nullptr) cusolverDnDestroy(solver_);
+    if (blas_ != nullptr) cublasDestroy(blas_);
+    random_ = nullptr;
+    solver_ = nullptr;
+    blas_ = nullptr;
+  }
+
+  void bind(cudaStream_t stream) {
+    require_blas(
+      cublasSetStream(blas_, stream), "cublasSetStream(rSVD cache)"
+    );
+    require_solver(
+      cusolverDnSetStream(solver_, stream),
+      "cusolverDnSetStream(rSVD cache)"
+    );
+    require_random(
+      curandSetStream(random_, stream), "curandSetStream(rSVD cache)"
+    );
+  }
+
+  cublasHandle_t blas() const { return blas_; }
+  cusolverDnHandle_t solver() const { return solver_; }
+  curandGenerator_t random() const { return random_; }
+
+ private:
+  cublasHandle_t blas_ = nullptr;
+  cusolverDnHandle_t solver_ = nullptr;
+  curandGenerator_t random_ = nullptr;
+};
+
+inline RsvdHandleCache& rsvd_handle_cache() {
+  static thread_local RsvdHandleCache cache;
+  return cache;
+}
+
 class RsvdWorkspace {
  public:
   RsvdWorkspace(int rows, int columns, int rank, int oversample,
@@ -184,30 +248,27 @@ class RsvdWorkspace {
 
  private:
   void create_handles() {
-    require_blas(cublasCreate(&blas_), "cublasCreate(rSVD)");
-    require_blas(cublasSetStream(blas_, stream_), "cublasSetStream(rSVD)");
-    require_blas(
-      cublasSetMathMode(blas_, CUBLAS_PEDANTIC_MATH),
-      "cublasSetMathMode(rSVD)"
-    );
-    require_solver(cusolverDnCreate(&solver_), "cusolverDnCreate(rSVD)");
-    require_solver(
-      cusolverDnSetStream(solver_, stream_), "cusolverDnSetStream(rSVD)"
-    );
-    require_random(
-      curandCreateGenerator(&random_, CURAND_RNG_PSEUDO_DEFAULT),
-      "curandCreateGenerator(rSVD)"
-    );
-    require_random(
-      curandSetStream(random_, stream_), "curandSetStream(rSVD)"
-    );
+    RsvdHandleCache& cache = rsvd_handle_cache();
+    cache.bind(stream_);
+    blas_ = cache.blas();
+    solver_ = cache.solver();
+    random_ = cache.random();
   }
 
   void allocate(float*& pointer, std::size_t count) {
+#if CUDART_VERSION >= 11020
+    require_cuda(
+      cudaMallocAsync(
+        reinterpret_cast<void**>(&pointer), count * sizeof(float), stream_
+      ),
+      "cudaMallocAsync(rSVD buffer)"
+    );
+#else
     require_cuda(
       cudaMalloc(reinterpret_cast<void**>(&pointer), count * sizeof(float)),
       "cudaMalloc(rSVD buffer)"
     );
+#endif
   }
 
   void allocate_buffers() {
@@ -222,6 +283,20 @@ class RsvdWorkspace {
     allocate(singular_all_, sketch_);
     allocate(tau_, sketch_);
     allocate(rwork_, static_cast<std::size_t>(std::max(1, sketch_ - 1)));
+#if CUDART_VERSION >= 11020
+    require_cuda(
+      cudaMallocAsync(
+        reinterpret_cast<void**>(&info_), sizeof(int), stream_
+      ),
+      "cudaMallocAsync(rSVD info)"
+    );
+    require_cuda(
+      cudaMallocAsync(
+        reinterpret_cast<void**>(&invalid_), sizeof(int), stream_
+      ),
+      "cudaMallocAsync(rSVD invalid)"
+    );
+#else
     require_cuda(
       cudaMalloc(reinterpret_cast<void**>(&info_), sizeof(int)),
       "cudaMalloc(rSVD info)"
@@ -230,6 +305,7 @@ class RsvdWorkspace {
       cudaMalloc(reinterpret_cast<void**>(&invalid_), sizeof(int)),
       "cudaMalloc(rSVD invalid)"
     );
+#endif
   }
 
   void configure_workspace() {
@@ -306,13 +382,27 @@ class RsvdWorkspace {
            omega_, basis_, right_basis_, small_, small_u_, small_vt_,
            singular_all_, tau_, work_, rwork_
          }) {
-      if (pointer != nullptr) cudaFree(pointer);
+      if (pointer == nullptr) continue;
+#if CUDART_VERSION >= 11020
+      cudaFreeAsync(pointer, stream_);
+#else
+      cudaFree(pointer);
+#endif
     }
-    if (info_ != nullptr) cudaFree(info_);
-    if (invalid_ != nullptr) cudaFree(invalid_);
-    if (random_ != nullptr) curandDestroyGenerator(random_);
-    if (solver_ != nullptr) cusolverDnDestroy(solver_);
-    if (blas_ != nullptr) cublasDestroy(blas_);
+    if (info_ != nullptr) {
+#if CUDART_VERSION >= 11020
+      cudaFreeAsync(info_, stream_);
+#else
+      cudaFree(info_);
+#endif
+    }
+    if (invalid_ != nullptr) {
+#if CUDART_VERSION >= 11020
+      cudaFreeAsync(invalid_, stream_);
+#else
+      cudaFree(invalid_);
+#endif
+    }
   }
 
   int rows_;

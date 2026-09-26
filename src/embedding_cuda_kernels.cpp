@@ -17,7 +17,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <limits>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <cuda_runtime.h>
@@ -80,6 +82,8 @@ struct KnnPrepParams {
 };
 
 thread_local std::string embedding_last_error;
+thread_local bool last_tsne_cuda_graph_capture = false;
+thread_local bool last_umap_cuda_graph_capture = false;
 
 void set_embedding_error(const std::string& message) {
   embedding_last_error = message;
@@ -108,14 +112,26 @@ class CudaWorkspace {
   CudaWorkspace(const CudaWorkspace&) = delete;
   CudaWorkspace& operator=(const CudaWorkspace&) = delete;
   ~CudaWorkspace() {
-    if (base_ != nullptr) cudaFree(base_);
+    release();
   }
 
   int init(std::size_t bytes, const char* label) {
+    release();
     capacity_ = align_bytes(bytes);
     offset_ = 0u;
     if (capacity_ == 0u) return 0;
-    return check_cuda(cudaMalloc(&base_, capacity_), std::string("cudaMalloc(workspace ") + label + ")");
+#if CUDART_VERSION >= 11020
+    if (configure_pool()) return 1;
+    return check_cuda(
+      cudaMallocAsync(&base_, capacity_, nullptr),
+      std::string("cudaMallocAsync(workspace ") + label + ")"
+    );
+#else
+    return check_cuda(
+      cudaMalloc(&base_, capacity_),
+      std::string("cudaMalloc(workspace ") + label + ")"
+    );
+#endif
   }
 
   template <typename T>
@@ -138,6 +154,48 @@ class CudaWorkspace {
   }
 
  private:
+  void release() noexcept {
+    if (base_ == nullptr) return;
+#if CUDART_VERSION >= 11020
+    cudaFreeAsync(base_, nullptr);
+#else
+    cudaFree(base_);
+#endif
+    base_ = nullptr;
+    capacity_ = 0u;
+    offset_ = 0u;
+  }
+
+#if CUDART_VERSION >= 11020
+  int configure_pool() {
+    int device = 0;
+    if (check_cuda(cudaGetDevice(&device), "cudaGetDevice(workspace)")) {
+      return 1;
+    }
+    static thread_local int configured_device = -1;
+    if (configured_device == device) return 0;
+    cudaMemPool_t pool = nullptr;
+    if (check_cuda(
+          cudaDeviceGetDefaultMemPool(&pool, device),
+          "cudaDeviceGetDefaultMemPool(workspace)"
+        )) {
+      return 1;
+    }
+    std::uint64_t threshold =
+      std::numeric_limits<std::uint64_t>::max();
+    if (check_cuda(
+          cudaMemPoolSetAttribute(
+            pool, cudaMemPoolAttrReleaseThreshold, &threshold
+          ),
+          "cudaMemPoolSetAttribute(workspace release threshold)"
+        )) {
+      return 1;
+    }
+    configured_device = device;
+    return 0;
+  }
+#endif
+
   void* base_ = nullptr;
   std::size_t capacity_ = 0u;
   std::size_t offset_ = 0u;
@@ -153,8 +211,9 @@ class CudaStreamOwner {
   }
 
   int init() {
+    if (stream_ != nullptr) return 0;
     return check_cuda(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking),
-                      "cudaStreamCreateWithFlags(openTSNE)");
+                      "cudaStreamCreateWithFlags(embedding)");
   }
 
   cudaStream_t get() const { return stream_; }
@@ -162,6 +221,11 @@ class CudaStreamOwner {
  private:
   cudaStream_t stream_ = nullptr;
 };
+
+CudaStreamOwner& cuda_execution_stream() {
+  static thread_local CudaStreamOwner stream;
+  return stream;
+}
 
 class CudaGraphExecOwner {
  public:
@@ -246,6 +310,103 @@ int check_cufft(cufftResult code, const char* where) {
   if (code == CUFFT_SUCCESS) return 0;
   set_embedding_error(std::string(where) + ": cuFFT error " + std::to_string(static_cast<int>(code)));
   return 1;
+}
+
+class CudaFftPlanCache {
+ public:
+  CudaFftPlanCache() = default;
+  CudaFftPlanCache(const CudaFftPlanCache&) = delete;
+  CudaFftPlanCache& operator=(const CudaFftPlanCache&) = delete;
+  ~CudaFftPlanCache() { reset(); }
+
+  int acquire(int fft_size, cudaStream_t stream) {
+    int device = 0;
+    if (check_cuda(cudaGetDevice(&device), "cudaGetDevice(cuFFT cache)")) {
+      return 1;
+    }
+    if (device_ == device && fft_size_ == fft_size &&
+        forward_ != 0 && inverse_ != 0) {
+      return bind_stream(stream);
+    }
+    reset();
+    device_ = device;
+    fft_size_ = fft_size;
+    int dims[2] = {fft_size, fft_size};
+    int embed[2] = {fft_size, fft_size};
+    if (check_cufft(cufftCreate(&forward_), "cufftCreate(forward cache)") ||
+        check_cufft(cufftCreate(&inverse_), "cufftCreate(inverse cache)") ||
+        check_cufft(
+          cufftSetAutoAllocation(forward_, 0),
+          "cufftSetAutoAllocation(forward cache)"
+        ) ||
+        check_cufft(
+          cufftSetAutoAllocation(inverse_, 0),
+          "cufftSetAutoAllocation(inverse cache)"
+        ) ||
+        check_cufft(
+          cufftMakePlanMany(
+            forward_, 2, dims, embed, 1, fft_size * fft_size,
+            embed, 1, fft_size * fft_size, CUFFT_C2C, 5,
+            &forward_work_bytes_
+          ),
+          "cufftMakePlanMany(forward cache)"
+        ) ||
+        check_cufft(
+          cufftMakePlanMany(
+            inverse_, 2, dims, embed, 1, fft_size * fft_size,
+            embed, 1, fft_size * fft_size, CUFFT_C2C, 4,
+            &inverse_work_bytes_
+          ),
+          "cufftMakePlanMany(inverse cache)"
+        ) ||
+        bind_stream(stream)) {
+      reset();
+      return 1;
+    }
+    return 0;
+  }
+
+  cufftHandle forward() const { return forward_; }
+  cufftHandle inverse() const { return inverse_; }
+  std::size_t work_bytes() const {
+    return align_bytes(
+      std::max(forward_work_bytes_, inverse_work_bytes_)
+    );
+  }
+
+ private:
+  int bind_stream(cudaStream_t stream) {
+    return check_cufft(
+      cufftSetStream(forward_, stream),
+      "cufftSetStream(forward cache)"
+    ) || check_cufft(
+      cufftSetStream(inverse_, stream),
+      "cufftSetStream(inverse cache)"
+    );
+  }
+
+  void reset() noexcept {
+    if (forward_ != 0) cufftDestroy(forward_);
+    if (inverse_ != 0) cufftDestroy(inverse_);
+    forward_ = 0;
+    inverse_ = 0;
+    fft_size_ = 0;
+    device_ = -1;
+    forward_work_bytes_ = 0u;
+    inverse_work_bytes_ = 0u;
+  }
+
+  int device_ = -1;
+  int fft_size_ = 0;
+  cufftHandle forward_ = 0;
+  cufftHandle inverse_ = 0;
+  std::size_t forward_work_bytes_ = 0u;
+  std::size_t inverse_work_bytes_ = 0u;
+};
+
+CudaFftPlanCache& cuda_fft_plan_cache() {
+  static thread_local CudaFftPlanCache cache;
+  return cache;
 }
 
 int check_embedding_memory_available(std::size_t required_bytes, const char* where) {
@@ -2514,15 +2675,11 @@ __global__ void opentsne_layout_stats_blocks_kernel(const float* current,
   double* max_x = min_x + blockDim.x;
   double* min_y = max_x + blockDim.x;
   double* max_y = min_y + blockDim.x;
-  double* sum_x = max_y + blockDim.x;
-  double* sum_y = sum_x + blockDim.x;
   const int tid = static_cast<int>(threadIdx.x);
   double mnx = kCudaDoubleInf;
   double mxx = -kCudaDoubleInf;
   double mny = kCudaDoubleInf;
   double mxy = -kCudaDoubleInf;
-  double sx = 0.0;
-  double sy = 0.0;
   for (int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
        i < n;
        i += static_cast<int>(gridDim.x * blockDim.x)) {
@@ -2532,15 +2689,11 @@ __global__ void opentsne_layout_stats_blocks_kernel(const float* current,
     mxx = fmax(mxx, x);
     mny = fmin(mny, y);
     mxy = fmax(mxy, y);
-    sx += x;
-    sy += y;
   }
   min_x[tid] = mnx;
   max_x[tid] = mxx;
   min_y[tid] = mny;
   max_y[tid] = mxy;
-  sum_x[tid] = sx;
-  sum_y[tid] = sy;
   __syncthreads();
   for (int stride = static_cast<int>(blockDim.x) / 2; stride > 0; stride >>= 1) {
     if (tid < stride) {
@@ -2548,56 +2701,43 @@ __global__ void opentsne_layout_stats_blocks_kernel(const float* current,
       max_x[tid] = fmax(max_x[tid], max_x[tid + stride]);
       min_y[tid] = fmin(min_y[tid], min_y[tid + stride]);
       max_y[tid] = fmax(max_y[tid], max_y[tid + stride]);
-      sum_x[tid] += sum_x[tid + stride];
-      sum_y[tid] += sum_y[tid + stride];
     }
     __syncthreads();
   }
   if (tid == 0) {
-    const std::size_t base = static_cast<std::size_t>(blockIdx.x) * 6u;
+    const std::size_t base = static_cast<std::size_t>(blockIdx.x) * 4u;
     partial[base] = min_x[0];
     partial[base + 1u] = max_x[0];
     partial[base + 2u] = min_y[0];
     partial[base + 3u] = max_y[0];
-    partial[base + 4u] = sum_x[0];
-    partial[base + 5u] = sum_y[0];
   }
 }
 
 __global__ void opentsne_finalize_layout_stats_kernel(const double* partial,
                                                       double* stats,
                                                       int n_blocks,
-                                                      int n,
                                                       int grid_size) {
   extern __shared__ double shared[];
   double* min_x = shared;
   double* max_x = min_x + blockDim.x;
   double* min_y = max_x + blockDim.x;
   double* max_y = min_y + blockDim.x;
-  double* sum_x = max_y + blockDim.x;
-  double* sum_y = sum_x + blockDim.x;
   const int tid = static_cast<int>(threadIdx.x);
   double mnx = kCudaDoubleInf;
   double mxx = -kCudaDoubleInf;
   double mny = kCudaDoubleInf;
   double mxy = -kCudaDoubleInf;
-  double sx = 0.0;
-  double sy = 0.0;
   for (int b = tid; b < n_blocks; b += static_cast<int>(blockDim.x)) {
-    const std::size_t base = static_cast<std::size_t>(b) * 6u;
+    const std::size_t base = static_cast<std::size_t>(b) * 4u;
     mnx = fmin(mnx, partial[base]);
     mxx = fmax(mxx, partial[base + 1u]);
     mny = fmin(mny, partial[base + 2u]);
     mxy = fmax(mxy, partial[base + 3u]);
-    sx += partial[base + 4u];
-    sy += partial[base + 5u];
   }
   min_x[tid] = mnx;
   max_x[tid] = mxx;
   min_y[tid] = mny;
   max_y[tid] = mxy;
-  sum_x[tid] = sx;
-  sum_y[tid] = sy;
   __syncthreads();
   for (int stride = static_cast<int>(blockDim.x) / 2; stride > 0; stride >>= 1) {
     if (tid < stride) {
@@ -2605,8 +2745,6 @@ __global__ void opentsne_finalize_layout_stats_kernel(const double* partial,
       max_x[tid] = fmax(max_x[tid], max_x[tid + stride]);
       min_y[tid] = fmin(min_y[tid], min_y[tid + stride]);
       max_y[tid] = fmax(max_y[tid], max_y[tid + stride]);
-      sum_x[tid] += sum_x[tid + stride];
-      sum_y[tid] += sum_y[tid + stride];
     }
     __syncthreads();
   }
@@ -2621,8 +2759,6 @@ __global__ void opentsne_finalize_layout_stats_kernel(const double* partial,
     stats[1] = cy - half;
     stats[2] = spacing;
     stats[3] = 1.0 / spacing;
-    stats[4] = sum_x[0] / static_cast<double>(max(n, 1));
-    stats[5] = sum_y[0] / static_cast<double>(max(n, 1));
   }
 }
 
@@ -3264,6 +3400,103 @@ __global__ void embed_epoch_coo_delta_kernel(const float* layout,
   }
 }
 
+__device__ void update_umap_row_atomic(float* layout,
+                                       const int* neighbors,
+                                       const float* weights,
+                                       EmbedParams p,
+                                       unsigned int epoch,
+                                       int width,
+                                       int head,
+                                       int lane) {
+  const float alpha = p.learning_rate *
+    (1.0f - static_cast<float>(epoch) /
+     fmaxf(1.0f, static_cast<float>(p.n_epochs)));
+  const float eps = 1.1920928955078125e-7f;
+  const std::size_t head_base = static_cast<std::size_t>(head) * 2u;
+  const float head_x = layout[head_base];
+  const float head_y = layout[head_base + 1u];
+  float head_dx = 0.0f;
+  float head_dy = 0.0f;
+
+  for (int rank = lane; rank < width; rank += 32) {
+    const std::size_t edge = static_cast<std::size_t>(head) * width +
+      rank;
+    const int tail = neighbors[edge];
+    const float weight = weights[edge];
+    if (tail < 0 || tail >= p.n || tail == head || weight <= 0.0f) {
+      continue;
+    }
+    const float period = p.max_weight / fmaxf(weight, 1.0e-6f);
+    const int positive_samples =
+      positive_samples_this_epoch_umap_schedule(period, epoch);
+    if (positive_samples <= 0) continue;
+
+    const std::size_t tail_base = static_cast<std::size_t>(tail) * 2u;
+    const float dx = head_x - layout[tail_base];
+    const float dy = head_y - layout[tail_base + 1u];
+    const float d2 = fmaxf(eps, dx * dx + dy * dy);
+    const float coeff = attractive_coeff(d2, weight, p);
+    const float gx = clip4(coeff * dx) * alpha * positive_samples;
+    const float gy = clip4(coeff * dy) * alpha * positive_samples;
+    head_dx += gx;
+    head_dy += gy;
+    atomicAdd(layout + tail_base, -gx);
+    atomicAdd(layout + tail_base + 1u, -gy);
+
+    const int negatives = negative_samples_this_epoch_umap_schedule(
+      period, p, epoch
+    );
+    for (int sample = 0; sample < negatives; ++sample) {
+      const unsigned int negative = deterministic_vertex(
+        static_cast<unsigned int>(p.n), p.seed, epoch,
+        static_cast<unsigned int>(head),
+        static_cast<unsigned int>(tail),
+        static_cast<unsigned int>(sample)
+      );
+      if (static_cast<int>(negative) == head ||
+          static_cast<int>(negative) == tail) {
+        continue;
+      }
+      const std::size_t negative_base =
+        static_cast<std::size_t>(negative) * 2u;
+      const float ndx = head_x - layout[negative_base];
+      const float ndy = head_y - layout[negative_base + 1u];
+      const float nd2 = fmaxf(eps, ndx * ndx + ndy * ndy);
+      const float repulsion = repulsive_coeff(nd2, p);
+      head_dx += clip4(repulsion * ndx) * alpha;
+      head_dy += clip4(repulsion * ndy) * alpha;
+    }
+  }
+
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    head_dx += __shfl_down_sync(0xffffffffu, head_dx, offset);
+    head_dy += __shfl_down_sync(0xffffffffu, head_dy, offset);
+  }
+  if (lane == 0) {
+    atomicAdd(layout + head_base, head_dx);
+    atomicAdd(layout + head_base + 1u, head_dy);
+  }
+}
+
+__global__ void embed_epoch_row_atomic_kernel(float* layout,
+                                              const int* neighbors,
+                                              const float* weights,
+                                              EmbedParams p,
+                                              unsigned int epoch,
+                                              int width) {
+  const int lane = static_cast<int>(threadIdx.x) & 31;
+  const int warp_in_block = static_cast<int>(threadIdx.x) >> 5;
+  const int warps_per_block = static_cast<int>(blockDim.x) >> 5;
+  const int first_row = static_cast<int>(blockIdx.x) * warps_per_block +
+    warp_in_block;
+  const int row_stride = static_cast<int>(gridDim.x) * warps_per_block;
+  for (int head = first_row; head < p.n; head += row_stride) {
+    update_umap_row_atomic(
+      layout, neighbors, weights, p, epoch, width, head, lane
+    );
+  }
+}
+
 __global__ void apply_delta_sanitize_layout_kernel(float* layout,
                                                    const float* delta,
                                                    int n,
@@ -3414,6 +3647,117 @@ int scale_tsne_pca_device_init(float* d_values,
   return check_cuda(cudaGetLastError(), "scale_tsne_pca_init_kernel launch");
 }
 
+__global__ void convert_pca_input_kernel(const double* input,
+                                         float* output,
+                                         std::size_t count) {
+  const std::size_t index = static_cast<std::size_t>(blockIdx.x) *
+    blockDim.x + threadIdx.x;
+  if (index < count) output[index] = static_cast<float>(input[index]);
+}
+
+__global__ void pca_row_major_to_column_major_kernel(
+    const float* input,
+    float* output,
+    int n,
+    int p) {
+  const std::size_t index = static_cast<std::size_t>(blockIdx.x) *
+    blockDim.x + threadIdx.x;
+  const std::size_t count = static_cast<std::size_t>(n) * p;
+  if (index >= count) return;
+  const int row = static_cast<int>(index / p);
+  const int column = static_cast<int>(index % p);
+  output[static_cast<std::size_t>(column) * n + row] = input[index];
+}
+
+__global__ void preprocess_pca_columns_kernel(float* values,
+                                              float* centers,
+                                              float* scales,
+                                              unsigned int* invalid,
+                                              int n,
+                                              int p,
+                                              int apply_center,
+                                              int apply_scale) {
+  const int column = blockIdx.x;
+  const int tid = threadIdx.x;
+  if (column >= p) return;
+  extern __shared__ float scratch[];
+  const std::size_t offset = static_cast<std::size_t>(column) * n;
+  float sum = 0.0f;
+  for (int row = tid; row < n; row += blockDim.x) {
+    float value = values[offset + row];
+    if (!isfinite(value)) {
+      atomicExch(invalid, 1u);
+      value = 0.0f;
+    }
+    sum += value;
+  }
+  scratch[tid] = sum;
+  __syncthreads();
+  for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
+    if (tid < stride) scratch[tid] += scratch[tid + stride];
+    __syncthreads();
+  }
+  if (tid == 0) {
+    const float mean = scratch[0] / static_cast<float>(n);
+    scratch[0] = apply_center != 0 ? mean : 0.0f;
+  }
+  __syncthreads();
+  const float center = scratch[0];
+  float sum_squares = 0.0f;
+  for (int row = tid; row < n; row += blockDim.x) {
+    const float centered = values[offset + row] - center;
+    sum_squares += centered * centered;
+  }
+  scratch[tid] = sum_squares;
+  __syncthreads();
+  for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
+    if (tid < stride) scratch[tid] += scratch[tid + stride];
+    __syncthreads();
+  }
+  if (tid == 0) {
+    float column_scale = 1.0f;
+    if (apply_scale != 0 && scratch[0] > 0.0f) {
+      column_scale = sqrtf(
+        scratch[0] / static_cast<float>(max(1, n - 1))
+      );
+    }
+    centers[column] = center;
+    scales[column] = isfinite(column_scale) && column_scale > 0.0f ?
+      column_scale : 1.0f;
+    scratch[0] = scales[column];
+  }
+  __syncthreads();
+  const float inverse_scale = 1.0f / scratch[0];
+  for (int row = tid; row < n; row += blockDim.x) {
+    values[offset + row] =
+      (values[offset + row] - center) * inverse_scale;
+  }
+}
+
+constexpr std::size_t kPcaUploadChunkItems = 1u << 20;
+
+std::size_t cuda_pca_workspace_bytes(int n,
+                                     int p,
+                                     int n_components,
+                                     bool input_is_double) {
+  const std::size_t input_items = static_cast<std::size_t>(n) * p;
+  const std::size_t component_items =
+    static_cast<std::size_t>(n_components) * p;
+  std::size_t bytes = align_bytes(input_items * sizeof(float));
+  bytes += align_bytes(component_items * sizeof(float));
+  bytes += 3u * align_bytes(
+    static_cast<std::size_t>(n_components) * sizeof(float)
+  );
+  bytes += 2u * align_bytes(static_cast<std::size_t>(p) * sizeof(float));
+  bytes += align_bytes(sizeof(unsigned int));
+  if (input_is_double) {
+    const std::size_t upload_items =
+      std::min(input_items, kPcaUploadChunkItems);
+    bytes += align_bytes(upload_items * sizeof(double));
+  }
+  return bytes;
+}
+
 int select_cuda_pca_decomposition(int requested_method,
                                   int n,
                                   int p,
@@ -3456,8 +3800,10 @@ int cuda_pca_scores_to_device(const HostT* values,
                               unsigned int seed = 4u,
                               int requested_oversample = 16,
                               int requested_power = 2,
-                              int* selected_method_out = nullptr) {
-  if (values == nullptr || d_scores_out == nullptr) {
+                              int* selected_method_out = nullptr,
+                              const float* device_row_major = nullptr) {
+  if ((values == nullptr && device_row_major == nullptr) ||
+      d_scores_out == nullptr) {
     set_embedding_error("null pointer in CUDA device PCA initialization");
     return 1;
   }
@@ -3467,54 +3813,24 @@ int cuda_pca_scores_to_device(const HostT* values,
   }
 
   const std::size_t input_items = static_cast<std::size_t>(n) * p;
-  const std::size_t component_items = static_cast<std::size_t>(n_components) * p;
-
-  std::vector<float> centers(p, 0.0f);
-  std::vector<float> scales(p, 1.0f);
-  for (int j = 0; j < p; ++j) {
-    const std::size_t col = static_cast<std::size_t>(j) * n;
-    double sum = 0.0;
-    for (int i = 0; i < n; ++i) {
-      const double value = static_cast<double>(values[col + i]);
-      if (!std::isfinite(value)) {
-        set_embedding_error("PCA input must contain only finite values");
-        return 1;
-      }
-      sum += value;
-    }
-    const double mean = center_input ? sum / static_cast<double>(n) : 0.0;
-    centers[j] = static_cast<float>(mean);
-    if (scale_input) {
-      double sum_squares = 0.0;
-      for (int i = 0; i < n; ++i) {
-        const double centered = static_cast<double>(values[col + i]) - mean;
-        sum_squares += centered * centered;
-      }
-      const double denominator = static_cast<double>(std::max(1, n - 1));
-      const double scale = std::sqrt(sum_squares / denominator);
-      scales[j] = (!std::isfinite(scale) || scale == 0.0) ?
-        1.0f : static_cast<float>(scale);
-    }
-    if (host_center_out != nullptr) host_center_out[j] = centers[j];
-    if (host_scale_out != nullptr) host_scale_out[j] = scales[j];
-  }
-
-  std::vector<float> h_input(input_items);
-  for (int j = 0; j < p; ++j) {
-    const std::size_t col = static_cast<std::size_t>(j) * n;
-    const float mean = centers[j];
-    const float inverse_scale = 1.0f / scales[j];
-    for (int i = 0; i < n; ++i) {
-      h_input[col + i] =
-        (static_cast<float>(values[col + i]) - mean) * inverse_scale;
-    }
-  }
+  const std::size_t component_items =
+    static_cast<std::size_t>(n_components) * p;
+  const bool input_is_double = std::is_same<HostT, double>::value;
+  static_assert(
+    std::is_same<HostT, float>::value ||
+      std::is_same<HostT, double>::value,
+    "CUDA PCA input must be float or double"
+  );
 
   float* d_input = nullptr;
   float* d_components = nullptr;
   float* d_explained = nullptr;
   float* d_explained_ratio = nullptr;
   float* d_singular = nullptr;
+  float* d_centers = nullptr;
+  float* d_scales = nullptr;
+  unsigned int* d_invalid = nullptr;
+  double* d_upload = nullptr;
   const bool use_workspace = workspace != nullptr;
   auto cleanup = [&]() {
     if (!use_workspace) {
@@ -3523,13 +3839,17 @@ int cuda_pca_scores_to_device(const HostT* values,
       if (d_explained != nullptr) cudaFree(d_explained);
       if (d_explained_ratio != nullptr) cudaFree(d_explained_ratio);
       if (d_singular != nullptr) cudaFree(d_singular);
+      if (d_centers != nullptr) cudaFree(d_centers);
+      if (d_scales != nullptr) cudaFree(d_scales);
+      if (d_invalid != nullptr) cudaFree(d_invalid);
+      if (d_upload != nullptr) cudaFree(d_upload);
     }
   };
 
   try {
-    const std::size_t required_bytes =
-      (input_items + component_items +
-       static_cast<std::size_t>(3 * n_components)) * sizeof(float);
+    const std::size_t required_bytes = cuda_pca_workspace_bytes(
+      n, p, n_components, input_is_double
+    );
     if (!use_workspace &&
         check_embedding_memory_available(
           required_bytes, "CUDA device PCA initialization allocation preflight"
@@ -3551,8 +3871,22 @@ int cuda_pca_scores_to_device(const HostT* values,
       d_singular = workspace->alloc<float>(
         n_components, "cuda pca singular"
       );
-      if (d_input == nullptr || d_components == nullptr || d_explained == nullptr ||
-          d_explained_ratio == nullptr || d_singular == nullptr) {
+      d_centers = workspace->alloc<float>(p, "cuda pca centers");
+      d_scales = workspace->alloc<float>(p, "cuda pca scales");
+      d_invalid = workspace->alloc<unsigned int>(
+        1u, "cuda pca invalid flag"
+      );
+      if (input_is_double) {
+        d_upload = workspace->alloc<double>(
+          std::min(input_items, kPcaUploadChunkItems),
+          "cuda pca double upload"
+        );
+      }
+      if (d_input == nullptr || d_components == nullptr ||
+          d_explained == nullptr || d_explained_ratio == nullptr ||
+          d_singular == nullptr || d_centers == nullptr ||
+          d_scales == nullptr || d_invalid == nullptr ||
+          (input_is_double && d_upload == nullptr)) {
         cleanup();
         return 1;
       }
@@ -3591,19 +3925,155 @@ int cuda_pca_scores_to_device(const HostT* values,
               n_components * sizeof(float)
             ),
             "cudaMalloc(cuda pca singular)"
+          ) ||
+          check_cuda(
+            cudaMalloc(
+              reinterpret_cast<void**>(&d_centers),
+              static_cast<std::size_t>(p) * sizeof(float)
+            ),
+            "cudaMalloc(cuda pca centers)"
+          ) ||
+          check_cuda(
+            cudaMalloc(
+              reinterpret_cast<void**>(&d_scales),
+              static_cast<std::size_t>(p) * sizeof(float)
+            ),
+            "cudaMalloc(cuda pca scales)"
+          ) ||
+          check_cuda(
+            cudaMalloc(
+              reinterpret_cast<void**>(&d_invalid),
+              sizeof(unsigned int)
+            ),
+            "cudaMalloc(cuda pca invalid flag)"
+          )) {
+        cleanup();
+        return 1;
+      }
+      if (input_is_double && check_cuda(
+            cudaMalloc(
+              reinterpret_cast<void**>(&d_upload),
+              std::min(input_items, kPcaUploadChunkItems) * sizeof(double)
+            ),
+            "cudaMalloc(cuda pca double upload)"
           )) {
         cleanup();
         return 1;
       }
     }
+
+    if (device_row_major != nullptr) {
+      const int threads = 256;
+      const int blocks = static_cast<int>(
+        (input_items + threads - 1u) / threads
+      );
+      pca_row_major_to_column_major_kernel<<<blocks, threads>>>(
+        device_row_major, d_input, n, p
+      );
+      if (check_cuda(
+            cudaGetLastError(),
+            "pca_row_major_to_column_major_kernel launch"
+          )) {
+        cleanup();
+        return 1;
+      }
+    } else if constexpr (std::is_same<HostT, float>::value) {
+      if (check_cuda(
+            cudaMemcpy(
+              d_input, values, input_items * sizeof(float),
+              cudaMemcpyHostToDevice
+            ),
+            "cudaMemcpy(cuda pca float input H2D)"
+          )) {
+        cleanup();
+        return 1;
+      }
+    } else {
+      const int threads = 256;
+      for (std::size_t offset = 0u; offset < input_items;
+           offset += kPcaUploadChunkItems) {
+        const std::size_t count = std::min(
+          input_items - offset, kPcaUploadChunkItems
+        );
+        if (check_cuda(
+              cudaMemcpy(
+                d_upload, values + offset, count * sizeof(double),
+                cudaMemcpyHostToDevice
+              ),
+              "cudaMemcpy(cuda pca double input H2D)"
+            )) {
+          cleanup();
+          return 1;
+        }
+        const int blocks = static_cast<int>(
+          (count + threads - 1u) / threads
+        );
+        convert_pca_input_kernel<<<blocks, threads>>>(
+          d_upload, d_input + offset, count
+        );
+        if (check_cuda(
+              cudaGetLastError(), "convert_pca_input_kernel launch"
+            )) {
+          cleanup();
+          return 1;
+        }
+      }
+    }
+
+    if (check_cuda(
+          cudaMemset(d_invalid, 0, sizeof(unsigned int)),
+          "cudaMemset(cuda pca invalid flag)"
+        )) {
+      cleanup();
+      return 1;
+    }
+    const int preprocess_threads = 256;
+    preprocess_pca_columns_kernel<<<
+      p, preprocess_threads, preprocess_threads * sizeof(float)
+    >>>(
+      d_input, d_centers, d_scales, d_invalid, n, p,
+      center_input ? 1 : 0, scale_input ? 1 : 0
+    );
+    if (check_cuda(
+          cudaGetLastError(), "preprocess_pca_columns_kernel launch"
+        )) {
+      cleanup();
+      return 1;
+    }
+    unsigned int invalid = 0u;
     if (check_cuda(
           cudaMemcpy(
-            d_input,
-            h_input.data(),
-            input_items * sizeof(float),
-            cudaMemcpyHostToDevice
+            &invalid, d_invalid, sizeof(unsigned int),
+            cudaMemcpyDeviceToHost
           ),
-          "cudaMemcpy(cuda pca input H2D)"
+          "cudaMemcpy(cuda pca invalid flag D2H)"
+        )) {
+      cleanup();
+      return 1;
+    }
+    if (invalid != 0u) {
+      cleanup();
+      set_embedding_error("PCA input must contain only finite values");
+      return 1;
+    }
+    if (host_center_out != nullptr && check_cuda(
+          cudaMemcpy(
+            host_center_out, d_centers,
+            static_cast<std::size_t>(p) * sizeof(float),
+            cudaMemcpyDeviceToHost
+          ),
+          "cudaMemcpy(cuda pca centers D2H)"
+        )) {
+      cleanup();
+      return 1;
+    }
+    if (host_scale_out != nullptr && check_cuda(
+          cudaMemcpy(
+            host_scale_out, d_scales,
+            static_cast<std::size_t>(p) * sizeof(float),
+            cudaMemcpyDeviceToHost
+          ),
+          "cudaMemcpy(cuda pca scales D2H)"
         )) {
       cleanup();
       return 1;
@@ -3662,7 +4132,7 @@ int cuda_pca_scores_to_device(const HostT* values,
       }
     } else {
 #ifdef FASTEMBEDR_HAS_RAFT
-      raft::handle_t handle;
+      static thread_local raft::handle_t handle;
       auto input_view = raft::make_device_matrix_view<
         float, std::size_t, raft::col_major
       >(d_input, static_cast<std::size_t>(n), static_cast<std::size_t>(p));
@@ -4130,6 +4600,22 @@ extern "C" const char* fastembedr_cuda_embedding_last_error() {
   return embedding_last_error.c_str();
 }
 
+extern "C" const char* fastembedr_cuda_workspace_allocator() {
+#if CUDART_VERSION >= 11020
+  return "cuda_async_default_mempool";
+#else
+  return "cuda_legacy_workspace";
+#endif
+}
+
+extern "C" int fastembedr_cuda_last_tsne_graph_capture() {
+  return last_tsne_cuda_graph_capture ? 1 : 0;
+}
+
+extern "C" int fastembedr_cuda_last_umap_graph_capture() {
+  return last_umap_cuda_graph_capture ? 1 : 0;
+}
+
 extern "C" bool fastembedr_cuda_available() {
   int count = 0;
   cudaError_t code = cudaGetDeviceCount(&count);
@@ -4277,22 +4763,23 @@ extern "C" int fastembedr_cuda_finalize_cuvs_query_knn(
   return 0;
 }
 
-extern "C" int fastembedr_cuda_pca_fit(const float* values,
-                                        int n,
-                                        int p,
-                                        int n_components,
-                                        int center,
-                                        int scale,
-                                        float* scores,
-                                        float* components,
-                                        float* singular_values,
-                                        float* center_values,
-                                        float* scale_values,
-                                        int requested_method,
-                                        unsigned int seed,
-                                        int oversample,
-                                        int power,
-                                        int* selected_method) {
+template <typename HostT>
+int fastembedr_cuda_pca_fit_impl(const HostT* values,
+                                 int n,
+                                 int p,
+                                 int n_components,
+                                 int center,
+                                 int scale,
+                                 float* scores,
+                                 float* components,
+                                 float* singular_values,
+                                 float* center_values,
+                                 float* scale_values,
+                                 int requested_method,
+                                 unsigned int seed,
+                                 int oversample,
+                                 int power,
+                                 int* selected_method) {
   embedding_last_error.clear();
   if (values == nullptr || scores == nullptr || components == nullptr ||
       singular_values == nullptr || center_values == nullptr ||
@@ -4307,13 +4794,12 @@ extern "C" int fastembedr_cuda_pca_fit(const float* values,
   }
 
   const std::size_t score_items = static_cast<std::size_t>(n) * n_components;
-  const std::size_t component_items =
-    static_cast<std::size_t>(n_components) * p;
-  const std::size_t input_items = static_cast<std::size_t>(n) * p;
-  const std::size_t workspace_bytes =
-    (score_items + input_items + component_items +
-     static_cast<std::size_t>(3 * n_components)) * sizeof(float) +
-    32u * 256u;
+  const bool input_is_double = std::is_same<HostT, double>::value;
+  const std::size_t workspace_bytes = align_bytes(
+    score_items * sizeof(float)
+  ) + cuda_pca_workspace_bytes(
+    n, p, n_components, input_is_double
+  );
   CudaWorkspace workspace;
   try {
     if (check_embedding_memory_available(
@@ -4325,7 +4811,7 @@ extern "C" int fastembedr_cuda_pca_fit(const float* values,
     if (workspace.init(workspace_bytes, "cuda pca fit")) return 1;
     float* d_scores = workspace.alloc<float>(score_items, "cuda pca scores");
     if (d_scores == nullptr) return 1;
-    if (cuda_pca_scores_to_device<float>(
+    if (cuda_pca_scores_to_device<HostT>(
           values,
           n,
           p,
@@ -4362,6 +4848,53 @@ extern "C" int fastembedr_cuda_pca_fit(const float* values,
     set_embedding_error("CUDA PCA fit failed with an unknown error.");
     return 1;
   }
+}
+
+extern "C" int fastembedr_cuda_pca_fit(const float* values,
+                                        int n,
+                                        int p,
+                                        int n_components,
+                                        int center,
+                                        int scale,
+                                        float* scores,
+                                        float* components,
+                                        float* singular_values,
+                                        float* center_values,
+                                        float* scale_values,
+                                        int requested_method,
+                                        unsigned int seed,
+                                        int oversample,
+                                        int power,
+                                        int* selected_method) {
+  return fastembedr_cuda_pca_fit_impl(
+    values, n, p, n_components, center, scale, scores, components,
+    singular_values, center_values, scale_values, requested_method,
+    seed, oversample, power, selected_method
+  );
+}
+
+extern "C" int fastembedr_cuda_pca_fit_double(
+    const double* values,
+    int n,
+    int p,
+    int n_components,
+    int center,
+    int scale,
+    float* scores,
+    float* components,
+    float* singular_values,
+    float* center_values,
+    float* scale_values,
+    int requested_method,
+    unsigned int seed,
+    int oversample,
+    int power,
+    int* selected_method) {
+  return fastembedr_cuda_pca_fit_impl(
+    values, n, p, n_components, center, scale, scores, components,
+    singular_values, center_values, scale_values, requested_method,
+    seed, oversample, power, selected_method
+  );
 }
 
 extern "C" int fastembedr_cuda_standardize_matrix(const double* values,
@@ -5376,11 +5909,13 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
                                                        bool binary_graph,
                                                        float* out) {
   embedding_last_error.clear();
+  last_umap_cuda_graph_capture = false;
   if (d_indices_src == nullptr || d_distances_src == nullptr || out == nullptr) {
     set_embedding_error("null device pointer");
     return 1;
   }
-  if (n < 2 || k < 1 || k > 256 || n_epochs < 1 || negative_sample_rate < 0 ||
+  if (n < 2 || k < 1 || k > 256 || n_epochs < 1 ||
+      negative_sample_rate < 0 || optimizer_mode < 0 || optimizer_mode > 1 ||
       learning_rate <= 0.0f || spectral_n_iter < 1) {
     set_embedding_error("invalid fused CUDA UMAP dimensions or parameters");
     return 1;
@@ -5388,18 +5923,19 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
 
   const int objective = 0;
   const int width = std::min(256, std::max(k, 2 * k));
+  const bool row_optimizer = optimizer_mode == 0;
   const std::size_t graph_items = static_cast<std::size_t>(n) * width;
-  const std::size_t cub_select_temp_bytes =
+  const std::size_t cub_select_temp_bytes = row_optimizer ? 0u :
     cub_select_flagged_temp_bytes(static_cast<int>(graph_items));
   const std::size_t embed_bytes = static_cast<std::size_t>(n) * 2u * sizeof(float);
   const int threads = 256;
   const int blocks = (n + threads - 1) / threads;
   const int stat_blocks = std::max(1, std::min(1024, blocks));
+  const std::size_t coo_bytes = row_optimizer ? 0u :
+    graph_items * (3u * sizeof(int) + 2u * sizeof(float) +
+      sizeof(unsigned char)) + sizeof(int) + cub_select_temp_bytes;
   const std::size_t required_bytes =
-    graph_items * (3u * sizeof(int) + 5u * sizeof(float)) +
-    graph_items * (sizeof(unsigned char) + sizeof(int)) +
-    sizeof(int) +
-    cub_select_temp_bytes +
+    graph_items * 2u * (sizeof(int) + sizeof(float)) + coo_bytes +
     (optimizer_mode == 1 ? 3u : 2u) * embed_bytes +
     static_cast<std::size_t>(n) * sizeof(int) +
     static_cast<std::size_t>(stat_blocks) * 5u * sizeof(double) +
@@ -5433,13 +5969,25 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
   d_neighbors = workspace.alloc<int>(graph_items, "fused umap neighbors");
   d_weights = workspace.alloc<float>(graph_items, "fused umap weights");
   d_counts = workspace.alloc<int>(static_cast<std::size_t>(n), "fused umap row counts");
-  d_valid_flags = workspace.alloc<unsigned char>(graph_items, "fused umap valid flags");
-  d_selected_ids = workspace.alloc<int>(graph_items, "fused umap selected ids");
-  d_selected_count = workspace.alloc<int>(1u, "fused umap selected count");
-  d_coo_heads = workspace.alloc<int>(graph_items, "fused umap coo heads");
-  d_coo_tails = workspace.alloc<int>(graph_items, "fused umap coo tails");
-  d_coo_weights = workspace.alloc<float>(graph_items, "fused umap coo weights");
-  d_coo_epochs_per_sample = workspace.alloc<float>(graph_items, "fused umap coo epochs_per_sample");
+  if (!row_optimizer) {
+    d_valid_flags = workspace.alloc<unsigned char>(
+      graph_items, "fused umap valid flags"
+    );
+    d_selected_ids = workspace.alloc<int>(
+      graph_items, "fused umap selected ids"
+    );
+    d_selected_count = workspace.alloc<int>(
+      1u, "fused umap selected count"
+    );
+    d_coo_heads = workspace.alloc<int>(graph_items, "fused umap coo heads");
+    d_coo_tails = workspace.alloc<int>(graph_items, "fused umap coo tails");
+    d_coo_weights = workspace.alloc<float>(
+      graph_items, "fused umap coo weights"
+    );
+    d_coo_epochs_per_sample = workspace.alloc<float>(
+      graph_items, "fused umap coo epochs_per_sample"
+    );
+  }
   d_current = workspace.alloc<float>(static_cast<std::size_t>(n) * 2u, "fused umap current");
   d_next = workspace.alloc<float>(static_cast<std::size_t>(n) * 2u, "fused umap next");
   d_delta = optimizer_mode == 1 ?
@@ -5447,11 +5995,13 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
     nullptr;
   d_partial = workspace.alloc<double>(static_cast<std::size_t>(stat_blocks) * 5u, "fused umap partial");
   d_stats = workspace.alloc<double>(5u, "fused umap stats");
+  const bool missing_coo = !row_optimizer &&
+    (d_valid_flags == nullptr || d_selected_ids == nullptr ||
+     d_selected_count == nullptr || d_coo_heads == nullptr ||
+     d_coo_tails == nullptr || d_coo_weights == nullptr ||
+     d_coo_epochs_per_sample == nullptr);
   if (d_neighbors == nullptr || d_weights == nullptr || d_counts == nullptr ||
-      d_valid_flags == nullptr || d_selected_ids == nullptr ||
-      d_selected_count == nullptr || d_coo_heads == nullptr ||
-      d_coo_tails == nullptr || d_coo_weights == nullptr ||
-      d_coo_epochs_per_sample == nullptr || d_current == nullptr ||
+      missing_coo || d_current == nullptr ||
       d_next == nullptr || (optimizer_mode == 1 && d_delta == nullptr) ||
       d_partial == nullptr || d_stats == nullptr) {
     cleanup();
@@ -5495,95 +6045,196 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
     std::swap(d_current, d_next);
   }
 
-  const int graph_blocks = (static_cast<int>(graph_items) + threads - 1) / threads;
-  mark_valid_graph_entries_rank_major_kernel<<<graph_blocks, threads>>>(
-    d_neighbors, d_weights, d_valid_flags, n, width
-  );
-  if (check_cuda(cudaGetLastError(), "mark_valid_graph_entries_rank_major_kernel(fused umap) launch")) {
-    cleanup();
-    return 1;
-  }
-  if (cub_select_valid_ids_rank_major(
-        d_valid_flags, d_selected_ids, d_selected_count,
-        static_cast<int>(graph_items), workspace, cub_select_temp_bytes,
-        "fused umap selected edge ids")) {
-    cleanup();
-    return 1;
-  }
   int edge_items = 0;
-  if (check_cuda(cudaMemcpy(&edge_items, d_selected_count, sizeof(int), cudaMemcpyDeviceToHost),
-                 "cudaMemcpy(fused umap edge count D2H)")) {
-    cleanup();
-    return 1;
-  }
-  if (edge_items < 1 || static_cast<std::size_t>(edge_items) > graph_items) {
-    set_embedding_error("invalid fused CUDA UMAP graph edge count");
-    cleanup();
-    return 1;
-  }
-
   const float graph_max_weight = 1.0f;
   const EmbedParams params{
     n, width, n_epochs, negative_sample_rate, objective, seed, learning_rate, a, b, graph_max_weight, repulsion_strength
   };
-  const int edge_blocks =
-    (edge_items + threads - 1) / threads;
-  pack_coo_graph_from_selected_rank_major_kernel<<<edge_blocks, threads>>>(
-    d_selected_ids, d_neighbors, d_weights, d_coo_heads, d_coo_tails, d_coo_weights,
-    d_coo_epochs_per_sample, graph_max_weight, edge_items, n, width
-  );
-  if (check_cuda(cudaGetLastError(), "pack_coo_graph_from_selected_rank_major_kernel(fused umap) launch")) {
+  int edge_blocks = 0;
+  if (!row_optimizer) {
+    const int graph_blocks =
+      (static_cast<int>(graph_items) + threads - 1) / threads;
+    mark_valid_graph_entries_rank_major_kernel<<<graph_blocks, threads>>>(
+      d_neighbors, d_weights, d_valid_flags, n, width
+    );
+    if (check_cuda(
+          cudaGetLastError(),
+          "mark_valid_graph_entries_rank_major_kernel(fused umap) launch"
+        )) {
+      cleanup();
+      return 1;
+    }
+    if (cub_select_valid_ids_rank_major(
+          d_valid_flags, d_selected_ids, d_selected_count,
+          static_cast<int>(graph_items), workspace, cub_select_temp_bytes,
+          "fused umap selected edge ids")) {
+      cleanup();
+      return 1;
+    }
+    if (check_cuda(
+          cudaMemcpy(
+            &edge_items, d_selected_count, sizeof(int),
+            cudaMemcpyDeviceToHost
+          ),
+          "cudaMemcpy(fused umap edge count D2H)"
+        )) {
+      cleanup();
+      return 1;
+    }
+    if (edge_items < 1 ||
+        static_cast<std::size_t>(edge_items) > graph_items) {
+      set_embedding_error("invalid fused CUDA UMAP graph edge count");
+      cleanup();
+      return 1;
+    }
+    edge_blocks = (edge_items + threads - 1) / threads;
+    pack_coo_graph_from_selected_rank_major_kernel<<<
+      edge_blocks, threads
+    >>>(
+      d_selected_ids, d_neighbors, d_weights, d_coo_heads, d_coo_tails,
+      d_coo_weights, d_coo_epochs_per_sample, graph_max_weight,
+      edge_items, n, width
+    );
+    if (check_cuda(
+          cudaGetLastError(),
+          "pack_coo_graph_from_selected_rank_major_kernel(fused umap) launch"
+        )) {
+      cleanup();
+      return 1;
+    }
+  }
+
+  const float max_abs_coord = 16.0f;
+  CudaStreamOwner& execution_stream = cuda_execution_stream();
+  if (execution_stream.init()) {
     cleanup();
     return 1;
   }
-  d_neighbors = nullptr;
-  d_weights = nullptr;
-  d_counts = nullptr;
-  d_valid_flags = nullptr;
-  d_selected_ids = nullptr;
-  d_selected_count = nullptr;
-
-  const float max_abs_coord = 16.0f;
-  for (int epoch = 0; epoch < n_epochs; ++epoch) {
+  cudaStream_t stream = execution_stream.get();
+  const int warps_per_block = threads / 32;
+  const int row_blocks = std::max(
+    1, std::min(4096, (n + warps_per_block - 1) / warps_per_block)
+  );
+  if (check_cuda(
+        cudaDeviceSynchronize(),
+        "cudaDeviceSynchronize(umap setup before graph capture)"
+      )) {
+    cleanup();
+    return 1;
+  }
+  auto encode_epoch = [&](int epoch, bool check_launches) -> int {
     if (optimizer_mode == 1) {
-      if (check_cuda(cudaMemset(d_delta, 0, embed_bytes), "cudaMemset(fused umap delta)")) {
-        cleanup();
+      if (check_cuda(
+            cudaMemsetAsync(d_delta, 0, embed_bytes, stream),
+            "cudaMemsetAsync(fused umap delta)"
+          )) {
         return 1;
       }
-      embed_epoch_coo_delta_kernel<<<edge_blocks, threads>>>(
+      embed_epoch_coo_delta_kernel<<<
+        edge_blocks, threads, 0, stream
+      >>>(
         d_current, d_delta, d_coo_heads, d_coo_tails, d_coo_weights,
         d_coo_epochs_per_sample, params, static_cast<unsigned int>(epoch),
         edge_items
       );
-      if (check_cuda(cudaGetLastError(), "embed_epoch_coo_delta_kernel(fused umap) launch")) {
-        cleanup();
+      if (check_launches && check_cuda(
+            cudaGetLastError(),
+            "embed_epoch_coo_delta_kernel(fused umap) launch"
+          )) {
         return 1;
       }
-      apply_delta_sanitize_layout_kernel<<<blocks, threads>>>(d_current, d_delta, n, max_abs_coord);
-      if (check_cuda(cudaGetLastError(), "apply_delta_sanitize_layout_kernel(fused umap) launch")) {
-        cleanup();
+      apply_delta_sanitize_layout_kernel<<<
+        blocks, threads, 0, stream
+      >>>(d_current, d_delta, n, max_abs_coord);
+      if (check_launches && check_cuda(
+            cudaGetLastError(),
+            "apply_delta_sanitize_layout_kernel(fused umap) launch"
+          )) {
         return 1;
       }
     } else {
-      embed_epoch_coo_atomic_kernel<<<edge_blocks, threads>>>(
-        d_current, d_coo_heads, d_coo_tails, d_coo_weights,
-        d_coo_epochs_per_sample, params, static_cast<unsigned int>(epoch),
-        edge_items
+      embed_epoch_row_atomic_kernel<<<
+        row_blocks, threads, 0, stream
+      >>>(
+        d_current, d_neighbors, d_weights, params,
+        static_cast<unsigned int>(epoch), width
       );
-      if (check_cuda(cudaGetLastError(), "embed_epoch_coo_atomic_kernel(fused umap) launch")) {
-        cleanup();
+      if (check_launches && check_cuda(
+            cudaGetLastError(),
+            "embed_epoch_row_atomic_kernel(fused umap) launch"
+          )) {
         return 1;
       }
-      umap_sanitize_layout_kernel<<<blocks, threads>>>(d_current, n, max_abs_coord);
-      if (check_cuda(cudaGetLastError(), "umap_sanitize_layout_kernel(fused umap) launch")) {
+      umap_sanitize_layout_kernel<<<blocks, threads, 0, stream>>>(
+        d_current, n, max_abs_coord
+      );
+      if (check_launches && check_cuda(
+            cudaGetLastError(),
+            "umap_sanitize_layout_kernel(row umap) launch"
+          )) {
+        return 1;
+      }
+    }
+    return 0;
+  };
+
+  bool used_graph_capture = false;
+  CudaGraphExecOwner epoch_graph;
+  if (cuda_graph_capture_enabled() && n_epochs > 1) {
+    cudaGraph_t graph = nullptr;
+    cudaError_t code = cudaStreamBeginCapture(
+      stream, cudaStreamCaptureModeGlobal
+    );
+    bool capture_ok = code == cudaSuccess;
+    if (capture_ok) {
+      for (int epoch = 0; epoch < n_epochs; ++epoch) {
+        if (encode_epoch(epoch, false)) {
+          capture_ok = false;
+          break;
+        }
+      }
+      code = cudaStreamEndCapture(stream, &graph);
+      capture_ok = capture_ok && code == cudaSuccess && graph != nullptr;
+    }
+    if (capture_ok) {
+      const int instantiate_status = epoch_graph.instantiate(graph);
+      graph = nullptr;
+      if (instantiate_status == 0) {
+        if (check_cuda(
+              cudaGraphLaunch(epoch_graph.get(), stream),
+              "cudaGraphLaunch(umap epochs)"
+            )) {
+          cleanup();
+          return 1;
+        }
+        used_graph_capture = true;
+      }
+    }
+    if (!used_graph_capture) {
+      if (graph != nullptr) cudaGraphDestroy(graph);
+      cudaGetLastError();
+    }
+  }
+
+  if (!used_graph_capture) {
+    for (int epoch = 0; epoch < n_epochs; ++epoch) {
+      if (encode_epoch(epoch, true)) {
         cleanup();
         return 1;
       }
     }
   }
+  last_umap_cuda_graph_capture = used_graph_capture;
 
-  if (check_cuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize(fused umap)") ||
-      check_cuda(cudaMemcpy(out, d_current, embed_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy(fused umap D2H)")) {
+  if (check_cuda(
+        cudaStreamSynchronize(stream),
+        "cudaStreamSynchronize(fused umap)"
+      ) || check_cuda(
+        cudaMemcpy(
+          out, d_current, embed_bytes, cudaMemcpyDeviceToHost
+        ),
+        "cudaMemcpy(fused umap D2H)"
+      )) {
     cleanup();
     return 1;
   }
@@ -5869,6 +6520,7 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
                                                        int has_init,
                                                        const double* pca_init_double,
                                                        const float* pca_init_float,
+                                                       const float* pca_init_device_row_major,
                                                        int pca_init_p,
                                                        int n,
                                                        int k,
@@ -5889,13 +6541,16 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
                                                        float* out,
                                                        cudaMemcpyKind input_copy_kind) {
   embedding_last_error.clear();
+  last_tsne_cuda_graph_capture = false;
   if (indices == nullptr || distances == nullptr || out == nullptr ||
       (has_init && init == nullptr)) {
     set_embedding_error("null CUDA openTSNE input pointer");
     return 1;
   }
   if (n < 2 || k < 1 || k > 256 || n_components != 2 ||
-      ((!has_init && (pca_init_double != nullptr || pca_init_float != nullptr)) &&
+      ((!has_init && (pca_init_double != nullptr ||
+                      pca_init_float != nullptr ||
+                      pca_init_device_row_major != nullptr)) &&
        pca_init_p < n_components) ||
       perplexity <= 0.0f || early_exaggeration_iter < 0 || n_iter < 0 ||
       early_exaggeration_iter + n_iter < 1 ||
@@ -5918,7 +6573,7 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
   const int fft_blocks = (fft_total + threads - 1) / threads;
   const int layout_stat_blocks = std::min(1024, std::max(1, point_blocks));
   const std::size_t partial_items = static_cast<std::size_t>(
-    std::max(layout_stat_blocks * 6, std::max(point_blocks * 2, point_blocks))
+    std::max(layout_stat_blocks * 4, std::max(point_blocks * 2, point_blocks))
   );
   const std::size_t complex_items = static_cast<std::size_t>(fft_total);
   const std::size_t required_bytes =
@@ -5927,7 +6582,7 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
     static_cast<std::size_t>(n) * sizeof(float2) +
     complex_items * 9u * sizeof(cufftComplex) +
     partial_items * sizeof(double) +
-    6u * sizeof(double);
+    4u * sizeof(double);
 
   const int* d_indices = nullptr;
   const DistanceT* d_distances = nullptr;
@@ -5954,68 +6609,28 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
   void* d_cufft_work = nullptr;
 
   const bool input_on_device = input_copy_kind == cudaMemcpyDeviceToDevice;
-  auto cleanup = [&]() {
-    if (plan_forward != 0) cufftDestroy(plan_forward);
-    if (plan_inverse != 0) cufftDestroy(plan_inverse);
-  };
-
-  int fft_dims[2] = {fft_size, fft_size};
-  int fft_embed[2] = {fft_size, fft_size};
-  std::size_t fft_forward_work_bytes = 0u;
-  std::size_t fft_inverse_work_bytes = 0u;
-  if (check_cufft(cufftCreate(&plan_forward), "cufftCreate(opentsne forward)") ||
-      check_cufft(cufftCreate(&plan_inverse), "cufftCreate(opentsne inverse)") ||
-      check_cufft(cufftSetAutoAllocation(plan_forward, 0), "cufftSetAutoAllocation(opentsne forward)") ||
-      check_cufft(cufftSetAutoAllocation(plan_inverse, 0), "cufftSetAutoAllocation(opentsne inverse)") ||
-      check_cufft(
-        cufftMakePlanMany(
-          plan_forward,
-          2,
-          fft_dims,
-          fft_embed,
-          1,
-          fft_total,
-          fft_embed,
-          1,
-          fft_total,
-          CUFFT_C2C,
-          5,
-          &fft_forward_work_bytes
-        ),
-        "cufftMakePlanMany(opentsne forward batch)"
-      ) ||
-      check_cufft(
-        cufftMakePlanMany(
-          plan_inverse,
-          2,
-          fft_dims,
-          fft_embed,
-          1,
-          fft_total,
-          fft_embed,
-          1,
-          fft_total,
-          CUFFT_C2C,
-          4,
-          &fft_inverse_work_bytes
-        ),
-        "cufftMakePlanMany(opentsne inverse batch)"
-      )) {
-    cleanup();
+  auto cleanup = []() {};
+  CudaStreamOwner& execution_stream = cuda_execution_stream();
+  if (execution_stream.init()) return 1;
+  cudaStream_t stream = execution_stream.get();
+  CudaFftPlanCache& fft_cache = cuda_fft_plan_cache();
+  if (fft_cache.acquire(fft_size, stream)) {
     return 1;
   }
-  const std::size_t cufft_work_bytes =
-    align_bytes(std::max(fft_forward_work_bytes, fft_inverse_work_bytes));
+  plan_forward = fft_cache.forward();
+  plan_inverse = fft_cache.inverse();
+  const std::size_t cufft_work_bytes = fft_cache.work_bytes();
 
   const bool use_device_pca_init =
-    !has_init && (pca_init_double != nullptr || pca_init_float != nullptr);
+    !has_init && (pca_init_double != nullptr || pca_init_float != nullptr ||
+                  pca_init_device_row_major != nullptr);
   const std::size_t pca_score_bytes = use_device_pca_init ?
     static_cast<std::size_t>(n) * static_cast<std::size_t>(n_components) * sizeof(float) :
     0u;
   const std::size_t pca_tsvd_workspace_bytes = use_device_pca_init ?
-    (static_cast<std::size_t>(n) * static_cast<std::size_t>(pca_init_p) +
-     static_cast<std::size_t>(n_components) * static_cast<std::size_t>(pca_init_p) +
-     static_cast<std::size_t>(3 * n_components)) * sizeof(float) :
+    cuda_pca_workspace_bytes(
+      n, pca_init_p, n_components, pca_init_double != nullptr
+    ) :
     0u;
   const std::size_t workspace_bytes = required_bytes +
     cufft_work_bytes +
@@ -6077,7 +6692,7 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
     d_yq2 = d_fft_slab + 8u * complex_items;
   }
   d_partial = workspace.alloc<double>(partial_items, "opentsne partial");
-  d_stats = workspace.alloc<double>(6u, "opentsne stats");
+  d_stats = workspace.alloc<double>(4u, "opentsne stats");
   if (d_probabilities == nullptr || d_current == nullptr || d_grad == nullptr ||
       d_gains == nullptr || d_update == nullptr || d_grid_pos == nullptr ||
       d_fft_slab == nullptr || d_mass == nullptr || d_mass_x == nullptr || d_mass_y == nullptr ||
@@ -6093,7 +6708,8 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
       cleanup();
       return 1;
     }
-  } else if (pca_init_double != nullptr || pca_init_float != nullptr) {
+  } else if (pca_init_double != nullptr || pca_init_float != nullptr ||
+             pca_init_device_row_major != nullptr) {
     float* d_scores = workspace.alloc<float>(
       static_cast<std::size_t>(n) * static_cast<std::size_t>(n_components),
       "opentsne cuda pca scores"
@@ -6102,13 +6718,22 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
       cleanup();
       return 1;
     }
-    const int pca_status = pca_init_double != nullptr ?
-      cuda_pca_scores_to_device<double>(
+    int pca_status = 0;
+    if (pca_init_device_row_major != nullptr) {
+      pca_status = cuda_pca_scores_to_device<float>(
+        nullptr, n, pca_init_p, n_components, d_scores, &workspace,
+        true, false, nullptr, nullptr, nullptr, nullptr,
+        0, seed, 16, 2, nullptr, pca_init_device_row_major
+      );
+    } else if (pca_init_double != nullptr) {
+      pca_status = cuda_pca_scores_to_device<double>(
         pca_init_double, n, pca_init_p, n_components, d_scores, &workspace
-      ) :
-      cuda_pca_scores_to_device<float>(
+      );
+    } else {
+      pca_status = cuda_pca_scores_to_device<float>(
         pca_init_float, n, pca_init_p, n_components, d_scores, &workspace
       );
+    }
     if (pca_status != 0) {
       cleanup();
       return 1;
@@ -6151,18 +6776,10 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
     return 1;
   }
 
-  CudaStreamOwner opentsne_stream;
-  if (opentsne_stream.init()) {
-    cleanup();
-    return 1;
-  }
-  cudaStream_t stream = opentsne_stream.get();
-  if (check_cufft(cufftSetStream(plan_forward, stream), "cufftSetStream(opentsne forward)") ||
-      check_cufft(cufftSetStream(plan_inverse, stream), "cufftSetStream(opentsne inverse)")) {
-    cleanup();
-    return 1;
-  }
-  if (check_cuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize(opentsne setup before graph capture)")) {
+  if (check_cuda(
+        cudaDeviceSynchronize(),
+        "cudaDeviceSynchronize(opentsne setup before graph capture)"
+      )) {
     cleanup();
     return 1;
   }
@@ -6174,15 +6791,15 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
                               float current_momentum,
                               float current_learning_rate,
                               bool check_launches) -> int {
-    opentsne_layout_stats_blocks_kernel<<<layout_stat_blocks, threads, 6u * threads * sizeof(double), stream>>>(
+    opentsne_layout_stats_blocks_kernel<<<layout_stat_blocks, threads, 4u * threads * sizeof(double), stream>>>(
       d_current, d_partial, n
     );
     if (check_launches &&
         check_cuda(cudaGetLastError(), "opentsne_layout_stats_blocks_kernel launch")) {
       return 1;
     }
-    opentsne_finalize_layout_stats_kernel<<<1, threads, 6u * threads * sizeof(double), stream>>>(
-      d_partial, d_stats, layout_stat_blocks, n, grid_size
+    opentsne_finalize_layout_stats_kernel<<<1, threads, 4u * threads * sizeof(double), stream>>>(
+      d_partial, d_stats, layout_stat_blocks, grid_size
     );
     if (check_launches &&
         check_cuda(cudaGetLastError(), "opentsne_finalize_layout_stats_kernel launch")) {
@@ -6400,6 +7017,8 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
     }
   }
 
+  last_tsne_cuda_graph_capture = used_graph_capture;
+
   if (check_cuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(opentsne fft)") ||
       check_cuda(cudaMemcpy(out, d_current, embed_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy(opentsne fft D2H)")) {
     cleanup();
@@ -6431,7 +7050,8 @@ extern "C" int fastembedr_cuda_opentsne_fft_from_knn(const int* indices,
                                                        int index_offset,
                                                        float* out) {
   return fastembedr_cuda_opentsne_fft_from_knn_impl<double>(
-    indices, distances, init, has_init, nullptr, nullptr, 0, n, k, n_components, perplexity,
+    indices, distances, init, has_init, nullptr, nullptr, nullptr,
+    0, n, k, n_components, perplexity,
     early_exaggeration_iter, n_iter, early_exaggeration, exaggeration,
     learning_rate, learning_rate_auto, initial_momentum, final_momentum,
     min_gain, max_step_norm, seed, index_offset, out, cudaMemcpyHostToDevice
@@ -6460,7 +7080,8 @@ extern "C" int fastembedr_cuda_opentsne_fft_from_knn_float(const int* indices,
                                                             int index_offset,
                                                             float* out) {
   return fastembedr_cuda_opentsne_fft_from_knn_impl<float>(
-    indices, distances, init, has_init, nullptr, nullptr, 0, n, k, n_components, perplexity,
+    indices, distances, init, has_init, nullptr, nullptr, nullptr,
+    0, n, k, n_components, perplexity,
     early_exaggeration_iter, n_iter, early_exaggeration, exaggeration,
     learning_rate, learning_rate_auto, initial_momentum, final_momentum,
     min_gain, max_step_norm, seed, index_offset, out, cudaMemcpyHostToDevice
@@ -6489,7 +7110,8 @@ extern "C" int fastembedr_cuda_opentsne_fft_from_device_knn_float(const int* ind
                                                                   int index_offset,
                                                                   float* out) {
   return fastembedr_cuda_opentsne_fft_from_knn_impl<float>(
-    indices, distances, init, has_init, nullptr, nullptr, 0, n, k, n_components, perplexity,
+    indices, distances, init, has_init, nullptr, nullptr, nullptr,
+    0, n, k, n_components, perplexity,
     early_exaggeration_iter, n_iter, early_exaggeration, exaggeration,
     learning_rate, learning_rate_auto, initial_momentum, final_momentum,
     min_gain, max_step_norm, seed, index_offset, out, cudaMemcpyDeviceToDevice
@@ -6518,7 +7140,8 @@ extern "C" int fastembedr_cuda_opentsne_fft_from_device_knn_float_pca_double(con
                                                                               int index_offset,
                                                                               float* out) {
   return fastembedr_cuda_opentsne_fft_from_knn_impl<float>(
-    indices, distances, nullptr, 0, pca_init_values, nullptr, pca_init_p, n, k, n_components, perplexity,
+    indices, distances, nullptr, 0, pca_init_values, nullptr, nullptr,
+    pca_init_p, n, k, n_components, perplexity,
     early_exaggeration_iter, n_iter, early_exaggeration, exaggeration,
     learning_rate, learning_rate_auto, initial_momentum, final_momentum,
     min_gain, max_step_norm, seed, index_offset, out, cudaMemcpyDeviceToDevice
@@ -6547,10 +7170,44 @@ extern "C" int fastembedr_cuda_opentsne_fft_from_device_knn_float_pca_float(cons
                                                                              int index_offset,
                                                                              float* out) {
   return fastembedr_cuda_opentsne_fft_from_knn_impl<float>(
-    indices, distances, nullptr, 0, nullptr, pca_init_values, pca_init_p, n, k, n_components, perplexity,
+    indices, distances, nullptr, 0, nullptr, pca_init_values, nullptr,
+    pca_init_p, n, k, n_components, perplexity,
     early_exaggeration_iter, n_iter, early_exaggeration, exaggeration,
     learning_rate, learning_rate_auto, initial_momentum, final_momentum,
     min_gain, max_step_norm, seed, index_offset, out, cudaMemcpyDeviceToDevice
+  );
+}
+
+extern "C" int
+fastembedr_cuda_opentsne_fft_from_device_knn_float_pca_device(
+    const int* indices,
+    const float* distances,
+    const float* pca_init_values,
+    int pca_init_p,
+    int n,
+    int k,
+    int n_components,
+    float perplexity,
+    int early_exaggeration_iter,
+    int n_iter,
+    float early_exaggeration,
+    float exaggeration,
+    float learning_rate,
+    int learning_rate_auto,
+    float initial_momentum,
+    float final_momentum,
+    float min_gain,
+    float max_step_norm,
+    unsigned int seed,
+    int index_offset,
+    float* out) {
+  return fastembedr_cuda_opentsne_fft_from_knn_impl<float>(
+    indices, distances, nullptr, 0, nullptr, nullptr, pca_init_values,
+    pca_init_p, n, k, n_components, perplexity,
+    early_exaggeration_iter, n_iter, early_exaggeration, exaggeration,
+    learning_rate, learning_rate_auto, initial_momentum, final_momentum,
+    min_gain, max_step_norm, seed, index_offset, out,
+    cudaMemcpyDeviceToDevice
   );
 }
 

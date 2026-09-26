@@ -329,7 +329,7 @@ test_that("native affine landmark projection returns finite local placements", {
     expect_equal(projected_parallel$n_threads, 2L)
 })
 
-test_that("tsne landmark mode uses native HNSW for CPU projection KNN", {
+test_that("tsne landmark mode uses native exact CPU projection KNN", {
     old <- options(
         fastEmbedR.landmark_projection = "auto",
         fastEmbedR.landmark_projection_min_rows = 1L,
@@ -364,7 +364,7 @@ test_that("tsne landmark mode uses native HNSW for CPU projection KNN", {
     expect_equal(fit$parameters$projection_nn_backend, "cpu")
     expect_equal(
         fit$parameters$projection_strategy,
-        "native_hnsw_reference_query_knn"
+        "native_exact_reference_query_knn"
     )
     expect_true(is.list(attr(fit$landmarks$projection_knn, "approximation")))
 })

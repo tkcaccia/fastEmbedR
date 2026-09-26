@@ -1604,6 +1604,37 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// native_exact_knn_cpp
+Rcpp::List native_exact_knn_cpp(SEXP data, int k, int n_threads, std::string metric, double target_recall);
+RcppExport SEXP _fastEmbedR_native_exact_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP n_threadsSEXP, SEXP metricSEXP, SEXP target_recallSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
+    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
+    rcpp_result_gen = Rcpp::wrap(native_exact_knn_cpp(data, k, n_threads, metric, target_recall));
+    return rcpp_result_gen;
+END_RCPP
+}
+// native_exact_query_cpp
+Rcpp::List native_exact_query_cpp(SEXP data, SEXP query, int k, int n_threads, std::string metric, double target_recall);
+RcppExport SEXP _fastEmbedR_native_exact_query_cpp(SEXP dataSEXP, SEXP querySEXP, SEXP kSEXP, SEXP n_threadsSEXP, SEXP metricSEXP, SEXP target_recallSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type query(querySEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
+    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
+    rcpp_result_gen = Rcpp::wrap(native_exact_query_cpp(data, query, k, n_threads, metric, target_recall));
+    return rcpp_result_gen;
+END_RCPP
+}
 // native_metal_knn_available_cpp
 bool native_metal_knn_available_cpp();
 RcppExport SEXP _fastEmbedR_native_metal_knn_available_cpp() {
@@ -1656,8 +1687,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // native_cuda_knn_cpp
-Rcpp::List native_cuda_knn_cpp(SEXP data, int k, std::string method, std::string metric, double target_recall, bool keep_gpu);
-RcppExport SEXP _fastEmbedR_native_cuda_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP metricSEXP, SEXP target_recallSEXP, SEXP keep_gpuSEXP) {
+Rcpp::List native_cuda_knn_cpp(SEXP data, int k, std::string method, std::string metric, double target_recall, bool keep_gpu, bool retain_data);
+RcppExport SEXP _fastEmbedR_native_cuda_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP metricSEXP, SEXP target_recallSEXP, SEXP keep_gpuSEXP, SEXP retain_dataSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1667,7 +1698,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
     Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
     Rcpp::traits::input_parameter< bool >::type keep_gpu(keep_gpuSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_cuda_knn_cpp(data, k, method, metric, target_recall, keep_gpu));
+    Rcpp::traits::input_parameter< bool >::type retain_data(retain_dataSEXP);
+    rcpp_result_gen = Rcpp::wrap(native_cuda_knn_cpp(data, k, method, metric, target_recall, keep_gpu, retain_data));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1922,11 +1954,13 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_fastembedr_graph_cluster_metal_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_cluster_metal_cpp, 9},
     {"_fastEmbedR_native_hnsw_knn_cpp", (DL_FUNC) &_fastEmbedR_native_hnsw_knn_cpp, 5},
     {"_fastEmbedR_native_hnsw_query_cpp", (DL_FUNC) &_fastEmbedR_native_hnsw_query_cpp, 6},
+    {"_fastEmbedR_native_exact_knn_cpp", (DL_FUNC) &_fastEmbedR_native_exact_knn_cpp, 5},
+    {"_fastEmbedR_native_exact_query_cpp", (DL_FUNC) &_fastEmbedR_native_exact_query_cpp, 6},
     {"_fastEmbedR_native_metal_knn_available_cpp", (DL_FUNC) &_fastEmbedR_native_metal_knn_available_cpp, 0},
     {"_fastEmbedR_native_metal_knn_cpp", (DL_FUNC) &_fastEmbedR_native_metal_knn_cpp, 5},
     {"_fastEmbedR_native_metal_query_knn_cpp", (DL_FUNC) &_fastEmbedR_native_metal_query_knn_cpp, 6},
     {"_fastEmbedR_native_cuda_knn_available_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_available_cpp, 0},
-    {"_fastEmbedR_native_cuda_knn_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_cpp, 6},
+    {"_fastEmbedR_native_cuda_knn_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_cpp, 7},
     {"_fastEmbedR_native_cuda_query_knn_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_query_knn_cpp, 7},
     {"_fastEmbedR_native_cuda_knn_to_host_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_to_host_cpp, 1},
     {"_fastEmbedR_opentsne_kl_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_opentsne_kl_diagnostic_cpp, 5},

@@ -286,11 +286,6 @@ NumericMatrix rsvd_multiply_cuda_impl(NumericMatrix,
   Rcpp::stop("CUDA RSVD matrix multiply is available only when the package is built with CUDA support.");
 }
 
-NumericMatrix cuda_pca_init_cuda_impl(NumericMatrix,
-                                      int) {
-  Rcpp::stop("native CUDA PCA initialization is available only when the package is built with CUDA support.");
-}
-
 List pca_tsvd_cuda_impl(SEXP,
                         int,
                         bool,

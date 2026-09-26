@@ -17,6 +17,7 @@
 #include <Rcpp.h>
 
 #include "native_knn_common.h"
+#include "native_knn_hnsw_tuning.h"
 
 #include <algorithm>
 #include <atomic>
@@ -71,6 +72,7 @@ class CompactHNSW {
 
   void build(int n_threads) {
     if (n_ == 0) return;
+    n_threads = fastembedr::adaptive_worker_count(n_threads, n_);
     entry_point_ = 0;
     current_max_level_ = levels_[0];
     BuildScratch scratch(n_, ef_construction_, 2 * m_);
@@ -86,7 +88,7 @@ class CompactHNSW {
     output_ids.assign(static_cast<std::size_t>(n_) * k, -1);
     output_distances.assign(static_cast<std::size_t>(n_) * k, std::numeric_limits<float>::infinity());
     std::atomic<int> next(0);
-    n_threads = std::max(1, std::min(n_threads, n_));
+    n_threads = fastembedr::adaptive_worker_count(n_threads, n_);
     std::vector<std::thread> workers;
     workers.reserve(n_threads);
     for (int thread_id = 0; thread_id < n_threads; ++thread_id) {
@@ -124,7 +126,7 @@ class CompactHNSW {
       std::numeric_limits<float>::infinity()
     );
     std::atomic<int> next(0);
-    n_threads = std::max(1, std::min(n_threads, n_queries));
+    n_threads = fastembedr::adaptive_worker_count(n_threads, n_queries);
     std::vector<std::thread> workers;
     workers.reserve(n_threads);
     for (int thread_id = 0; thread_id < n_threads; ++thread_id) {
@@ -323,25 +325,7 @@ class CompactHNSW {
   inline const float* point(int id) const { return data_.data() + static_cast<std::size_t>(id) * p_; }
 
   inline float distance(const float* a, const float* b) const {
-    float sum0 = 0.0f, sum1 = 0.0f, sum2 = 0.0f, sum3 = 0.0f;
-    int d = 0;
-    for (; d + 15 < p_; d += 16) {
-      float x0 = a[d] - b[d]; float x1 = a[d + 1] - b[d + 1];
-      float x2 = a[d + 2] - b[d + 2]; float x3 = a[d + 3] - b[d + 3];
-      float x4 = a[d + 4] - b[d + 4]; float x5 = a[d + 5] - b[d + 5];
-      float x6 = a[d + 6] - b[d + 6]; float x7 = a[d + 7] - b[d + 7];
-      float x8 = a[d + 8] - b[d + 8]; float x9 = a[d + 9] - b[d + 9];
-      float xa = a[d + 10] - b[d + 10]; float xb = a[d + 11] - b[d + 11];
-      float xc = a[d + 12] - b[d + 12]; float xd = a[d + 13] - b[d + 13];
-      float xe = a[d + 14] - b[d + 14]; float xf = a[d + 15] - b[d + 15];
-      sum0 += x0*x0 + x4*x4 + x8*x8 + xc*xc;
-      sum1 += x1*x1 + x5*x5 + x9*x9 + xd*xd;
-      sum2 += x2*x2 + x6*x6 + xa*xa + xe*xe;
-      sum3 += x3*x3 + x7*x7 + xb*xb + xf*xf;
-    }
-    float sum = (sum0 + sum1) + (sum2 + sum3);
-    for (; d < p_; ++d) { float delta = a[d] - b[d]; sum += delta * delta; }
-    return sum;
+    return fastembedr::squared_l2_distance(a, b, p_);
   }
 
   inline float distance(int a, int b) const { return distance(point(a), point(b)); }
@@ -729,14 +713,17 @@ Rcpp::List native_hnsw_knn_impl(SEXP data_sexp,
   const auto start = Clock::now();
   const fastembedr::KnnMetric metric = fastembedr::parse_knn_metric(metric_name);
   fastembedr::FloatMatrix input = fastembedr::matrix_to_row_major_float(data_sexp, metric);
+  fastembedr::require_finite_matrix(input);
   const auto converted = Clock::now();
   const int n = input.nrow;
   const int p = input.ncol;
   if (n < 2 || p < 1 || k < 1 || k >= n) Rcpp::stop("invalid HNSW input");
-  const bool large_high_dim = n >= 50000 && p >= 128 && k <= 30;
-  const int m = large_high_dim ? 10 : 16;
-  const int ef_construction = large_high_dim ? 40 : 80;
-  const int ef_search = large_high_dim ? 40 : 64;
+  const fastembedr::HnswTuning tuning = fastembedr::tune_native_hnsw(
+    n, p, k, metric, target_recall
+  );
+  const int m = tuning.m;
+  const int ef_construction = tuning.ef_construction;
+  const int ef_search = tuning.ef_search;
   CompactHNSW index(std::move(input.values), n, p, m, ef_construction, ef_search);
   index.build(n_threads);
   const auto built = Clock::now();
@@ -758,9 +745,19 @@ Rcpp::List native_hnsw_knn_impl(SEXP data_sexp,
     Rcpp::Named("method") = "native_hnsw",
     Rcpp::Named("metric") = metric_name,
     Rcpp::Named("requested_recall") = target_recall,
+    Rcpp::Named("target_recall") = target_recall,
     Rcpp::Named("recall_audited") = false,
     Rcpp::Named("target_met") = Rcpp::LogicalVector::get_na(),
-    Rcpp::Named("recall_status") = "not_audited_fixed_heuristic",
+    Rcpp::Named("recall_status") =
+      "calibration_informed_not_runtime_audited",
+    Rcpp::Named("tuning_policy") = "shape_metric_k_recall99",
+    Rcpp::Named("tuning_rule") = tuning.rule,
+    Rcpp::Named("tuning_shape_group") = tuning.shape,
+    Rcpp::Named("tuning_k_bucket") = tuning.k_bucket,
+    Rcpp::Named("tuning_reference_target_met") =
+      tuning.reference_target_met,
+    Rcpp::Named("tuning_source") =
+      "faissR_0.99.48_09f4c88fe8af",
     Rcpp::Named("M") = m,
     Rcpp::Named("efConstruction") = ef_construction,
     Rcpp::Named("efSearch") = ef_search,
@@ -791,6 +788,8 @@ Rcpp::List native_hnsw_query_impl(SEXP data_sexp,
     fastembedr::matrix_to_row_major_float(data_sexp, metric);
   fastembedr::FloatMatrix query =
     fastembedr::matrix_to_row_major_float(query_sexp, metric);
+  fastembedr::require_finite_matrix(input);
+  fastembedr::require_finite_matrix(query);
   const auto converted = Clock::now();
   const int n = input.nrow;
   const int p = input.ncol;
@@ -798,10 +797,12 @@ Rcpp::List native_hnsw_query_impl(SEXP data_sexp,
   if (n < 1 || n_queries < 1 || p < 1 || query.ncol != p || k < 1 || k > n) {
     Rcpp::stop("Invalid native HNSW query input.");
   }
-  const bool large_high_dim = n >= 50000 && p >= 128 && k <= 30;
-  const int m = large_high_dim ? 10 : 16;
-  const int ef_construction = large_high_dim ? 40 : 80;
-  const int ef_search = large_high_dim ? 40 : 64;
+  const fastembedr::HnswTuning tuning = fastembedr::tune_native_hnsw(
+    n, p, k, metric, target_recall
+  );
+  const int m = tuning.m;
+  const int ef_construction = tuning.ef_construction;
+  const int ef_search = tuning.ef_search;
   CompactHNSW index(
     std::move(input.values), n, p, m, ef_construction, ef_search
   );
@@ -831,9 +832,19 @@ Rcpp::List native_hnsw_query_impl(SEXP data_sexp,
     Rcpp::Named("method") = "native_hnsw_query",
     Rcpp::Named("metric") = metric_name,
     Rcpp::Named("requested_recall") = target_recall,
+    Rcpp::Named("target_recall") = target_recall,
     Rcpp::Named("recall_audited") = false,
     Rcpp::Named("target_met") = Rcpp::LogicalVector::get_na(),
-    Rcpp::Named("recall_status") = "not_audited_fixed_heuristic",
+    Rcpp::Named("recall_status") =
+      "calibration_informed_not_runtime_audited",
+    Rcpp::Named("tuning_policy") = "shape_metric_k_recall99",
+    Rcpp::Named("tuning_rule") = tuning.rule,
+    Rcpp::Named("tuning_shape_group") = tuning.shape,
+    Rcpp::Named("tuning_k_bucket") = tuning.k_bucket,
+    Rcpp::Named("tuning_reference_target_met") =
+      tuning.reference_target_met,
+    Rcpp::Named("tuning_source") =
+      "faissR_0.99.48_09f4c88fe8af",
     Rcpp::Named("M") = m,
     Rcpp::Named("efConstruction") = ef_construction,
     Rcpp::Named("efSearch") = ef_search,

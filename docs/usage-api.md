@@ -48,9 +48,10 @@ benchmarks easier to interpret.
 
 The one-call functions and `precompute_knn()` intentionally hide the KNN
 algorithm choice. Their `backend` accepts only `"cpu"`, `"metal"`, or
-`"cuda"`. CPU KNN uses native HNSW; Metal uses native exact/IVF-Flat; CUDA
-uses RAPIDS cuVS exact or IVF-Flat search and keeps its output resident on the
-device. A CUDA KNN object should therefore be reused with a CUDA embedding
+`"cuda"`. CPU KNN uses exhaustive exact search below 5,000 observations and
+native HNSW otherwise. Metal uses native exact/IVF-Flat; CUDA uses RAPIDS cuVS
+exact or IVF-Flat search and keeps its output resident on the device. A CUDA
+KNN object should therefore be reused with a CUDA embedding
 backend. A host KNN result from another tool may still be
 supplied as a plain list containing `indices` and `distances`; fastEmbedR never
 calls that tool itself.
@@ -275,6 +276,11 @@ embedding implementation on that subset, and project the remaining rows.
 used by the projection stage. It searches the fixed reference only and avoids
 constructing unnecessary query-to-query neighbors.
 
+Landmark results report the reference-stage memory ratio and saving, plus the
+estimated query-to-reference KNN payload. These are float32 working-set
+estimates, excluding the input matrix, R overhead, allocator caches and
+temporary buffers; they are not peak-RSS measurements.
+
 The integrated t-SNE call accepts the landmark selection directly:
 
 ```r
@@ -320,8 +326,10 @@ To reconstruct the original training rows, pass the complementary rows as
 `query_indices = fit$model$selection$query_indices`. With no indices, every
 supplied row is treated as a genuinely new observation.
 
-CPU projection uses native fixed-parameter HNSW and reports that recall was
-not audited at runtime. Metal uses native exact search
+CPU projection uses exhaustive exact search below 5,000 reference rows and
+native metric-, shape-, and `k`-aware HNSW parameters otherwise. The HNSW
+route is calibrated for target recall 0.99 and reports that recall was not
+audited at runtime. Metal uses native exact search
 for small references and recall-tuned IVF-Flat for larger references, followed
 by native fixed-reference transform kernels. CUDA uses native exact search for
 smaller references and IVF-Flat for larger references; its KNN result remains

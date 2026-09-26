@@ -4355,6 +4355,80 @@ void symmetric_jacobi_float(std::vector<float> matrix,
   eigenvectors.swap(sorted_vectors);
 }
 
+void preprocess_pca_input_metal(MetalEmbeddingState& state,
+                                id<MTLBuffer> data_buffer,
+                                int n,
+                                int p,
+                                NSUInteger data_stride,
+                                bool center_input,
+                                bool scale_input,
+                                NumericVector& centers,
+                                NumericVector& scales) {
+  id<MTLBuffer> center_buffer = [state.device
+    newBufferWithLength:static_cast<std::size_t>(p) * sizeof(float)
+               options:MTLResourceStorageModeShared];
+  id<MTLBuffer> scale_buffer = [state.device
+    newBufferWithLength:static_cast<std::size_t>(p) * sizeof(float)
+               options:MTLResourceStorageModeShared];
+  id<MTLBuffer> invalid_buffer = [state.device
+    newBufferWithLength:sizeof(std::uint32_t)
+               options:MTLResourceStorageModeShared];
+  if (center_buffer == nil || scale_buffer == nil || invalid_buffer == nil) {
+    if (invalid_buffer != nil) [invalid_buffer release];
+    if (scale_buffer != nil) [scale_buffer release];
+    if (center_buffer != nil) [center_buffer release];
+    Rcpp::stop("Failed to allocate Metal PCA preprocessing buffers.");
+  }
+  std::memset([invalid_buffer contents], 0, sizeof(std::uint32_t));
+  const std::uint32_t rows = static_cast<std::uint32_t>(n);
+  const std::uint32_t columns = static_cast<std::uint32_t>(p);
+  const std::uint32_t stride = static_cast<std::uint32_t>(data_stride);
+  const std::uint32_t apply_center = center_input ? 1u : 0u;
+  const std::uint32_t apply_scale = scale_input ? 1u : 0u;
+  NSUInteger threads = 1u;
+  const NSUInteger limit = std::min<NSUInteger>(
+    256u, state.pca_center_scale_pipeline.maxTotalThreadsPerThreadgroup
+  );
+  while ((threads << 1u) <= limit) threads <<= 1u;
+  id<MTLCommandBuffer> command = [state.queue commandBuffer];
+  id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+  [encoder setComputePipelineState:state.pca_center_scale_pipeline];
+  [encoder setBuffer:data_buffer offset:0 atIndex:0];
+  [encoder setBuffer:center_buffer offset:0 atIndex:1];
+  [encoder setBuffer:scale_buffer offset:0 atIndex:2];
+  [encoder setBuffer:invalid_buffer offset:0 atIndex:3];
+  [encoder setBytes:&rows length:sizeof(rows) atIndex:4];
+  [encoder setBytes:&columns length:sizeof(columns) atIndex:5];
+  [encoder setBytes:&stride length:sizeof(stride) atIndex:6];
+  [encoder setBytes:&apply_center length:sizeof(apply_center) atIndex:7];
+  [encoder setBytes:&apply_scale length:sizeof(apply_scale) atIndex:8];
+  [encoder setThreadgroupMemoryLength:2u * threads * sizeof(float)
+                                 atIndex:0];
+  [encoder dispatchThreadgroups:MTLSizeMake(p, 1, 1)
+           threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
+  [encoder endEncoding];
+  wait_for_command(command, "Metal rSVD PCA preprocessing");
+  const std::uint32_t invalid =
+    *static_cast<const std::uint32_t*>([invalid_buffer contents]);
+  if (invalid != 0u) {
+    [invalid_buffer release];
+    [scale_buffer release];
+    [center_buffer release];
+    Rcpp::stop("data must contain only finite values.");
+  }
+  const float* center_values =
+    static_cast<const float*>([center_buffer contents]);
+  const float* scale_values =
+    static_cast<const float*>([scale_buffer contents]);
+  for (int column = 0; column < p; ++column) {
+    centers[column] = center_values[column];
+    scales[column] = scale_values[column];
+  }
+  [invalid_buffer release];
+  [scale_buffer release];
+  [center_buffer release];
+}
+
 List run_rsvd_pca_metal(SEXP data_sexp,
                         int n_components,
                         bool center,
@@ -4409,93 +4483,24 @@ List run_rsvd_pca_metal(SEXP data_sexp,
           static_cast<std::size_t>(n) * sizeof(float)
         );
       }
-
-      id<MTLBuffer> center_values_buffer = [state.device
-        newBufferWithLength:static_cast<std::size_t>(p) * sizeof(float)
-                   options:MTLResourceStorageModeShared];
-      id<MTLBuffer> scale_values_buffer = [state.device
-        newBufferWithLength:static_cast<std::size_t>(p) * sizeof(float)
-                   options:MTLResourceStorageModeShared];
-      id<MTLBuffer> invalid_buffer = [state.device
-        newBufferWithLength:sizeof(std::uint32_t)
-                   options:MTLResourceStorageModeShared];
-      if (center_values_buffer == nil || scale_values_buffer == nil || invalid_buffer == nil) {
-        Rcpp::stop("Failed to allocate Metal PCA preprocessing buffers.");
-      }
-      std::memset([invalid_buffer contents], 0, sizeof(std::uint32_t));
-      const std::uint32_t rows_u = static_cast<std::uint32_t>(n);
-      const std::uint32_t columns_u = static_cast<std::uint32_t>(p);
-      const std::uint32_t stride_u = static_cast<std::uint32_t>(data_stride);
-      const std::uint32_t center_u = center ? 1u : 0u;
-      const std::uint32_t scale_u = scale ? 1u : 0u;
-      NSUInteger threads = 1u;
-      const NSUInteger thread_limit = std::min<NSUInteger>(
-        256u,
-        state.pca_center_scale_pipeline.maxTotalThreadsPerThreadgroup
-      );
-      while ((threads << 1u) <= thread_limit) threads <<= 1u;
-      id<MTLCommandBuffer> preprocess_command = [state.queue commandBuffer];
-      id<MTLComputeCommandEncoder> preprocess_encoder =
-        [preprocess_command computeCommandEncoder];
-      [preprocess_encoder setComputePipelineState:state.pca_center_scale_pipeline];
-      [preprocess_encoder setBuffer:data_buffer offset:0 atIndex:0];
-      [preprocess_encoder setBuffer:center_values_buffer offset:0 atIndex:1];
-      [preprocess_encoder setBuffer:scale_values_buffer offset:0 atIndex:2];
-      [preprocess_encoder setBuffer:invalid_buffer offset:0 atIndex:3];
-      [preprocess_encoder setBytes:&rows_u length:sizeof(std::uint32_t) atIndex:4];
-      [preprocess_encoder setBytes:&columns_u length:sizeof(std::uint32_t) atIndex:5];
-      [preprocess_encoder setBytes:&stride_u length:sizeof(std::uint32_t) atIndex:6];
-      [preprocess_encoder setBytes:&center_u length:sizeof(std::uint32_t) atIndex:7];
-      [preprocess_encoder setBytes:&scale_u length:sizeof(std::uint32_t) atIndex:8];
-      [preprocess_encoder setThreadgroupMemoryLength:2u * threads * sizeof(float)
-                                             atIndex:0];
-      [preprocess_encoder dispatchThreadgroups:MTLSizeMake(static_cast<NSUInteger>(p), 1, 1)
-                         threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
-      [preprocess_encoder endEncoding];
-      wait_for_command(preprocess_command, "Metal rSVD float32 centering");
-      const std::uint32_t invalid =
-        *static_cast<const std::uint32_t*>([invalid_buffer contents]);
-      if (invalid != 0u) {
-        Rcpp::stop("data must contain only finite values.");
-      }
-      const float* center_values =
-        static_cast<const float*>([center_values_buffer contents]);
-      const float* scale_values =
-        static_cast<const float*>([scale_values_buffer contents]);
-      for (int column = 0; column < p; ++column) {
-        centers[column] = center_values[column];
-        scales[column] = scale_values[column];
-      }
-      [invalid_buffer release];
-      [scale_values_buffer release];
-      [center_values_buffer release];
     } else {
       NumericMatrix numeric(data_sexp);
       const double* double_values = REAL(numeric);
       for (int column = 0; column < p; ++column) {
-        double sum = 0.0;
-        double sum_squares = 0.0;
         const std::size_t input_offset = static_cast<std::size_t>(column) * n;
+        float* destination =
+          data_values + static_cast<std::size_t>(column) * data_stride;
         for (int row = 0; row < n; ++row) {
-          const float value = static_cast<float>(double_values[input_offset + row]);
-          if (!std::isfinite(value)) Rcpp::stop("data must contain only finite values.");
-          sum += value;
-          sum_squares += static_cast<double>(value) * value;
-        }
-        const double raw_mean = sum / static_cast<double>(n);
-        const double variance = n > 1 ?
-          std::max(0.0, (sum_squares - sum * raw_mean) / static_cast<double>(n - 1)) : 0.0;
-        const double column_scale = scale && variance > 0.0 ? std::sqrt(variance) : 1.0;
-        const double column_center = center ? raw_mean : 0.0;
-        centers[column] = column_center;
-        scales[column] = column_scale;
-        float* destination = data_values + static_cast<std::size_t>(column) * data_stride;
-        for (int row = 0; row < n; ++row) {
-          const float value = static_cast<float>(double_values[input_offset + row]);
-          destination[row] = static_cast<float>((value - column_center) / column_scale);
+          destination[row] = static_cast<float>(
+            double_values[input_offset + row]
+          );
         }
       }
     }
+    preprocess_pca_input_metal(
+      state, data_buffer, n, p, data_stride, center, scale,
+      centers, scales
+    );
     const auto converted = Clock::now();
 
     id<MTLBuffer> basis_buffer = [state.device

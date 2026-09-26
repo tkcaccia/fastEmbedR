@@ -47,10 +47,11 @@ from the supplied matrix.}
 \item{seed}{Random seed.}
 
 \item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. CPU KNN
-uses package-native HNSW. Metal uses package-native exact or recall-tuned
-IVF-Flat search. CUDA uses cuVS brute-force exact search below 100,000
-rows and cuVS IVF-Flat above that threshold. The KNN result stays on the
-device through graph construction and optimization.
+uses package-native exact search below 5,000 rows and HNSW otherwise.
+Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
+cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
+that threshold. The KNN result stays on the device through graph
+construction and optimization.
 GPU requests must resolve to a real native backend; the package does not
 relabel CPU work as GPU.}
 

@@ -292,7 +292,7 @@ test_that("float32 finiteness validation avoids coercion", {
     expect_s4_class(prepare_embedding_data(x, FALSE, NULL, 1L)$data, "float32")
 })
 
-test_that("float32 KNN bridge passes float32 data directly to native HNSW", {
+test_that("float32 KNN bridge uses native exact search below 5000 rows", {
     skip_if_not_installed("float")
     set.seed(44)
     x <- float::fl(matrix(rnorm(40L), 10L, 4L))
@@ -308,16 +308,16 @@ test_that("float32 KNN bridge passes float32 data directly to native HNSW", {
     expect_equal(dim(out$indices), c(10L, 3L))
     expect_s4_class(out$distances, "float32")
     expect_identical(attr(out, "backend"), "cpu")
-    expect_identical(attr(out, "method"), "native_hnsw")
+    expect_identical(attr(out, "method"), "native_exact")
 })
 
 test_that("one-call KNN policy selects native CPU and Metal defaults", {
     expect_equal(
         fastEmbedR:::fastembedr_embedding_nn_policy("cpu", n = 1000L),
         list(
-            backend = "cpu", method = "hnsw", tuning = "auto",
-            target_recall = NA_real_,
-            recall_status = "not_audited_fixed_heuristic"
+            backend = "cpu", method = "exact",
+            target_recall = 0.99,
+            recall_status = "exact_by_construction"
         )
     )
     expect_equal(
@@ -330,9 +330,10 @@ test_that("one-call KNN policy selects native CPU and Metal defaults", {
     expect_equal(
         fastEmbedR:::fastembedr_embedding_nn_policy("cpu", n = 200000L),
         list(
-            backend = "cpu", method = "hnsw", tuning = "auto",
-            target_recall = NA_real_,
-            recall_status = "not_audited_fixed_heuristic"
+            backend = "cpu", method = "hnsw",
+            target_recall = 0.99,
+            recall_status =
+                "calibration_informed_not_runtime_audited"
         )
     )
     expect_equal(
@@ -351,7 +352,7 @@ test_that("one-call KNN policy selects native CPU and Metal defaults", {
     )
 })
 
-test_that("CPU matrix input uses package-native HNSW only", {
+test_that("CPU matrix input supports native exact and HNSW search", {
     set.seed(45)
     x <- matrix(rnorm(40L), 10L, 4L)
     out <- fastEmbedR:::fastembedr_nn_without_self(
@@ -366,26 +367,27 @@ test_that("CPU matrix input uses package-native HNSW only", {
     expect_equal(dim(out$indices), c(10L, 2L))
     expect_identical(attr(out, "backend"), "cpu")
     expect_identical(attr(out, "method"), "native_hnsw")
-    expect_error(
-        fastEmbedR:::fastembedr_nn_without_self(
-            x,
-            k = 2L, backend = "cpu", method = "exact"
-        ),
-        "HNSW"
+    exact <- fastEmbedR:::fastembedr_nn_without_self(
+        x,
+        k = 2L, backend = "cpu", method = "exact"
     )
+    expect_identical(attr(exact, "method"), "native_exact")
+    expect_true(exact$exact_recall_by_construction)
 })
 
 test_that("CUDA KNN bridge consumes native GPU-resident output", {
     set.seed(47)
     x <- matrix(rnorm(40L), 10L, 4L)
     captured <- new.env(parent = emptyenv())
-    native_mock <- function(data, k, method, metric, target_recall, keep_gpu) {
+    native_mock <- function(data, k, method, metric, target_recall, keep_gpu,
+                            retain_data) {
         captured$called <- TRUE
         captured$k <- k
         captured$method <- method
         captured$metric <- metric
         captured$target_recall <- target_recall
         captured$keep_gpu <- keep_gpu
+        captured$retain_data <- retain_data
         structure(
             list(
                 handle = "mock",
@@ -422,6 +424,7 @@ test_that("CUDA KNN bridge consumes native GPU-resident output", {
 
     expect_true(captured$called)
     expect_true(captured$keep_gpu)
+    expect_false(captured$retain_data)
     expect_equal(captured$method, "auto")
     expect_equal(captured$target_recall, 0.99)
     expect_s3_class(out, "fastEmbedR_gpu_knn")
@@ -523,7 +526,7 @@ test_that("CUDA UMAP keeps native fastEmbedR GPU KNN on device", {
                 knn_n_neighbors = 3L,
                 n_neighbors = 3L,
                 knn_residency = "cuda_device",
-                graph_storage = "native_cuda_device_coo_fused"
+                graph_storage = "native_cuda_device_row_major"
             )
             out
         },
@@ -559,11 +562,15 @@ test_that("one-call CUDA embeddings use the intended KNN residency policy", {
     )
     captured <- new.env(parent = emptyenv())
     captured$keep_gpu <- list()
+    captured$retain_data <- list()
     with_mocked_bindings(
         fastembedr_nn_without_self = function(
                 data, k, backend, method, metric, output,
-                n_threads, tuning, target_recall, keep_gpu) {
+                n_threads, tuning, target_recall, keep_gpu,
+                retain_data = FALSE) {
             captured$keep_gpu[[length(captured$keep_gpu) + 1L]] <- keep_gpu
+            captured$retain_data[[length(captured$retain_data) + 1L]] <-
+                retain_data
             expect_identical(backend, "cuda")
             if (isTRUE(keep_gpu)) {
                 gpu_knn
@@ -612,17 +619,22 @@ test_that("one-call CUDA embeddings use the intended KNN residency policy", {
                 x, perplexity = 2, Y_init = y_init,
                 backend = "cuda", keep_knn = TRUE
             )
+            fit_tsne_pca <- tsne(
+                x, perplexity = 2, backend = "cuda", keep_knn = TRUE
+            )
         },
         .package = "fastEmbedR"
     )
 
-    expect_equal(captured$keep_gpu, list(TRUE, TRUE))
+    expect_equal(captured$keep_gpu, list(TRUE, TRUE, TRUE))
+    expect_equal(captured$retain_data, list(FALSE, FALSE, TRUE))
     expect_true(captured$umap_gpu_input)
     expect_true(captured$umap_distances_null)
     expect_true(captured$tsne_gpu_input)
     expect_true(captured$tsne_distances_null)
     expect_s3_class(fit_umap$knn, "fastEmbedR_gpu_knn")
     expect_s3_class(fit_tsne$knn, "fastEmbedR_gpu_knn")
+    expect_s3_class(fit_tsne_pca$knn, "fastEmbedR_gpu_knn")
 })
 
 test_that("float32 KNN distances use less memory than double distances", {

@@ -152,14 +152,18 @@ gpu_resident_umap_metadata <- function(cfg, info, graph_mode, verbose) {
     cfg$graph_prep_backend <- paste0(
         "cuda_", graph_mode, "_union_device"
     )
-    cfg$graph_storage <- "native_cuda_device_coo_fused"
-    cfg$sgd_loop <- "cuda_fused_device_knn_to_coo_atomic"
+    cfg$graph_storage <- "native_cuda_device_row_major"
+    cfg$sgd_loop <- "cuda_graph_row_warp_fused"
     cfg$gpu_transfer_policy <-
         "gpu_knn_device_pointers_no_knn_host_copy"
-    cfg$gpu_optimizer_mode <- "atomic_coo"
+    cfg$gpu_optimizer_mode <- "row_warp_atomic_tail"
     cfg$gpu_optimizer_update_rule <-
-        "native_cuda_atomic_coo_umap_schedule"
-    cfg$gpu_optimizer_schedule <- "coo_epochs_per_sample_device"
+        "fused_attraction_repulsion_head_aggregated"
+    cfg$gpu_optimizer_schedule <- "row_weight_epoch_schedule_device"
+    cfg$gpu_edge_ordering <- "row_major_head_grouped"
+    cfg$gpu_conflict_strategy <- "warp_aggregated_head_atomic_tail"
+    cfg$gpu_negative_sampling <- "deterministic_on_device_per_edge_epoch"
+    cfg$gpu_kernel_fusion <- "attraction_repulsion_coordinate_update"
     cfg$gpu_initial_backend <- "cuda"
     cfg$optimizer_backend <- "cuda"
     cfg$init_backend <- "cuda_fused_diffusion"
@@ -168,7 +172,7 @@ gpu_resident_umap_metadata <- function(cfg, info, graph_mode, verbose) {
         "graph construction, initialization, and optimization on device."
     )
     cfg$gpu_umap_path <- paste0(
-        "cuda_gpu_knn_", graph_mode, "_float32_atomic"
+        "cuda_gpu_knn_", graph_mode, "_float32_row_warp"
     )
     cfg$gpu_initial_epochs <- as.integer(cfg$n_epochs)
     cfg$verbose <- isTRUE(verbose)
@@ -221,6 +225,9 @@ run_gpu_resident_umap <- function(gpu_knn, info, cfg, seed,
         0L,
         identical(graph_mode, "binary")
     )
+    cfg$cuda_allocator <- attr(layout, "cuda_allocator")
+    cfg$cuda_graph_capture <- attr(layout, "cuda_graph_capture")
+    cfg$cuda_graph_scope <- attr(layout, "cuda_graph_scope")
     layout <- finalize_embedding_layout(layout, "UMAP", return_float32 = TRUE)
     attr(layout, "fastEmbedR_config") <- public_core_config(cfg)
     layout

@@ -346,7 +346,9 @@ tsne_transform_config <- function(
         affinity_storage = out$affinity_storage,
         transform_batch_size = out$transform_batch_size,
         transform_batches = out$transform_batches,
-        n.cores = out$n_threads %||% NA_integer_,
+        n.cores = out$n_threads_requested %||% out$n_threads %||%
+            NA_integer_,
+        n.cores_effective = out$n_threads %||% NA_integer_,
         seed = as.integer(request$seed),
         provenance = "fixed_reference_tsne_native_cpp"
     )
@@ -1304,7 +1306,7 @@ project_landmark_tsne <- function(state, request) {
     }
     state$projection <- list(
         knn = projection_knn,
-        projected = transformed$layout,
+        projected = if (use_cuda) transformed$value else transformed$layout,
         projection_time = projection$time,
         transform_time = transformed$time,
         init = init,
@@ -1357,7 +1359,7 @@ landmark_tsne_timings <- function(state) {
 
 landmark_tsne_metrics <- function(state, request, timings) {
     reference <- landmark_tsne_reference_times(state)
-    data.frame(
+    metrics <- data.frame(
         method = "landmark_tsne",
         n = state$n,
         p = ncol(state$x),
@@ -1380,6 +1382,11 @@ landmark_tsne_metrics <- function(state, request, timings) {
         transform_k = state$projection$controls$k,
         stringsAsFactors = FALSE
     )
+    memory <- landmark_memory_estimate(
+        state$n, state$n_landmarks, state$policy$n_neighbors,
+        state$projection$controls$k, request$n_components
+    )
+    cbind(metrics, as.data.frame(memory))
 }
 
 landmark_tsne_reference_parameters <- function(state) {
@@ -1417,6 +1424,10 @@ landmark_tsne_transform_parameters <- function(state, request) {
 
 landmark_tsne_parameters <- function(state, request) {
     projection <- state$projection
+    memory <- landmark_memory_estimate(
+        state$n, state$n_landmarks, state$policy$n_neighbors,
+        projection$controls$k, request$n_components
+    )
     base <- list(
         method = "landmark_tsne",
         n = state$n,
@@ -1445,6 +1456,7 @@ landmark_tsne_parameters <- function(state, request) {
         base,
         landmark_tsne_reference_parameters(state),
         landmark_tsne_transform_parameters(state, request),
+        memory,
         state$prepared$preprocess
     )
 }

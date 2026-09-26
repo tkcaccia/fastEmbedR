@@ -28,6 +28,20 @@ License file: LICENSES/FAISSR-LICENSE
 Comment: Calls installed cuVS libraries; those libraries are not redistributed
          in the package.
 
+Files: src/native_knn_hnsw_tuning.h
+Copyright: Stefano Cacciatore
+License: MIT
+Upstream: adapted from faissR 0.99.48 commit
+          09f4c88fe8af431053a35a945db809a1da22033e
+License file: LICENSES/FAISSR-LICENSE
+
+Files: src/native_knn_exact.cpp
+Copyright: Stefano Cacciatore
+License: MIT
+Upstream: exact-search behavior adapted from faissR 0.99.48 commit
+          09f4c88fe8af431053a35a945db809a1da22033e
+License file: LICENSES/FAISSR-LICENSE
+
 Files: src/dlpack/dlpack.h
 Copyright: DMLC contributors
 License: Apache-2.0

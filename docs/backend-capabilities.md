@@ -21,16 +21,16 @@ unavailable explicit accelerator request raises an error.
 
 | Function | CPU | Metal | CUDA | Notes |
 | --- | --- | --- | --- | --- |
-| `precompute_knn()` / internal one-call KNN | native float32 HNSW | native exact or recall-tuned IVF-Flat | cuVS brute-force exact or IVF-Flat | KNN selection remains internal; the public function exposes only `k`, metric, backend, and CPU thread count. CUDA results stay device-resident. |
+| `precompute_knn()` / internal one-call KNN | native float32 exact below 5,000 rows; HNSW otherwise | native exact or recall-tuned IVF-Flat | cuVS brute-force exact or IVF-Flat | KNN selection remains internal; the public function exposes only `k`, metric, backend, and CPU thread count. CUDA results stay device-resident. |
 | `umap_init()` | native sparse graph initialization | native Metal initialization from prepared graph state | native CUDA initialization when compiled | Returns reusable graph and initial coordinates; a raw CUDA diagnostic call may materialize KNN on the host, whereas ordinary one-call CUDA UMAP remains resident. |
 | `umap_knn()` | native C++ CSR graph and optimizer | native Metal `atomic_inplace` optimizer | native CUDA pure-atomic optimizer | Metal/CUDA optimizers use the supplied graph; unavailable GPU backends fail clearly. |
-| `umap()` | native HNSW, then `umap_knn()` | native exact/IVF-Flat, then native Metal UMAP | native cuVS device KNN, then native CUDA UMAP | CUDA KNN is not copied through R. Metal IVF exact-reranks candidates in the original dimensions and records its pilot recall. |
+| `umap()` | native exact/HNSW, then `umap_knn()` | native exact/IVF-Flat, then native Metal UMAP | native cuVS device KNN, then native CUDA UMAP | CPU uses exact search below 5,000 rows. CUDA KNN is not copied through R. Metal IVF exact-reranks candidates in the original dimensions and records its pilot recall. |
 | `tsne_knn()` | native C++ FFT-grid optimizer | native Metal FFT-grid optimizer | native CUDA FFT-grid optimizer using cuFFT | Use `Y_init` or `init_data` for explicit PCA initialization. |
-| `tsne()` | native HNSW, then `tsne_knn()` | native exact/IVF-Flat, then Metal t-SNE | native cuVS device KNN, then CUDA t-SNE | The package does not call Python openTSNE in public functions. |
+| `tsne()` | native exact/HNSW, then `tsne_knn()` | native exact/IVF-Flat, then Metal t-SNE | native cuVS device KNN, then CUDA t-SNE | CPU uses exact search below 5,000 rows. The package does not call Python openTSNE in public functions. |
 | `pca()` / t-SNE PCA init | native float32 blocked rSVD | native float32 MPS block-subspace rSVD | package-native rSVD; optional RAPIDS RAFT TSVD | CUDA selects from matrix shape and rank when RAFT is enabled, and otherwise uses native rSVD. GPU requests never silently fall back to CPU. |
 | `transform_tsne()` | native fixed-reference transform | native Metal projection/transform kernels where available | native CUDA projection/transform kernels where built | Used by t-SNE landmarking. |
 | `select_landmarks()` | native selection | shared selection | shared selection | Selection is independent of the embedding method and can be reused. |
-| `precompute_query_knn()` | native HNSW reference-query search | native exact/recall-tuned IVF-Flat reference-query search | native exact/IVF-Flat reference-query search | Searches only the fixed reference; CUDA output remains device resident. |
+| `precompute_query_knn()` | native exact below 5,000 reference rows; HNSW otherwise | native exact/recall-tuned IVF-Flat reference-query search | native exact/IVF-Flat reference-query search | Searches only the fixed reference; CUDA output remains device resident. |
 | `project_landmark_model()` | native projection/transform/refinement | native Metal projection/transform/refinement | native CUDA resident projection/transform/refinement | Projects held-out or genuinely new observations while reference coordinates remain fixed. |
 | `umap(..., landmarks = ...)` | landmark embed/project/refine | native Metal path | native CUDA path | Landmarking remains an explicit approximation. |
 | `tsne(..., landmarks = ...)` | landmark embed plus transform | native Metal path | native CUDA path | Projection quality is tracked separately. |
@@ -42,9 +42,9 @@ unavailable explicit accelerator request raises an error.
 
 | Metric | CPU | Metal | CUDA | Notes |
 | --- | --- | --- | --- | --- |
-| `euclidean` | native HNSW | native exact/IVF-Flat | cuVS exact/IVF-Flat | Validated default for UMAP/t-SNE. |
-| `cosine` | row normalization plus native HNSW | row normalization plus native exact/IVF-Flat | row normalization plus native cuVS | Candidate selection is approximate; returned distances use the transformed full-dimensional vectors. |
-| `correlation` | row centering/normalization plus native HNSW | row centering/normalization plus native exact/IVF-Flat | row centering/normalization plus native cuVS | Correlation is represented by Euclidean distance on centered unit rows. |
+| `euclidean` | native exact/HNSW | native exact/IVF-Flat | cuVS exact/IVF-Flat | Exact CPU search is selected below 5,000 rows. |
+| `cosine` | row normalization plus native exact/HNSW | row normalization plus native exact/IVF-Flat | row normalization plus native cuVS | Exact CPU search is selected below 5,000 rows; approximate routes return distances from transformed full-dimensional vectors. |
+| `correlation` | row centering/normalization plus native exact/HNSW | row centering/normalization plus native exact/IVF-Flat | row centering/normalization plus native cuVS | Correlation is represented by Euclidean distance on centered unit rows. |
 
 ## Backend Labels
 

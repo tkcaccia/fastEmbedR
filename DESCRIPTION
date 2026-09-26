@@ -14,8 +14,9 @@ Copyright: See inst/COPYRIGHTS and inst/NOTICE for source-level ownership,
 Description: A native float32 UMAP implementation and a configurable
     interpolation-based t-SNE implementation for embeddings from data
     matrices or precomputed nearest-neighbor indices and distances. One-call
-    workflows use package-native CPU HNSW and Apple Metal exact or IVF-Flat
-    search. Optional CUDA support links to the RAPIDS cuVS C API while
+    workflows use package-native CPU exact or HNSW search and Apple Metal
+    exact or IVF-Flat search. Optional CUDA support links to the RAPIDS cuVS
+    C API while
     retaining nearest-neighbor results on the device.
     Preprocessing, graph or affinity construction, fixed-reference transform,
     and layout optimization use native code with explicit CPU, Metal, and CUDA

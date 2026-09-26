@@ -47,10 +47,11 @@ fit$metrics
 
 Use `backend = "metal"` on Apple Silicon or `backend = "cuda"` on a CUDA build.
 Explicit GPU requests fail clearly if the backend is unavailable.
-For matrix input, CPU uses native HNSW and Metal uses native exact or
-recall-tuned IVF-Flat. CUDA uses package-native cuVS GPU-resident KNN. The
-default compact non-self affinity support is `ceiling(perplexity)`. The
-supplied KNN is trimmed to that width. Use `tsne_knn()` with a plain
+For matrix input, CPU uses exhaustive exact search below 5,000 observations
+and native HNSW otherwise. Metal uses native exact or recall-tuned IVF-Flat.
+CUDA uses package-native cuVS GPU-resident KNN. The default compact non-self
+affinity support is `ceiling(perplexity)`. The supplied KNN is trimmed to that
+width. Use `tsne_knn()` with a plain
 precomputed host KNN list when benchmarking another search implementation.
 
 ## Iris One-Call UMAP

@@ -91,6 +91,48 @@
       "notice_file": "inst/NOTICE"
     },
     {
+      "id": "faissr-hnsw-tuning",
+      "name": "faissR CPU HNSW tuning policy",
+      "classification": "adapted_source",
+      "repository": "https://github.com/tkcaccia/faissR",
+      "revision": "09f4c88fe8af431053a35a945db809a1da22033e",
+      "version": "0.99.48",
+      "license_spdx": "MIT",
+      "copyright": "Stefano Cacciatore",
+      "redistributed_source": false,
+      "redistributed_binary": false,
+      "linked": false,
+      "linkage": "Only the deterministic CPU HNSW recall-0.99 shape, metric, and k parameter policy is adapted; faissR is not called or linked.",
+      "package_files": ["src/native_knn_hnsw_tuning.h"],
+      "upstream_files": [
+        "src/nn_auto_select.cpp",
+        "benchmark_scripts/"
+      ],
+      "license_file": "inst/LICENSES/FAISSR-LICENSE",
+      "notice_file": "inst/NOTICE"
+    },
+    {
+      "id": "faissr-exact-knn-behavior",
+      "name": "faissR CPU exact KNN behavior",
+      "classification": "adapted_source",
+      "repository": "https://github.com/tkcaccia/faissR",
+      "revision": "09f4c88fe8af431053a35a945db809a1da22033e",
+      "version": "0.99.48",
+      "license_spdx": "MIT",
+      "copyright": "Stefano Cacciatore",
+      "redistributed_source": false,
+      "redistributed_binary": false,
+      "linked": false,
+      "linkage": "Exact-route preprocessing, distance, deterministic top-k, zero-row handling, and metadata behavior are adapted in package-owned C++; FAISS and faissR are not called or linked.",
+      "package_files": ["src/native_knn_exact.cpp"],
+      "upstream_files": [
+        "src/nn_faiss_impl.cpp",
+        "src/nn_faiss_bridge.cpp"
+      ],
+      "license_file": "inst/LICENSES/FAISSR-LICENSE",
+      "notice_file": "inst/NOTICE"
+    },
+    {
       "id": "dlpack",
       "name": "DLPack",
       "classification": "vendored_header",

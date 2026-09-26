@@ -55,16 +55,25 @@ Adapted or vendored source
 3. faissR
 
    Repository: https://github.com/tkcaccia/faissR
-   Commit: f37ea97c5774200025b1480770b8ecbf1d2d7919
-   Version at commit: 0.99.15
+   Commits: f37ea97c5774200025b1480770b8ecbf1d2d7919;
+            09f4c88fe8af431053a35a945db809a1da22033e
+   Versions at commits: 0.99.15; 0.99.48
    License: MIT
    Copyright: Stefano Cacciatore
-   Package file: src/native_knn_cuda_impl.cpp
+   Package files: src/native_knn_cuda_impl.cpp,
+                  src/native_knn_hnsw_tuning.h,
+                  src/native_knn_exact.cpp
    Upstream files: src/nn_cuvs_impl.cpp, src/nn_cuda_impl.cpp,
-                   src/nn_cuda_kernels.cpp
+                   src/nn_cuda_kernels.cpp, src/nn_auto_select.cpp,
+                   src/nn_faiss_impl.cpp, src/nn_faiss_bridge.cpp,
+                   benchmark_scripts/
    Boundary: CUDA adapter, buffer-ownership, and tuning organization was
-             distilled into fastEmbedR. The faissR R package is not imported,
-             linked, or called by fastEmbedR production code.
+             distilled into fastEmbedR. The CPU HNSW recall-0.99 selector
+             adapts only the metric/shape/k parameter policy. Exhaustive CPU
+             search adapts exact-route preprocessing, distance, and metadata
+             behavior in package-owned C++. The faissR R package and FAISS
+             library are not imported, linked, or called by fastEmbedR
+             production code.
    License copy: LICENSES/FAISSR-LICENSE
 
 4. DLPack 1.0

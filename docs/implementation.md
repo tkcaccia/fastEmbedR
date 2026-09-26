@@ -16,10 +16,11 @@ interpolation-based t-SNE. UMAP follows the fuzzy simplicial-set graph formulati
 introduced by McInnes and colleagues [7,13]. The t-SNE path follows the
 probabilistic neighbor-embedding objective of van der Maaten and Hinton [1],
 with modern interpolation-based optimization ideas from FIt-SNE and openTSNE [3-4].
-The package is intentionally KNN-first. fastEmbedR implements its CPU HNSW and
-Apple Metal exact/IVF-Flat one-call KNN paths natively. CUDA builds link to the
-Apache-2.0 RAPIDS cuVS C API for exact and IVF-Flat search. They do not call
-another R package, Python, or `reticulate`. Graph/affinity construction,
+The package is intentionally KNN-first. fastEmbedR implements its CPU
+exact/HNSW and Apple Metal exact/IVF-Flat one-call KNN paths natively. CUDA
+builds link to the Apache-2.0 RAPIDS cuVS C API for exact and IVF-Flat search.
+They do not call another R package, Python, or `reticulate`. Graph/affinity
+construction,
 initialization, stochastic optimization, native fixed-reference transforms,
 backend reporting, and quality metrics remain inside fastEmbedR.
 
@@ -109,16 +110,30 @@ backend, and CPU thread count; it applies the same internally selected search
 policy as the one-call embedding functions. The KNN-input functions also
 accept a plain host list of indices and distances from another implementation.
 
-The CPU implementation distils the HNSW organization in FAISS 1.14.3 [8]:
+For fewer than 5,000 observations, the CPU route uses exhaustive float32
+distance evaluation and deterministic top-k selection. Euclidean, cosine, and
+correlation preprocessing and zero-row handling follow the documented
+`method = "exact"` behavior of faissR 0.99.48. The code is package-owned C++
+and does not include, call, or link FAISS or faissR. Because every candidate is
+examined, recall is one by construction. The same rule applies to
+query-to-reference search when the reference has fewer than 5,000 rows.
+
+For larger inputs, the CPU implementation distils the HNSW organization in
+FAISS 1.14.3 [8]:
 exponentially sampled hierarchy levels, greedy descent through upper layers,
 bounded `efConstruction` expansion at each insertion layer, diversity-aware
 neighbor pruning, reciprocal graph links, and independent parallel queries.
 All vectors, graph distances, and search buffers are float32; indices are
-int32. A large/high-dimensional target-0.99 policy uses `M = 10`,
-`efConstruction = 40`, and `efSearch = 40`, selected only after comparison
-against the original FAISS HNSW output. Other shapes use a more conservative
-graph. The package records the selected values and does not claim bitwise
-identity with FAISS.
+int32. The target-0.99 policy selects `M`, `efConstruction`, and `efSearch`
+from the metric, dataset size, feature count, and a `k` bucket. The policy was
+adapted from the deterministic faissR 0.99.48 calibration tables at commit
+`09f4c88fe8af431053a35a945db809a1da22033e`. Those tables were fitted on
+FAISS HNSW, so fastEmbedR records the selected values and calibration source
+without claiming a per-call recall measurement or a guarantee on unseen data.
+`tuning_reference_target_met` describes whether the faissR calibration cell
+met its target; it is not measured recall for the current fastEmbedR call. The
+native implementation is tested against exact neighbors on representative
+inputs.
 
 Construction uses one persistent worker team, reusable visit tables and
 bounded heaps, early-exit squared-distance comparisons, and parallel
@@ -151,8 +166,9 @@ permissive licenses are retained under `inst/LICENSES/`.
 For reproducibility, the one-call API fixes only the requested KNN device class
 and a small/large data policy:
 
-- CPU one-call embeddings use native HNSW. Metal uses native exact KNN below
-  4,096 observations and recall-tuned IVF-Flat for larger inputs.
+- CPU one-call embeddings use native exact KNN below 5,000 observations and
+  HNSW otherwise. Metal uses native exact KNN below 4,096 observations and
+  recall-tuned IVF-Flat for larger inputs.
 - CUDA one-call embeddings use cuVS brute force below 100,000 samples and
   recall-tuned cuVS IVF-Flat at or above 100,000 samples. Input is converted
   once to the row-major float32 layout expected by cuVS. IVF starts from a
@@ -338,7 +354,11 @@ engineering references [12].
 ### CUDA UMAP
 
 The CUDA backend is compiled when `FASTEMBEDR_USE_CUDA=1` is enabled. The
-public CUDA path uses the pure atomic optimizer. When
+public CUDA path stores the graph in row-major device memory and assigns one
+warp to each head row. Neighbor reads are coalesced, head updates are reduced
+within the warp, and tail updates use atomics only after that aggregation. The
+optimizer kernel fuses attraction, device-side negative sampling, repulsion,
+and coordinate updates. When
 `FASTEMBEDR_USE_CUVS=1`, exact/IVF-Flat search is invoked through the native
 cuVS C API, its KNN buffers remain on the selected CUDA device, and graph or
 affinity construction consumes those pointers directly. The owning R object
@@ -453,10 +473,13 @@ provide enough benefit to justify another user-facing backend.
 The current CPU FFT-grid path reuses a scoped worker team, FFT bit-reversal and
 root tables, and per-thread column scratch. The current Metal path encodes 16
 unchanged optimization iterations per command buffer. The current CUDA path
-captures chunks of 25 unchanged iterations in CUDA Graphs. These are
-implementation-only optimizations: they do not reduce perplexity, grid size,
-or iteration counts. Their profiling results, output-agreement gates, rejected
-experiments, and exact benchmark artifacts are documented in
+uses the CUDA default asynchronous memory pool, reuses thread-local CUDA
+library handles and cuFFT plans, and captures chunks of 25 unchanged t-SNE
+iterations in CUDA Graphs. CUDA UMAP captures its complete epoch sequence.
+One-call CUDA t-SNE also reuses the feature matrix retained for KNN as its PCA
+input. These are implementation-only optimizations: they do not reduce
+perplexity, grid size, epochs, or iteration counts. Their profiling results,
+output-agreement gates, rejected experiments, and benchmark artifacts are in
 [Backend Performance Engineering](backend-performance-engineering.md).
 
 ## Landmarking
@@ -466,6 +489,16 @@ subset, projects non-landmark observations using fixed-reference KNN
 interpolation/transform steps, and records projection/transform time
 separately. Landmarking is not used silently inside full `tsne()` or
 `umap()` calls.
+
+Landmarking is also evaluated as a memory strategy, not only as a timing
+strategy. Landmark metrics report estimated graph and layout bytes for a full
+fit and for the reference fit, together with query-to-reference KNN bytes
+required during projection. These estimates assume four-byte indices,
+four-byte float32 edge values and four-byte layout coordinates. They exclude
+the input matrix, R object overhead, allocator caches and temporary buffers.
+The reference-fit saving is therefore stage-specific and is not a claim about
+total peak RSS: retaining query neighbors or the full output layout can reduce
+or eliminate the memory advantage.
 
 ## Parameter Policy And Autotuning
 

@@ -11,6 +11,7 @@ Rcpp::List native_cuda_knn_impl(SEXP,
                                 const std::string&,
                                 const std::string&,
                                 double,
+                                bool,
                                 bool) {
   Rcpp::stop(
     "Native CUDA KNN is unavailable. Reinstall fastEmbedR with CUDA and "

@@ -429,7 +429,8 @@ summarize_tsne_gpu_knn <- function(knn, n, n_neighbors) {
 }
 
 compute_tsne_matrix_knn <- function(
-    x, nn, n, n_neighbors, backend, metric, n_threads, keep_knn
+    x, nn, n, n_neighbors, backend, metric, n_threads, keep_knn,
+    retain_cuda_data
 ) {
     engine <- "supplied"
     if (is.null(nn)) {
@@ -445,7 +446,8 @@ compute_tsne_matrix_knn <- function(
             output = fastembedr_knn_output_type(x, policy$backend),
             n_threads = n_threads, tuning = policy$tuning,
             target_recall = policy$target_recall,
-            keep_gpu = policy$backend == "cuda"
+            keep_gpu = policy$backend == "cuda",
+            retain_data = isTRUE(retain_cuda_data)
         )
     }
     if (fastembedr_is_gpu_knn(nn)) {
@@ -614,9 +616,12 @@ run_matrix_input_tsne <- function(data, nn, settings, extra, input_float) {
         nrow(x), settings$perplexity
     )
     settings$perplexity <- policy$perplexity
+    retain_cuda_data <- is.null(nn) && settings$backend == "cuda" &&
+        metric == "euclidean" && is.null(settings$Y_init) &&
+        is.null(settings$init_data)
     knn <- timed_do_call(compute_tsne_matrix_knn, list(
         x, nn, nrow(x), policy$n_neighbors, settings$backend, metric,
-        settings$n_threads, settings$keep_knn
+        settings$n_threads, settings$keep_knn, retain_cuda_data
     ))
     init <- timed_do_call(prepare_tsne_matrix_init, list(
         x, knn$value$input, settings, nrow(x)
@@ -677,10 +682,11 @@ run_matrix_input_tsne <- function(data, nn, settings, extra, input_float) {
 #' @param nn Optional precomputed KNN output when `data` is a data matrix.
 #' @param seed Random seed.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. CPU KNN
-#'   uses package-native HNSW. Metal uses package-native exact or recall-tuned
-#'   IVF-Flat search. CUDA uses cuVS brute-force exact search below 100,000
-#'   rows and cuVS IVF-Flat above that threshold. Device pointers pass directly
-#'   to the native CUDA t-SNE optimizer.
+#'   uses package-native exact search below 5,000 rows and HNSW otherwise.
+#'   Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
+#'   cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
+#'   that threshold. Device pointers pass directly to the native CUDA t-SNE
+#'   optimizer.
 #'   Unsupported GPU requests fail clearly and are not relabelled CPU runs.
 #' @param keep_knn If `TRUE`, retain KNN matrices in the returned object.
 #' @param verbose Print optimizer progress.

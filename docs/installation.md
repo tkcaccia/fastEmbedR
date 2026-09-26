@@ -17,8 +17,9 @@ FASTEMBEDR_USE_CUDA=0 \
 R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 ```
 
-The CPU HNSW source is compiled into fastEmbedR. Its retained FAISS notice
-describes source provenance; it does not imply a runtime libfaiss dependency.
+The CPU exact and HNSW sources are compiled into fastEmbedR. Retained FAISS
+and faissR notices describe source provenance; they do not imply a runtime
+libfaiss or faissR dependency.
 
 ## Apple Metal
 
@@ -93,6 +94,12 @@ export FASTEMBEDR_USE_RAFT=1
 
 Without these RAFT settings, CUDA PCA and CUDA t-SNE PCA initialization use
 the package-native rSVD implementation; they do not fall back to CPU.
+
+CUDA embedding uses the CUDA default asynchronous memory pool for large
+workspaces. cuBLAS, cuSOLVER, cuRAND, RAFT, and cuFFT objects are cached within
+the calling R thread where applicable. This RMM-style allocator discipline does
+not add an RMM dependency; RMM remains relevant only to the optional RAFT TSVD
+route described above.
 
 ## Discovery variables
 

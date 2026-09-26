@@ -100,7 +100,7 @@ test_that("Metal t-SNE FFT-grid exposes opt-in per-stage timing", {
     expect_equal(attr(layout, "fastEmbedR_config")$metal_stage_timing, timing)
 })
 
-test_that("GPU UMAP config records only the validated atomic paths", {
+test_that("GPU UMAP config records validated backend paths", {
     cfg <- fastEmbedR:::fast_knn_umap_config(
         n = 70000L,
         k = 50L,
@@ -113,10 +113,10 @@ test_that("GPU UMAP config records only the validated atomic paths", {
 
     cuda_cfg <- cfg
     cuda_cfg$backend <- "cuda"
-    cuda_cfg$gpu_optimizer_mode <- "atomic_coo"
-    cuda_cfg$gpu_umap_path <- "cuda_pure_atomic"
-    expect_equal(cuda_cfg$gpu_optimizer_mode, "atomic_coo")
-    expect_equal(cuda_cfg$gpu_umap_path, "cuda_pure_atomic")
+    cuda_cfg$gpu_optimizer_mode <- "row_warp_atomic_tail"
+    cuda_cfg$gpu_umap_path <- "cuda_row_warp"
+    expect_equal(cuda_cfg$gpu_optimizer_mode, "row_warp_atomic_tail")
+    expect_equal(cuda_cfg$gpu_umap_path, "cuda_row_warp")
 })
 
 test_that(paste(

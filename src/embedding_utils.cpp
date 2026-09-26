@@ -150,7 +150,8 @@ int resolve_projection_threads(int n_threads, const int n) {
     const unsigned int hw = std::thread::hardware_concurrency();
     n_threads = hw == 0 ? 1 : static_cast<int>(hw);
   }
-  return std::max(1, std::min(n_threads, n));
+  const int cap = n < 256 ? 1 : n < 2048 ? 2 : n_threads;
+  return std::max(1, std::min(std::min(n_threads, cap), n));
 }
 
 template <typename Function>
@@ -428,6 +429,7 @@ List pca_rsvd_cpu_cpp(SEXP data,
     scale_values
   );
   const int max_rank = std::min(x.nrow, x.ncol);
+  n_threads = resolve_projection_threads(n_threads, x.ncol);
   const int rank = std::min(n_components, max_rank);
   if (rank < 1) Rcpp::stop("PCA input has no usable rank.");
   if (omega.nrow() != x.ncol || omega.ncol() < rank ||
@@ -2406,7 +2408,8 @@ List project_embedding_affine_parallel_cpp(SEXP reference_data_sexp,
   IntegerVector used_neighbors(n_query);
   IntegerVector fallback(n_query);
   const double eps = std::sqrt(std::numeric_limits<double>::epsilon());
-  const int threads = resolve_projection_threads(n_threads, n_query);
+  const int requested_threads = n_threads < 1 ? 1 : n_threads;
+  const int threads = resolve_projection_threads(requested_threads, n_query);
   const auto reference_value = [&](const int row, const int col) -> double {
     return static_cast<double>(reference_data.values[
       static_cast<std::size_t>(row) * n_features + col
@@ -2646,6 +2649,7 @@ List project_embedding_affine_parallel_cpp(SEXP reference_data_sexp,
     Rcpp::Named("max_neighbors") = max_neighbors,
     Rcpp::Named("ridge") = ridge,
     Rcpp::Named("max_extrapolation") = max_extrapolation,
-    Rcpp::Named("n_threads") = threads
+    Rcpp::Named("n_threads") = requested_threads,
+    Rcpp::Named("n_threads_effective") = threads
   );
 }

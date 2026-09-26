@@ -642,13 +642,23 @@ plot_embedding(fit_landmark_umap$layout, labels, "Landmark UMAP")
 par(old_par)
 ```
 
-CPU uses native HNSW for query-to-reference search. Metal uses native exact
-search for small references and recall-tuned IVF-Flat for larger references,
-followed by fixed-reference transforms. CUDA uses native exact or IVF-Flat
-query search and keeps KNN, layouts, and refinement buffers resident on the
-GPU. The result records landmark count, fraction, projection backend, and
+CPU uses exhaustive exact query-to-reference search below 5,000 reference
+rows and native HNSW otherwise. Metal uses native exact search for small
+references and recall-tuned IVF-Flat for larger references, followed by
+fixed-reference transforms. CUDA uses native exact or IVF-Flat query search
+and keeps KNN, layouts, and refinement buffers resident on the GPU. The result
+records landmark count, fraction, projection backend, and
 separate reference, query-KNN, and transform timings so a landmark
 approximation cannot be mistaken for a full embedding.
+
+Landmarking can also reduce the memory needed by reference optimization. The
+returned `metrics` include `landmark_reference_memory_saving` for this stage
+and `landmark_projection_knn_bytes` for the query search. The estimates use
+float32 graph values and coordinates and exclude the input matrix, R object
+overhead, allocator caches, and temporary buffers. They describe where memory
+is saved rather than claiming that every landmark run has lower peak RSS.
+Projection may retain enough query neighbors or output rows to offset the
+reference-stage saving.
 
 Each integrated landmark fit also retains a reusable model in `$model`.
 `project_landmark_model(fit$model, newdata)` applies the fitted preprocessing
@@ -714,7 +724,7 @@ The backend argument has exactly three choices.
 
 | Backend | One-call KNN | Embedding implementation |
 | --- | --- | --- |
-| `"cpu"` | HNSW | Multithreaded C++ |
+| `"cpu"` | Exact below 5,000 rows; HNSW otherwise | Multithreaded C++ |
 | `"metal"` | Exact or IVF-Flat | Metal kernels |
 | `"cuda"` | Exact or IVF-Flat | CUDA kernels |
 

@@ -109,6 +109,8 @@ test_that("integrated landmark UMAP returns a reusable model", {
     expect_null(fit$model$preprocess_transform$pca$scores)
     expect_equal(dim(projected$layout), c(5L, 2L))
     expect_true(all(is.finite(projected$layout)))
+    expect_true(fit$metrics$landmark_reference_memory_saving > 0)
+    expect_gt(fit$metrics$landmark_projection_knn_bytes, 0)
     expect_identical(projected$parameters$projection_scope, "held_out_query")
 })
 
@@ -149,6 +151,8 @@ test_that("integrated landmark t-SNE returns a reusable model", {
     expect_s3_class(fit$model$fit, "fastEmbedR_embedding")
     expect_equal(dim(projected$layout), c(4L, 2L))
     expect_true(all(is.finite(projected$layout)))
+    expect_true(fit$metrics$landmark_reference_memory_saving > 0)
+    expect_gt(fit$metrics$landmark_projection_knn_bytes, 0)
 })
 
 test_that("original reconstruction requires explicit query indices", {
@@ -219,4 +223,20 @@ test_that("landmark projection rejects fractional iteration controls", {
         ),
         "refinement_epochs"
     )
+})
+
+test_that("landmark memory metrics separate fit and projection stages", {
+    memory <- fastEmbedR:::landmark_memory_estimate(
+        n = 1000, n_landmarks = 250, n_neighbors = 15,
+        transform_k = 15, n_components = 2
+    )
+    expect_lt(
+        memory$landmark_reference_optimizer_bytes,
+        memory$full_optimizer_bytes
+    )
+    expect_equal(
+        memory$landmark_reference_memory_saving,
+        1 - memory$landmark_reference_memory_ratio
+    )
+    expect_gt(memory$landmark_projection_knn_bytes, 0)
 })

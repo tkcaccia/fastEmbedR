@@ -38,13 +38,15 @@ by fastEmbedR for the requested backend and is deliberately not a user
 parameter.
 }
 \details{
-CPU search uses a package-native HNSW implementation with fixed,
-size-aware search parameters; its recall is not audited at runtime. Metal
-uses native exact search for small inputs and recall-tuned IVF-Flat for
-larger inputs. CUDA uses RAPIDS cuVS brute-force exact search below 100,000
-observations and cuVS IVF-Flat above that threshold. Approximate Metal and
-CUDA routes use an internal recall target of 0.99 and report whether their
-pilot audit met it.
+CPU uses native exhaustive float32 search below 5,000 observations and HNSW
+otherwise. HNSW applies a metric-, shape-, and \code{k}-aware policy calibrated
+for target recall 0.99; its recall is not audited during each call.
+\code{tuning_reference_target_met} describes the faissR calibration cell and is
+not measured recall for the current call. Metal uses native exact search for
+small inputs and recall-tuned IVF-Flat for larger inputs. CUDA uses RAPIDS
+cuVS brute-force exact search below 100,000 observations and cuVS IVF-Flat
+above that threshold. Approximate Metal and CUDA routes use an internal
+recall target of 0.99 and report whether their pilot audit met it.
 
 The CUDA result remains on the GPU and can be passed directly to
 \code{\link[=umap_knn]{umap_knn()}} or \code{\link[=tsne_knn]{tsne_knn()}} with \code{backend = "cuda"}. CPU and Metal

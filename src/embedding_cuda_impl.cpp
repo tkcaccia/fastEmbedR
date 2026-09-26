@@ -26,6 +26,9 @@ using Rcpp::NumericVector;
 extern "C" {
 bool fastembedr_cuda_available();
 const char* fastembedr_cuda_embedding_last_error();
+const char* fastembedr_cuda_workspace_allocator();
+int fastembedr_cuda_last_tsne_graph_capture();
+int fastembedr_cuda_last_umap_graph_capture();
 int fastembedr_cuda_opentsne_fft_grid_size(int n);
 int fastembedr_cuda_embed(const int* neighbors,
                           const float* weights,
@@ -184,6 +187,28 @@ int fastembedr_cuda_opentsne_fft_from_device_knn_float_pca_float(const int* indi
                                                                  unsigned int seed,
                                                                  int index_offset,
                                                                  float* out);
+int fastembedr_cuda_opentsne_fft_from_device_knn_float_pca_device(
+    const int* indices,
+    const float* distances,
+    const float* pca_init_values,
+    int pca_init_p,
+    int n,
+    int k,
+    int n_components,
+    float perplexity,
+    int early_exaggeration_iter,
+    int n_iter,
+    float early_exaggeration,
+    float exaggeration,
+    float learning_rate,
+    int learning_rate_auto,
+    float initial_momentum,
+    float final_momentum,
+    float min_gain,
+    float max_step_norm,
+    unsigned int seed,
+    int index_offset,
+    float* out);
 int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
                                            const double* distances,
                                            int n,
@@ -415,6 +440,22 @@ int fastembedr_cuda_pca_fit(const float* values,
                             int oversample,
                             int power,
                             int* selected_method);
+int fastembedr_cuda_pca_fit_double(const double* values,
+                                   int n,
+                                   int p,
+                                   int n_components,
+                                   int center,
+                                   int scale,
+                                   float* scores,
+                                   float* components,
+                                   float* singular_values,
+                                   float* center_values,
+                                   float* scale_values,
+                                   int requested_method,
+                                   unsigned int seed,
+                                   int oversample,
+                                   int power,
+                                   int* selected_method);
 }
 
 namespace {
@@ -1372,178 +1413,6 @@ NumericMatrix rsvd_multiply_cuda_impl(NumericMatrix left,
   return out;
 }
 
-NumericMatrix cuda_pca_init_cuda_impl(NumericMatrix data,
-                                      int n_components) {
-#ifndef FASTEMBEDR_HAS_CUDA
-  Rcpp::stop("fastEmbedR was not built with CUDA support.");
-#else
-  if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
-  const int n = data.nrow();
-  const int p = data.ncol();
-  if (n < 2 || p < 1) {
-    Rcpp::stop("CUDA PCA initialization requires at least two rows and one column.");
-  }
-  n_components = std::max(1, std::min(n_components, std::min(n, p)));
-
-  std::vector<double> means(p, 0.0);
-  for (int j = 0; j < p; ++j) {
-    double s = 0.0;
-    for (int i = 0; i < n; ++i) s += data(i, j);
-    means[j] = s / static_cast<double>(n);
-  }
-
-  std::vector<float> h_x(static_cast<std::size_t>(n) * p);
-  for (int j = 0; j < p; ++j) {
-    const std::size_t col = static_cast<std::size_t>(j) * n;
-    for (int i = 0; i < n; ++i) {
-      h_x[col + i] = static_cast<float>(data(i, j) - means[j]);
-    }
-  }
-
-  float* d_x = nullptr;
-  float* d_cov = nullptr;
-  float* d_scores = nullptr;
-  float* d_work = nullptr;
-  int* d_info = nullptr;
-  cublasHandle_t blas = nullptr;
-  cusolverDnHandle_t solver = nullptr;
-  auto cleanup = [&]() {
-    if (d_x != nullptr) cudaFree(d_x);
-    if (d_cov != nullptr) cudaFree(d_cov);
-    if (d_scores != nullptr) cudaFree(d_scores);
-    if (d_work != nullptr) cudaFree(d_work);
-    if (d_info != nullptr) cudaFree(d_info);
-    if (blas != nullptr) cublasDestroy(blas);
-    if (solver != nullptr) cusolverDnDestroy(solver);
-  };
-
-  const std::size_t x_items = static_cast<std::size_t>(n) * p;
-  const std::size_t cov_items = static_cast<std::size_t>(p) * p;
-  const std::size_t score_items = static_cast<std::size_t>(n) * n_components;
-  try {
-    if (cudaMalloc(reinterpret_cast<void**>(&d_x), x_items * sizeof(float)) != cudaSuccess ||
-        cudaMalloc(reinterpret_cast<void**>(&d_cov), cov_items * sizeof(float)) != cudaSuccess ||
-        cudaMalloc(reinterpret_cast<void**>(&d_scores), score_items * sizeof(float)) != cudaSuccess ||
-        cudaMalloc(reinterpret_cast<void**>(&d_info), sizeof(int)) != cudaSuccess) {
-      cleanup();
-      Rcpp::stop("CUDA allocation failed in PCA initialization.");
-    }
-    if (cudaMemcpy(d_x, h_x.data(), x_items * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
-      cleanup();
-      Rcpp::stop("CUDA upload failed in PCA initialization.");
-    }
-    if (cublasCreate(&blas) != CUBLAS_STATUS_SUCCESS ||
-        cusolverDnCreate(&solver) != CUSOLVER_STATUS_SUCCESS) {
-      cleanup();
-      Rcpp::stop("Could not create cuBLAS/cuSOLVER handles for PCA initialization.");
-    }
-
-    const float alpha_cov = 1.0f / static_cast<float>(std::max(1, n - 1));
-    const float beta_zero = 0.0f;
-    if (cublasSgemm(
-          blas,
-          CUBLAS_OP_T,
-          CUBLAS_OP_N,
-          p,
-          p,
-          n,
-          &alpha_cov,
-          d_x,
-          n,
-          d_x,
-          n,
-          &beta_zero,
-          d_cov,
-          p
-        ) != CUBLAS_STATUS_SUCCESS) {
-      cleanup();
-      Rcpp::stop("cuBLAS covariance multiply failed in PCA initialization.");
-    }
-
-    int lwork = 0;
-    if (cusolverDnSsyevd_bufferSize(
-          solver,
-          CUSOLVER_EIG_MODE_VECTOR,
-          CUBLAS_FILL_MODE_UPPER,
-          p,
-          d_cov,
-          p,
-          d_scores,
-          &lwork
-        ) != CUSOLVER_STATUS_SUCCESS || lwork <= 0) {
-      cleanup();
-      Rcpp::stop("cuSOLVER workspace query failed in PCA initialization.");
-    }
-    if (cudaMalloc(reinterpret_cast<void**>(&d_work), static_cast<std::size_t>(lwork) * sizeof(float)) != cudaSuccess) {
-      cleanup();
-      Rcpp::stop("CUDA workspace allocation failed in PCA initialization.");
-    }
-    if (cusolverDnSsyevd(
-          solver,
-          CUSOLVER_EIG_MODE_VECTOR,
-          CUBLAS_FILL_MODE_UPPER,
-          p,
-          d_cov,
-          p,
-          d_scores,
-          d_work,
-          lwork,
-          d_info
-        ) != CUSOLVER_STATUS_SUCCESS) {
-      cleanup();
-      Rcpp::stop("cuSOLVER eigen decomposition failed in PCA initialization.");
-    }
-    int info = 0;
-    if (cudaMemcpy(&info, d_info, sizeof(int), cudaMemcpyDeviceToHost) != cudaSuccess || info != 0) {
-      cleanup();
-      Rcpp::stop("cuSOLVER PCA initialization returned info=%d.", info);
-    }
-
-    const float alpha_score = 1.0f;
-    const float beta_score = 0.0f;
-    const float* d_top_vectors = d_cov + static_cast<std::size_t>(p - n_components) * p;
-    if (cublasSgemm(
-          blas,
-          CUBLAS_OP_N,
-          CUBLAS_OP_N,
-          n,
-          n_components,
-          p,
-          &alpha_score,
-          d_x,
-          n,
-          d_top_vectors,
-          p,
-          &beta_score,
-          d_scores,
-          n
-        ) != CUBLAS_STATUS_SUCCESS) {
-      cleanup();
-      Rcpp::stop("cuBLAS score multiply failed in PCA initialization.");
-    }
-
-    std::vector<float> h_scores(score_items);
-    if (cudaMemcpy(h_scores.data(), d_scores, score_items * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
-      cleanup();
-      Rcpp::stop("CUDA score download failed in PCA initialization.");
-    }
-    cleanup();
-
-    NumericMatrix out(n, n_components);
-    for (int j = 0; j < n_components; ++j) {
-      const std::size_t col = static_cast<std::size_t>(j) * n;
-      for (int i = 0; i < n; ++i) {
-        out(i, j) = static_cast<double>(h_scores[col + i]);
-      }
-    }
-    return out;
-  } catch (...) {
-    cleanup();
-    throw;
-  }
-#endif
-}
-
 List pca_tsvd_cuda_impl(SEXP data,
                         int n_components,
                         bool center,
@@ -1566,7 +1435,6 @@ List pca_tsvd_cuda_impl(SEXP data,
   }
 
   const bool float32_output = cuda_is_float32_s4(data);
-  std::vector<float> input = cuda_copy_matrix_float(data, n, p, "data");
   std::vector<float> scores(static_cast<std::size_t>(n) * n_components);
   std::vector<float> components(static_cast<std::size_t>(n_components) * p);
   std::vector<float> singular_values(n_components);
@@ -1575,24 +1443,27 @@ List pca_tsvd_cuda_impl(SEXP data,
 
   const auto started = std::chrono::steady_clock::now();
   int selected_method = 0;
-  const int status = fastembedr_cuda_pca_fit(
-    input.data(),
-    n,
-    p,
-    n_components,
-    center ? 1 : 0,
-    scale ? 1 : 0,
-    scores.data(),
-    components.data(),
-    singular_values.data(),
-    center_values.data(),
-    scale_values.data(),
-    requested_method,
-    static_cast<unsigned int>(seed),
-    oversample,
-    power,
-    &selected_method
-  );
+  int status = 0;
+  if (float32_output) {
+    IntegerMatrix payload = cuda_float32_data_slot(data);
+    const float* input = reinterpret_cast<const float*>(INTEGER(payload));
+    status = fastembedr_cuda_pca_fit(
+      input, n, p, n_components, center ? 1 : 0, scale ? 1 : 0,
+      scores.data(), components.data(), singular_values.data(),
+      center_values.data(), scale_values.data(), requested_method,
+      static_cast<unsigned int>(seed), oversample, power,
+      &selected_method
+    );
+  } else {
+    NumericMatrix input(data);
+    status = fastembedr_cuda_pca_fit_double(
+      input.begin(), n, p, n_components, center ? 1 : 0,
+      scale ? 1 : 0, scores.data(), components.data(),
+      singular_values.data(), center_values.data(), scale_values.data(),
+      requested_method, static_cast<unsigned int>(seed), oversample,
+      power, &selected_method
+    );
+  }
   if (status != 0) {
     Rcpp::stop("Native CUDA PCA failed: %s", cuda_embedding_error_message());
   }
@@ -2000,6 +1871,10 @@ NumericMatrix knn_umap_cuda_fused_gpu_impl(SEXP gpu_knn,
     result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);
     result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
   }
+  result.attr("cuda_allocator") = fastembedr_cuda_workspace_allocator();
+  result.attr("cuda_graph_capture") =
+    fastembedr_cuda_last_umap_graph_capture() != 0;
+  result.attr("cuda_graph_scope") = "complete_umap_epoch_loop";
   return result;
 }
 
@@ -2574,15 +2449,34 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
 
   const int* device_indices = cuda_int_device_ptr_from_external(src["indices_ptr"], "indices_ptr");
   const float* device_distances = cuda_float_device_ptr_from_external(src["distances_ptr"], "distances_ptr");
-  const bool use_device_pca = !init && pca_init_data != R_NilValue;
+  const bool pca_requested = !init && pca_init_data != R_NilValue;
+  const bool has_resident_pca = pca_requested &&
+    src.containsElementNamed("data_ptr") &&
+    src.containsElementNamed("n_features") &&
+    src.containsElementNamed("pca_data_compatible") &&
+    Rcpp::as<bool>(src["pca_data_compatible"]);
+  const bool use_device_pca = pca_requested;
   std::vector<float> init_float;
-  std::vector<float> pca_float;
   NumericMatrix pca_double;
   const double* pca_double_ptr = nullptr;
   const float* pca_float_ptr = nullptr;
+  const float* pca_device_ptr = nullptr;
   int pca_p = 0;
   if (init) {
     init_float = init_to_float_2d(y_init);
+  } else if (has_resident_pca) {
+    const std::string data_layout = src.containsElementNamed("data_layout") ?
+      Rcpp::as<std::string>(src["data_layout"]) : "";
+    if (data_layout != "row_major_observation_by_feature") {
+      Rcpp::stop("Unsupported resident CUDA feature-matrix layout.");
+    }
+    pca_p = Rcpp::as<int>(src["n_features"]);
+    if (pca_p < n_components) {
+      Rcpp::stop("Resident CUDA PCA data have too few features.");
+    }
+    pca_device_ptr = cuda_float_device_ptr_from_external(
+      src["data_ptr"], "data_ptr"
+    );
   } else if (use_device_pca) {
     if (cuda_is_float32_s4(pca_init_data)) {
       IntegerMatrix payload = cuda_float32_data_slot(pca_init_data);
@@ -2590,8 +2484,7 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
         Rcpp::stop("CUDA device PCA initialization data has incompatible dimensions.");
       }
       pca_p = payload.ncol();
-      pca_float = cuda_copy_float32_payload(pca_init_data, n, pca_p);
-      pca_float_ptr = pca_float.data();
+      pca_float_ptr = reinterpret_cast<const float*>(INTEGER(payload));
     } else {
       pca_double = Rcpp::as<NumericMatrix>(pca_init_data);
       if (pca_double.nrow() != n || pca_double.ncol() < n_components) {
@@ -2608,7 +2501,21 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
   const int index_offset = src.containsElementNamed("index_base") ?
     Rcpp::as<int>(src["index_base"]) : 1;
   int status = 0;
-  if (pca_double_ptr != nullptr) {
+  if (pca_device_ptr != nullptr) {
+    status =
+      fastembedr_cuda_opentsne_fft_from_device_knn_float_pca_device(
+        device_indices, device_distances, pca_device_ptr, pca_p,
+        n, k, n_components, static_cast<float>(perplexity),
+        early_exaggeration_iter, n_iter,
+        static_cast<float>(early_exaggeration),
+        static_cast<float>(exaggeration),
+        static_cast<float>(learning_rate), learning_rate_auto ? 1 : 0,
+        static_cast<float>(initial_momentum),
+        static_cast<float>(final_momentum), static_cast<float>(min_gain),
+        static_cast<float>(max_step_norm),
+        static_cast<unsigned int>(seed), index_offset, out.data()
+      );
+  } else if (pca_double_ptr != nullptr) {
     status = fastembedr_cuda_opentsne_fft_from_device_knn_float_pca_double(
       device_indices,
       device_distances,
@@ -2730,6 +2637,17 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
         "pca_cuda_raft_tsvd_device") :
       (init ? "host_supplied" : "cuda_random"),
     Rcpp::Named("init_residency") = use_device_pca ? "cuda_device" : (init ? "host_to_device" : "cuda_device"),
+    Rcpp::Named("pca_input_residency") = has_resident_pca ?
+      "shared_cuda_knn_data" :
+      (use_device_pca ? "host_to_cuda" : "not_used"),
+    Rcpp::Named("cuda_allocator") =
+      fastembedr_cuda_workspace_allocator(),
+    Rcpp::Named("cuda_fft_plan_cache") = "thread_local_by_grid_size",
+    Rcpp::Named("cuda_handle_cache") =
+      "thread_local_cublas_cusolver_curand_raft",
+    Rcpp::Named("cuda_graph_capture") =
+      fastembedr_cuda_last_tsne_graph_capture() != 0,
+    Rcpp::Named("cuda_graph_scope") = "repeated_optimizer_chunks",
     Rcpp::Named("auto_kld_stop") = false,
     Rcpp::Named("auto_stop_reason") = "not_available_cuda_gpu_resident_fft",
     Rcpp::Named("auto_iter_end") = early_exaggeration_iter + n_iter,

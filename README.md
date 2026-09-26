@@ -23,7 +23,8 @@ primary contributions are:
 - native CPU, Apple Metal, and CUDA embedding backends where available;
 - float32 input/output support with float32 native optimizer buffers;
 - explicit backend reporting, with no silent CPU fallback labelled as GPU;
-- native CPU HNSW and Apple Metal exact/IVF-Flat KNN for one-call embeddings;
+- native CPU exact/HNSW and Apple Metal exact/IVF-Flat KNN for one-call
+  embeddings;
 - optional GPU-resident exact/IVF-Flat CUDA KNN through RAPIDS cuVS.
 
 The t-SNE implementation combines sparse perplexity affinities, two-phase
@@ -55,12 +56,14 @@ The intended workflow is:
 
 For the one-call functions `tsne()` and `umap()`, the embedding backend is
 deliberately limited to `backend = "cpu"`, `"metal"`, or `"cuda"`. Internal
-CPU one-call embeddings use the package-native float32 HNSW path. Metal uses
-native exact search for small inputs and recall-tuned IVF-Flat for larger
-inputs. CUDA uses cuVS brute-force exact search below 100,000 rows and cuVS
-IVF-Flat above that threshold, then passes package-owned device pointers
-into UMAP or t-SNE. It does not call another R package for KNN. No
-unavailable GPU backend is silently relabelled as CPU.
+CPU one-call embeddings use package-native exhaustive float32 search below
+5,000 observations and HNSW otherwise. The HNSW route uses a metric-, shape-,
+and `k`-aware target-0.99 tuning policy. Metal uses native exact search for
+small inputs and recall-tuned IVF-Flat for larger inputs.
+CUDA uses cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat
+above that threshold, then passes package-owned device pointers into UMAP or
+t-SNE. It does not call another R package for KNN. No unavailable GPU backend
+is silently relabelled as CPU.
 
 ## Quick Start
 

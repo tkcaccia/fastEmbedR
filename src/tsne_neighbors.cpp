@@ -100,6 +100,15 @@ int resolve_index_offset(const IntegerMatrix& indices) {
   return (min_idx >= 1 && max_idx <= n) ? 1 : 0;
 }
 
+int adaptive_thread_cap(const int n, const int requested) {
+  if (n <= 1) return 1;
+  const int cap = n < 256 ? 1 :
+    n < 2048 ? 2 :
+    n < 8192 ? 4 :
+    n < 32768 ? 8 : requested;
+  return std::max(1, std::min(requested, cap));
+}
+
 int resolve_threads(int n_threads, int n) {
   if (n_threads == NA_INTEGER) n_threads = 1;
   if (n_threads < 0) Rcpp::stop("`n_threads` must be non-negative.");
@@ -107,7 +116,13 @@ int resolve_threads(int n_threads, int n) {
     const unsigned int hw = std::thread::hardware_concurrency();
     n_threads = hw == 0u ? 1 : static_cast<int>(hw);
   }
-  return std::max(1, std::min(n_threads, std::max(1, n)));
+  return adaptive_thread_cap(std::max(1, n), n_threads);
+}
+
+int resolve_pairwise_threads(const int n_threads, const int n) {
+  if (n <= 1) return 1;
+  const int cap = n < 64 ? 1 : n < 512 ? 2 : n_threads;
+  return std::max(1, std::min(n_threads, cap));
 }
 
 class ParallelExecutor {
@@ -260,19 +275,20 @@ class ParallelExecutorScope {
 
 template <typename Function>
 void parallel_for(const int n, const int n_threads, Function fn) {
-  if (n_threads <= 1 || n < 2) {
+  const int threads = resolve_threads(n_threads, n);
+  if (threads <= 1 || n < 2) {
     fn(0, n, 0);
     return;
   }
   if (active_parallel_executor != nullptr &&
-      n_threads <= active_parallel_executor->max_threads()) {
-    active_parallel_executor->run(n, n_threads, fn);
+      threads <= active_parallel_executor->max_threads()) {
+    active_parallel_executor->run(n, threads, fn);
     return;
   }
   std::vector<std::thread> workers;
-  workers.reserve(static_cast<std::size_t>(n_threads - 1));
-  const int chunk = (n + n_threads - 1) / n_threads;
-  for (int t = 1; t < n_threads; ++t) {
+  workers.reserve(static_cast<std::size_t>(threads - 1));
+  const int chunk = (n + threads - 1) / threads;
+  for (int t = 1; t < threads; ++t) {
     const int begin = t * chunk;
     const int end = std::min(n, begin + chunk);
     if (begin < end) {
@@ -1035,22 +1051,23 @@ float compute_sum_q_f(const std::vector<float>& y,
                       const int n,
                       const int dims,
                       const int n_threads) {
-  std::vector<double> partial(static_cast<std::size_t>(n_threads), 0.0);
+  const int threads = resolve_pairwise_threads(n_threads, n);
+  std::vector<double> partial(static_cast<std::size_t>(threads), 0.0);
   auto worker = [&](const int thread_id) {
     double local = 0.0;
-    for (int i = thread_id; i < n - 1; i += n_threads) {
+    for (int i = thread_id; i < n - 1; i += threads) {
       for (int j = i + 1; j < n; ++j) {
         local += 2.0 / (1.0 + static_cast<double>(squared_distance_f(y, i, j, dims)));
       }
     }
     partial[static_cast<std::size_t>(thread_id)] = local;
   };
-  if (n_threads <= 1) {
+  if (threads <= 1) {
     worker(0);
   } else {
     std::vector<std::thread> workers;
-    workers.reserve(static_cast<std::size_t>(n_threads - 1));
-    for (int t = 1; t < n_threads; ++t) workers.emplace_back(worker, t);
+    workers.reserve(static_cast<std::size_t>(threads - 1));
+    for (int t = 1; t < threads; ++t) workers.emplace_back(worker, t);
     worker(0);
     for (auto& thread : workers) thread.join();
   }
@@ -1094,16 +1111,17 @@ void compute_gradient_pair_symmetric_f(const SparseProbabilitiesF& p,
                                        const float exaggeration,
                                        const int n_threads,
                                        std::vector<float>& grad) {
+  const int threads = resolve_pairwise_threads(n_threads, n);
   std::fill(grad.begin(), grad.end(), 0.0f);
   std::vector<std::vector<float>> local_grad(
-    static_cast<std::size_t>(n_threads),
+    static_cast<std::size_t>(threads),
     std::vector<float>(grad.size(), 0.0f)
   );
-  std::vector<double> partial_sum_q(static_cast<std::size_t>(n_threads), 0.0);
+  std::vector<double> partial_sum_q(static_cast<std::size_t>(threads), 0.0);
   auto repulsive_worker = [&](const int thread_id) {
     std::vector<float>& g = local_grad[static_cast<std::size_t>(thread_id)];
     double local_sum_q = 0.0;
-    for (int i = thread_id; i < n - 1; i += n_threads) {
+    for (int i = thread_id; i < n - 1; i += threads) {
       const std::size_t ib = static_cast<std::size_t>(i) * dims;
       for (int j = i + 1; j < n; ++j) {
         const std::size_t jb = static_cast<std::size_t>(j) * dims;
@@ -1124,12 +1142,12 @@ void compute_gradient_pair_symmetric_f(const SparseProbabilitiesF& p,
     }
     partial_sum_q[static_cast<std::size_t>(thread_id)] = local_sum_q;
   };
-  if (n_threads <= 1) {
+  if (threads <= 1) {
     repulsive_worker(0);
   } else {
     std::vector<std::thread> workers;
-    workers.reserve(static_cast<std::size_t>(n_threads - 1));
-    for (int t = 1; t < n_threads; ++t) workers.emplace_back(repulsive_worker, t);
+    workers.reserve(static_cast<std::size_t>(threads - 1));
+    for (int t = 1; t < threads; ++t) workers.emplace_back(repulsive_worker, t);
     repulsive_worker(0);
     for (auto& thread : workers) thread.join();
   }
@@ -1137,10 +1155,10 @@ void compute_gradient_pair_symmetric_f(const SparseProbabilitiesF& p,
     std::accumulate(partial_sum_q.begin(), partial_sum_q.end(), 0.0),
     static_cast<double>(FLT_MIN)
   ));
-  parallel_for(static_cast<int>(grad.size()), n_threads, [&](const int begin, const int end, const int) {
+  parallel_for(static_cast<int>(grad.size()), threads, [&](const int begin, const int end, const int) {
     for (int index = begin; index < end; ++index) {
       float value = 0.0f;
-      for (int t = 0; t < n_threads; ++t) {
+      for (int t = 0; t < threads; ++t) {
         value += local_grad[static_cast<std::size_t>(t)][static_cast<std::size_t>(index)];
       }
       grad[static_cast<std::size_t>(index)] = value * inv_sum_q;
@@ -1342,9 +1360,10 @@ double evaluate_kl_f(const SparseProbabilitiesF& p,
                      const int n_threads,
                      std::vector<double>* row_costs = nullptr) {
   const double sum_q = static_cast<double>(compute_sum_q_f(y, n, dims, n_threads));
-  std::vector<double> partial(static_cast<std::size_t>(n_threads), 0.0);
+  const int threads = resolve_threads(n_threads, n);
+  std::vector<double> partial(static_cast<std::size_t>(threads), 0.0);
   if (row_costs != nullptr) row_costs->assign(static_cast<std::size_t>(n), 0.0);
-  parallel_for(n, n_threads, [&](const int begin, const int end, const int thread_id) {
+  parallel_for(n, threads, [&](const int begin, const int end, const int thread_id) {
     double local = 0.0;
     for (int i = begin; i < end; ++i) {
       double row_total = 0.0;
@@ -2184,6 +2203,7 @@ List transform_tsne_cpp(NumericMatrix reference_layout,
     }
   }
 
+  const int requested_threads = n_threads;
   const int threads = resolve_threads(n_threads, n_query);
   ParallelExecutor parallel_executor(threads);
   ParallelExecutorScope parallel_scope(&parallel_executor);
@@ -2368,6 +2388,7 @@ List transform_tsne_cpp(NumericMatrix reference_layout,
     Rcpp::Named("transform_batch_size") = batch_size,
     Rcpp::Named("transform_batches") = n_batches,
     Rcpp::Named("n_negatives") = n_negatives,
-    Rcpp::Named("n_threads") = threads
+    Rcpp::Named("n_threads") = threads,
+    Rcpp::Named("n_threads_requested") = requested_threads
   );
 }

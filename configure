@@ -658,7 +658,7 @@ fi
     echo "NVCC = $nvcc"
     printf "%s" "$cuda_rule"
   fi
-  echo "OBJECTS = RcppExports.o tsne_neighbors.o embedding_utils.o fast_knn_umap.o graph_clustering.o graph_clustering_cuda_bridge.o graph_clustering_metal_bridge.o walktrap.o native_knn_bridge.o native_knn_hnsw.o $native_cuda_knn_object $graph_cuda_object $metal_objects embedding_cuda_bridge.o $cuda_objects"
+  echo "OBJECTS = RcppExports.o tsne_neighbors.o embedding_utils.o fast_knn_umap.o graph_clustering.o graph_clustering_cuda_bridge.o graph_clustering_metal_bridge.o walktrap.o native_knn_bridge.o native_knn_hnsw.o native_knn_exact.o $native_cuda_knn_object $graph_cuda_object $metal_objects embedding_cuda_bridge.o $cuda_objects"
 } > src/Makevars
 
 echo "fastEmbedR configuration:"
