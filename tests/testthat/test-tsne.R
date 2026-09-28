@@ -27,6 +27,40 @@ test_that("tsne_knn runs native t-SNE from supplied neighbours", {
     expect_equal(cfg$learning_rate_normal, nrow(x) / cfg$early_exaggeration)
 })
 
+test_that("small two-dimensional CPU t-SNE selects FFT automatically", {
+    set.seed(321)
+    x <- matrix(rnorm(40L * 4L), 40L, 4L)
+    knn <- test_exact_knn(x, k = 12L, backend = "cpu")
+    layout <- tsne_knn(
+        knn, perplexity = 4, early_exaggeration_iter = 1L,
+        n_iter = 1L, backend = "cpu", n.cores = 1L, seed = 321L
+    )
+    config <- attr(layout, "fastEmbedR_config")
+    expect_identical(config$repulsion, "fft_grid")
+    expect_identical(config$fft_grid_size, 128L)
+})
+
+test_that("CPU FFT grid switches to 256 cells at 40,000 rows", {
+    for (n in c(39999L, 40000L)) {
+        indices <- vapply(seq_len(5L), function(offset) {
+            (seq_len(n) + offset - 1L) %% n + 1L
+        }, integer(n))
+        distances <- matrix(1, n, 5L)
+        set.seed(4)
+        initial <- matrix(rnorm(n * 2L, sd = 1e-4), n, 2L)
+        fit <- tsne_knn(
+            indices, distances, perplexity = 3, Y_init = initial,
+            early_exaggeration_iter = 0L, n_iter = 1L,
+            backend = "cpu", n.cores = 1L, seed = 4L
+        )
+        config <- attr(fit, "fastEmbedR_config")
+        expect_identical(config$repulsion, "fft_grid")
+        expect_identical(
+            config$fft_grid_size, if (n == 40000L) 256L else 128L
+        )
+    }
+})
+
 test_that("t-SNE integer controls reject fractional values", {
     set.seed(320)
     x <- matrix(rnorm(30L * 4L), 30L, 4L)

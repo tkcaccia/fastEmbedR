@@ -213,6 +213,7 @@ int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
                                            const double* distances,
                                            int n,
                                            int k,
+                                           int n_components,
                                            int n_epochs,
                                            int negative_sample_rate,
                                float learning_rate,
@@ -223,11 +224,13 @@ int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
                                            unsigned int seed,
                                            int index_offset,
                                            int optimizer_mode,
+                                           int binary_graph,
                                            float* out);
 int fastembedr_cuda_umap_from_knn_spectral_float(const int* indices,
                                                  const float* distances,
                                                  int n,
                                                  int k,
+                                                 int n_components,
                                                  int n_epochs,
                                                  int negative_sample_rate,
                                                  float learning_rate,
@@ -238,11 +241,13 @@ int fastembedr_cuda_umap_from_knn_spectral_float(const int* indices,
                                                  unsigned int seed,
                                                  int index_offset,
                                                  int optimizer_mode,
+                                                 int binary_graph,
                                                  float* out);
 int fastembedr_cuda_umap_from_device_knn_spectral_float(const int* device_indices,
                                                         const float* device_distances,
                                                         int n,
                                                         int k,
+                                                        int n_components,
                                                         int n_epochs,
                                                         int negative_sample_rate,
                                                         float learning_rate,
@@ -852,14 +857,23 @@ void prepare_embedding_neighbors(const IntegerMatrix& indices,
   }
 }
 
-std::vector<float> init_to_float_2d(const NumericMatrix& init) {
+std::vector<float> init_to_float_layout(
+    const NumericMatrix& init, int n_components) {
   const int n = init.nrow();
-  std::vector<float> out(static_cast<std::size_t>(n) * 2u);
+  std::vector<float> out(
+    static_cast<std::size_t>(n) * n_components
+  );
   for (int i = 0; i < n; ++i) {
-    out[static_cast<std::size_t>(i) * 2u] = static_cast<float>(init(i, 0));
-    out[static_cast<std::size_t>(i) * 2u + 1u] = static_cast<float>(init(i, 1));
+    for (int axis = 0; axis < n_components; ++axis) {
+      out[static_cast<std::size_t>(i) * n_components + axis] =
+        static_cast<float>(init(i, axis));
+    }
   }
   return out;
+}
+
+std::vector<float> init_to_float_2d(const NumericMatrix& init) {
+  return init_to_float_layout(init, 2);
 }
 
 bool cuda_is_float32_s4(SEXP x) {
@@ -1679,7 +1693,9 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix indices,
                                        double repulsion_strength,
                                        int spectral_n_iter,
                                        int seed,
-                                       int optimizer_mode) {
+                                       int optimizer_mode,
+                                       int n_components,
+                                       bool binary_graph) {
   if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
     Rcpp::stop("indices and distances must have the same dimensions");
   }
@@ -1695,13 +1711,19 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix indices,
   if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
 
   const int n = indices.nrow();
-  std::vector<float> out(static_cast<std::size_t>(n) * 2u);
+  if (n_components != 2 && n_components != 3) {
+    Rcpp::stop("CUDA UMAP requires two or three output components.");
+  }
+  std::vector<float> out(
+    static_cast<std::size_t>(n) * n_components
+  );
   const auto ab = find_ab_params(1.0, min_dist);
   const int status = fastembedr_cuda_umap_from_knn_spectral(
     indices.begin(),
     distances.begin(),
     n,
     indices.ncol(),
+    n_components,
     n_epochs,
     negative_sample_rate,
     static_cast<float>(learning_rate),
@@ -1712,16 +1734,20 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix indices,
       static_cast<unsigned int>(seed),
       knn_index_offset(indices),
       optimizer_mode,
+      binary_graph ? 1 : 0,
       out.data()
   );
   if (status != 0) {
     Rcpp::stop("CUDA fused UMAP failed: %s", cuda_embedding_error_message());
   }
 
-  NumericMatrix result(n, 2);
+  NumericMatrix result(n, n_components);
   for (int i = 0; i < n; ++i) {
-    result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);
-    result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
+    for (int axis = 0; axis < n_components; ++axis) {
+      result(i, axis) = static_cast<double>(
+        out[static_cast<std::size_t>(i) * n_components + axis]
+      );
+    }
   }
   return result;
 }
@@ -1735,7 +1761,9 @@ NumericMatrix knn_umap_cuda_fused_float_impl(IntegerMatrix indices,
                                              double repulsion_strength,
                                              int spectral_n_iter,
                                              int seed,
-                                             int optimizer_mode) {
+                                             int optimizer_mode,
+                                             int n_components,
+                                             bool binary_graph) {
   if (!cuda_is_float32_s4(distances)) {
     Rcpp::stop("CUDA float32 UMAP requires float::float32 KNN distances.");
   }
@@ -1753,13 +1781,19 @@ NumericMatrix knn_umap_cuda_fused_float_impl(IntegerMatrix indices,
   if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
 
   std::vector<float> distance_float = cuda_copy_float32_payload(distances, n, k);
-  std::vector<float> out(static_cast<std::size_t>(n) * 2u);
+  if (n_components != 2 && n_components != 3) {
+    Rcpp::stop("CUDA UMAP requires two or three output components.");
+  }
+  std::vector<float> out(
+    static_cast<std::size_t>(n) * n_components
+  );
   const auto ab = find_ab_params(1.0, min_dist);
   const int status = fastembedr_cuda_umap_from_knn_spectral_float(
     indices.begin(),
     distance_float.data(),
     n,
     k,
+    n_components,
     n_epochs,
     negative_sample_rate,
     static_cast<float>(learning_rate),
@@ -1770,15 +1804,19 @@ NumericMatrix knn_umap_cuda_fused_float_impl(IntegerMatrix indices,
     static_cast<unsigned int>(seed),
     knn_index_offset(indices),
     optimizer_mode,
+    binary_graph ? 1 : 0,
     out.data()
   );
   if (status != 0) {
     Rcpp::stop("CUDA fused UMAP failed: %s", cuda_embedding_error_message());
   }
-  NumericMatrix result(n, 2);
+  NumericMatrix result(n, n_components);
   for (int i = 0; i < n; ++i) {
-    result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);
-    result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
+    for (int axis = 0; axis < n_components; ++axis) {
+      result(i, axis) = static_cast<double>(
+        out[static_cast<std::size_t>(i) * n_components + axis]
+      );
+    }
   }
   return result;
 }
@@ -1793,7 +1831,8 @@ NumericMatrix knn_umap_cuda_fused_gpu_impl(SEXP gpu_knn,
                                            int spectral_n_iter,
                                            int seed,
                                            int optimizer_mode,
-                                           bool binary_graph) {
+                                           bool binary_graph,
+                                           int n_components) {
   if (!Rf_isNewList(gpu_knn)) {
     Rcpp::stop("CUDA GPU-resident UMAP requires a GPU KNN list contract.");
   }
@@ -1842,13 +1881,19 @@ NumericMatrix knn_umap_cuda_fused_gpu_impl(SEXP gpu_knn,
   const float* device_distances = cuda_float_device_ptr_from_external(src["distances_ptr"], "distances_ptr");
   const int index_offset = src.containsElementNamed("index_base") ?
     Rcpp::as<int>(src["index_base"]) : 1;
-  std::vector<float> out(static_cast<std::size_t>(n) * 2u);
+  if (n_components != 2 && n_components != 3) {
+    Rcpp::stop("CUDA UMAP requires two or three output components.");
+  }
+  std::vector<float> out(
+    static_cast<std::size_t>(n) * n_components
+  );
   const auto ab = find_ab_params(1.0, min_dist);
   const int status = fastembedr_cuda_umap_from_device_knn_spectral_float(
     device_indices,
     device_distances,
     n,
     k,
+    n_components,
     n_epochs,
     negative_sample_rate,
     static_cast<float>(learning_rate),
@@ -1866,10 +1911,13 @@ NumericMatrix knn_umap_cuda_fused_gpu_impl(SEXP gpu_knn,
     Rcpp::stop("CUDA GPU-resident UMAP failed: %s", cuda_embedding_error_message());
   }
 
-  NumericMatrix result(n, 2);
+  NumericMatrix result(n, n_components);
   for (int i = 0; i < n; ++i) {
-    result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);
-    result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
+    for (int axis = 0; axis < n_components; ++axis) {
+      result(i, axis) = static_cast<double>(
+        out[static_cast<std::size_t>(i) * n_components + axis]
+      );
+    }
   }
   result.attr("cuda_allocator") = fastembedr_cuda_workspace_allocator();
   result.attr("cuda_graph_capture") =
@@ -2101,11 +2149,12 @@ List knn_tsne_opentsne_cuda_impl(IntegerMatrix indices,
     if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
       Rcpp::stop("indices and distances must have the same dimensions");
     }
-    if (n_components != 2) {
-      Rcpp::stop("CUDA openTSNE FFT-grid currently supports exactly two output components.");
+    if (n_components != 2 && n_components != 3) {
+      Rcpp::stop("CUDA t-SNE supports two or three output components.");
     }
-    if (init && (y_init.nrow() != indices.nrow() || y_init.ncol() != 2)) {
-      Rcpp::stop("CUDA openTSNE FFT-grid requires a two-dimensional initialization.");
+    if (init && (y_init.nrow() != indices.nrow() ||
+                 y_init.ncol() != n_components)) {
+      Rcpp::stop("CUDA t-SNE initialization dimensions do not match.");
     }
     if (indices.ncol() > kMaxCudaNeighbors) {
       Rcpp::stop("CUDA openTSNE FFT-grid currently supports at most %d neighbors.", kMaxCudaNeighbors);
@@ -2129,9 +2178,11 @@ List knn_tsne_opentsne_cuda_impl(IntegerMatrix indices,
     const int n = indices.nrow();
     std::vector<float> init_float;
     if (init) {
-      init_float = init_to_float_2d(y_init);
+      init_float = init_to_float_layout(y_init, n_components);
     } else {
-      init_float.assign(static_cast<std::size_t>(n) * 2u, 0.0f);
+      init_float.assign(
+        static_cast<std::size_t>(n) * n_components, 0.0f
+      );
     }
     std::vector<float> out(init_float.size());
     const int status = fastembedr_cuda_opentsne_fft_from_knn(
@@ -2161,10 +2212,17 @@ List knn_tsne_opentsne_cuda_impl(IntegerMatrix indices,
       Rcpp::stop("CUDA openTSNE FFT-grid failed: %s", cuda_embedding_error_message());
     }
 
-    NumericMatrix result(n, 2);
+    NumericMatrix result(n, n_components);
     for (int i = 0; i < n; ++i) {
-      result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);
-      result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
+      for (int axis = 0; axis < n_components; ++axis) {
+        const float value = out[
+          static_cast<std::size_t>(i) * n_components + axis
+        ];
+        if (n_components == 3 && !std::isfinite(value)) {
+          Rcpp::stop("CUDA 3D t-SNE produced nonfinite coordinates.");
+        }
+        result(i, axis) = value;
+      }
     }
     return List::create(
       Rcpp::Named("Y") = result,
@@ -2172,8 +2230,11 @@ List knn_tsne_opentsne_cuda_impl(IntegerMatrix indices,
       Rcpp::Named("itercosts") = NumericVector::create(),
       Rcpp::Named("itercost_iterations") = IntegerVector::create(),
       Rcpp::Named("optimizer") = "opentsne_fitsne_fft_grid_native_cuda",
-      Rcpp::Named("repulsion") = "fft_grid_cuda_cufft",
-      Rcpp::Named("fft_grid_size") = fastembedr_cuda_opentsne_fft_grid_size(n),
+      Rcpp::Named("repulsion") = n_components == 3 ?
+        "fft_grid_3d_cuda_cufft" : "fft_grid_cuda_cufft",
+      Rcpp::Named("fft_grid_size") = n_components == 3 ?
+        (n < 5000 ? 16 : 64) :
+        fastembedr_cuda_opentsne_fft_grid_size(n),
       Rcpp::Named("probabilities") = "symmetric_sparse_knn_cuda",
       Rcpp::Named("n_negatives") = NA_INTEGER,
       Rcpp::Named("n_threads") = NA_INTEGER,
@@ -2236,11 +2297,12 @@ List knn_tsne_opentsne_cuda_float_impl(IntegerMatrix indices,
   if (!cuda_is_float32_s4(distances)) {
     Rcpp::stop("CUDA float32 openTSNE requires float::float32 KNN distances.");
   }
-  if (n_components != 2) {
-    Rcpp::stop("CUDA openTSNE FFT-grid currently supports exactly two output components.");
+  if (n_components != 2 && n_components != 3) {
+    Rcpp::stop("CUDA t-SNE supports two or three output components.");
   }
-  if (init && (y_init.nrow() != indices.nrow() || y_init.ncol() != 2)) {
-    Rcpp::stop("CUDA openTSNE FFT-grid requires a two-dimensional initialization.");
+  if (init && (y_init.nrow() != indices.nrow() ||
+               y_init.ncol() != n_components)) {
+    Rcpp::stop("CUDA t-SNE initialization dimensions do not match.");
   }
   if (indices.ncol() > kMaxCudaNeighbors) {
     Rcpp::stop("CUDA openTSNE FFT-grid currently supports at most %d neighbors.", kMaxCudaNeighbors);
@@ -2266,9 +2328,11 @@ List knn_tsne_opentsne_cuda_float_impl(IntegerMatrix indices,
   std::vector<float> distance_float = cuda_copy_float32_payload(distances, n, k);
   std::vector<float> init_float;
   if (init) {
-    init_float = init_to_float_2d(y_init);
+    init_float = init_to_float_layout(y_init, n_components);
   } else {
-    init_float.assign(static_cast<std::size_t>(n) * 2u, 0.0f);
+    init_float.assign(
+      static_cast<std::size_t>(n) * n_components, 0.0f
+    );
   }
   std::vector<float> out(init_float.size());
   const int status = fastembedr_cuda_opentsne_fft_from_knn_float(
@@ -2298,10 +2362,17 @@ List knn_tsne_opentsne_cuda_float_impl(IntegerMatrix indices,
     Rcpp::stop("CUDA openTSNE FFT-grid failed: %s", cuda_embedding_error_message());
   }
 
-  NumericMatrix result(n, 2);
+  NumericMatrix result(n, n_components);
   for (int i = 0; i < n; ++i) {
-    result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);
-    result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
+    for (int axis = 0; axis < n_components; ++axis) {
+      const float value = out[
+        static_cast<std::size_t>(i) * n_components + axis
+      ];
+      if (n_components == 3 && !std::isfinite(value)) {
+        Rcpp::stop("CUDA 3D t-SNE produced nonfinite coordinates.");
+      }
+      result(i, axis) = value;
+    }
   }
   return List::create(
     Rcpp::Named("Y") = result,
@@ -2309,8 +2380,11 @@ List knn_tsne_opentsne_cuda_float_impl(IntegerMatrix indices,
     Rcpp::Named("itercosts") = NumericVector::create(),
     Rcpp::Named("itercost_iterations") = IntegerVector::create(),
     Rcpp::Named("optimizer") = "opentsne_fitsne_fft_grid_native_cuda",
-    Rcpp::Named("repulsion") = "fft_grid_cuda_cufft",
-    Rcpp::Named("fft_grid_size") = fastembedr_cuda_opentsne_fft_grid_size(n),
+    Rcpp::Named("repulsion") = n_components == 3 ?
+      "fft_grid_3d_cuda_cufft" : "fft_grid_cuda_cufft",
+    Rcpp::Named("fft_grid_size") = n_components == 3 ?
+      (n < 5000 ? 16 : 64) :
+      fastembedr_cuda_opentsne_fft_grid_size(n),
     Rcpp::Named("probabilities") = "symmetric_sparse_knn_cuda_float32",
     Rcpp::Named("precision") = "float32",
     Rcpp::Named("n_negatives") = NA_INTEGER,
@@ -2422,11 +2496,12 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
   if (k < 1 || k > available_k) {
     Rcpp::stop("Requested GPU KNN width exceeds the GPU KNN object width.");
   }
-  if (n_components != 2) {
-    Rcpp::stop("CUDA openTSNE FFT-grid currently supports exactly two output components.");
+  if (n_components != 2 && n_components != 3) {
+    Rcpp::stop("CUDA t-SNE supports two or three output components.");
   }
-  if (init && (y_init.nrow() != n || y_init.ncol() != 2)) {
-    Rcpp::stop("CUDA openTSNE FFT-grid requires a two-dimensional initialization.");
+  if (init && (y_init.nrow() != n ||
+               y_init.ncol() != n_components)) {
+    Rcpp::stop("CUDA t-SNE initialization dimensions do not match.");
   }
   if (k > kMaxCudaNeighbors) {
     Rcpp::stop("CUDA openTSNE FFT-grid currently supports at most %d neighbors.", kMaxCudaNeighbors);
@@ -2463,7 +2538,7 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
   const float* pca_device_ptr = nullptr;
   int pca_p = 0;
   if (init) {
-    init_float = init_to_float_2d(y_init);
+    init_float = init_to_float_layout(y_init, n_components);
   } else if (has_resident_pca) {
     const std::string data_layout = src.containsElementNamed("data_layout") ?
       Rcpp::as<std::string>(src["data_layout"]) : "";
@@ -2494,10 +2569,15 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
       pca_double_ptr = pca_double.begin();
     }
   } else {
-    init_float.assign(static_cast<std::size_t>(n) * 2u, 0.0f);
+    init_float.assign(
+      static_cast<std::size_t>(n) * n_components, 0.0f
+    );
   }
   std::vector<float> out(init_float.size());
-  if (out.empty()) out.assign(static_cast<std::size_t>(n) * 2u, 0.0f);
+  if (out.empty()) {
+    out.assign(static_cast<std::size_t>(n) *
+               n_components, 0.0f);
+  }
   const int index_offset = src.containsElementNamed("index_base") ?
     Rcpp::as<int>(src["index_base"]) : 1;
   int status = 0;
@@ -2592,10 +2672,17 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
     Rcpp::stop("CUDA openTSNE FFT-grid failed: %s", cuda_embedding_error_message());
   }
 
-  NumericMatrix result(n, 2);
+  NumericMatrix result(n, n_components);
   for (int i = 0; i < n; ++i) {
-    result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);
-    result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
+    for (int axis = 0; axis < n_components; ++axis) {
+      const float value = out[
+        static_cast<std::size_t>(i) * n_components + axis
+      ];
+      if (n_components == 3 && !std::isfinite(value)) {
+        Rcpp::stop("CUDA 3D t-SNE produced nonfinite coordinates.");
+      }
+      result(i, axis) = value;
+    }
   }
   const int pca_rank_limit = use_device_pca ?
     std::min(n - 1, pca_p) : 0;
@@ -2616,8 +2703,11 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
     Rcpp::Named("itercosts") = NumericVector::create(),
     Rcpp::Named("itercost_iterations") = IntegerVector::create(),
     Rcpp::Named("optimizer") = "opentsne_fitsne_fft_grid_native_cuda_gpu_knn",
-    Rcpp::Named("repulsion") = "fft_grid_cuda_cufft",
-    Rcpp::Named("fft_grid_size") = fastembedr_cuda_opentsne_fft_grid_size(n),
+    Rcpp::Named("repulsion") = n_components == 3 ?
+      "fft_grid_3d_cuda_cufft" : "fft_grid_cuda_cufft",
+    Rcpp::Named("fft_grid_size") = n_components == 3 ?
+      (n < 5000 ? 16 : 64) :
+      fastembedr_cuda_opentsne_fft_grid_size(n),
     Rcpp::Named("probabilities") = "symmetric_sparse_knn_cuda_float32_gpu_resident",
     Rcpp::Named("precision") = "float32",
     Rcpp::Named("n_negatives") = NA_INTEGER,

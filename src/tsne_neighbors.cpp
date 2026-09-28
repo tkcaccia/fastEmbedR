@@ -379,21 +379,23 @@ std::vector<float> copy_distances_float_sexp(SEXP distances, const int n_threads
 }
 
 std::string tsne_repulsion_mode(const int n,
+                                const int dims,
                                 const double theta,
                                 const std::string& requested_method) {
   const std::string requested = lowercase(requested_method);
   if (requested == "bh" || requested == "barnes_hut" || requested == "barnes-hut") {
     Rcpp::stop(
-      "Barnes-Hut t-SNE has been removed from fastEmbedR. "
-      "Use `negative_gradient_method = \"fft\"` for the standard CPU path "
-      "or `\"exact\"` for small reference runs."
+      "Barnes-Hut repulsion is unavailable. Use `fft` or `exact`."
     );
   }
   if (requested == "exact" || requested == "pair" || requested == "pair_symmetric") {
     return "pair_symmetric";
   }
   if (requested == "fft" || requested == "interpolation" || requested == "fitsne") {
-    return "fft_grid";
+    return dims == 3 ? "fft_grid_3d" : "fft_grid";
+  }
+  if (requested != "auto") {
+    Rcpp::stop("Unknown t-SNE repulsion method. Use `auto`, `fft`, or `exact`.");
   }
 
   const char* raw = std::getenv("FASTEMBEDR_TSNE_REPULSION");
@@ -412,16 +414,15 @@ std::string tsne_repulsion_mode(const int n,
     }
   }
 
-  (void)n;
-  return theta > 0.0 ? "fft_grid" : "pair_symmetric";
+  if (theta <= 0.0 || dims == 1) return "pair_symmetric";
+  if (dims == 3) return "fft_grid_3d";
+  return "fft_grid";
 }
 
 int tsne_fft_grid_size(const int n) {
-  // The automatic route uses exact repulsion for n <= 3000. When FFT is
-  // requested explicitly on a small problem, 64 cells can satisfy force-level
-  // tolerances yet converge to a measurably worse long-run KL objective. A
-  // minimum of 128 passed the matched common-affinity production trajectory.
-  const int fallback = n >= 50000 ? 256 : 128;
+  // A 64-cell 2D grid can pass force-level tolerances yet reach a worse
+  // long-run KL objective. The 128-cell minimum passed the fixed trajectory.
+  const int fallback = n >= 40000 ? 256 : 128;
   const int requested = env_positive_int("FASTEMBEDR_TSNE_FFT_GRID", fallback);
   int grid = 32;
   while (grid < requested && grid < 512) grid <<= 1;
@@ -742,23 +743,14 @@ SparseProbabilitiesF build_tsne_probabilities_float(const IntegerMatrix& indices
 template <typename T>
 struct FftPlanT {
   int size = 0;
-  int thread_capacity = 0;
   std::vector<int> bit_reverse;
   std::vector<std::complex<T>> forward_roots;
   std::vector<std::complex<T>> inverse_roots;
-  std::vector<std::complex<T>> column_scratch;
+  std::vector<std::complex<T>> transpose_scratch;
 
-  void ensure(const int requested_size, const int requested_threads) {
-    const int threads = std::max(1, requested_threads);
-    if (size == requested_size) {
-      if (thread_capacity < threads) {
-        thread_capacity = threads;
-        column_scratch.resize(static_cast<std::size_t>(size) * thread_capacity);
-      }
-      return;
-    }
+  void ensure(const int requested_size) {
+    if (size == requested_size) return;
     size = requested_size;
-    thread_capacity = threads;
     bit_reverse.resize(static_cast<std::size_t>(size));
     int bits = 0;
     for (int value = size; value > 1; value >>= 1) ++bits;
@@ -782,7 +774,7 @@ struct FftPlanT {
       forward_roots.emplace_back(std::cos(angle), std::sin(angle));
       inverse_roots.emplace_back(std::cos(-angle), std::sin(-angle));
     }
-    column_scratch.resize(static_cast<std::size_t>(size) * thread_capacity);
+    transpose_scratch.resize(static_cast<std::size_t>(size) * size);
   }
 };
 
@@ -832,21 +824,35 @@ void fft_2d_t(std::vector<std::complex<T>>& values,
     }
   });
 
-  parallel_for(size, n_threads, [&](const int begin, const int end, const int thread_id) {
-    std::complex<T>* column = plan.column_scratch.data() +
-      static_cast<std::size_t>(thread_id) * size;
-    for (int col = begin; col < end; ++col) {
-      for (int row = 0; row < size; ++row) {
-        column[row] =
-          values[static_cast<std::size_t>(row) * size + col];
+  constexpr int tile_size = 32;
+  const int tile_count = (size + tile_size - 1) / tile_size;
+  const auto transpose_tiled = [&](const auto& input, auto& output) {
+    parallel_for(tile_count, n_threads,
+                 [&](const int begin, const int end, const int) {
+      for (int tile = begin; tile < end; ++tile) {
+        const int row_begin = tile * tile_size;
+        const int row_end = std::min(size, row_begin + tile_size);
+        for (int col_begin = 0; col_begin < size; col_begin += tile_size) {
+          const int col_end = std::min(size, col_begin + tile_size);
+          for (int row = row_begin; row < row_end; ++row) {
+            for (int col = col_begin; col < col_end; ++col) {
+              output[static_cast<std::size_t>(col) * size + row] =
+                input[static_cast<std::size_t>(row) * size + col];
+            }
+          }
+        }
       }
-      fft_1d_t<T>(column, size, inverse, plan);
-      for (int row = 0; row < size; ++row) {
-        values[static_cast<std::size_t>(row) * size + col] =
-          column[row];
-      }
+    });
+  };
+  transpose_tiled(values, plan.transpose_scratch);
+  parallel_for(size, n_threads, [&](const int begin, const int end, const int) {
+    for (int row = begin; row < end; ++row) {
+      fft_1d_t<T>(plan.transpose_scratch.data() +
+                    static_cast<std::size_t>(row) * size,
+                  size, inverse, plan);
     }
   });
+  transpose_tiled(plan.transpose_scratch, values);
 }
 
 template <typename T>
@@ -921,7 +927,7 @@ struct FftGridWorkspaceT {
     kernel_q.resize(fft_total);
     kernel_q2.resize(fft_total);
     work.resize(fft_total);
-    fft_plan.ensure(fft_size, n_threads);
+    fft_plan.ensure(fft_size);
   }
 
   void clear_grid_mass() {
@@ -1167,6 +1173,8 @@ void compute_gradient_pair_symmetric_f(const SparseProbabilitiesF& p,
   add_sparse_attractive_gradient_f(p, y, n, dims, exaggeration, n_threads, grad);
 }
 
+#include "tsne_fft_3d.h"
+
 void compute_gradient_fft_grid_f(const SparseProbabilitiesF& p,
                                  const std::vector<float>& y,
                                  const int n,
@@ -1177,8 +1185,7 @@ void compute_gradient_fft_grid_f(const SparseProbabilitiesF& p,
                                  std::vector<float>& grad,
                                  const int grid_size_override) {
   if (dims != 2) {
-    compute_gradient_pair_symmetric_f(p, y, n, dims, exaggeration, n_threads, grad);
-    return;
+    Rcpp::stop("Two-dimensional FFT repulsion requires two coordinates.");
   }
   std::fill(grad.begin(), grad.end(), 0.0f);
   const int grid_size = grid_size_override > 0 ?
@@ -1285,13 +1292,20 @@ void compute_gradient_f(const SparseProbabilitiesF& p,
                         const int n_threads,
                         const std::string& repulsion_mode,
                         FftGridWorkspaceT<float>* fft_workspace,
+                        TsneFft3dWorkspace* fft_3d_workspace,
                         std::vector<float>& grad) {
   if (repulsion_mode == "fft_grid") {
     compute_gradient_fft_grid_f(
       p, y, n, dims, exaggeration, n_threads, fft_workspace, grad, 0
     );
-  } else {
+  } else if (repulsion_mode == "fft_grid_3d") {
+    compute_gradient_fft_3d_f(
+      p, y, n, exaggeration, n_threads, *fft_3d_workspace, grad
+    );
+  } else if (repulsion_mode == "pair_symmetric") {
     compute_gradient_pair_symmetric_f(p, y, n, dims, exaggeration, n_threads, grad);
+  } else {
+    Rcpp::stop("Unknown t-SNE repulsion mode.");
   }
 }
 
@@ -1836,6 +1850,73 @@ List opentsne_force_diagnostic_cpp(IntegerMatrix indices,
 }
 
 // [[Rcpp::export]]
+List tsne_fft_3d_force_diagnostic_cpp(IntegerMatrix indices,
+                                      SEXP distances, SEXP layout,
+                                      double perplexity,
+                                      double exaggeration,
+                                      int grid_size, int n_threads) {
+  const auto knn_dims = distance_sexp_dims(distances);
+  const auto layout_dims = distance_sexp_dims(layout);
+  if (indices.nrow() != knn_dims.first ||
+      indices.ncol() != knn_dims.second ||
+      layout_dims.first != indices.nrow() || layout_dims.second != 3) {
+    Rcpp::stop("Three-dimensional layout and KNN dimensions must match.");
+  }
+  if (!std::isfinite(perplexity) || perplexity <= 0.0 ||
+      perplexity > indices.ncol() ||
+      !std::isfinite(exaggeration) || exaggeration <= 0.0 ||
+      (grid_size != 16 && grid_size != 32 && grid_size != 64 &&
+       grid_size != 128)) {
+    Rcpp::stop("Invalid t-SNE force diagnostic parameters.");
+  }
+  const int n = indices.nrow();
+  const int threads = resolve_threads(n_threads, n);
+  ParallelExecutor executor(threads);
+  ParallelExecutorScope scope(&executor);
+  const auto distance_values = copy_distances_float_sexp(distances, threads);
+  const auto p = build_tsne_probabilities_float(
+    indices, distance_values, perplexity, threads
+  );
+  const auto y = copy_distances_float_sexp(layout, threads);
+  if (!std::all_of(y.begin(), y.end(), [](float value) {
+        return std::isfinite(value);
+      })) {
+    Rcpp::stop("`layout` must contain only finite coordinates.");
+  }
+  std::vector<float> attractive(y.size(), 0.0f);
+  std::vector<float> exact(y.size(), 0.0f);
+  std::vector<float> fft(y.size(), 0.0f);
+  add_sparse_attractive_gradient_f(
+    p, y, n, 3, static_cast<float>(exaggeration), threads, attractive
+  );
+  compute_gradient_pair_symmetric_f(
+    p, y, n, 3, static_cast<float>(exaggeration), threads, exact
+  );
+  TsneFft3dWorkspace workspace;
+  compute_gradient_fft_3d_f(
+    p, y, n, static_cast<float>(exaggeration), threads,
+    workspace, fft, grid_size
+  );
+  auto force_matrix = [&](const std::vector<float>& values) {
+    NumericMatrix result(n, 3);
+    for (int i = 0; i < n; ++i) {
+      for (int d = 0; d < 3; ++d) {
+        const std::size_t index = static_cast<std::size_t>(i) * 3 + d;
+        result(i, d) = values[index] - attractive[index];
+      }
+    }
+    return result;
+  };
+  return List::create(
+    Rcpp::Named("repulsive_exact") = force_matrix(exact),
+    Rcpp::Named("repulsive_fft") = force_matrix(fft),
+    Rcpp::Named("sum_q_exact") = compute_sum_q_f(y, n, 3, threads),
+    Rcpp::Named("sum_q_fft") = workspace.sum_q,
+    Rcpp::Named("grid_size") = grid_size
+  );
+}
+
+// [[Rcpp::export]]
 List tsne_auto_parameters_cpp(const int n,
                               const int k,
                               const double perplexity,
@@ -1945,8 +2026,17 @@ List knn_tsne_opentsne_float_cpp(IntegerMatrix indices,
   std::vector<float>().swap(distance_values);
   const auto affinity_end = std::chrono::steady_clock::now();
 
-  const std::string repulsion_mode = tsne_repulsion_mode(n, theta, negative_gradient_method);
-  std::string optimizer_name = repulsion_mode == "fft_grid" ?
+  const std::string repulsion_mode = tsne_repulsion_mode(
+    n, n_components, theta, negative_gradient_method
+  );
+  if (repulsion_mode == "fft_grid_3d" && n_components != 3) {
+    Rcpp::stop("Three-dimensional FFT repulsion requires three coordinates.");
+  }
+  if (repulsion_mode == "fft_grid" && n_components != 2) {
+    Rcpp::stop("FFT repulsion requires two coordinates.");
+  }
+  std::string optimizer_name = repulsion_mode == "fft_grid_3d" ?
+    "tsne_fft_grid_3d_sparse_knn_float32" : repulsion_mode == "fft_grid" ?
     "opentsne_fitsne_fft_grid_sparse_knn_float32" :
     "opentsne_exact_sparse_knn_float32";
 
@@ -1975,6 +2065,7 @@ List knn_tsne_opentsne_float_cpp(IntegerMatrix indices,
   std::vector<float> update(y.size(), 0.0f);
   std::vector<float> gains(y.size(), 1.0f);
   FftGridWorkspaceT<float> fft_workspace;
+  TsneFft3dWorkspace fft_3d_workspace;
   const int requested_total_iter = early_exaggeration_iter + n_iter;
   const bool auto_kld_stop = auto_config && n <= 5000;
   const bool should_record_costs = record_costs || verbose;
@@ -2021,7 +2112,8 @@ List knn_tsne_opentsne_float_cpp(IntegerMatrix indices,
     for (int iter = 0; iter < phase_iter; ++iter) {
       if (((completed_iter + iter) & 7) == 0) Rcpp::checkUserInterrupt();
       compute_gradient_f(
-        p, y, n, n_components, phase_exag_f, threads, repulsion_mode, &fft_workspace, grad
+        p, y, n, n_components, phase_exag_f, threads, repulsion_mode,
+        &fft_workspace, &fft_3d_workspace, grad
       );
       apply_open_tsne_update_f(
         y, update, gains, grad, n, n_components, phase_lr, phase_momentum_f,
@@ -2114,7 +2206,13 @@ List knn_tsne_opentsne_float_cpp(IntegerMatrix indices,
     Rcpp::Named("optimizer") = optimizer_name,
     Rcpp::Named("repulsion") = repulsion_mode,
     Rcpp::Named("fft_grid_size") = repulsion_mode == "fft_grid" ?
-      tsne_fft_grid_size(n) : NA_INTEGER,
+      tsne_fft_grid_size(n) : repulsion_mode == "fft_grid_3d" ?
+      tsne_fft_3d_grid_size(n) : NA_INTEGER,
+    Rcpp::Named("fft_elapsed_sec") = repulsion_mode == "fft_grid_3d" ?
+      fft_3d_workspace.fft_elapsed_sec : NA_REAL,
+    Rcpp::Named("correction_elapsed_sec") =
+      repulsion_mode == "fft_grid_3d" ?
+      fft_3d_workspace.correction_elapsed_sec : NA_REAL,
     Rcpp::Named("theta_requested") = theta,
     Rcpp::Named("n_threads") = threads,
     Rcpp::Named("n_threads_requested") = requested_threads,

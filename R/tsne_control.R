@@ -329,13 +329,11 @@ validate_opentsne_n_components <- function(n_components, backend = NULL) {
         stop("`n_components` should be 1, 2, or 3.", call. = FALSE)
     }
     n_components <- as.integer(n_components)
-    if (!is.null(backend) && n_components != 2L && backend %in% c(
-        "metal",
-        "cuda"
-    )) {
+    if (!is.null(backend) && n_components == 1L &&
+        backend %in% c("metal", "cuda")) {
         stop(
-            "Native Metal and CUDA t-SNE optimizers currently support only ",
-            "`n_components = 2`.",
+            "The requested backend does not support this ",
+            "`n_components` setting.",
             call. = FALSE
         )
     }

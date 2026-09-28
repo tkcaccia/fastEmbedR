@@ -7,8 +7,7 @@
 #' @param distances Numeric matrix matching `indices`. Leave as `NULL` when
 #'   `indices` is a KNN list.
 #' @param n_components Output dimensionality. The CPU backend supports positive
-#'   dimensions, including three-dimensional embeddings. The current Metal and
-#'   CUDA optimizers support only `2L`.
+#'   dimensions. Metal and CUDA support two- and three-dimensional embeddings.
 #' @param seed Integer random seed.
 #' @param verbose Print progress from C++.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`.
@@ -20,7 +19,8 @@
 #' @details The public API intentionally keeps only the inputs that matter. The
 #'   package chooses epochs, negative sampling, learning rate, spectral
 #'   iterations, CPU thread count, and the UMAP repulsion weight internally
-#'   using size-aware defaults.
+#'   using size-aware defaults. CUDA prepared-graph reuse currently supports
+#'   two dimensions; ordinary matrix and KNN CUDA fits also support three.
 #' @noRd
 fast_knn_umap <- function(indices,
                             distances = NULL,
@@ -123,8 +123,8 @@ fast_knn_umap_core <- function(
 }
 
 validate_gpu_resident_umap <- function(gpu_knn, n_components) {
-    if (n_components != 2L) {
-        stop("Native CUDA UMAP supports only `n_components = 2`.",
+    if (!n_components %in% c(2L, 3L)) {
+        stop("Native CUDA UMAP supports 2D or 3D output.",
             call. = FALSE
         )
     }
@@ -223,7 +223,8 @@ run_gpu_resident_umap <- function(gpu_knn, info, cfg, seed,
         as.integer(cfg$spectral_n_iter),
         as.integer(seed),
         0L,
-        identical(graph_mode, "binary")
+        identical(graph_mode, "binary"),
+        as.integer(cfg$n_components)
     )
     cfg$cuda_allocator <- attr(layout, "cuda_allocator")
     cfg$cuda_graph_capture <- attr(layout, "cuda_graph_capture")
@@ -405,9 +406,9 @@ configure_prepared_umap <- function(
     n_threads,
     n_epochs
 ) {
-    if (n_components != 2L) {
+    if (n_components != 2L && backend == "cuda") {
         stop(
-            "Prepared UMAP reuse supports only `n_components = 2`.",
+            "Prepared CUDA UMAP supports only `n_components = 2`.",
             call. = FALSE
         )
     }
@@ -463,7 +464,7 @@ compute_prepared_umap_init <- function(prepared, cfg, seed) {
         }
         spectral_knn_init(
             knn$indices, distances,
-            n_components = 2L,
+            n_components = cfg$n_components,
             min_dist = cfg$min_dist,
             spectral_n_iter = cfg$spectral_n_iter,
             seed = seed, backend = "cpu",
@@ -472,7 +473,7 @@ compute_prepared_umap_init <- function(prepared, cfg, seed) {
     } else {
         umap_init_from_csr_graph(
             prepared$graph,
-            n_components = 2L,
+            n_components = cfg$n_components,
             cfg = cfg,
             seed = seed,
             verbose = FALSE
@@ -1409,8 +1410,7 @@ spectral_knn_init <- function(
 #' @param distances Numeric matrix matching `indices`. Leave as `NULL` when
 #'   `indices` is a KNN object.
 #' @param n_components Output dimensionality. The CPU backend supports positive
-#'   dimensions, including three-dimensional embeddings. The current Metal and
-#'   CUDA optimizers support only `2L`.
+#'   dimensions. Metal and CUDA support two- and three-dimensional embeddings.
 #' @param seed Integer random seed.
 #' @param verbose Print native optimizer progress.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`.
@@ -1428,7 +1428,9 @@ spectral_knn_init <- function(
 #' negative-sample rate, spectral iterations, and backend update mode
 #' internally. The resolved configuration is attached as
 #' `attr(layout, "fastEmbedR_config")`. Pass an object from [umap_init()] to
-#' reuse both the prepared graph and package-native initialization. This API is
+#' reuse both the prepared graph and package-native initialization. Prepared
+#' CUDA graph reuse currently supports two dimensions; ordinary KNN CUDA fits
+#' also support three. This API is
 #' intended for fixed-boundary comparisons and repeated seeds, not arbitrary
 #' UMAP hyperparameter sweeps.
 #' @return An embedding matrix with `nrow(indices)` rows and `n_components`

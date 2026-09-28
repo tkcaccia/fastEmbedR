@@ -45,9 +45,9 @@ its first columns. If omitted, the compact affinity policy uses
 \item{perplexity}{t-SNE perplexity. If \code{NULL}, the optimizer chooses a safe
 value from the supplied KNN width and sample size.}
 
-\item{n_components}{Output dimensionality, from 1 to 3. Dimensions other
-than two use CPU exact repulsion; the current Metal and CUDA
-interpolation/FFT optimizers support only \code{2L}.}
+\item{n_components}{Output dimensionality, from 1 to 3. Two- and
+three-dimensional fits use FFT repulsion on all backends by default.
+One-dimensional CPU fits use exact repulsion.}
 
 \item{init_data}{Optional original high-dimensional data matrix used only to
 compute PCA initialization for KNN-input runs. It is not used for neighbor
@@ -94,11 +94,10 @@ exaggeration.}
 same validated limit on CPU, Metal, and CUDA. Use \code{NULL} or \code{NA} to
 disable clipping.}
 
-\item{negative_gradient_method}{\code{"auto"}, \code{"exact"}, or
-\code{"fft"}. On CPU, \code{"auto"} resolves to the native grid-FFT
-FIt-SNE-style negative-gradient approximation. Native GPU FFT/exact paths
-are used only when the corresponding compiled symbols are available;
-otherwise GPU requests fail clearly rather than falling back to CPU.}
+\item{negative_gradient_method}{\code{"auto"}, \code{"exact"}, or \code{"fft"}.
+Two- and three-dimensional fits use grid-FFT repulsion by default.
+Native GPU FFT paths require their compiled symbols and never fall back
+to CPU. GPU 3D fits do not support exact repulsion.}
 
 \item{record_costs}{If \code{TRUE}, compute diagnostic KL/cost traces.}
 

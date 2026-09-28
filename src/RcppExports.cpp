@@ -65,8 +65,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // knn_umap_cuda_fused_cpp
-NumericMatrix knn_umap_cuda_fused_cpp(IntegerMatrix indices, NumericMatrix distances, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int spectral_n_iter, int seed, int optimizer_mode);
-RcppExport SEXP _fastEmbedR_knn_umap_cuda_fused_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP spectral_n_iterSEXP, SEXP seedSEXP, SEXP optimizer_modeSEXP) {
+NumericMatrix knn_umap_cuda_fused_cpp(IntegerMatrix indices, NumericMatrix distances, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int spectral_n_iter, int seed, int optimizer_mode, int n_components, bool binary_graph);
+RcppExport SEXP _fastEmbedR_knn_umap_cuda_fused_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP spectral_n_iterSEXP, SEXP seedSEXP, SEXP optimizer_modeSEXP, SEXP n_componentsSEXP, SEXP binary_graphSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -80,13 +80,15 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type spectral_n_iter(spectral_n_iterSEXP);
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< int >::type optimizer_mode(optimizer_modeSEXP);
-    rcpp_result_gen = Rcpp::wrap(knn_umap_cuda_fused_cpp(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode));
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    Rcpp::traits::input_parameter< bool >::type binary_graph(binary_graphSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_umap_cuda_fused_cpp(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode, n_components, binary_graph));
     return rcpp_result_gen;
 END_RCPP
 }
 // knn_umap_cuda_fused_float_cpp
-NumericMatrix knn_umap_cuda_fused_float_cpp(IntegerMatrix indices, SEXP distances, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int spectral_n_iter, int seed, int optimizer_mode);
-RcppExport SEXP _fastEmbedR_knn_umap_cuda_fused_float_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP spectral_n_iterSEXP, SEXP seedSEXP, SEXP optimizer_modeSEXP) {
+NumericMatrix knn_umap_cuda_fused_float_cpp(IntegerMatrix indices, SEXP distances, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int spectral_n_iter, int seed, int optimizer_mode, int n_components, bool binary_graph);
+RcppExport SEXP _fastEmbedR_knn_umap_cuda_fused_float_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP spectral_n_iterSEXP, SEXP seedSEXP, SEXP optimizer_modeSEXP, SEXP n_componentsSEXP, SEXP binary_graphSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -100,13 +102,15 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type spectral_n_iter(spectral_n_iterSEXP);
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< int >::type optimizer_mode(optimizer_modeSEXP);
-    rcpp_result_gen = Rcpp::wrap(knn_umap_cuda_fused_float_cpp(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode));
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    Rcpp::traits::input_parameter< bool >::type binary_graph(binary_graphSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_umap_cuda_fused_float_cpp(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode, n_components, binary_graph));
     return rcpp_result_gen;
 END_RCPP
 }
 // knn_umap_cuda_fused_gpu_cpp
-NumericMatrix knn_umap_cuda_fused_gpu_cpp(SEXP gpu_knn, int requested_k, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int spectral_n_iter, int seed, int optimizer_mode, bool binary_graph);
-RcppExport SEXP _fastEmbedR_knn_umap_cuda_fused_gpu_cpp(SEXP gpu_knnSEXP, SEXP requested_kSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP spectral_n_iterSEXP, SEXP seedSEXP, SEXP optimizer_modeSEXP, SEXP binary_graphSEXP) {
+NumericMatrix knn_umap_cuda_fused_gpu_cpp(SEXP gpu_knn, int requested_k, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int spectral_n_iter, int seed, int optimizer_mode, bool binary_graph, int n_components);
+RcppExport SEXP _fastEmbedR_knn_umap_cuda_fused_gpu_cpp(SEXP gpu_knnSEXP, SEXP requested_kSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP spectral_n_iterSEXP, SEXP seedSEXP, SEXP optimizer_modeSEXP, SEXP binary_graphSEXP, SEXP n_componentsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -121,7 +125,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< int >::type optimizer_mode(optimizer_modeSEXP);
     Rcpp::traits::input_parameter< bool >::type binary_graph(binary_graphSEXP);
-    rcpp_result_gen = Rcpp::wrap(knn_umap_cuda_fused_gpu_cpp(gpu_knn, requested_k, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode, binary_graph));
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_umap_cuda_fused_gpu_cpp(gpu_knn, requested_k, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode, binary_graph, n_components));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1763,6 +1768,23 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// tsne_fft_3d_force_diagnostic_cpp
+List tsne_fft_3d_force_diagnostic_cpp(IntegerMatrix indices, SEXP distances, SEXP layout, double perplexity, double exaggeration, int grid_size, int n_threads);
+RcppExport SEXP _fastEmbedR_tsne_fft_3d_force_diagnostic_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP layoutSEXP, SEXP perplexitySEXP, SEXP exaggerationSEXP, SEXP grid_sizeSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type layout(layoutSEXP);
+    Rcpp::traits::input_parameter< double >::type perplexity(perplexitySEXP);
+    Rcpp::traits::input_parameter< double >::type exaggeration(exaggerationSEXP);
+    Rcpp::traits::input_parameter< int >::type grid_size(grid_sizeSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(tsne_fft_3d_force_diagnostic_cpp(indices, distances, layout, perplexity, exaggeration, grid_size, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
 // tsne_auto_parameters_cpp
 List tsne_auto_parameters_cpp(const int n, const int k, const double perplexity, const bool perplexity_missing, const std::string backend, const std::string negative_gradient_method);
 RcppExport SEXP _fastEmbedR_tsne_auto_parameters_cpp(SEXP nSEXP, SEXP kSEXP, SEXP perplexitySEXP, SEXP perplexity_missingSEXP, SEXP backendSEXP, SEXP negative_gradient_methodSEXP) {
@@ -1865,9 +1887,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_embedding_cuda_available_cpp", (DL_FUNC) &_fastEmbedR_embedding_cuda_available_cpp, 0},
     {"_fastEmbedR_spectral_knn_init_cuda_cpp", (DL_FUNC) &_fastEmbedR_spectral_knn_init_cuda_cpp, 5},
     {"_fastEmbedR_knn_embed_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_cuda_cpp, 9},
-    {"_fastEmbedR_knn_umap_cuda_fused_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_cuda_fused_cpp, 10},
-    {"_fastEmbedR_knn_umap_cuda_fused_float_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_cuda_fused_float_cpp, 10},
-    {"_fastEmbedR_knn_umap_cuda_fused_gpu_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_cuda_fused_gpu_cpp, 11},
+    {"_fastEmbedR_knn_umap_cuda_fused_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_cuda_fused_cpp, 12},
+    {"_fastEmbedR_knn_umap_cuda_fused_float_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_cuda_fused_float_cpp, 12},
+    {"_fastEmbedR_knn_umap_cuda_fused_gpu_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_cuda_fused_gpu_cpp, 12},
     {"_fastEmbedR_umap_cuda_graph_dump_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_graph_dump_cpp, 2},
     {"_fastEmbedR_umap_cuda_optimize_coo_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_optimize_coo_cpp, 12},
     {"_fastEmbedR_umap_cuda_optimize_csr_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_optimize_csr_cpp, 12},
@@ -1965,6 +1987,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_native_cuda_knn_to_host_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_to_host_cpp, 1},
     {"_fastEmbedR_opentsne_kl_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_opentsne_kl_diagnostic_cpp, 5},
     {"_fastEmbedR_opentsne_force_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_opentsne_force_diagnostic_cpp, 7},
+    {"_fastEmbedR_tsne_fft_3d_force_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_tsne_fft_3d_force_diagnostic_cpp, 7},
     {"_fastEmbedR_tsne_auto_parameters_cpp", (DL_FUNC) &_fastEmbedR_tsne_auto_parameters_cpp, 6},
     {"_fastEmbedR_knn_tsne_opentsne_float_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_float_cpp, 24},
     {"_fastEmbedR_transform_tsne_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_cpp, 21},

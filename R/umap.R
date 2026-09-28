@@ -10,8 +10,7 @@
 #' @param n_neighbors Number of non-self neighbors. `NULL` chooses the package
 #'   default for the data size.
 #' @param n_components Output dimensionality. The CPU backend supports positive
-#'   dimensions, including three-dimensional embeddings. The current Metal and
-#'   CUDA optimizers support only `2L`.
+#'   dimensions. Metal and CUDA support two- and three-dimensional embeddings.
 #' @param standardize Center and scale columns before KNN when `data` is a
 #'   matrix. Defaults to `FALSE` so one-call results match a KNN object computed
 #'   from the supplied matrix.
@@ -77,12 +76,10 @@ validate_umap_request <- function(backend, graph_mode, n_components,
     backend <- resolve_embedding_backend(backend)
     graph_mode <- match.arg(graph_mode, c("fuzzy", "binary"))
     n_components <- validate_n_components(n_components)
-    if (n_components != 2L && backend %in% c("metal", "cuda")) {
-        stop(
-            "Native Metal and CUDA UMAP optimizers currently support only ",
-            "`n_components = 2`.",
-            call. = FALSE
-        )
+    if (!n_components %in% c(2L, 3L) &&
+        backend %in% c("metal", "cuda")) {
+        stop("Native GPU UMAP supports 2D or 3D output.",
+            call. = FALSE)
     }
     list(
         backend = backend, graph_mode = graph_mode,
@@ -238,7 +235,9 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #' @details Landmark mode fits the requested fuzzy or binary UMAP graph on the
 #' landmark rows, projects the remaining rows with query-to-reference KNN, and
 #' optionally refines only projected rows while landmark coordinates remain
-#' fixed. Precomputed KNN input cannot be combined with landmarking.
+#' fixed. Metal and CUDA landmark refinement currently requires 2D output;
+#' 3D landmark requests fail explicitly. Precomputed KNN input cannot be
+#' combined with landmarking.
 #' The returned `model` retains the fitted preprocessing transform so new data
 #' can be supplied in the same original feature space.
 #' @rdname umap
@@ -297,6 +296,16 @@ run_landmark_umap <- function(data, landmarks, n_neighbors, n_components,
         data, landmarks, n_neighbors, n_components, standardize,
         pca_dims, metric, seed, backend, n.cores, graph_mode
     )
+    if (state$backend == "metal" && state$n_components == 3L &&
+        !state$all_landmarks) {
+        stop("Metal 3D landmark refinement is not available.",
+            call. = FALSE)
+    }
+    if (state$backend == "cuda" && state$n_components == 3L &&
+        !state$all_landmarks) {
+        stop("CUDA 3D landmark refinement is not available.",
+            call. = FALSE)
+    }
     if (state$all_landmarks) {
         return(run_full_landmark_umap(
             state, seed, keep_knn, verbose

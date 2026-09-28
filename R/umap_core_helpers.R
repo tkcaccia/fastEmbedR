@@ -197,7 +197,8 @@ initialize_umap_gpu_host_knn <- function(indices,
                                             distances,
                                             cfg,
                                             graph_mode,
-                                            seed) {
+                                            seed,
+                                            n_components) {
     if (identical(graph_mode, "binary")) {
         cfg$init_backend <- "pending_binary_csr"
         cfg$init_backend_reason <- paste(
@@ -219,7 +220,7 @@ initialize_umap_gpu_host_knn <- function(indices,
     init <- spectral_knn_init(
         indices,
         init_distances,
-        n_components = 2L,
+        n_components = n_components,
         min_dist = cfg$min_dist,
         spectral_n_iter = cfg$spectral_n_iter,
         seed = seed,
@@ -316,7 +317,7 @@ optimize_umap_gpu_csr <- function(graph, init, cfg, backend, seed) {
 }
 
 configure_gpu_host_umap <- function(
-    cfg, indices, distances, init, graph_mode, backend
+    cfg, indices, distances, init, graph_mode, backend, n_components
 ) {
     cfg$graph_prep_backend <- paste0("cpu_", graph_mode, "_csr")
     cfg$graph_storage <- if (backend == "cuda") {
@@ -350,7 +351,7 @@ configure_gpu_host_umap <- function(
     cfg <- add_gpu_transfer_metadata(
         cfg, indices, distances,
         init = init,
-        n = nrow(indices), n_components = 2L,
+        n = nrow(indices), n_components = n_components,
         objective = "umap"
     )
     cfg$backend <- backend
@@ -381,32 +382,59 @@ finish_gpu_host_umap <- function(state, backend, seed, distances) {
     layout
 }
 
+run_umap_cuda_host_3d <- function(indices, distances, cfg,
+                                    graph_mode, seed) {
+    fused <- if (is_float32_matrix(distances)) {
+        knn_umap_cuda_fused_float_cpp
+    } else {
+        knn_umap_cuda_fused_cpp
+    }
+    layout <- fused(
+        indices, distances, as.integer(cfg$n_epochs),
+        as.integer(cfg$negative_sample_rate), cfg$learning_rate,
+        cfg$min_dist, cfg$repulsion_strength,
+        as.integer(cfg$spectral_n_iter), as.integer(seed), 0L,
+        3L, identical(graph_mode, "binary")
+    )
+    cfg$init_backend <- "cuda_fused_diffusion"
+    cfg$optimizer_backend <- "cuda"
+    cfg$graph_prep_backend <- paste0(
+        "cuda_", graph_mode, "_union_device"
+    )
+    cfg$graph_storage <- "native_cuda_device_row_major"
+    cfg$gpu_transfer_policy <- "host_knn_uploaded_once"
+    layout <- finalize_embedding_layout(
+        layout, "UMAP", return_float32 = is_float32_matrix(distances)
+    )
+    attr(layout, "fastEmbedR_config") <- public_core_config(cfg)
+    layout
+}
+
 run_umap_gpu_host_knn <- function(
     indices, distances, knn, cfg, n_components, graph_mode, seed
 ) {
-    if (n_components != 2L) {
-        stop("Native GPU UMAP supports only `n_components = 2`.",
-            call. = FALSE
-        )
+    if (!n_components %in% c(2L, 3L)) {
+        stop("Native GPU UMAP supports 2D or 3D output.",
+            call. = FALSE)
     }
     materialized <- materialize_umap_gpu_knn(
         indices, distances, knn, cfg
     )
+    if (n_components == 3L && cfg$backend == "cuda") {
+        return(run_umap_cuda_host_3d(
+            materialized$indices, materialized$distances,
+            materialized$cfg, graph_mode, seed
+        ))
+    }
     initialized <- initialize_umap_gpu_host_knn(
-        materialized$indices,
-        materialized$distances,
-        materialized$cfg,
-        graph_mode,
-        seed
+        materialized$indices, materialized$distances,
+        materialized$cfg, graph_mode, seed, n_components
     )
     backend <- initialized$cfg$backend
     cfg <- configure_gpu_host_umap(
-        initialized$cfg,
-        materialized$indices,
-        materialized$distances,
-        initialized$init,
-        graph_mode,
-        backend
+        initialized$cfg, materialized$indices,
+        materialized$distances, initialized$init,
+        graph_mode, backend, n_components
     )
     state <- build_umap_csr_state(
         materialized$indices,
@@ -415,16 +443,12 @@ run_umap_gpu_host_knn <- function(
         n_neighbors = ncol(materialized$indices),
         cfg = cfg,
         graph_mode = graph_mode,
-        n_components = 2L,
+        n_components = n_components,
         seed = seed,
         init = initialized$init
     )
-    finish_gpu_host_umap(
-        state,
-        backend,
-        seed,
-        materialized$distances
-    )
+    finish_gpu_host_umap(state, backend, seed,
+        materialized$distances)
 }
 
 run_umap_cpu_generic <- function(indices, distances, knn, cfg,

@@ -25,8 +25,7 @@ column is removed automatically.}
 \code{indices} is a KNN object.}
 
 \item{n_components}{Output dimensionality. The CPU backend supports positive
-dimensions, including three-dimensional embeddings. The current Metal and
-CUDA optimizers support only \code{2L}.}
+dimensions. Metal and CUDA support two- and three-dimensional embeddings.}
 
 \item{seed}{Integer random seed.}
 
@@ -59,7 +58,9 @@ epochs, minimum distance, spread, learning rate, repulsion strength,
 negative-sample rate, spectral iterations, and backend update mode
 internally. The resolved configuration is attached as
 \code{attr(layout, "fastEmbedR_config")}. Pass an object from \code{\link[=umap_init]{umap_init()}} to
-reuse both the prepared graph and package-native initialization. This API is
+reuse both the prepared graph and package-native initialization. Prepared
+CUDA graph reuse currently supports two dimensions; ordinary KNN CUDA fits
+also support three. This API is
 intended for fixed-boundary comparisons and repeated seeds, not arbitrary
 UMAP hyperparameter sweeps.
 }

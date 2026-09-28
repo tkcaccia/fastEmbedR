@@ -166,6 +166,8 @@ struct MetalEmbeddingState {
   id<MTLComputePipelineState> embed_pipeline;
   id<MTLComputePipelineState> embed_atomic_inplace_pipeline;
   id<MTLComputePipelineState> embed_clean_atomic_inplace_pipeline;
+  id<MTLComputePipelineState> embed_atomic_3d_pipeline;
+  id<MTLComputePipelineState> embed_clean_atomic_3d_pipeline;
   id<MTLComputePipelineState> refine_prepare_pipeline;
   id<MTLComputePipelineState> refine_rows_pipeline;
   id<MTLComputePipelineState> standardize_stats_pipeline;
@@ -367,6 +369,8 @@ MetalEmbeddingState& metal_embedding_state() {
   if (state.device != nil && state.embed_pipeline != nil &&
       state.embed_atomic_inplace_pipeline != nil &&
       state.embed_clean_atomic_inplace_pipeline != nil &&
+      state.embed_atomic_3d_pipeline != nil &&
+      state.embed_clean_atomic_3d_pipeline != nil &&
       state.refine_prepare_pipeline != nil &&
       state.refine_rows_pipeline != nil &&
       state.affine_project_pipeline != nil &&
@@ -415,6 +419,10 @@ MetalEmbeddingState& metal_embedding_state() {
   state.embed_pipeline = make_pipeline(state, "embed_epoch");
   state.embed_atomic_inplace_pipeline = make_pipeline(state, "embed_epoch_atomic_inplace");
   state.embed_clean_atomic_inplace_pipeline = make_pipeline(state, "embed_epoch_clean_atomic_inplace");
+  state.embed_atomic_3d_pipeline =
+    make_pipeline(state, "embed_epoch_atomic_3d");
+  state.embed_clean_atomic_3d_pipeline =
+    make_pipeline(state, "embed_epoch_clean_atomic_3d");
   state.refine_prepare_pipeline = make_pipeline(state, "umap_refine_prepare_rows");
   state.refine_rows_pipeline = make_pipeline(state, "umap_refine_rows_atomic_inplace");
   state.standardize_stats_pipeline = make_pipeline(state, "standardize_stats");
@@ -1072,15 +1080,20 @@ double evaluate_kl_metal_graph(const TsneSparseMetalGraph& graph,
 std::vector<float> initialize_opentsne_metal_layout(const NumericMatrix& y_init,
                                                     const bool init,
                                                     const int n,
+                                                    const int n_components,
                                                     const int seed) {
-  std::vector<float> out(static_cast<std::size_t>(n) * 2u, 0.0f);
+  std::vector<float> out(
+    static_cast<std::size_t>(n) * n_components, 0.0f
+  );
   if (init) {
-    if (y_init.nrow() != n || y_init.ncol() != 2) {
-      Rcpp::stop("`Y_init` must have one row per point and two columns for Metal openTSNE.");
+    if (y_init.nrow() != n || y_init.ncol() != n_components) {
+      Rcpp::stop("`Y_init` has incompatible Metal t-SNE dimensions.");
     }
     for (int i = 0; i < n; ++i) {
-      out[static_cast<std::size_t>(i) * 2u] = static_cast<float>(y_init(i, 0));
-      out[static_cast<std::size_t>(i) * 2u + 1u] = static_cast<float>(y_init(i, 1));
+      for (int axis = 0; axis < n_components; ++axis) {
+        out[static_cast<std::size_t>(i) * n_components + axis] =
+          static_cast<float>(y_init(i, axis));
+      }
     }
   } else {
     const unsigned int resolved_seed = seed == NA_INTEGER ? 5489u : static_cast<unsigned int>(seed);
@@ -1088,17 +1101,22 @@ std::vector<float> initialize_opentsne_metal_layout(const NumericMatrix& y_init,
     std::normal_distribution<float> normal(0.0f, 1.0e-4f);
     for (float& value : out) value = normal(rng);
   }
-  double mean_x = 0.0;
-  double mean_y = 0.0;
+  double means[3] = {};
   for (int i = 0; i < n; ++i) {
-    mean_x += out[static_cast<std::size_t>(i) * 2u];
-    mean_y += out[static_cast<std::size_t>(i) * 2u + 1u];
+    for (int axis = 0; axis < n_components; ++axis) {
+      means[axis] += out[
+        static_cast<std::size_t>(i) * n_components + axis
+      ];
+    }
   }
-  mean_x /= static_cast<double>(n);
-  mean_y /= static_cast<double>(n);
+  for (int axis = 0; axis < n_components; ++axis) {
+    means[axis] /= static_cast<double>(n);
+  }
   for (int i = 0; i < n; ++i) {
-    out[static_cast<std::size_t>(i) * 2u] -= static_cast<float>(mean_x);
-    out[static_cast<std::size_t>(i) * 2u + 1u] -= static_cast<float>(mean_y);
+    for (int axis = 0; axis < n_components; ++axis) {
+      out[static_cast<std::size_t>(i) * n_components + axis] -=
+        static_cast<float>(means[axis]);
+    }
   }
   return out;
 }
@@ -1544,6 +1562,105 @@ kernel void embed_epoch_clean_atomic_inplace(
       atomic_fetch_add_explicit(&layout[head_base + 1u], fixed_delta(repulsive.y), memory_order_relaxed);
     }
   }
+}
+
+float3 load_layout_3d(device atomic_int* layout, uint row) {
+  constexpr float inv_scale = 1.0f / 65536.0f;
+  uint base = row * 3u;
+  return float3(
+    float(atomic_load_explicit(&layout[base],
+                               memory_order_relaxed)) * inv_scale,
+    float(atomic_load_explicit(&layout[base + 1u],
+                               memory_order_relaxed)) * inv_scale,
+    float(atomic_load_explicit(&layout[base + 2u],
+                               memory_order_relaxed)) * inv_scale
+  );
+}
+
+void add_layout_3d(device atomic_int* layout, uint row, float3 delta) {
+  uint base = row * 3u;
+  atomic_fetch_add_explicit(&layout[base], fixed_delta(delta.x),
+                            memory_order_relaxed);
+  atomic_fetch_add_explicit(&layout[base + 1u], fixed_delta(delta.y),
+                            memory_order_relaxed);
+  atomic_fetch_add_explicit(&layout[base + 2u], fixed_delta(delta.z),
+                            memory_order_relaxed);
+}
+
+void embed_epoch_atomic_3d_impl(
+  device atomic_int* layout, device const int* neighbors,
+  device const float* weights, device const float* periods,
+  constant EmbedParams& p, uint epoch, uint gid, bool clean
+) {
+  if (gid >= p.n) return;
+  float progress = clean ?
+    float(epoch) / max(1.0f, float(p.n_epochs - 1u)) :
+    float(epoch) / max(1.0f, float(p.n_epochs));
+  float alpha = p.learning_rate * (1.0f - progress);
+  for (uint e = 0; e < p.k; ++e) {
+    uint pos = gid * p.k + e;
+    int nb_i = neighbors[pos];
+    if (nb_i < 0 || uint(nb_i) >= p.n || uint(nb_i) == gid) continue;
+    uint nb = uint(nb_i);
+    float period = periods[pos];
+    if (clean) {
+      float probability = clamp(weights[pos] /
+        max(p.max_weight, 1.0e-6f), 0.0f, 1.0f);
+      if (probability < 1.0f && clean_metal_uniform01(
+          p.seed, epoch, gid, nb, e, 0u, 3u) >= probability) continue;
+    } else if (positive_samples_this_epoch_period(
+        period, p, epoch) <= 0) {
+      continue;
+    }
+    float3 diff = load_layout_3d(layout, gid) -
+      load_layout_3d(layout, nb);
+    float d2 = max(1.1920928955078125e-7f, dot(diff, diff));
+    float coeff = attractive_coeff(d2, weights[pos], p);
+    float3 delta = alpha * clamp(coeff * diff, -4.0f, 4.0f);
+    add_layout_3d(layout, gid, delta);
+    add_layout_3d(layout, nb, -delta);
+    uint neg_samples = clean ? p.negative_sample_rate :
+      uint(negative_samples_this_epoch_period(period, p, epoch));
+    for (uint s = 0; s < neg_samples; ++s) {
+      uint neg = clean ? clean_metal_hash(
+        p.seed, epoch, gid, nb, e, s, 17u) % p.n :
+        deterministic_vertex(p.n, p.seed, epoch, gid, e, s);
+      if (neg == gid || neg == nb) continue;
+      float3 ndiff = load_layout_3d(layout, gid) -
+        load_layout_3d(layout, neg);
+      float nd2 = max(1.1920928955078125e-7f,
+                      dot(ndiff, ndiff));
+      float rcoeff = repulsive_coeff(nd2, p);
+      add_layout_3d(layout, gid,
+                    alpha * clamp(rcoeff * ndiff, -4.0f, 4.0f));
+    }
+  }
+}
+
+kernel void embed_epoch_atomic_3d(
+  device atomic_int* layout [[buffer(0)]],
+  device const int* neighbors [[buffer(1)]],
+  device const float* weights [[buffer(2)]],
+  device const float* periods [[buffer(3)]],
+  constant EmbedParams& p [[buffer(4)]],
+  constant uint& epoch [[buffer(5)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  embed_epoch_atomic_3d_impl(layout, neighbors, weights, periods,
+                             p, epoch, gid, false);
+}
+
+kernel void embed_epoch_clean_atomic_3d(
+  device atomic_int* layout [[buffer(0)]],
+  device const int* neighbors [[buffer(1)]],
+  device const float* weights [[buffer(2)]],
+  device const float* periods [[buffer(3)]],
+  constant EmbedParams& p [[buffer(4)]],
+  constant uint& epoch [[buffer(5)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  embed_epoch_atomic_3d_impl(layout, neighbors, weights, periods,
+                             p, epoch, gid, true);
 }
 
 kernel void umap_refine_prepare_rows(
@@ -5480,6 +5597,8 @@ List transform_tsne_metal_impl(NumericMatrix reference_layout,
   }
 }
 
+#include "tsne_fft_3d_metal.h"
+
 List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
                                   SEXP distances,
                                   NumericMatrix y_init,
@@ -5504,7 +5623,9 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
   const int n = indices.nrow();
   const int k = indices.ncol();
   if (n < 2 || k < 1) Rcpp::stop("KNN input must have at least two rows and one neighbor column.");
-  if (n_components != 2) Rcpp::stop("Metal openTSNE currently supports exactly two output components.");
+  if (n_components != 2 && n_components != 3) {
+    Rcpp::stop("Metal t-SNE supports two or three output components.");
+  }
   const std::pair<int, int> distance_dims = metal_matrix_dims(distances, "KNN distances");
   if (distance_dims.first != n || distance_dims.second != k) {
     Rcpp::stop("KNN `indices` and `distances` must have the same dimensions.");
@@ -5532,6 +5653,12 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
   if (!use_fft_grid && !use_exact) {
     Rcpp::stop("Metal openTSNE supports `negative_gradient_method = \"fft\"` or `\"exact\"`.");
   }
+  if (n_components == 3 && !use_fft_grid) {
+    Rcpp::stop("Metal 3D t-SNE requires FFT repulsion.");
+  }
+  if (n_components == 3 && record_costs) {
+    Rcpp::stop("Metal 3D t-SNE optimizer tracing is not available.");
+  }
   if (use_exact && n > kMetalOpenTsneExactDenseThreshold) {
     Rcpp::stop(
       "Native Metal openTSNE exact optimization is limited to n <= %d until "
@@ -5546,7 +5673,18 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
     std::vector<float> distance_values = metal_copy_float_vector(distances, "KNN distances");
     TsneSparseMetalGraph graph = build_tsne_sparse_graph_metal(indices, distance_values, perplexity);
     std::vector<float>().swap(distance_values);
-    std::vector<float> current = initialize_opentsne_metal_layout(y_init, init, n, seed);
+    std::vector<float> current = initialize_opentsne_metal_layout(
+      y_init, init, n, n_components, seed
+    );
+    if (n_components == 3) {
+      return run_metal_tsne_3d(
+        state, graph, current, n, early_exaggeration_iter,
+        n_iter, early_exaggeration, exaggeration,
+        learning_rate, learning_rate_auto,
+        initial_momentum, final_momentum, min_gain,
+        max_step_norm, auto_config
+      );
+    }
     std::vector<float> gains(current.size(), 1.0f);
     std::vector<float> updates(current.size(), 0.0f);
     std::vector<float> row_sums(static_cast<std::size_t>(n), 0.0f);
@@ -7687,8 +7825,9 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
                                        int seed,
                                        int sampler_mode) {
   const int n = init.nrow();
-  if (n < 1 || init.ncol() != 2) {
-    Rcpp::stop("Metal CSR embedding currently requires a two-dimensional initialization.");
+  const int n_components = init.ncol();
+  if (n < 1 || (n_components != 2 && n_components != 3)) {
+    Rcpp::stop("Metal CSR embedding requires a 2D or 3D initialization.");
   }
   if (n_epochs < 1) Rcpp::stop("n_epochs must be positive");
   if (negative_sample_rate < 0) Rcpp::stop("negative_sample_rate must be non-negative");
@@ -7719,7 +7858,8 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
     );
 
     const int k = static_cast<int>(neighbors.size() / static_cast<std::size_t>(n));
-    std::vector<float> current = init_to_float_2d(init);
+    std::vector<float> current =
+      metal_copy_float_matrix_row_major(init, "initialization");
     const auto ab = find_ab_params(1.0, min_dist);
     std::vector<float> epochs_per_sample;
     if (!clean_sampler) {
@@ -7778,7 +7918,11 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
     const std::uint32_t epochs_per_command = kMetalEmbeddingEpochsPerCommand;
 
     id<MTLComputePipelineState> selected_pipeline =
-      clean_sampler ? state.embed_clean_atomic_inplace_pipeline : state.embed_atomic_inplace_pipeline;
+      n_components == 3 ?
+        (clean_sampler ? state.embed_clean_atomic_3d_pipeline :
+                         state.embed_atomic_3d_pipeline) :
+        (clean_sampler ? state.embed_clean_atomic_inplace_pipeline :
+                         state.embed_atomic_inplace_pipeline);
     const NSUInteger embed_threads = bounded_threads(selected_pipeline);
     const MTLSize embed_threadgroup_size = MTLSizeMake(embed_threads, 1, 1);
     for (std::uint32_t epoch0 = 0; epoch0 < static_cast<std::uint32_t>(n_epochs); epoch0 += epochs_per_command) {
@@ -7812,10 +7956,13 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
       current[i] = static_cast<float>(fixed_layout[i]) * inv_fixed_scale;
     }
 
-    NumericMatrix out(n, 2);
+    NumericMatrix out(n, n_components);
     for (int i = 0; i < n; ++i) {
-      out(i, 0) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u]);
-      out(i, 1) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u + 1u]);
+      for (int dim = 0; dim < n_components; ++dim) {
+        out(i, dim) = static_cast<double>(
+          current[static_cast<std::size_t>(i) * n_components + dim]
+        );
+      }
     }
     out.attr("metal_epoch_schedule") = clean_sampler ?
       "bernoulli_weight_sampling" : "precomputed_epochs_per_sample";

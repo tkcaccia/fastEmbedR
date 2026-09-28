@@ -17,16 +17,16 @@ knn_embed_cuda_cpp <- function(indices, distances, init, objective, n_epochs, ne
     .Call(`_fastEmbedR_knn_embed_cuda_cpp`, indices, distances, init, objective, n_epochs, negative_sample_rate, learning_rate, min_dist, seed)
 }
 
-knn_umap_cuda_fused_cpp <- function(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode) {
-    .Call(`_fastEmbedR_knn_umap_cuda_fused_cpp`, indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode)
+knn_umap_cuda_fused_cpp <- function(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode, n_components = 2L, binary_graph = FALSE) {
+    .Call(`_fastEmbedR_knn_umap_cuda_fused_cpp`, indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode, n_components, binary_graph)
 }
 
-knn_umap_cuda_fused_float_cpp <- function(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode) {
-    .Call(`_fastEmbedR_knn_umap_cuda_fused_float_cpp`, indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode)
+knn_umap_cuda_fused_float_cpp <- function(indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode, n_components = 2L, binary_graph = FALSE) {
+    .Call(`_fastEmbedR_knn_umap_cuda_fused_float_cpp`, indices, distances, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode, n_components, binary_graph)
 }
 
-knn_umap_cuda_fused_gpu_cpp <- function(gpu_knn, requested_k, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode, binary_graph) {
-    .Call(`_fastEmbedR_knn_umap_cuda_fused_gpu_cpp`, gpu_knn, requested_k, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode, binary_graph)
+knn_umap_cuda_fused_gpu_cpp <- function(gpu_knn, requested_k, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode, binary_graph, n_components = 2L) {
+    .Call(`_fastEmbedR_knn_umap_cuda_fused_gpu_cpp`, gpu_knn, requested_k, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, spectral_n_iter, seed, optimizer_mode, binary_graph, n_components)
 }
 
 umap_cuda_graph_dump_cpp <- function(indices, distances) {
@@ -415,6 +415,10 @@ opentsne_kl_diagnostic_cpp <- function(indices, distances, layout, perplexity, n
 
 opentsne_force_diagnostic_cpp <- function(indices, distances, layout, perplexity, exaggeration, grid_size, n_threads) {
     .Call(`_fastEmbedR_opentsne_force_diagnostic_cpp`, indices, distances, layout, perplexity, exaggeration, grid_size, n_threads)
+}
+
+tsne_fft_3d_force_diagnostic_cpp <- function(indices, distances, layout, perplexity, exaggeration, grid_size, n_threads) {
+    .Call(`_fastEmbedR_tsne_fft_3d_force_diagnostic_cpp`, indices, distances, layout, perplexity, exaggeration, grid_size, n_threads)
 }
 
 tsne_auto_parameters_cpp <- function(n, k, perplexity, perplexity_missing, backend, negative_gradient_method) {

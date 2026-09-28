@@ -44,7 +44,7 @@ test_that(paste(
 })
 
 test_that("GPU UMAP exposes one CUDA fused entry shape", {
-    expect_length(formals(fastEmbedR:::knn_umap_cuda_fused_cpp), 10L)
+    expect_length(formals(fastEmbedR:::knn_umap_cuda_fused_cpp), 12L)
 })
 
 test_that("Metal t-SNE FFT-grid exposes opt-in per-stage timing", {

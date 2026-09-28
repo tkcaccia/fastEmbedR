@@ -63,11 +63,7 @@ resolve_opentsne_gradient_method <- function(method,
                                                 n,
                                                 n_components) {
     if (identical(method, "auto")) {
-        method <- if (n_components != 2L) {
-            "exact"
-        } else if (identical(optimizer_backend, "cuda")) {
-            "fft"
-        } else if (n <= 3000L) {
+        method <- if (n_components == 1L) {
             "exact"
         } else {
             "fft"
@@ -75,13 +71,9 @@ resolve_opentsne_gradient_method <- function(method,
     }
     if (identical(optimizer_backend, "cpu") &&
         identical(method, "fft") &&
-        n_components != 2L) {
+        n_components == 1L) {
         stop(
-            sprintf(
-                "%s%s",
-                "`negative_gradient_method = \"fft\"` currently supports two ",
-                "output components."
-            ),
+            "FFT repulsion requires two or three output components.",
             call. = FALSE
         )
     }
@@ -366,6 +358,9 @@ opentsne_result_runtime <- function(
 ) {
     list(
         fft_grid_size = out$fft_grid_size %||% NA_integer_,
+        fft_elapsed_sec = out$fft_elapsed_sec %||% NA_real_,
+        correction_elapsed_sec =
+            out$correction_elapsed_sec %||% NA_real_,
         auto_config = isTRUE(auto_params$auto_config),
         auto_config_rule = auto_params$auto_rule,
         auto_kld_stop = isTRUE(out$auto_kld_stop %||% FALSE),

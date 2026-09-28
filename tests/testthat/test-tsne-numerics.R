@@ -94,6 +94,22 @@ test_that("FFT-grid repulsion converges to exact forces as the grid grows", {
     expect_true(all(diff(errors) < 0))
 })
 
+test_that("CPU FFT forces agree across worker counts and grid sizes", {
+    set.seed(709)
+    x <- matrix(rnorm(80L * 6L), 80L, 6L)
+    knn <- test_exact_knn(x, k = 5L, exclude_self = TRUE)
+    layout <- matrix(rnorm(80L * 2L, sd = 0.3), 80L, 2L)
+    for (grid in c(128L, 256L)) {
+        force <- function(n.cores) {
+            fastEmbedR:::opentsne_force_diagnostic_cpp(
+                knn$indices, knn$distances, layout,
+                5, 1, grid, n.cores
+            )$repulsive_force_fft
+        }
+        expect_equal(force(1L), force(4L), tolerance = 1e-6)
+    }
+})
+
 test_that("exact force agreement holds across perplexity and support widths", {
     set.seed(704)
     x <- matrix(rnorm(40L * 6L), 40L, 6L)

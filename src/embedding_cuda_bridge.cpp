@@ -30,7 +30,9 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix indices,
                                        double repulsion_strength,
                                        int spectral_n_iter,
                                        int seed,
-                                       int optimizer_mode);
+                                       int optimizer_mode,
+                                       int n_components,
+                                       bool binary_graph);
 NumericMatrix knn_umap_cuda_fused_float_impl(IntegerMatrix indices,
                                              SEXP distances,
                                              int n_epochs,
@@ -40,7 +42,9 @@ NumericMatrix knn_umap_cuda_fused_float_impl(IntegerMatrix indices,
                                              double repulsion_strength,
                                              int spectral_n_iter,
                                              int seed,
-                                             int optimizer_mode);
+                                             int optimizer_mode,
+                                             int n_components,
+                                             bool binary_graph);
 NumericMatrix knn_umap_cuda_fused_gpu_impl(SEXP gpu_knn,
                                            int requested_k,
                                            int n_epochs,
@@ -51,7 +55,8 @@ NumericMatrix knn_umap_cuda_fused_gpu_impl(SEXP gpu_knn,
                                            int spectral_n_iter,
                                            int seed,
                                            int optimizer_mode,
-                                           bool binary_graph);
+                                           bool binary_graph,
+                                           int n_components);
 List umap_cuda_graph_dump_impl(IntegerMatrix indices,
                                NumericMatrix distances);
 NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector heads,
@@ -304,7 +309,9 @@ NumericMatrix knn_umap_cuda_fused_cpp(IntegerMatrix indices,
                                       double repulsion_strength,
                                       int spectral_n_iter,
                                       int seed,
-                                      int optimizer_mode) {
+                                      int optimizer_mode,
+                                      int n_components = 2,
+                                      bool binary_graph = false) {
   return knn_umap_cuda_fused_impl(
     indices,
     distances,
@@ -315,7 +322,9 @@ NumericMatrix knn_umap_cuda_fused_cpp(IntegerMatrix indices,
     repulsion_strength,
     spectral_n_iter,
     seed,
-    optimizer_mode
+    optimizer_mode,
+    n_components,
+    binary_graph
   );
 }
 
@@ -329,7 +338,9 @@ NumericMatrix knn_umap_cuda_fused_float_cpp(IntegerMatrix indices,
                                             double repulsion_strength,
                                             int spectral_n_iter,
                                             int seed,
-                                            int optimizer_mode) {
+                                            int optimizer_mode,
+                                            int n_components = 2,
+                                            bool binary_graph = false) {
   return knn_umap_cuda_fused_float_impl(
     indices,
     distances,
@@ -340,7 +351,9 @@ NumericMatrix knn_umap_cuda_fused_float_cpp(IntegerMatrix indices,
     repulsion_strength,
     spectral_n_iter,
     seed,
-    optimizer_mode
+    optimizer_mode,
+    n_components,
+    binary_graph
   );
 }
 
@@ -355,7 +368,8 @@ NumericMatrix knn_umap_cuda_fused_gpu_cpp(SEXP gpu_knn,
                                           int spectral_n_iter,
                                           int seed,
                                           int optimizer_mode,
-                                          bool binary_graph) {
+                                          bool binary_graph,
+                                          int n_components = 2) {
   return knn_umap_cuda_fused_gpu_impl(
     gpu_knn,
     requested_k,
@@ -367,7 +381,8 @@ NumericMatrix knn_umap_cuda_fused_gpu_cpp(SEXP gpu_knn,
     spectral_n_iter,
     seed,
     optimizer_mode,
-    binary_graph
+    binary_graph,
+    n_components
   );
 }
 

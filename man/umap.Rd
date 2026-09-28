@@ -30,8 +30,7 @@ and \code{distances}.}
 default for the data size.}
 
 \item{n_components}{Output dimensionality. The CPU backend supports positive
-dimensions, including three-dimensional embeddings. The current Metal and
-CUDA optimizers support only \code{2L}.}
+dimensions. Metal and CUDA support two- and three-dimensional embeddings.}
 
 \item{standardize}{Center and scale columns before KNN when \code{data} is a
 matrix. Defaults to \code{FALSE} so one-call results match a KNN object computed
@@ -117,7 +116,9 @@ parameter interchangeability with those packages.
 Landmark mode fits the requested fuzzy or binary UMAP graph on the
 landmark rows, projects the remaining rows with query-to-reference KNN, and
 optionally refines only projected rows while landmark coordinates remain
-fixed. Precomputed KNN input cannot be combined with landmarking.
+fixed. Metal and CUDA landmark refinement currently requires 2D output;
+3D landmark requests fail explicitly. Precomputed KNN input cannot be
+combined with landmarking.
 The returned \code{model} retains the fitted preprocessing transform so new data
 can be supplied in the same original feature space.
 }

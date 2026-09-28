@@ -347,7 +347,9 @@ separately from fuzzy UMAP.
 The Metal backend is implemented in Objective-C++/Metal and uses the validated
 atomic in-place edge-update kernel. It does not call Python, Torch, MLX, or
 `reticulate`. The Metal optimizer consumes the same prepared graph as the CPU
-path and returns only the final layout and metadata to R. The package-native
+path and supports two- and three-dimensional full embeddings. Three-dimensional
+landmark refinement remains unavailable and fails explicitly. Only the final
+layout and metadata return to R. The package-native
 Metal FFT work used by t-SNE was informed by permissive Apple GPU FFT
 engineering references [12].
 
@@ -364,7 +366,9 @@ cuVS C API, its KNN buffers remain on the selected CUDA device, and graph or
 affinity construction consumes those pointers directly. The owning R object
 contains external pointers with a finalizer; copying to ordinary R matrices is
 an explicit diagnostic operation. No CPU or companion-package fallback is
-used for a CUDA request.
+used for a CUDA request. Full CUDA UMAP supports two- and three-dimensional
+output; prepared graph reuse and landmark refinement remain limited to two
+dimensions.
 
 ## Interpolation-Based t-SNE From KNN
 
@@ -419,17 +423,23 @@ compare.
 
 ### Repulsive Force Approximation
 
-The default large-data path uses an FFT-grid approximation inspired by
+The default large-data 2D path uses an FFT-grid approximation inspired by
 FIt-SNE [3]. Sparse attractive forces are evaluated from the KNN affinity
 graph. The negative force is approximated by placing points on a
 two-dimensional grid, convolving with the t-SNE kernel, and interpolating the
-resulting force back to points [3-5]. The Barnes-Hut path is not part of the
-public benchmark surface because the FFT-grid path is the intended standard
-for MNIST70k-scale data; Barnes-Hut remains an important historical reference
-for tree-based t-SNE acceleration [2].
+resulting force back to points [3-5]. For 3D fits on CPU, Metal, and CUDA, a
+three-dimensional FFT grid evaluates a smoothed kernel potential, and exact
+short-range corrections recover nearby interactions.
+The grid self-interaction is removed before normalization. Small 2D and
+1D fits use exact repulsion by default; `"exact"` is also available for CPU
+3D comparisons. The 3D grid has 16 cells per side below 5,000 observations
+and 64 cells per side otherwise; the near-field correction spans three and
+two cells, respectively.
+The 3D Metal path uses Metal Performance Shaders Graph for the convolution
+FFT and native Metal kernels for grid interpolation, short-range correction,
+and coordinate updates. The 3D CUDA path uses cuFFT and native CUDA kernels.
 
-Automatic small-data execution uses exact repulsion. If FFT is requested
-explicitly, CPU and Metal use a minimum 128-cell grid. A matched long-run
+For 2D FFT, CPU and Metal use a minimum 128-cell grid. A matched long-run
 diagnostic showed that the former 64-cell setting could pass first-step force
 tests yet exceed the final common-affinity KL gate after a complete trajectory.
 The 128-cell floor restored CPU/Metal KL, trustworthiness, and Preserve@30

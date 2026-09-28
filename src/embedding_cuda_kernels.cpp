@@ -5891,11 +5891,14 @@ extern "C" int fastembedr_cuda_umap_graph_dump_from_knn(const int* indices,
   );
 }
 
+#include "embedding_cuda_umap_3d.cuh"
+
 template <typename DistanceT>
 int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
                                                        const DistanceT* d_distances_src,
                                                        int n,
                                                        int k,
+                                                       int n_components,
                                                        int n_epochs,
                                                        int negative_sample_rate,
                                                        float learning_rate,
@@ -5915,6 +5918,8 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
     return 1;
   }
   if (n < 2 || k < 1 || k > 256 || n_epochs < 1 ||
+      (n_components != 2 && n_components != 3) ||
+      (n_components == 3 && optimizer_mode != 0) ||
       negative_sample_rate < 0 || optimizer_mode < 0 || optimizer_mode > 1 ||
       learning_rate <= 0.0f || spectral_n_iter < 1) {
     set_embedding_error("invalid fused CUDA UMAP dimensions or parameters");
@@ -5927,7 +5932,8 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
   const std::size_t graph_items = static_cast<std::size_t>(n) * width;
   const std::size_t cub_select_temp_bytes = row_optimizer ? 0u :
     cub_select_flagged_temp_bytes(static_cast<int>(graph_items));
-  const std::size_t embed_bytes = static_cast<std::size_t>(n) * 2u * sizeof(float);
+  const std::size_t embed_bytes = static_cast<std::size_t>(n) *
+    n_components * sizeof(float);
   const int threads = 256;
   const int blocks = (n + threads - 1) / threads;
   const int stat_blocks = std::max(1, std::min(1024, blocks));
@@ -5939,7 +5945,7 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
     (optimizer_mode == 1 ? 3u : 2u) * embed_bytes +
     static_cast<std::size_t>(n) * sizeof(int) +
     static_cast<std::size_t>(stat_blocks) * 5u * sizeof(double) +
-    5u * sizeof(double) +
+    (n_components == 3 ? 9u : 5u) * sizeof(double) +
     32u * 256u;
 
   int* d_neighbors = nullptr;
@@ -5988,13 +5994,21 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
       graph_items, "fused umap coo epochs_per_sample"
     );
   }
-  d_current = workspace.alloc<float>(static_cast<std::size_t>(n) * 2u, "fused umap current");
-  d_next = workspace.alloc<float>(static_cast<std::size_t>(n) * 2u, "fused umap next");
+  d_current = workspace.alloc<float>(
+    static_cast<std::size_t>(n) * n_components, "fused umap current"
+  );
+  d_next = workspace.alloc<float>(
+    static_cast<std::size_t>(n) * n_components, "fused umap next"
+  );
   d_delta = optimizer_mode == 1 ?
-    workspace.alloc<float>(static_cast<std::size_t>(n) * 2u, "fused umap delta") :
+    workspace.alloc<float>(
+      static_cast<std::size_t>(n) * n_components, "fused umap delta"
+    ) :
     nullptr;
   d_partial = workspace.alloc<double>(static_cast<std::size_t>(stat_blocks) * 5u, "fused umap partial");
-  d_stats = workspace.alloc<double>(5u, "fused umap stats");
+  d_stats = workspace.alloc<double>(
+    n_components == 3 ? 9u : 5u, "fused umap stats"
+  );
   const bool missing_coo = !row_optimizer &&
     (d_valid_flags == nullptr || d_selected_ids == nullptr ||
      d_selected_count == nullptr || d_coo_heads == nullptr ||
@@ -6023,22 +6037,41 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
     }
   }
 
-  random_init_kernel<<<blocks, threads>>>(d_current, n, seed);
+  if (n_components == 3) {
+    umap_random_init_3d<<<blocks, threads>>>(d_current, n, seed);
+  } else {
+    random_init_kernel<<<blocks, threads>>>(d_current, n, seed);
+  }
   if (check_cuda(cudaGetLastError(), "random_init_kernel(fused umap) launch")) {
     cleanup();
     return 1;
   }
-  if (normalize_device_init(d_current, d_partial, d_stats, n, stat_blocks, threads)) {
+  const auto normalize_init = [&](float* values) {
+    return n_components == 3 ?
+      normalize_device_init_3d(values, d_stats, n, blocks, threads) :
+      normalize_device_init(
+        values, d_partial, d_stats, n, stat_blocks, threads
+      );
+  };
+  if (normalize_init(d_current)) {
     cleanup();
     return 1;
   }
   for (int iter = 0; iter < spectral_n_iter; ++iter) {
-    diffuse_init_kernel<<<blocks, threads>>>(d_neighbors, d_weights, d_current, d_next, n, width);
+    if (n_components == 3) {
+      umap_diffuse_init_3d<<<blocks, threads>>>(
+        d_neighbors, d_weights, d_current, d_next, n, width
+      );
+    } else {
+      diffuse_init_kernel<<<blocks, threads>>>(
+        d_neighbors, d_weights, d_current, d_next, n, width
+      );
+    }
     if (check_cuda(cudaGetLastError(), "diffuse_init_kernel(fused umap) launch")) {
       cleanup();
       return 1;
     }
-    if (normalize_device_init(d_next, d_partial, d_stats, n, stat_blocks, threads)) {
+    if (normalize_init(d_next)) {
       cleanup();
       return 1;
     }
@@ -6153,21 +6186,36 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
         return 1;
       }
     } else {
-      embed_epoch_row_atomic_kernel<<<
-        row_blocks, threads, 0, stream
-      >>>(
-        d_current, d_neighbors, d_weights, params,
-        static_cast<unsigned int>(epoch), width
-      );
+      if (n_components == 3) {
+        embed_epoch_row_atomic_3d_kernel<<<
+          row_blocks, threads, 0, stream
+        >>>(
+          d_current, d_neighbors, d_weights, params,
+          static_cast<unsigned int>(epoch), width
+        );
+      } else {
+        embed_epoch_row_atomic_kernel<<<
+          row_blocks, threads, 0, stream
+        >>>(
+          d_current, d_neighbors, d_weights, params,
+          static_cast<unsigned int>(epoch), width
+        );
+      }
       if (check_launches && check_cuda(
             cudaGetLastError(),
             "embed_epoch_row_atomic_kernel(fused umap) launch"
           )) {
         return 1;
       }
-      umap_sanitize_layout_kernel<<<blocks, threads, 0, stream>>>(
-        d_current, n, max_abs_coord
-      );
+      if (n_components == 3) {
+        umap_sanitize_layout_3d_kernel<<<blocks, threads, 0, stream>>>(
+          d_current, n, max_abs_coord
+        );
+      } else {
+        umap_sanitize_layout_kernel<<<blocks, threads, 0, stream>>>(
+          d_current, n, max_abs_coord
+        );
+      }
       if (check_launches && check_cuda(
             cudaGetLastError(),
             "umap_sanitize_layout_kernel(row umap) launch"
@@ -6248,6 +6296,7 @@ int fastembedr_cuda_umap_from_knn_spectral_impl(const int* indices,
                                                 const DistanceT* distances,
                                                 int n,
                                                 int k,
+                                                int n_components,
                                                 int n_epochs,
                                                 int negative_sample_rate,
                                                 float learning_rate,
@@ -6292,7 +6341,8 @@ int fastembedr_cuda_umap_from_knn_spectral_impl(const int* indices,
     return 1;
   }
   const int status = fastembedr_cuda_umap_from_device_knn_spectral_impl<DistanceT>(
-    d_indices, d_distances, n, k, n_epochs, negative_sample_rate, learning_rate,
+    d_indices, d_distances, n, k, n_components, n_epochs,
+    negative_sample_rate, learning_rate,
     a, b, repulsion_strength, spectral_n_iter, seed, index_offset, optimizer_mode,
     binary_graph, out
   );
@@ -6304,6 +6354,7 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
                                                        const double* distances,
                                                        int n,
                                                        int k,
+                                                       int n_components,
                                                        int n_epochs,
                                                        int negative_sample_rate,
                                                        float learning_rate,
@@ -6314,11 +6365,13 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral(const int* indices,
                                                        unsigned int seed,
                                                        int index_offset,
                                                        int optimizer_mode,
+                                                       int binary_graph,
                                                        float* out) {
   return fastembedr_cuda_umap_from_knn_spectral_impl<double>(
-    indices, distances, n, k, n_epochs, negative_sample_rate, learning_rate,
+    indices, distances, n, k, n_components, n_epochs,
+    negative_sample_rate, learning_rate,
     a, b, repulsion_strength, spectral_n_iter, seed, index_offset,
-    optimizer_mode, false, out
+    optimizer_mode, binary_graph != 0, out
   );
 }
 
@@ -6326,6 +6379,7 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral_float(const int* indices,
                                                              const float* distances,
                                                              int n,
                                                              int k,
+                                                             int n_components,
                                                              int n_epochs,
                                                              int negative_sample_rate,
                                                              float learning_rate,
@@ -6336,11 +6390,13 @@ extern "C" int fastembedr_cuda_umap_from_knn_spectral_float(const int* indices,
                                                              unsigned int seed,
                                                              int index_offset,
                                                              int optimizer_mode,
+                                                             int binary_graph,
                                                              float* out) {
   return fastembedr_cuda_umap_from_knn_spectral_impl<float>(
-    indices, distances, n, k, n_epochs, negative_sample_rate, learning_rate,
+    indices, distances, n, k, n_components, n_epochs,
+    negative_sample_rate, learning_rate,
     a, b, repulsion_strength, spectral_n_iter, seed, index_offset,
-    optimizer_mode, false, out
+    optimizer_mode, binary_graph != 0, out
   );
 }
 
@@ -6348,6 +6404,7 @@ extern "C" int fastembedr_cuda_umap_from_device_knn_spectral_float(const int* de
                                                                     const float* device_distances,
                                                                     int n,
                                                                     int k,
+                                                                    int n_components,
                                                                     int n_epochs,
                                                                     int negative_sample_rate,
                                                                     float learning_rate,
@@ -6361,7 +6418,8 @@ extern "C" int fastembedr_cuda_umap_from_device_knn_spectral_float(const int* de
                                                                     int binary_graph,
                                                                     float* out) {
   return fastembedr_cuda_umap_from_device_knn_spectral_impl<float>(
-    device_indices, device_distances, n, k, n_epochs, negative_sample_rate,
+    device_indices, device_distances, n, k, n_components, n_epochs,
+    negative_sample_rate,
     learning_rate, a, b, repulsion_strength, spectral_n_iter, seed,
     index_offset, optimizer_mode, binary_graph != 0, out
   );
@@ -6513,6 +6571,8 @@ extern "C" int fastembedr_cuda_opentsne_fft_grid_size(const int n) {
   return resolve_cuda_tsne_fft_grid_size(n);
 }
 
+#include "tsne_fft_3d_cuda.cuh"
+
 template <typename DistanceT>
 int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
                                                        const DistanceT* distances,
@@ -6547,7 +6607,8 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
     set_embedding_error("null CUDA openTSNE input pointer");
     return 1;
   }
-  if (n < 2 || k < 1 || k > 256 || n_components != 2 ||
+  if (n < 2 || k < 1 || k > 256 ||
+      (n_components != 2 && n_components != 3) ||
       ((!has_init && (pca_init_double != nullptr ||
                       pca_init_float != nullptr ||
                       pca_init_device_row_major != nullptr)) &&
@@ -6559,6 +6620,19 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
       initial_momentum < 0.0f || final_momentum < 0.0f || min_gain <= 0.0f) {
     set_embedding_error("invalid CUDA openTSNE FFT-grid dimensions or parameters");
     return 1;
+  }
+
+  if (n_components == 3) {
+    return cuda_tsne_fft_3d_from_knn<DistanceT>(
+      indices, distances, init, has_init,
+      pca_init_double, pca_init_float,
+      pca_init_device_row_major, pca_init_p, n, k,
+      perplexity, early_exaggeration_iter, n_iter,
+      early_exaggeration, exaggeration, learning_rate,
+      learning_rate_auto, initial_momentum,
+      final_momentum, min_gain, max_step_norm,
+      seed, index_offset, out, input_copy_kind
+    );
   }
 
   const int grid_size = resolve_cuda_tsne_fft_grid_size(n);
