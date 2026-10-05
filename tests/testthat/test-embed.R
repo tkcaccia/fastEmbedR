@@ -50,6 +50,42 @@ test_that("preprocessing PCA uses package-native RSVD", {
     expect_equal(pre$preprocess$pca_backend, "cpu_rsvd")
 })
 
+test_that("wide embedding PCA uses requested CPU cores", {
+    set.seed(40)
+    x <- matrix(rnorm(80L * 300L), 80L, 300L)
+    single <- fastEmbedR:::run_embedding_pca(x, 3L, "cpu", 40L, 1L)
+    parallel <- fastEmbedR:::run_embedding_pca(x, 3L, "cpu", 40L, 4L)
+    expect_equal(single$n_threads, 1L)
+    expect_equal(parallel$n_threads, 2L)
+    expect_equal(parallel$scores, single$scores, tolerance = 1e-3)
+
+    prepared <- fastEmbedR:::prepare_umap_matrix(
+        x, FALSE, 3L, 40L, "cpu", 4L
+    )
+    expect_equal(ncol(prepared$prepared$data), 3L)
+    expect_equal(prepared$prepared$preprocess$pca_backend, "cpu_rsvd")
+
+    umap_fit <- umap(
+        x, n_neighbors = 10L, pca_dims = 3L, n.cores = 4L,
+        backend = "cpu", seed = 40L
+    )
+    tsne_fit <- tsne(
+        x, perplexity = 10L, pca_dims = 3L, n.cores = 4L,
+        backend = "cpu", seed = 40L,
+        early_exaggeration_iter = 5L, n_iter = 10L
+    )
+    expect_equal(dim(umap_fit$layout), c(80L, 2L))
+    expect_equal(dim(tsne_fit$layout), c(80L, 2L))
+    expect_true(all(is.finite(umap_fit$layout)))
+    expect_true(all(is.finite(tsne_fit$layout)))
+
+    unchanged <- fastEmbedR:::prepare_embedding_data(
+        x, FALSE, NULL, 40L, backend = "cpu", n.cores = 4L
+    )
+    expect_true(is.na(unchanged$preprocess$pca_dims))
+    expect_equal(dim(unchanged$data), dim(x))
+})
+
 test_that("explicit CUDA PCA never falls back to CPU", {
     if (isTRUE(fastEmbedR:::embedding_cuda_available_cpp())) {
         skip("CUDA is available; the hardware test covers the native path.")

@@ -4,6 +4,20 @@ This page defines the build contract for CPU, Metal, and CUDA installations.
 Backend names are strict: an unavailable requested accelerator raises an error
 and is never relabelled CPU work.
 
+For host GPU, driver, and toolkit diagnostics, use the separate `gpuinfo`
+package:
+
+```r
+install.packages("gpuinfo")
+gpuinfo::gpu_sitrep()
+gpuinfo::has_cuda()
+gpuinfo::has_metal()
+```
+
+These checks describe the host, not whether this installation of fastEmbedR
+contains working accelerator kernels. Verify package execution with an
+explicit backend request and the returned backend metadata below.
+
 ## Diagnostic-only builds
 
 The diagnostic-only build is intended for unavailable-backend error-path

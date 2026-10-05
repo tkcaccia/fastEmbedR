@@ -426,7 +426,7 @@ if [ "$cuda_probe_ok" = "1" ]; then
     esac
     cuda_arch_flags="$cuda_arch_flags -gencode=arch=compute_$arch,code=sm_$arch"
   done
-  cuda_objects="embedding_cuda_impl.o embedding_cuda_kernels.o"
+  cuda_objects="embedding_cuda_impl.o embedding_cuda_kernels.o massive_pca_cuda.o"
   graph_cuda_object="graph_clustering_cuda_kernels.o"
   cppflags="$cppflags -DFASTEMBEDR_HAS_CUDA"
   cppflags="$cppflags $cuda_cpp_flags $cuda_include_flags"
@@ -633,6 +633,9 @@ embedding_cuda_kernels.o: embedding_cuda_kernels.cpp
 
 graph_clustering_cuda_kernels.o: graph_clustering_cuda_kernels.cu
 	\$(NVCC) \$(CUDA_NVCCFLAGS) -c \$< -o \$@
+
+massive_pca_cuda.o: massive_pca_cuda.cu massive_pca_cuda.h
+	\$(NVCC) \$(CUDA_NVCCFLAGS) -c \$< -o \$@
 "
 fi
 
@@ -658,7 +661,7 @@ fi
     echo "NVCC = $nvcc"
     printf "%s" "$cuda_rule"
   fi
-  echo "OBJECTS = RcppExports.o tsne_neighbors.o embedding_utils.o fast_knn_umap.o graph_clustering.o graph_clustering_cuda_bridge.o graph_clustering_metal_bridge.o walktrap.o native_knn_bridge.o native_knn_hnsw.o native_knn_exact.o $native_cuda_knn_object $graph_cuda_object $metal_objects embedding_cuda_bridge.o $cuda_objects"
+  echo "OBJECTS = RcppExports.o tsne_neighbors.o embedding_utils.o massive_matrix.o massive_graph_merge.o massive_graph_reorder.o fast_knn_umap.o graph_clustering.o graph_clustering_cuda_bridge.o graph_clustering_metal_bridge.o walktrap.o native_knn_bridge.o native_knn_hnsw.o native_knn_exact.o $native_cuda_knn_object $graph_cuda_object $metal_objects embedding_cuda_bridge.o $cuda_objects"
 } > src/Makevars
 
 echo "fastEmbedR configuration:"

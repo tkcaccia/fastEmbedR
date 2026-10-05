@@ -205,14 +205,6 @@ default_tsne_threads <- function() {
     resolve_n_cores(default = 4L)
 }
 
-metal_opentsne_exact_dense_threshold <- function() {
-    6000L
-}
-
-cuda_opentsne_exact_dense_threshold <- function() {
-    6000L
-}
-
 metal_opentsne_native_available <- function() {
     exists("knn_tsne_opentsne_metal_cpp",
         envir = asNamespace("fastEmbedR"),
@@ -234,46 +226,10 @@ normalize_tsne_negative_gradient_method <- function(method) {
             call. = FALSE
         )
     }
-    aliases <- c(
-        auto = "auto",
-        exact = "exact",
-        pair = "exact",
-        pair_symmetric = "exact",
-        fft = "fft",
-        interpolation = "fft",
-        fitsne = "fft",
-        fit_sne = "fft"
-    )
-    if (method %in% c("bh", "barnes_hut", "barnes", "barnes-hut")) {
-        stop(
-            sprintf(
-                "%s%s%s%s",
-                "`negative_gradient_method = \"bh\"` has been removed ",
-                "from fastEmbedR. Use `negative_gradient_method = \"fft\"` ",
-                "for the standard CPU t-SNE path, ",
-                "or `\"exact\"` for small reference runs."
-            ),
-            call. = FALSE
-        )
+    if (!method %in% c("auto", "fft")) {
+        stop("Only FFT t-SNE repulsion is supported.", call. = FALSE)
     }
-    if (method %in% c("sampled", "negative_sampling", "sample")) {
-        stop(
-            "`negative_gradient_method = \"sampled\"` is not part of the ",
-            "standard GPU t-SNE path because it changes the optimization ",
-            "mathematics. Use `\"exact\"` for small native GPU checks, or CPU ",
-            "`\"fft\"`; native Metal/CUDA FFT paths are used when compiled.",
-            call. = FALSE
-        )
-    }
-    out <- unname(aliases[method])
-    if (is.na(out)) {
-        stop(
-            "`negative_gradient_method` must be one of ",
-            "`\"auto\"`, `\"exact\"`, or `\"fft\"`.",
-            call. = FALSE
-        )
-    }
-    out
+    "fft"
 }
 
 check_tsne_neighbor_params <- function(
@@ -323,20 +279,12 @@ check_tsne_neighbor_params <- function(
     )
 }
 
-validate_opentsne_n_components <- function(n_components, backend = NULL) {
-    if (!is_whole_number(n_components) || n_components < 1L ||
+validate_opentsne_n_components <- function(n_components) {
+    if (!is_whole_number(n_components) || n_components < 2L ||
         n_components > 3L) {
-        stop("`n_components` should be 1, 2, or 3.", call. = FALSE)
+        stop("`n_components` should be 2 or 3.", call. = FALSE)
     }
     n_components <- as.integer(n_components)
-    if (!is.null(backend) && n_components == 1L &&
-        backend %in% c("metal", "cuda")) {
-        stop(
-            "The requested backend does not support this ",
-            "`n_components` setting.",
-            call. = FALSE
-        )
-    }
     n_components
 }
 

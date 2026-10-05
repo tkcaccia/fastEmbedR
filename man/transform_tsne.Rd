@@ -85,7 +85,8 @@ below this reference count.}
 
 \item{backend}{Backend used for query KNN when \code{knn} is \code{NULL}; \code{"metal"}
 and \code{"cuda"} run their native fixed-reference transform optimizers when
-those backends were compiled. Explicit unavailable GPU requests fail; CPU
+those backends were compiled. CUDA accepts 2D or 3D reference layouts;
+Metal currently accepts 2D. Explicit unavailable GPU requests fail; CPU
 work is never reported as Metal or CUDA.}
 
 \item{verbose}{Print native optimizer progress.}

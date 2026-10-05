@@ -293,10 +293,7 @@ test_that("native Metal and CUDA match the CPU first optimizer step", {
         )
     }
 
-    cpu <- list(
-        exact = run_step("cpu", "exact"),
-        fft = run_step("cpu", "fft")
-    )
+    cpu_fft <- run_step("cpu", "fft")
     available <- list(
         metal = isTRUE(fastEmbedR:::embedding_metal_available_cpp()) &&
             isTRUE(fastEmbedR:::metal_opentsne_native_available()),
@@ -306,13 +303,7 @@ test_that("native Metal and CUDA match the CPU first optimizer step", {
 
     for (backend in names(available)[unlist(available)]) {
         fft <- run_step(backend, "fft")
-        if (backend != "cuda") {
-            exact <- run_step(backend, "exact")
-            expect_lt(tsne_relative_l2(exact, cpu$exact), 5e-4,
-                label = paste(backend, "exact first-step relative L2")
-            )
-        }
-        expect_lt(tsne_relative_l2(fft, cpu$fft), 2e-3,
+        expect_lt(tsne_relative_l2(fft, cpu_fft), 2e-3,
             label = paste(backend, "FFT first-step relative L2")
         )
     }
@@ -325,7 +316,7 @@ test_that("native Metal and CUDA match the CPU first optimizer step", {
     }
 })
 
-test_that("FFT t-SNE retains exact-objective agreement over a long run", {
+test_that("FFT t-SNE retains cross-backend objective agreement", {
     set.seed(719)
     x <- matrix(rnorm(180L * 8L), 180L, 8L)
     knn <- test_exact_knn(x, k = 10L, exclude_self = TRUE)
@@ -370,14 +361,12 @@ test_that("FFT t-SNE retains exact-objective agreement over a long run", {
         )
     }
 
-    reference_kl <- objective(run_long("cpu", "exact"))
     cpu_fft_kl <- objective(run_long("cpu", "fft"))
-    expect_true(is.finite(reference_kl))
-    expect_lte(cpu_fft_kl, 1.05 * reference_kl)
+    expect_true(is.finite(cpu_fft_kl))
 
     if (isTRUE(fastEmbedR:::embedding_metal_available_cpp())) {
         metal_fft_kl <- objective(run_long("metal", "fft"))
-        expect_lte(metal_fft_kl, 1.05 * reference_kl)
+        expect_lte(metal_fft_kl, 1.05 * cpu_fft_kl)
     }
 })
 

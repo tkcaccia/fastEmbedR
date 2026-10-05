@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -278,6 +279,67 @@ Rcpp::List native_exact_query_impl(SEXP data_sexp,
     std::chrono::duration<double>(converted - start).count(),
     std::chrono::duration<double>(searched - converted).count()
   );
+  result.attr("backend") = "cpu";
+  result.attr("method") = "native_exact_query";
+  result.attr("exclude_self") = false;
+  return result;
+}
+
+SEXP native_exact_index_build_impl(SEXP data_sexp) {
+  fastembedr::FloatMatrix data =
+    fastembedr::matrix_to_row_major_float(
+      data_sexp, fastembedr::KnnMetric::Euclidean
+    );
+  fastembedr::require_finite_matrix(data);
+  if (data.nrow < 1 || data.ncol < 1) {
+    Rcpp::stop("Invalid native exact reference.");
+  }
+  Rcpp::XPtr<fastembedr::FloatMatrix> index(
+    new fastembedr::FloatMatrix(std::move(data)), true
+  );
+  R_SetExternalPtrTag(index, Rf_install("fastEmbedR_exact_index"));
+  return index;
+}
+
+Rcpp::List native_exact_index_search_impl(SEXP pointer,
+                                          SEXP query_sexp,
+                                          int k,
+                                          int n_threads) {
+  if (TYPEOF(pointer) != EXTPTRSXP ||
+      R_ExternalPtrTag(pointer) !=
+        Rf_install("fastEmbedR_exact_index")) {
+    Rcpp::stop("Expected a live persistent exact index.");
+  }
+  Rcpp::XPtr<fastembedr::FloatMatrix> index(pointer);
+  if (index.get() == nullptr || index->nrow < 1) {
+    Rcpp::stop("Expected a live persistent exact index.");
+  }
+  using Clock = std::chrono::steady_clock;
+  const auto start = Clock::now();
+  fastembedr::FloatMatrix query =
+    fastembedr::matrix_to_row_major_float(
+      query_sexp, fastembedr::KnnMetric::Euclidean
+    );
+  fastembedr::require_finite_matrix(query);
+  if (query.nrow < 1 || query.ncol != index->ncol ||
+      k < 1 || k > index->nrow) {
+    Rcpp::stop("Invalid persistent exact query input.");
+  }
+  const auto converted = Clock::now();
+  const int threads = std::max(1, std::min(n_threads, query.nrow));
+  const ExactOutput output = exact_search(
+    *index, query, k, threads, false
+  );
+  const auto searched = Clock::now();
+  Rcpp::List result = format_exact_result(
+    output, *index, query, fastembedr::KnnMetric::Euclidean,
+    "euclidean", k, threads, false, 0.99,
+    std::chrono::duration<double>(converted - start).count(),
+    std::chrono::duration<double>(searched - converted).count()
+  );
+  result["index_reused"] = true;
+  result["tuning_policy"] = "massive_persistent_exact";
+  result["tuning_rule"] = "native_reference_reused";
   result.attr("backend") = "cpu";
   result.attr("method") = "native_exact_query";
   result.attr("exclude_self") = false;

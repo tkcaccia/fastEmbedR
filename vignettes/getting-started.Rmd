@@ -131,6 +131,12 @@ recorded in returned objects, for example
 Metal or CUDA backend must be available and execute natively; otherwise the
 function stops with an informative error instead of silently using CPU.
 
+The separate `gpuinfo` package reports host GPU, driver, and toolkit
+visibility. For example, `gpuinfo::gpu_sitrep()` helps diagnose an
+unavailable accelerator. Hardware visibility alone does not establish that
+fastEmbedR was compiled for it; confirm execution with the returned backend
+metadata from an explicit `backend = "metal"` or `backend = "cuda"` call.
+
 The public workflow is intentionally small:
 
 | Goal | Function |
@@ -219,8 +225,8 @@ fit_tsne$parameters[c(
 
 The two embedding functions deliberately expose different levels of control.
 t-SNE exposes perplexity/support, initialization, iteration counts, early
-and normal exaggeration, learning rate, momentum, clipping, and exact-versus-FFT
-repulsion. Set `auto_config = FALSE` and provide explicit values when automatic
+and normal exaggeration, learning rate, and momentum. Repulsion uses FFT for
+both 2D and 3D output. Set `auto_config = FALSE` when automatic
 iteration or stopping choices are not appropriate.
 
 UMAP is an opinionated high-throughput implementation, not a general-purpose

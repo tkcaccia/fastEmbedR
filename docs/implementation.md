@@ -423,16 +423,16 @@ compare.
 
 ### Repulsive Force Approximation
 
-The default large-data 2D path uses an FFT-grid approximation inspired by
+The 2D fit uses an FFT-grid approximation inspired by
 FIt-SNE [3]. Sparse attractive forces are evaluated from the KNN affinity
 graph. The negative force is approximated by placing points on a
 two-dimensional grid, convolving with the t-SNE kernel, and interpolating the
 resulting force back to points [3-5]. For 3D fits on CPU, Metal, and CUDA, a
 three-dimensional FFT grid evaluates a smoothed kernel potential, and exact
 short-range corrections recover nearby interactions.
-The grid self-interaction is removed before normalization. Small 2D and
-1D fits use exact repulsion by default; `"exact"` is also available for CPU
-3D comparisons. The 3D grid has 16 cells per side below 5,000 observations
+The grid self-interaction is removed before normalization. Exact pairwise
+forces are retained only as numerical test references, not fit options.
+The 3D grid has 16 cells per side below 5,000 observations
 and 64 cells per side otherwise; the near-field correction spans three and
 two cells, respectively.
 The 3D Metal path uses Metal Performance Shaders Graph for the convolution
@@ -514,7 +514,7 @@ or eliminate the memory advantage.
 
 The configurability is deliberately asymmetric. t-SNE exposes perplexity
 and support, initialization, iteration counts, exaggeration, learning rate,
-momentum, clipping, and exact-versus-FFT repulsion. Its native helper supplies
+momentum, and clipping. FFT repulsion is fixed. Its native helper supplies
 opt-SNE-inspired learning-rate and iteration defaults only when values are
 omitted [6], and `auto_config = FALSE` disables automatic iteration/stopping
 choices.

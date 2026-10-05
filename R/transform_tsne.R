@@ -39,7 +39,8 @@
 #' @param seed Random seed.
 #' @param backend Backend used for query KNN when `knn` is `NULL`; `"metal"`
 #'   and `"cuda"` run their native fixed-reference transform optimizers when
-#'   those backends were compiled. Explicit unavailable GPU requests fail; CPU
+#'   those backends were compiled. CUDA accepts 2D or 3D reference layouts;
+#'   Metal currently accepts 2D. Explicit unavailable GPU requests fail; CPU
 #'   work is never reported as Metal or CUDA.
 #' @param verbose Print native optimizer progress.
 #' @return A numeric matrix with one row per query observation.
@@ -261,10 +262,12 @@ prepare_tsne_transform_init <- function(
 run_tsne_transform_gpu <- function(
     backend, reference_layout, projection, request, controls, init
 ) {
-    if (ncol(reference_layout) != 2L) {
+    dimensions <- ncol(reference_layout)
+    if (dimensions != 2L &&
+        !(backend == "cuda" && dimensions == 3L)) {
         stop(
-            backend, " t-SNE transform currently supports only ",
-            "two-dimensional reference layouts.",
+            backend, " t-SNE transform does not support a ",
+            dimensions, "D reference layout.",
             call. = FALSE
         )
     }
@@ -508,10 +511,6 @@ landmark_projection_knn <- function(x_landmarks,
                                     backend,
                                     seed,
                                     n_threads = NULL,
-                                    landmark_layout = NULL,
-                                    all_data = NULL,
-                                    landmark_indices = NULL,
-                                    query_rows = NULL,
                                     metric = "euclidean") {
     backend <- as.character(backend)[1L]
     if (length(backend) != 1L || is.na(backend) || !nzchar(backend)) {
@@ -818,7 +817,8 @@ prepare_landmark_tsne_data <- function(data, request) {
         request$standardize,
         request$pca_dims,
         request$seed,
-        backend = resolve_preprocess_backend(request$backend)
+        backend = resolve_preprocess_backend(request$backend),
+        n.cores = request$n_threads
     ))
     x <- prepared$value$data
     metric <- resolve_embedding_metric(request$metric, x)
@@ -831,6 +831,8 @@ prepare_landmark_tsne_data <- function(data, request) {
     list(
         x = x,
         n = nrow(x),
+        p = ncol(x),
+        float32 = is_float32_matrix(x),
         prepared = prepared$value,
         preprocess_time = prepared$time,
         selection = selection, metric = metric
@@ -886,6 +888,8 @@ partition_landmark_tsne <- function(state, request) {
     state$x_landmarks <- partition$landmarks
     state$x_query <- partition$query
     state$n_landmarks <- nrow(partition$landmarks)
+    state$x <- NULL
+    state$prepared$data <- NULL
     state
 }
 
@@ -1097,10 +1101,6 @@ compute_landmark_tsne_projection_knn <- function(
         backend = request$backend,
         seed = request$seed + 503L,
         n_threads = request$n_threads,
-        landmark_layout = state$reference_fit$layout,
-        all_data = state$x,
-        landmark_indices = state$landmark_indices,
-        query_rows = state$query_indices,
         metric = state$metric
     )
 }
@@ -1362,7 +1362,7 @@ landmark_tsne_metrics <- function(state, request, timings) {
     metrics <- data.frame(
         method = "landmark_tsne",
         n = state$n,
-        p = ncol(state$x),
+        p = state$p,
         n_neighbors = state$policy$n_neighbors,
         perplexity = state$policy$perplexity,
         elapsed = sum(timings[, "elapsed"]),
@@ -1431,7 +1431,7 @@ landmark_tsne_parameters <- function(state, request) {
     base <- list(
         method = "landmark_tsne",
         n = state$n,
-        p = ncol(state$x),
+        p = state$p,
         n_neighbors = state$policy$n_neighbors,
         k = state$policy$n_neighbors + 1L,
         n_components = as.integer(request$n_components),
@@ -1470,7 +1470,7 @@ assemble_landmark_tsne_output <- function(state, request) {
         state$query_indices,
         state$n,
         prefix = "TSNE",
-        return_float32 = is_float32_matrix(state$x)
+        return_float32 = state$float32
     )
     timings <- landmark_tsne_timings(state)
     out <- list(

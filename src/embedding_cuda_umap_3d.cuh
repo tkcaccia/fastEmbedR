@@ -234,7 +234,70 @@ __global__ void umap_sanitize_layout_3d_kernel(
   std::size_t base = static_cast<std::size_t>(row) * 3u;
   for (int axis = 0; axis < 3; ++axis) {
     float value = layout[base + axis];
-    if (!isfinite(value)) value = 0.0f;
-    layout[base + axis] = fminf(limit, fmaxf(-limit, value));
+    if (isfinite(value)) {
+      layout[base + axis] = fminf(limit, fmaxf(-limit, value));
+    }
+  }
+}
+
+__global__ void embed_epoch_coo_atomic_3d_kernel(
+    float* layout, const int* heads, const int* tails,
+    const float* weights, const float* periods,
+    EmbedParams p, unsigned int epoch, int edges) {
+  const int id = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (id >= edges) return;
+  const int head = heads[id];
+  const int tail = tails[id];
+  if (head < 0 || head >= p.n || tail < 0 || tail >= p.n ||
+      head == tail) return;
+  const float period = periods[id];
+  const int positives = positive_samples_this_epoch_umap_schedule(
+    period, epoch);
+  if (positives <= 0) return;
+  const float alpha = p.learning_rate *
+    (1.0f - static_cast<float>(epoch) /
+      fmaxf(1.0f, static_cast<float>(p.n_epochs)));
+  constexpr float eps = 1.1920928955078125e-7f;
+  const std::size_t head_base = static_cast<std::size_t>(head) * 3u;
+  const std::size_t tail_base = static_cast<std::size_t>(tail) * 3u;
+  for (int sample = 0; sample < positives; ++sample) {
+    float diff[3];
+    float distance = 0.0f;
+    for (int axis = 0; axis < 3; ++axis) {
+      diff[axis] = layout[head_base + axis] -
+        layout[tail_base + axis];
+      distance += diff[axis] * diff[axis];
+    }
+    const float coeff = attractive_coeff(
+      fmaxf(eps, distance), weights[id], p);
+    for (int axis = 0; axis < 3; ++axis) {
+      const float delta = clip4(coeff * diff[axis]) * alpha;
+      atomicAdd(layout + head_base + axis, delta);
+      atomicAdd(layout + tail_base + axis, -delta);
+    }
+  }
+  const int negatives = negative_samples_this_epoch_umap_schedule(
+    period, p, epoch);
+  for (int sample = 0; sample < negatives; ++sample) {
+    const unsigned int neg = deterministic_vertex(
+      static_cast<unsigned int>(p.n), p.seed, epoch,
+      static_cast<unsigned int>(head),
+      static_cast<unsigned int>(tail),
+      static_cast<unsigned int>(sample));
+    if (static_cast<int>(neg) == head ||
+        static_cast<int>(neg) == tail) continue;
+    const std::size_t neg_base = static_cast<std::size_t>(neg) * 3u;
+    float diff[3];
+    float distance = 0.0f;
+    for (int axis = 0; axis < 3; ++axis) {
+      diff[axis] = layout[head_base + axis] -
+        layout[neg_base + axis];
+      distance += diff[axis] * diff[axis];
+    }
+    const float coeff = repulsive_coeff(fmaxf(eps, distance), p);
+    for (int axis = 0; axis < 3; ++axis) {
+      atomicAdd(layout + head_base + axis,
+        clip4(coeff * diff[axis]) * alpha);
+    }
   }
 }

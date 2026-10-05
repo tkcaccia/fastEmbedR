@@ -71,18 +71,6 @@ NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector heads,
                                           double repulsion_strength,
                                           int seed,
                                           int optimizer_mode);
-NumericMatrix knn_tsne_exact_cuda_impl(IntegerMatrix indices,
-                                       NumericMatrix distances,
-                                       NumericMatrix init,
-                                       int n_epochs,
-                                       double perplexity,
-                                       double learning_rate,
-                                       int stop_lying_iter,
-                                       int mom_switch_iter,
-                                       double momentum,
-                                       double final_momentum,
-                                       double exaggeration_factor,
-                                       int seed);
 List knn_tsne_opentsne_cuda_impl(IntegerMatrix indices,
                                  NumericMatrix distances,
                                  NumericMatrix y_init,
@@ -145,6 +133,11 @@ List standardize_cuda_impl(NumericMatrix data);
 NumericMatrix project_embedding_knn_cuda_impl(NumericMatrix reference_layout,
                                               IntegerMatrix projection_indices,
                                               NumericMatrix projection_distances);
+SEXP massive_cuda_projector_create_impl(NumericMatrix layout,
+                                        int k, int capacity);
+NumericMatrix massive_cuda_projector_batch_impl(
+    SEXP pointer, IntegerMatrix indices, NumericMatrix distances);
+void massive_cuda_projector_release_impl(SEXP pointer);
 NumericMatrix interpolate_landmark_layout_cuda_impl(NumericMatrix landmark_layout,
                                                     IntegerVector landmark_indices,
                                                     IntegerMatrix projection_indices,
@@ -448,35 +441,6 @@ NumericMatrix umap_cuda_optimize_csr_cpp(IntegerVector offsets,
 }
 
 // [[Rcpp::export]]
-NumericMatrix knn_tsne_exact_cuda_cpp(IntegerMatrix indices,
-                                      NumericMatrix distances,
-                                      NumericMatrix init,
-                                      int n_epochs,
-                                      double perplexity,
-                                      double learning_rate,
-                                      int stop_lying_iter,
-                                      int mom_switch_iter,
-                                      double momentum,
-                                      double final_momentum,
-                                      double exaggeration_factor,
-                                      int seed) {
-  return knn_tsne_exact_cuda_impl(
-    indices,
-    distances,
-    init,
-    n_epochs,
-    perplexity,
-    learning_rate,
-    stop_lying_iter,
-    mom_switch_iter,
-    momentum,
-    final_momentum,
-    exaggeration_factor,
-    seed
-  );
-}
-
-// [[Rcpp::export]]
 List knn_tsne_opentsne_cuda_cpp(IntegerMatrix indices,
                                 NumericMatrix distances,
                                 NumericMatrix y_init,
@@ -619,6 +583,23 @@ NumericMatrix project_embedding_knn_cuda_cpp(NumericMatrix reference_layout,
   return project_embedding_knn_cuda_impl(
     reference_layout, projection_indices, projection_distances
   );
+}
+
+// [[Rcpp::export]]
+SEXP massive_cuda_projector_create_cpp(NumericMatrix layout,
+                                       int k, int capacity) {
+  return massive_cuda_projector_create_impl(layout, k, capacity);
+}
+
+// [[Rcpp::export]]
+NumericMatrix massive_cuda_projector_batch_cpp(
+    SEXP pointer, IntegerMatrix indices, NumericMatrix distances) {
+  return massive_cuda_projector_batch_impl(pointer, indices, distances);
+}
+
+// [[Rcpp::export]]
+void massive_cuda_projector_release_cpp(SEXP pointer) {
+  massive_cuda_projector_release_impl(pointer);
 }
 
 // [[Rcpp::export]]

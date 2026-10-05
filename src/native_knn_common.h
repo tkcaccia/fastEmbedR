@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fastembedr {
@@ -72,8 +73,42 @@ inline void normalize_rows(FloatMatrix& matrix, bool center) {
   }
 }
 
+template <typename Source, typename Convert>
+inline void transpose_to_float(const Source* source,
+                               FloatMatrix& result,
+                               Convert convert) {
+  constexpr int tile = 32;
+  for (int row = 0; row < result.nrow; row += tile) {
+    const int row_end = std::min(row + tile, result.nrow);
+    for (int col = 0; col < result.ncol; col += tile) {
+      const int col_end = std::min(col + tile, result.ncol);
+      for (int j = col; j < col_end; ++j) {
+        for (int i = row; i < row_end; ++i) {
+          result.values[static_cast<std::size_t>(i) * result.ncol + j] =
+            convert(source[i + static_cast<std::size_t>(j) * result.nrow]);
+        }
+      }
+    }
+  }
+}
+
 inline FloatMatrix matrix_to_row_major_float(SEXP data, KnnMetric metric) {
   FloatMatrix result;
+  if (TYPEOF(data) == EXTPTRSXP &&
+      R_ExternalPtrTag(data) ==
+        Rf_install("fastEmbedR_massive_float_buffer")) {
+    Rcpp::XPtr<FloatMatrix> buffer(data);
+    if (buffer.get() == nullptr || buffer->nrow < 1 ||
+        buffer->values.empty()) {
+      Rcpp::stop("Massive float32 reference buffer was already consumed.");
+    }
+    result = std::move(*buffer);
+    buffer->nrow = 0;
+    buffer->ncol = 0;
+    if (metric == KnnMetric::Cosine) normalize_rows(result, false);
+    if (metric == KnnMetric::Correlation) normalize_rows(result, true);
+    return result;
+  }
   result.input_float32 = is_float32_matrix(data);
   if (result.input_float32) {
     Rcpp::S4 object(data);
@@ -86,12 +121,7 @@ inline FloatMatrix matrix_to_row_major_float(SEXP data, KnnMetric metric) {
     result.ncol = payload.ncol();
     result.values.resize(static_cast<std::size_t>(result.nrow) * result.ncol);
     const int* source = INTEGER(payload);
-    for (int j = 0; j < result.ncol; ++j) {
-      for (int i = 0; i < result.nrow; ++i) {
-        result.values[static_cast<std::size_t>(i) * result.ncol + j] =
-          int_bits_to_float(source[i + static_cast<std::size_t>(j) * result.nrow]);
-      }
-    }
+    transpose_to_float(source, result, int_bits_to_float);
   } else {
     SEXP dims = Rf_getAttrib(data, R_DimSymbol);
     if (TYPEOF(dims) != INTSXP || Rf_length(dims) != 2) {
@@ -102,16 +132,14 @@ inline FloatMatrix matrix_to_row_major_float(SEXP data, KnnMetric metric) {
     result.values.resize(static_cast<std::size_t>(result.nrow) * result.ncol);
     if (TYPEOF(data) == INTSXP) {
       const int* source = INTEGER(data);
-      for (int j = 0; j < result.ncol; ++j) for (int i = 0; i < result.nrow; ++i) {
-        result.values[static_cast<std::size_t>(i) * result.ncol + j] =
-          static_cast<float>(source[i + static_cast<std::size_t>(j) * result.nrow]);
-      }
+      transpose_to_float(source, result, [](int value) {
+        return static_cast<float>(value);
+      });
     } else if (TYPEOF(data) == REALSXP) {
       const double* source = REAL(data);
-      for (int j = 0; j < result.ncol; ++j) for (int i = 0; i < result.nrow; ++i) {
-        result.values[static_cast<std::size_t>(i) * result.ncol + j] =
-          static_cast<float>(source[i + static_cast<std::size_t>(j) * result.nrow]);
-      }
+      transpose_to_float(source, result, [](double value) {
+        return static_cast<float>(value);
+      });
     } else {
       Rcpp::stop("`data` must be an integer, numeric, or float::float32 matrix.");
     }

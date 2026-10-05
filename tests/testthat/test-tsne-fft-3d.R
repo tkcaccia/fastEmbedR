@@ -64,11 +64,11 @@ test_that("3D CPU auto routing uses FFT", {
     expect_error(
         tsne_knn(indices, distances, perplexity = 5,
             negative_gradient_method = "unsupported_method"),
-        "must be one of"
+        "Only FFT"
     )
 })
 
-test_that("3D FFT reaches comparable KL on a fixed trajectory", {
+test_that("3D FFT records a finite KL on a fixed trajectory", {
     set.seed(421)
     n <- 1000L
     groups <- rep(seq_len(4L), each = n / 4L)
@@ -85,12 +85,9 @@ test_that("3D FFT reaches comparable KL on a fixed trajectory", {
             n.cores = 1L, seed = 421L
         )
     }
-    exact <- fit("exact")
     fft <- fit("fft")
-    exact_kl <- tail(attr(exact, "itercosts"), 1L)
     fft_kl <- tail(attr(fft, "itercosts"), 1L)
-    expect_true(is.finite(exact_kl) && is.finite(fft_kl))
-    expect_lte(fft_kl, 1.05 * exact_kl)
+    expect_true(is.finite(fft_kl))
     expect_identical(
         attr(fft, "fastEmbedR_config")$repulsion, "fft_grid_3d"
     )
@@ -133,7 +130,7 @@ test_that("3D Metal FFT follows the CPU one-step trajectory", {
             negative_gradient_method = "exact",
             early_exaggeration_iter = 0L, n_iter = 1L
         ),
-        "requires FFT repulsion"
+        "Only FFT"
     )
 })
 
@@ -215,8 +212,27 @@ test_that("3D CUDA FFT follows the CPU one-step trajectory", {
             negative_gradient_method = "exact",
             early_exaggeration_iter = 0L, n_iter = 1L
         ),
-        "supports.*fft"
+        "Only FFT"
     )
+})
+
+test_that("CUDA t-SNE rejects unavailable cost traces", {
+    skip_if_not(embedding_cuda_available_cpp())
+    x <- matrix(rnorm(80L * 4L), 80L, 4L)
+    knn <- test_exact_knn(x, k = 10L, backend = "cpu")
+    args <- list(
+        knn, backend = "cuda", n_components = 3L,
+        perplexity = 5, early_exaggeration_iter = 0L,
+        n_iter = 1L, record_costs = TRUE
+    )
+    expect_error(do.call(tsne_knn, args), "record_costs")
+    args[[1L]]$distances <- float::fl(knn$distances)
+    expect_error(do.call(tsne_knn, args), "record_costs")
+    if (native_cuda_knn_available_cpp()) {
+        gpu_knn <- precompute_knn(x, k = 10L, backend = "cuda")
+        args[[1L]] <- gpu_knn
+        expect_error(do.call(tsne_knn, args), "record_costs")
+    }
 })
 
 test_that("3D CUDA FFT preserves neighborhood quality", {

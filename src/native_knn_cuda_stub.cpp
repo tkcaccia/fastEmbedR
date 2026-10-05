@@ -6,6 +6,10 @@ bool native_cuda_knn_available_impl() {
   return false;
 }
 
+Rcpp::List native_cuda_memory_info_impl() {
+  Rcpp::stop("CUDA memory information requires a functional CUDA build.");
+}
+
 Rcpp::List native_cuda_knn_impl(SEXP,
                                 int,
                                 const std::string&,
@@ -36,4 +40,15 @@ Rcpp::List native_cuda_query_knn_impl(SEXP,
 
 Rcpp::List native_cuda_knn_to_host_impl(SEXP) {
   Rcpp::stop("The supplied KNN object is not backed by native fastEmbedR CUDA storage.");
+}
+
+SEXP native_cuda_index_build_impl(SEXP,
+                                  int,
+                                  const std::string&,
+                                  double) {
+  Rcpp::stop("Persistent CUDA KNN requires a functional cuVS build.");
+}
+
+Rcpp::List native_cuda_index_search_impl(SEXP, SEXP, int) {
+  Rcpp::stop("Persistent CUDA KNN requires a functional cuVS build.");
 }

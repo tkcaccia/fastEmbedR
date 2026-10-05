@@ -17,7 +17,10 @@
 #' @param pca_dims Optional PCA dimension before KNN.
 #' @param metric KNN distance metric for one-call matrix input: `"euclidean"`,
 #'   `"cosine"`, or `"correlation"`.
-#' @param nn Optional precomputed KNN result when `data` is a matrix.
+#' @param nn Optional precomputed KNN result for resident matrix input. In
+#'   EXPERIMENTAL `massive = "landmark"` mode, a previous massive landmark
+#'   embedding reuses its saved selection and query-to-landmark KNN. Its
+#'   source, reference, neighbor count, and backend must match.
 #' @param seed Random seed.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. CPU KNN
 #'   uses package-native exact search below 5,000 rows and HNSW otherwise.
@@ -28,10 +31,10 @@
 #'   GPU requests must resolve to a real native backend; the package does not
 #'   relabel CPU work as GPU.
 #' @param n.cores Requested CPU core count. For matrix input, the value is
-#'   passed to native CPU KNN and CPU UMAP; UMAP currently uses at most four
-#'   workers and records both requested and effective values. `NULL` uses one
-#'   KNN worker and a size-aware UMAP default from one to four workers. Native
-#'   GPU stages ignore this argument.
+#'   passed to CPU PCA preprocessing, KNN, and UMAP. UMAP uses at most four
+#'   workers and records both requested and effective values. With `NULL`,
+#'   PCA uses `options(n.cores)` (one by default); KNN and UMAP use their
+#'   stage defaults. Native GPU stages ignore this argument.
 #' @param keep_knn Keep KNN matrices in the returned object.
 #' @param graph_mode Graph weighting mode. `"fuzzy"` (the default) uses the
 #'   standard UMAP fuzzy graph. `"binary"` uses a symmetric unit-weight graph
@@ -129,10 +132,11 @@ umap_knn_input_fit <- function(data, nn, state, seed, verbose) {
     )
 }
 
-prepare_umap_matrix <- function(data, standardize, pca_dims, seed, backend) {
+prepare_umap_matrix <- function(data, standardize, pca_dims, seed, backend,
+                                n.cores) {
     timed <- timed_do_call(prepare_embedding_data, list(
         data = data, standardize = standardize, pca_dims = pca_dims,
-        seed = seed, backend = backend
+        seed = seed, backend = backend, n.cores = n.cores
     ))
     list(prepared = timed$value, time = timed$time)
 }
@@ -232,12 +236,44 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #' @param transform_k Number of landmark neighbors used to project non-landmark
 #'   observations. Used only when `landmarks` enables landmarking and defaults
 #'   to `n_neighbors`.
+#' @param massive `"off"` (default), experimental `"landmark"`,
+#'   or `"out_of_core_graph"`. Landmarking is always explicit. The
+#'   full-graph route needs a symmetric fuzzy
+#'   [massive_umap_fuzzy_graph()] and file-backed `init`. The experimental
+#'   CUDA full-graph route requires a device-resident 2D layout.
+#' @param init File-backed 2D or 3D initial coordinates for experimental
+#'   full-graph UMAP. Other routes do not accept this argument.
+#' @param landmark_method Sampling method for experimental landmark mode:
+#'   `"reservoir"` (default) or `"random"` for fast random-access storage.
+#'   Auto mode uses ordinary UMAP when its conservative memory estimate fits;
+#'   otherwise it reports and runs approximate landmark UMAP. The landmark
+#'   route requires a file-backed [massive_matrix()] and a new `.f32` output.
+#' @param output New `.f32` path for experimental file-backed coordinates.
+#' @param chunk_rows Maximum experimental query rows per batch.
+#' @param memory_limit Conservative experimental RAM budget.
+#' @param checkpoint Save experimental workflow stages and completed batches.
+#'   Only available for massive landmark or full-graph mode.
+#' @param resume Continue a matching interrupted experimental workflow.
+#'   Changed input, backend, or fit controls fail without recomputation.
+#' @param layout_storage `"memory"` (default), `"mmap"` for a writable
+#'   CPU mapping, or `"managed"` for CUDA managed-memory coordinates in
+#'   experimental full-graph UMAP. CUDA rejects `"mmap"`.
+#' @param devices Optional CUDA device indices for experimental landmark
+#'   query projection. Reference fitting and KNN use the first device.
+#' @param refinement_epochs Fixed-reference UMAP projection epochs in
+#'   experimental mode. Defaults to zero on CPU and CUDA; CUDA currently
+#'   rejects positive values.
+#' @param local_refine Enable EXPERIMENTAL bounded query-to-query graph
+#'   refinement in massive landmark mode. Requires CPU and positive epochs.
+#' @param local_neighbors Non-self neighbors in each local query window.
+#' @param overlap_rows Extra rows on each side of a local query window;
+#'   at least `local_neighbors`.
 #' @details Landmark mode fits the requested fuzzy or binary UMAP graph on the
 #' landmark rows, projects the remaining rows with query-to-reference KNN, and
 #' optionally refines only projected rows while landmark coordinates remain
 #' fixed. Metal and CUDA landmark refinement currently requires 2D output;
-#' 3D landmark requests fail explicitly. Precomputed KNN input cannot be
-#' combined with landmarking.
+#' 3D landmark requests fail explicitly. Resident precomputed KNN input
+#' cannot be combined with landmarking.
 #' The returned `model` retains the fitted preprocessing transform so new data
 #' can be supplied in the same original feature space.
 #' @rdname umap
@@ -245,36 +281,42 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 umap <- function(data, n_neighbors = NULL, n_components = 2L,
                     standardize = FALSE, pca_dims = NULL,
                     metric = c("euclidean", "cosine", "correlation"),
-                    nn = NULL, seed = 4L,
-                    backend = NULL, n.cores = NULL, keep_knn = FALSE,
+                    nn = NULL, seed = 4L, backend = NULL,
+                    n.cores = NULL, keep_knn = FALSE,
                     graph_mode = c("fuzzy", "binary"), verbose = FALSE,
-                    landmarks = FALSE, transform_k = NULL) {
+                    landmarks = FALSE, transform_k = NULL,
+                    massive = "off", output = NULL, chunk_rows = NULL,
+                    memory_limit = "8GB", refinement_epochs = 0L,
+    local_refine = FALSE, local_neighbors = 15L, overlap_rows = 500L,
+    devices = NULL, landmark_method = "reservoir", init = NULL,
+    layout_storage = "memory", checkpoint = FALSE, resume = FALSE) {
+    massive <- massive_embedding_mode(massive)
+    if (!identical(massive, "off")) return(dispatch_massive_umap(data,
+        landmarks, n_neighbors, n_components, standardize, pca_dims, metric, nn,
+        seed, backend, n.cores, keep_knn, graph_mode, verbose, transform_k,
+        massive, output, chunk_rows, memory_limit, refinement_epochs,
+        local_refine, local_neighbors, overlap_rows, devices,
+        landmark_method, init, layout_storage, checkpoint, resume))
+    massive_embedding_off(output, chunk_rows, memory_limit,
+        refinement_epochs, local_refine, local_neighbors, overlap_rows,
+        devices, landmark_method, init, layout_storage,
+        checkpoint, resume)
     if (landmark_embedding_requested(landmarks)) {
-        if (!is.null(nn) || is_knn_input(data)) {
-            stop("Landmark UMAP requires matrix input without `nn`.",
-                call. = FALSE
-            )
-        }
         return(run_landmark_umap(
             data, landmarks, n_neighbors, n_components, standardize,
             pca_dims, metric, seed, backend, transform_k, n.cores,
-            keep_knn, graph_mode, verbose
-        ))
+            keep_knn, graph_mode, verbose, nn))
     }
-    state <- validate_umap_request(
-        backend, graph_mode, n_components, n.cores, keep_knn
-    )
-    if (is_knn_input(data)) {
+    state <- validate_umap_request(backend, graph_mode,
+        n_components, n.cores, keep_knn)
+    if (is_knn_input(data))
         return(umap_knn_input_fit(data, nn, state, seed, verbose))
-    }
-    prepared <- prepare_umap_matrix(
-        data, standardize, pca_dims, seed, state$backend
-    )
+    prepared <- prepare_umap_matrix(data, standardize, pca_dims,
+        seed, state$backend, state$n_threads)
     x <- prepared$prepared$data
     metric <- resolve_embedding_metric(metric, x)
-    if (is.null(n_neighbors)) {
-        n_neighbors <- auto_embedding_k(nrow(x), "umap", include_self = FALSE)
-    }
+    if (is.null(n_neighbors)) n_neighbors <- auto_embedding_k(
+        nrow(x), "umap", include_self = FALSE)
     n_neighbors <- validate_umap_n_neighbors(n_neighbors, nrow(x))
     state$n_neighbors <- n_neighbors
     knn_state <- compute_umap_matrix_knn(x, nn, n_neighbors, metric, state)
@@ -283,15 +325,17 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
         seed = seed, verbose = verbose, backend = state$backend,
         n_threads = state$n_threads, graph_mode = state$graph_mode
     ))
-    assemble_umap_matrix_fit(
-        data, prepared, knn_state, embedding, state, standardize, metric
-    )
+    assemble_umap_matrix_fit(data, prepared, knn_state, embedding,
+        state, standardize, metric)
 }
 
 run_landmark_umap <- function(data, landmarks, n_neighbors, n_components,
                                 standardize, pca_dims, metric, seed, backend,
                                 transform_k, n.cores, keep_knn, graph_mode,
-                                verbose) {
+                                verbose, nn = NULL) {
+    if (!is.null(nn) || is_knn_input(data))
+        stop("Landmark UMAP requires matrix input without `nn`.",
+            call. = FALSE)
     state <- prepare_landmark_umap(
         data, landmarks, n_neighbors, n_components, standardize,
         pca_dims, metric, seed, backend, n.cores, graph_mode
@@ -353,7 +397,7 @@ prepare_landmark_umap <- function(data, landmarks, n_neighbors,
     n_components <- validate_n_components(n_components)
     prepared <- timed_do_call(prepare_embedding_data, list(
         data = data, standardize = standardize, pca_dims = pca_dims,
-        seed = seed, backend = backend
+        seed = seed, backend = backend, n.cores = n.cores
     ))
     x <- prepared$value$data
     metric <- resolve_embedding_metric(metric, x)
@@ -371,10 +415,19 @@ prepare_landmark_umap <- function(data, landmarks, n_neighbors,
             n_threads = n.cores
         )
     }
+    n <- nrow(x)
+    p <- ncol(x)
+    float32 <- is_float32_matrix(x)
+    if (!all_landmarks) {
+        x <- NULL
+        prepared$value$data <- NULL
+    }
     list(
         x = x, prepared = prepared$value, preprocess_time = prepared$time,
         selection = selection, partition = partition,
-        all_landmarks = all_landmarks, n = nrow(x),
+        all_landmarks = all_landmarks,
+        n = n,
+        p = p, float32 = float32,
         n_neighbors = n_neighbors, n_components = n_components,
         backend = backend, n_threads = n.cores,
         graph_mode = graph_mode, metric = metric, seed = seed
@@ -478,9 +531,6 @@ project_landmark_umap_rows <- function(state, fit, transform_k, seed) {
             state$partition$landmarks, state$partition$query,
             k = transform_k, backend = state$backend,
             seed = seed + 503L, n_threads = state$n_threads,
-            landmark_layout = fit$layout, all_data = state$x,
-            landmark_indices = state$selection$indices,
-            query_rows = state$selection$query_indices,
             metric = state$metric
         )
         resident <- identical(state$backend, "cuda") &&
@@ -666,7 +716,7 @@ landmark_umap_metrics <- function(state, reference, projection, refinement) {
         projection$time, refinement$time
     )
     metrics <- data.frame(
-        method = "landmark_umap", n = state$n, p = ncol(state$x),
+        method = "landmark_umap", n = state$n, p = state$p,
         n_neighbors = state$n_neighbors,
         elapsed = sum(vapply(times, function(x) x[["elapsed"]], numeric(1))),
         preprocess_elapsed = times[[1L]][["elapsed"]],
@@ -706,7 +756,7 @@ landmark_umap_parameters <- function(state, reference, projection,
         projection$transform_k, state$n_components
     )
     c(list(
-        method = "landmark_umap", n = state$n, p = ncol(state$x),
+        method = "landmark_umap", n = state$n, p = state$p,
         n_neighbors = state$n_neighbors,
         n_components = as.integer(state$n_components),
         seed = as.integer(state$seed),
@@ -740,7 +790,7 @@ assemble_landmark_umap_fit <- function(state, reference, projection,
                                         refinement, keep_knn) {
     layout <- finalize_embedding_layout(
         refinement$layout, "UMAP",
-        return_float32 = is_float32_matrix(state$x)
+        return_float32 = state$float32
     )
     timings <- rbind(
         preprocess = state$preprocess_time,

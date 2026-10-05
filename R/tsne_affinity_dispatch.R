@@ -75,10 +75,6 @@ prepare_opentsne_materialized_run <- function(request) {
     request$iterations <- validate_opentsne_iteration_counts(
         request$auto_params
     )
-    request$gradient_method <- resolve_opentsne_gradient_method(
-        request$gradient_method, request$optimizer_backend,
-        request$n, request$n_components
-    )
     request
 }
 

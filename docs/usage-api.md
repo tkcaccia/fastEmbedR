@@ -24,6 +24,7 @@ This page gives the main KNN-first workflows and the public API.
 | You want Apple GPU | set `backend = "metal"` explicitly |
 | You want NVIDIA GPU | build with CUDA/cuVS, then set embedding `backend = "cuda"` |
 | You want a fast approximation for very large data | set `landmarks` in `umap()` or `tsne()` and report it as landmarking |
+| Your float32 input exceeds RAM | describe it with `massive_matrix()` and select an explicit mode |
 | You want quality metrics | `evaluate_embedding(x, layout)` |
 | You want a clustering graph | `knn_graph()` |
 | You want native graph communities | `graph_cluster(graph, method = "leiden")` |
@@ -82,9 +83,9 @@ Current metric support is deliberately explicit:
 
 fastEmbedR is deliberately more configurable for t-SNE than for UMAP. The
 t-SNE API exposes perplexity and affinity support, initialization, iteration
-counts, early and normal exaggeration, learning rate, momentum, clipping, and
-exact-versus-FFT repulsion. Set `auto_config = FALSE` and supply explicit
-values when an automatic iteration or stopping rule is not wanted.
+counts, early and normal exaggeration, learning rate, momentum, and clipping.
+Repulsion uses FFT for both 2D and 3D output. Set `auto_config = FALSE` and
+supply explicit values when automatic iteration or stopping is not wanted.
 
 UMAP is an opinionated high-throughput implementation, not a general-purpose
 UMAP tuning interface. It exposes
@@ -335,6 +336,34 @@ by native fixed-reference transform kernels. CUDA uses native exact search for
 smaller references and IVF-Flat for larger references; its KNN result remains
 device resident for the projection and refinement stages.
 
+## File-Backed Workflows
+
+`massive_matrix()` describes a row-major `.f32` or `.fbin` file without
+loading it into R. Ordinary matrix calls remain unchanged. File-backed
+calls require a persistent output path and an explicit execution mode:
+
+| Function | Mode | What is fitted |
+| --- | --- | --- |
+| `pca()` | `massive = "out_of_core"` | Streamed PCA on all rows. |
+| `umap()`, `tsne()` | `massive = "landmark"` | Reference landmarks, then projection of other rows. |
+| `umap()`, `tsne()` | `massive = "out_of_core_graph"` | All rows of a prepared graph or affinity object. |
+
+The last mode requires a graph and file-backed initialization prepared
+before the embedding call. It does not build an entire graph from a file
+automatically. `massive_full_knn_graph()` uses the package's existing
+CPU exact/HNSW or CUDA cuVS exact/IVF search routes; approximate search
+remains approximate even when every row is optimized. The file-backed
+Metal route and a distributed full multi-GPU optimizer are unavailable.
+Requests for unsupported backends fail explicitly.
+
+UMAP and t-SNE reject `massive = "auto"`: memory pressure must not
+silently switch a full fit to landmark projection. PCA retains an auto
+mode because it chooses between resident and streamed execution, not
+between fitting all rows and fitting a subset. `memory_limit` budgets
+algorithm buffers; it is not a bound on process RSS or filesystem cache.
+See the experimental massive-data vignette for file formats, checkpointing,
+and stage-specific controls.
+
 ## Automatic Parameters
 
 `tsne()` and `tsne_knn()` use `auto_config = TRUE` by default. Missing
@@ -345,8 +374,8 @@ t-SNE settings are resolved in native C++ using the opt-SNE strategy:
 - The normal phase can stop when KLD improvement drops below the opt-SNE
   threshold.
 
-The KLD monitor is enabled only where it is computationally honest: CPU/small
-exact runs. Large FFT and GPU runs keep opt-SNE's learning-rate/default-limit
+The KLD monitor is enabled only where it is computationally honest: small CPU
+FFT runs. Large FFT and GPU runs keep opt-SNE's learning-rate/default-limit
 policy but do not perform a hidden CPU O(n^2) KLD poll or report it as GPU
 work.
 

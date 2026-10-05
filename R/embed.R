@@ -155,7 +155,7 @@ validate_embedding_pca_dims <- function(pca_dims, x) {
     min(pca_dims, nrow(x) - 1L, ncol(x))
 }
 
-run_embedding_pca <- function(x, rank, backend, seed) {
+run_embedding_pca <- function(x, rank, backend, seed, n.cores = NULL) {
     args <- list(
         data = x,
         ncomp = rank,
@@ -169,17 +169,21 @@ run_embedding_pca <- function(x, rank, backend, seed) {
         cpu = fastembedr_cpu_rsvd_pca
     )
     if (backend == "cpu") {
-        args$n.cores <- 1L
+        args$n.cores <- resolve_n_cores(n.cores)
+        return(with_pca_cpu_threads(
+            args$n.cores, do.call(fun, args)
+        )$value)
     }
     do.call(fun, args)
 }
 
-apply_embedding_pca <- function(x, metadata, pca_dims, backend, seed) {
+apply_embedding_pca <- function(x, metadata, pca_dims, backend, seed,
+                                n.cores = NULL) {
     rank <- validate_embedding_pca_dims(pca_dims, x)
     if (is.null(rank) || rank < 1L || rank >= ncol(x)) {
         return(list(data = x, metadata = metadata, transform = NULL))
     }
-    fit <- run_embedding_pca(x, rank, backend, seed)
+    fit <- run_embedding_pca(x, rank, backend, seed, n.cores)
     metadata$pca_dims <- as.integer(ncol(fit$scores))
     metadata$pca_backend <- fit$backend
     metadata$pca_method <- fit$method
@@ -202,7 +206,8 @@ prepare_embedding_data <- function(data,
                                     standardize,
                                     pca_dims,
                                     seed,
-                                    backend = "cpu") {
+                                    backend = "cpu",
+                                    n.cores = NULL) {
     input <- coerce_embedding_data(data)
     metadata <- initial_preprocess_metadata(
         standardize,
@@ -219,7 +224,8 @@ prepare_embedding_data <- function(data,
         standardized$metadata,
         pca_dims,
         backend,
-        seed
+        seed,
+        n.cores
     )
     transform <- list(
         input_p = as.integer(ncol(input$data)),
@@ -738,15 +744,39 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' @param n.cores Positive integer CPU worker limit. Small stages use fewer
 #'   workers automatically. On Linux, BLAS and OpenMP are limited to one
 #'   thread while native workers are active to prevent nested parallelism.
-#'   On macOS, Accelerate may use the requested limit. It is ignored by
-#'   Metal and CUDA.
-#' @param seed Random seed for backends that use a Gaussian subspace sketch.
-#'   The RAFT covariance-eigensolver route records this value but does not
-#'   consume random numbers.
+#'   On macOS, Accelerate may use the requested limit. In experimental
+#'   out-of-core CUDA PCA it controls the streamed CPU mean pass. It is
+#'   otherwise ignored by Metal and CUDA.
+#' @param seed Random seed for backends that use a Gaussian subspace sketch,
+#'   including experimental wide streamed CPU or CUDA PCA. The RAFT
+#'   covariance-eigensolver route records but does not consume this value.
 #' @param tsne_init If `TRUE`, add `tsne_init` to the returned PCA
 #'   object. This matrix is centered and rescaled so its largest component
 #'   standard deviation is `1e-4`, ready to pass as `Y_init` to [tsne()]
 #'   or [tsne_knn()].
+#' @param massive `"off"` (default) keeps the existing in-memory route.
+#'   `"auto"` estimates memory and selects the in-memory route when safe,
+#'   otherwise streamed PCA. `"out_of_core"` explicitly activates
+#'   covariance PCA for a [massive_matrix()] source with at most 1024
+#'   columns on CPU or 2048 on CUDA. Wider matrices use randomized
+#'   streamed PCA. Wide CUDA streams the mean and scale passes on CPU,
+#'   runs its sketch and projection on CUDA, and reports stage backends.
+#'   Metal streaming is unavailable and fails explicitly.
+#' @param output Required `.f32` score-file path in out-of-core mode,
+#'   including when auto mode selects that route.
+#' @param chunk_rows Maximum rows read per block in out-of-core mode.
+#' @param memory_limit Conservative RAM budget for out-of-core buffers
+#'   and any resident R-matrix input, for example `"512MB"` or `"16GB"`.
+#'   This does not limit R itself or linked-library memory.
+#' @param checkpoint Save the experimental out-of-core PCA model and
+#'   completed score batches beside `output` for recovery.
+#' @param resume Continue from a matching PCA checkpoint and partial score
+#'   file. Available when out-of-core processing is selected.
+#' @param devices Optional distinct CUDA device IDs for experimental
+#'   file-backed PCA score projection. The decomposition runs on the first
+#'   selected device; projection rows are sharded across devices. Optional
+#'   checkpointing saves the decomposition and completed shard blocks;
+#'   resume requires the same input, settings, and device list.
 #' @return A `fastEmbedR_pca` list with `scores`, `loadings`,
 #'   `singular_values`, centering/scaling vectors, backend metadata, and
 #'   decomposition metadata. When `tsne_init = TRUE`, the list also
@@ -774,7 +804,28 @@ pca <- function(x,
                 backend = NULL,
                 n.cores = NULL,
                 seed = 4L,
-                tsne_init = FALSE) {
+                tsne_init = FALSE,
+                massive = "off",
+                output = NULL,
+                chunk_rows = NULL,
+                memory_limit = "512MB",
+                checkpoint = FALSE,
+                resume = FALSE,
+                devices = NULL) {
+    massive <- match.arg(massive, c("off", "auto", "out_of_core"))
+    if (massive == "auto") return(run_massive_auto_pca(x, ncomp,
+        xtest, center, scale, backend, n.cores, seed, tsne_init, output,
+        chunk_rows, memory_limit, checkpoint, resume, devices))
+    if (massive == "out_of_core") return(run_massive_pca(x, ncomp,
+        xtest, center, scale, backend, n.cores, seed, tsne_init,
+        output, chunk_rows, memory_limit, checkpoint, resume, devices))
+    if (!is.null(devices)) stop("`devices` requires experimental ",
+        "out-of-core PCA; no backend fallback was used.",
+        call. = FALSE)
+    if (!identical(checkpoint, FALSE) || !identical(resume, FALSE)) {
+        stop("PCA checkpoint controls require `massive = \"out_of_core\"`.",
+            call. = FALSE)
+    }
     backend <- validate_pca_backend(resolve_embedding_backend(backend))
     request <- validate_pca_request(ncomp, tsne_init, n.cores)
     run_pca <- function() {
@@ -784,9 +835,7 @@ pca <- function(x,
         )
         finalize_pca_fit(fit, xtest, tsne_init)
     }
-    if (!identical(backend, "cpu")) {
-        return(run_pca())
-    }
+    if (!identical(backend, "cpu")) return(run_pca())
     threaded <- with_pca_cpu_threads(request$n_threads, run_pca())
     fit <- threaded$value
     fit$n.cores_requested <- request$n_threads

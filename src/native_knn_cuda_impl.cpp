@@ -13,6 +13,7 @@
 #include <Rcpp.h>
 
 #include "native_knn_common.h"
+#include "native_knn_cuda_pilot.h"
 
 #include <cuda_runtime.h>
 #include <cuvs/core/c_api.h>
@@ -142,6 +143,9 @@ class CudaBuffer {
   }
   void* get() const { return pointer_; }
   std::size_t bytes() const { return bytes_; }
+  void reserve(std::size_t bytes) {
+    if (bytes > bytes_) reset(bytes);
+  }
   void* release() {
     void* out = pointer_;
     pointer_ = nullptr;
@@ -849,12 +853,14 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
 
   const std::size_t reference_items =
     static_cast<std::size_t>(reference.nrow) * reference.ncol;
-  const std::size_t query_items =
-    static_cast<std::size_t>(queries.nrow) * queries.ncol;
   const std::size_t final_items =
     static_cast<std::size_t>(queries.nrow) * k;
+  const int search_batch_size = std::min(queries.nrow, 32768);
   CudaBuffer reference_device(reference_items * sizeof(float));
-  CudaBuffer query_device(query_items * sizeof(float));
+  CudaBuffer query_device(
+    static_cast<std::size_t>(search_batch_size) * queries.ncol *
+    sizeof(float)
+  );
   CudaBuffer output_indices(final_items * sizeof(int));
   CudaBuffer output_distances(final_items * sizeof(float));
   cuda_check(
@@ -864,32 +870,32 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
     ),
     "cudaMemcpy(native CUDA query KNN reference H2D)"
   );
-  cuda_check(
-    cudaMemcpy(
-      query_device.get(), queries.values.data(),
-      query_items * sizeof(float), cudaMemcpyHostToDevice
-    ),
-    "cudaMemcpy(native CUDA query KNN query H2D)"
-  );
   std::vector<float>().swap(reference.values);
-  std::vector<float>().swap(queries.values);
 
   int64_t reference_shape[2] = {reference.nrow, reference.ncol};
-  int64_t query_shape[2] = {queries.nrow, queries.ncol};
   DLManagedTensor reference_tensor = make_tensor(
     reference_device.get(), reference_shape, 2, kDLCUDA, kDLFloat, 32
-  );
-  DLManagedTensor query_tensor = make_tensor(
-    query_device.get(), query_shape, 2, kDLCUDA, kDLFloat, 32
   );
   const auto distance = L2Expanded;
   const int distance_conversion = distance_mode(parsed_metric);
   IvfTuning tuning = tune_ivf(
     reference.nrow, reference.ncol, k, target_recall
   );
-  int search_batch_size = queries.nrow;
   int tuning_attempts = 0;
   double measured_pilot_recall = exact ? 1.0 : 0.0;
+
+  auto upload_query_batch = [&](int offset, int count) {
+    cuda_check(
+      cudaMemcpy(
+        query_device.get(),
+        queries.values.data() + static_cast<std::size_t>(offset) *
+          queries.ncol,
+        static_cast<std::size_t>(count) * queries.ncol * sizeof(float),
+        cudaMemcpyHostToDevice
+      ),
+      "cudaMemcpy(native CUDA query KNN query batch H2D)"
+    );
+  };
 
   auto finalize_batch = [&](const CudaBuffer& raw_indices,
                             const CudaBuffer& raw_distances,
@@ -913,15 +919,10 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
   };
 
   if (exact) {
-    CudaBuffer raw_indices(final_items * sizeof(int64_t));
-    CudaBuffer raw_distances(final_items * sizeof(float));
-    int64_t output_shape[2] = {queries.nrow, k};
-    DLManagedTensor neighbors_tensor = make_tensor(
-      raw_indices.get(), output_shape, 2, kDLCUDA, kDLInt, 64
-    );
-    DLManagedTensor distances_tensor = make_tensor(
-      raw_distances.get(), output_shape, 2, kDLCUDA, kDLFloat, 32
-    );
+    const std::size_t batch_items =
+      static_cast<std::size_t>(search_batch_size) * k;
+    CudaBuffer raw_indices(batch_items * sizeof(int64_t));
+    CudaBuffer raw_distances(batch_items * sizeof(float));
     BruteForceIndex index;
     cuvs_check(
       cuvsBruteForceBuild(
@@ -929,18 +930,34 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
       ),
       "cuvsBruteForceBuild(query reference)"
     );
-    cuvs_check(
-      cuvsBruteForceSearch(
-        resources.get(), index.get(), &query_tensor,
-        &neighbors_tensor, &distances_tensor, no_filter()
-      ),
-      "cuvsBruteForceSearch(query)"
-    );
-    cuvs_check(
-      cuvsStreamSync(resources.get()),
-      "cuvsStreamSync(brute-force query search)"
-    );
-    finalize_batch(raw_indices, raw_distances, queries.nrow, 0);
+    for (int offset = 0; offset < queries.nrow;
+         offset += search_batch_size) {
+      const int current = std::min(search_batch_size, queries.nrow - offset);
+      upload_query_batch(offset, current);
+      int64_t query_shape[2] = {current, queries.ncol};
+      int64_t output_shape[2] = {current, k};
+      DLManagedTensor query_tensor = make_tensor(
+        query_device.get(), query_shape, 2, kDLCUDA, kDLFloat, 32
+      );
+      DLManagedTensor neighbors_tensor = make_tensor(
+        raw_indices.get(), output_shape, 2, kDLCUDA, kDLInt, 64
+      );
+      DLManagedTensor distances_tensor = make_tensor(
+        raw_distances.get(), output_shape, 2, kDLCUDA, kDLFloat, 32
+      );
+      cuvs_check(
+        cuvsBruteForceSearch(
+          resources.get(), index.get(), &query_tensor,
+          &neighbors_tensor, &distances_tensor, no_filter()
+        ),
+        "cuvsBruteForceSearch(query)"
+      );
+      cuvs_check(
+        cuvsStreamSync(resources.get()),
+        "cuvsStreamSync(brute-force query search)"
+      );
+      finalize_batch(raw_indices, raw_distances, current, offset);
+    }
   } else {
     IvfFlatIndexParams index_params;
     index_params.get()->metric = distance;
@@ -1059,19 +1076,17 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
     }
     tuning.rule += "_query_recall_pilot";
     search_params.get()->n_probes = static_cast<uint32_t>(tuning.nprobe);
-    search_batch_size = std::min(queries.nrow, 32768);
     const std::size_t batch_items =
       static_cast<std::size_t>(search_batch_size) * k;
     CudaBuffer raw_indices(batch_items * sizeof(int64_t));
     CudaBuffer raw_distances(batch_items * sizeof(float));
     for (int offset = 0; offset < queries.nrow; offset += search_batch_size) {
       const int current = std::min(search_batch_size, queries.nrow - offset);
+      upload_query_batch(offset, current);
       int64_t batch_query_shape[2] = {current, queries.ncol};
       int64_t output_shape[2] = {current, k};
-      auto* query_pointer = static_cast<float*>(query_device.get()) +
-        static_cast<std::size_t>(offset) * queries.ncol;
       DLManagedTensor batch_query_tensor = make_tensor(
-        query_pointer, batch_query_shape, 2, kDLCUDA, kDLFloat, 32
+        query_device.get(), batch_query_shape, 2, kDLCUDA, kDLFloat, 32
       );
       DLManagedTensor neighbors_tensor = make_tensor(
         raw_indices.get(), output_shape, 2, kDLCUDA, kDLInt, 64
@@ -1114,6 +1129,8 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
   result["peak_temporary_search_bytes"] =
     static_cast<double>(search_batch_size) * k *
     static_cast<double>(sizeof(int64_t) + sizeof(float));
+  result["peak_temporary_query_bytes"] =
+    static_cast<double>(search_batch_size) * queries.ncol * sizeof(float);
   result["input_was_float32"] =
     reference.input_float32 && queries.input_float32;
   result["pilot_rows"] = pilot_n;
@@ -1165,4 +1182,289 @@ Rcpp::List native_cuda_knn_to_host_impl(SEXP knn) {
   out.attr("exclude_self") = source["exclude_self"];
   out.attr("gpu_resident_source") = true;
   return out;
+}
+
+namespace {
+
+struct PersistentCudaIndex {
+  CuvsResources resources;
+  CudaBuffer reference;
+  CudaBuffer queries;
+  CudaBuffer raw_indices;
+  CudaBuffer raw_distances;
+  CudaBuffer final_indices;
+  CudaBuffer final_distances;
+  BruteForceIndex exact_index;
+  IvfFlatIndex ivf_index;
+  IvfFlatSearchParams search_params;
+  int rows = 0;
+  int columns = 0;
+  int device = 0;
+  int k = 0;
+  int nlist = 0;
+  int nprobe = 0;
+  int pilot_rows = 0;
+  int tuning_attempts = 0;
+  double target_recall = 0.99;
+  double pilot_recall = 0.0;
+  double pilot_id_recall = 0.0;
+  bool approximate = false;
+  bool calibrated = false;
+
+  ~PersistentCudaIndex() { cudaSetDevice(device); }
+};
+
+void calibrate_persistent_ivf(PersistentCudaIndex* state,
+                              void* query_device,
+                              CudaBuffer& raw_indices,
+                              CudaBuffer& raw_distances,
+                              int query_rows) {
+  const int pilot_n = std::min(query_rows, 256);
+  const std::size_t pilot_items =
+    static_cast<std::size_t>(pilot_n) * state->k;
+  int64_t query_shape[2] = {pilot_n, state->columns};
+  int64_t output_shape[2] = {pilot_n, state->k};
+  DLManagedTensor query_tensor = make_tensor(
+    query_device, query_shape, 2, kDLCUDA, kDLFloat, 32
+  );
+  DLManagedTensor indices_tensor = make_tensor(
+    raw_indices.get(), output_shape, 2, kDLCUDA, kDLInt, 64
+  );
+  DLManagedTensor distances_tensor = make_tensor(
+    raw_distances.get(), output_shape, 2, kDLCUDA, kDLFloat, 32
+  );
+  cuvs_check(cuvsBruteForceSearch(state->resources.get(),
+    state->exact_index.get(), &query_tensor, &indices_tensor,
+    &distances_tensor, no_filter()),
+    "cuvsBruteForceSearch(persistent IVF pilot)");
+  cuvs_check(cuvsStreamSync(state->resources.get()),
+    "cuvsStreamSync(persistent IVF oracle)");
+  std::vector<int64_t> oracle(pilot_items);
+  std::vector<int64_t> observed(pilot_items);
+  std::vector<float> oracle_distances(pilot_items);
+  std::vector<float> observed_distances(pilot_items);
+  cuda_check(cudaMemcpy(oracle.data(), raw_indices.get(),
+    pilot_items * sizeof(int64_t), cudaMemcpyDeviceToHost),
+    "cudaMemcpy(persistent IVF oracle D2H)");
+  cuda_check(cudaMemcpy(oracle_distances.data(), raw_distances.get(),
+    pilot_items * sizeof(float), cudaMemcpyDeviceToHost),
+    "cudaMemcpy(persistent IVF oracle distances D2H)");
+  const double target = std::min(1.0, state->target_recall + 0.005);
+  int probe = state->nprobe;
+  while (true) {
+    ++state->tuning_attempts;
+    state->search_params.get()->n_probes =
+      static_cast<uint32_t>(probe);
+    cuvs_check(cuvsIvfFlatSearch(state->resources.get(),
+      state->search_params.get(), state->ivf_index.get(),
+      &query_tensor, &indices_tensor, &distances_tensor, no_filter()),
+      "cuvsIvfFlatSearch(persistent recall pilot)");
+    cuvs_check(cuvsStreamSync(state->resources.get()),
+      "cuvsStreamSync(persistent recall pilot)");
+    cuda_check(cudaMemcpy(observed.data(), raw_indices.get(),
+      pilot_items * sizeof(int64_t), cudaMemcpyDeviceToHost),
+      "cudaMemcpy(persistent IVF pilot D2H)");
+    cuda_check(cudaMemcpy(observed_distances.data(), raw_distances.get(),
+      pilot_items * sizeof(float), cudaMemcpyDeviceToHost),
+      "cudaMemcpy(persistent IVF pilot distances D2H)");
+    state->pilot_id_recall = query_pilot_recall(
+      oracle, observed, pilot_n, state->k
+    );
+    state->pilot_recall = fastembedr::query_pilot_distance_recall(
+      oracle_distances, observed_distances, pilot_n, state->k
+    );
+    state->nprobe = probe;
+    if (state->pilot_recall >= target || probe >= state->nlist) break;
+    probe = std::min(state->nlist, std::max(probe + 1, probe * 2));
+  }
+  if (state->pilot_recall < state->target_recall) {
+    Rcpp::stop("IVF pilot recall %.4f is below target %.4f.",
+      state->pilot_recall, state->target_recall);
+  }
+  state->pilot_rows = pilot_n;
+  state->calibrated = true;
+}
+
+}  // namespace
+
+Rcpp::List native_cuda_memory_info_impl() {
+  if (!native_cuda_knn_available_impl()) {
+    Rcpp::stop("No CUDA device is available for memory inspection.");
+  }
+  std::size_t free_bytes = 0;
+  std::size_t total_bytes = 0;
+  int device = 0;
+  cuda_check(cudaGetDevice(&device), "cudaGetDevice(memory inspection)");
+  cuda_check(cudaMemGetInfo(&free_bytes, &total_bytes),
+    "cudaMemGetInfo(native KNN)");
+  return Rcpp::List::create(
+    Rcpp::Named("device") = device,
+    Rcpp::Named("free_bytes") = static_cast<double>(free_bytes),
+    Rcpp::Named("total_bytes") = static_cast<double>(total_bytes)
+  );
+}
+
+SEXP native_cuda_index_build_impl(SEXP data,
+                                  int k,
+                                  const std::string& method,
+                                  double target_recall) {
+  if (!native_cuda_knn_available_impl()) {
+    Rcpp::stop("Persistent CUDA KNN requires a functional CUDA device.");
+  }
+  auto matrix = fastembedr::matrix_to_row_major_float(
+    data, fastembedr::KnnMetric::Euclidean
+  );
+  fastembedr::require_finite_matrix(matrix);
+  if (matrix.nrow < 1 || matrix.ncol < 1) {
+    Rcpp::stop("CUDA reference must have positive dimensions.");
+  }
+  if (k < 1 || k > matrix.nrow || k > kMaxNativeCudaK ||
+      !std::isfinite(target_recall) ||
+      target_recall < 0.8 || target_recall > 1.0) {
+    Rcpp::stop("CUDA index k or target recall is invalid.");
+  }
+  if (method != "exact" && method != "ivf") {
+    Rcpp::stop("Persistent CUDA KNN supports exact or IVF-Flat.");
+  }
+  Rcpp::XPtr<PersistentCudaIndex> state(
+    new PersistentCudaIndex(), true
+  );
+  state->rows = matrix.nrow;
+  state->columns = matrix.ncol;
+  state->k = k;
+  state->target_recall = target_recall;
+  state->approximate = method == "ivf";
+  cuda_check(cudaGetDevice(&state->device), "cudaGetDevice(index build)");
+  const std::size_t bytes = matrix.values.size() * sizeof(float);
+  state->reference.reset(bytes);
+  cuda_check(cudaMemcpy(state->reference.get(), matrix.values.data(),
+    bytes, cudaMemcpyHostToDevice), "cudaMemcpy(index reference H2D)");
+  int64_t shape[2] = {matrix.nrow, matrix.ncol};
+  DLManagedTensor tensor = make_tensor(
+    state->reference.get(), shape, 2, kDLCUDA, kDLFloat, 32
+  );
+  cuvs_check(cuvsBruteForceBuild(state->resources.get(), &tensor,
+    L2Expanded, 0.0f, state->exact_index.get()),
+    "cuvsBruteForceBuild(persistent reference)");
+  if (state->approximate) {
+    const IvfTuning tuning = tune_ivf(
+      matrix.nrow, matrix.ncol, k, target_recall
+    );
+    state->nlist = tuning.nlist;
+    state->nprobe = tuning.nprobe;
+    IvfFlatIndexParams params;
+    params.get()->metric = L2Expanded;
+    params.get()->add_data_on_build = true;
+    params.get()->n_lists = static_cast<uint32_t>(tuning.nlist);
+    params.get()->kmeans_n_iters = 20;
+    params.get()->kmeans_trainset_fraction = 1.0;
+    params.get()->adaptive_centers = false;
+    params.get()->conservative_memory_allocation = true;
+    cuvs_check(cuvsIvfFlatBuild(state->resources.get(), params.get(),
+      &tensor, state->ivf_index.get()),
+      "cuvsIvfFlatBuild(persistent reference)");
+  }
+  cuvs_check(cuvsStreamSync(state->resources.get()),
+    "cuvsStreamSync(persistent reference)");
+  return state;
+}
+
+Rcpp::List native_cuda_index_search_impl(SEXP pointer, SEXP query, int k) {
+  Rcpp::XPtr<PersistentCudaIndex> state(pointer);
+  if (state.get() == nullptr) Rcpp::stop("CUDA index is invalid.");
+  cuda_check(cudaSetDevice(state->device), "cudaSetDevice(index search)");
+  auto matrix = fastembedr::matrix_to_row_major_float(
+    query, fastembedr::KnnMetric::Euclidean
+  );
+  fastembedr::require_finite_matrix(matrix);
+  if (matrix.nrow < 1 || matrix.ncol != state->columns ||
+      k != state->k) {
+    Rcpp::stop("CUDA query dimensions or k are invalid.");
+  }
+  const std::size_t items = static_cast<std::size_t>(matrix.nrow) * k;
+  const std::size_t query_bytes = matrix.values.size() * sizeof(float);
+  const bool buffers_reused =
+    state->queries.bytes() >= query_bytes &&
+    state->raw_indices.bytes() >= items * sizeof(int64_t) &&
+    state->raw_distances.bytes() >= items * sizeof(float) &&
+    state->final_indices.bytes() >= items * sizeof(int) &&
+    state->final_distances.bytes() >= items * sizeof(float);
+  state->queries.reserve(query_bytes);
+  state->raw_indices.reserve(items * sizeof(int64_t));
+  state->raw_distances.reserve(items * sizeof(float));
+  state->final_indices.reserve(items * sizeof(int));
+  state->final_distances.reserve(items * sizeof(float));
+  cuda_check(cudaMemcpy(state->queries.get(), matrix.values.data(),
+    matrix.values.size() * sizeof(float), cudaMemcpyHostToDevice),
+    "cudaMemcpy(index queries H2D)");
+  int64_t query_shape[2] = {matrix.nrow, matrix.ncol};
+  int64_t output_shape[2] = {matrix.nrow, k};
+  DLManagedTensor query_tensor = make_tensor(
+    state->queries.get(), query_shape, 2, kDLCUDA, kDLFloat, 32
+  );
+  DLManagedTensor indices_tensor = make_tensor(
+    state->raw_indices.get(), output_shape, 2, kDLCUDA, kDLInt, 64
+  );
+  DLManagedTensor distances_tensor = make_tensor(
+    state->raw_distances.get(), output_shape, 2, kDLCUDA, kDLFloat, 32
+  );
+  if (state->approximate && !state->calibrated) {
+    calibrate_persistent_ivf(state, state->queries.get(),
+      state->raw_indices, state->raw_distances, matrix.nrow);
+  }
+  if (state->approximate) {
+    cuvs_check(cuvsIvfFlatSearch(state->resources.get(),
+      state->search_params.get(), state->ivf_index.get(),
+      &query_tensor, &indices_tensor, &distances_tensor, no_filter()),
+      "cuvsIvfFlatSearch(persistent index)");
+  } else {
+    cuvs_check(cuvsBruteForceSearch(state->resources.get(),
+      state->exact_index.get(), &query_tensor, &indices_tensor,
+      &distances_tensor, no_filter()),
+      "cuvsBruteForceSearch(persistent index)");
+  }
+  cuvs_check(cuvsStreamSync(state->resources.get()),
+    "cuvsStreamSync(persistent query)");
+  const int status = fastembedr_cuda_finalize_cuvs_query_knn(
+    static_cast<const int64_t*>(state->raw_indices.get()),
+    static_cast<const float*>(state->raw_distances.get()),
+    static_cast<int*>(state->final_indices.get()),
+    static_cast<float*>(state->final_distances.get()),
+    matrix.nrow, k, 0, 0, matrix.nrow, state->rows
+  );
+  if (status != 0) {
+    Rcpp::stop("Persistent CUDA KNN postprocessing failed: %s",
+      fastembedr_cuda_embedding_last_error());
+  }
+  cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize(index search)");
+  Rcpp::IntegerMatrix indices(matrix.nrow, k);
+  Rcpp::NumericMatrix distances(matrix.nrow, k);
+  std::vector<float> host_distances(items);
+  cuda_check(cudaMemcpy(indices.begin(), state->final_indices.get(),
+    items * sizeof(int), cudaMemcpyDeviceToHost),
+    "cudaMemcpy(index indices D2H)");
+  cuda_check(cudaMemcpy(host_distances.data(),
+    state->final_distances.get(),
+    items * sizeof(float), cudaMemcpyDeviceToHost),
+    "cudaMemcpy(index distances D2H)");
+  for (std::size_t i = 0; i < items; ++i) {
+    distances.begin()[i] = host_distances[i];
+  }
+  return Rcpp::List::create(
+    Rcpp::Named("indices") = indices,
+    Rcpp::Named("distances") = distances,
+    Rcpp::Named("backend") = state->approximate ?
+      "native_cuda_cuvs_ivf_flat" : "native_cuda_cuvs_exact",
+    Rcpp::Named("method") = state->approximate ? "ivf" : "exact",
+    Rcpp::Named("pilot_recall") = state->approximate ?
+      state->pilot_recall : 1.0,
+    Rcpp::Named("pilot_id_recall") = state->approximate ?
+      state->pilot_id_recall : 1.0,
+    Rcpp::Named("pilot_recall_metric") = "distance_at_k",
+    Rcpp::Named("pilot_rows") = state->pilot_rows,
+    Rcpp::Named("nlist") = state->nlist,
+    Rcpp::Named("nprobe") = state->nprobe,
+    Rcpp::Named("tuning_attempts") = state->tuning_attempts,
+    Rcpp::Named("query_buffers_reused") = buffers_reused
+  );
 }

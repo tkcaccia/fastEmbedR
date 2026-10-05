@@ -37,26 +37,35 @@ tsne(
   transform_early_exaggeration_iter = 0L,
   transform_n_negatives = NULL,
   initialization = c("median", "weighted", "random"),
+  massive = "off",
+  output = NULL,
+  chunk_rows = NULL,
+  memory_limit = "8GB",
+  devices = NULL,
+  landmark_method = "reservoir",
+  checkpoint = FALSE,
+  resume = FALSE,
   ...
 )
 }
 \arguments{
-\item{data}{Numeric matrix/data frame with observations in rows, or a list
-containing KNN \code{indices} and \code{distances}.}
+\item{data}{Numeric matrix/data frame with observations in rows, a list
+containing KNN \code{indices} and \code{distances}, or an experimental saved
+affinity graph for \code{massive = "out_of_core_graph"}.}
 
 \item{perplexity}{t-SNE perplexity. If \code{NULL}, uses the largest safe value
 up to 30 that is available for the input. Compact affinity support uses
 \code{ceiling(perplexity)} non-self neighbors.}
 
-\item{n_components}{Output dimensionality, from 1 to 3. Two- and
-three-dimensional fits use FFT repulsion on all backends by default.
-One-dimensional CPU fits use exact repulsion.}
+\item{n_components}{Output dimensionality, 2 or 3. FFT repulsion is used
+on every backend.}
 
 \item{init_data}{Optional original high-dimensional data matrix used only to
 compute PCA initialization. It is not used for
 neighbor search or optimization.}
 
-\item{Y_init}{Optional explicit initial layout. Use
+\item{Y_init}{Optional explicit initial layout. In full-graph massive
+mode this must be a 2D or 3D file-backed \code{.f32} matrix. Use
 \code{pca(data, tsne_init = TRUE)$tsne_init} to precompute and reuse a PCA
 initialization.}
 
@@ -68,7 +77,10 @@ so one-call results match a KNN object computed from the supplied matrix.}
 \item{metric}{KNN distance metric for one-call matrix input: \code{"euclidean"},
 \code{"cosine"}, or \code{"correlation"}.}
 
-\item{nn}{Optional precomputed KNN output when \code{data} is a data matrix.}
+\item{nn}{Optional precomputed KNN output for resident matrix input. In
+EXPERIMENTAL \code{massive = "landmark"} mode, a previous massive landmark
+embedding reuses its saved selection and query-to-landmark KNN. Its
+source, reference, neighbor count, and backend must match.}
 
 \item{seed}{Random seed.}
 
@@ -84,10 +96,10 @@ Unsupported GPU requests fail clearly and are not relabelled CPU runs.}
 
 \item{verbose}{Print optimizer progress.}
 
-\item{n.cores}{Number of CPU cores used by CPU KNN and CPU t-SNE
-optimization. \code{NULL} uses one CPU KNN worker and the package t-SNE thread
-option, which defaults to four. Native GPU optimizers ignore this
-argument.}
+\item{n.cores}{Number of CPU cores used by CPU PCA preprocessing, KNN, and
+t-SNE optimization. With \code{NULL}, PCA uses \code{options(n.cores)} (one by
+default), while KNN and t-SNE use their stage defaults. Native GPU stages
+ignore this argument.}
 
 \item{learning_rate}{Positive number or \code{"auto"}. With \code{"auto"}, the native
 optimizer uses \code{n / exaggeration} separately for each phase.}
@@ -110,18 +122,17 @@ exaggeration.}
 same validated limit on CPU, Metal, and CUDA. Use \code{NULL} or \code{NA} to
 disable clipping.}
 
-\item{negative_gradient_method}{\code{"auto"}, \code{"exact"}, or \code{"fft"}.
-Two- and three-dimensional fits use grid-FFT repulsion by default.
-Native GPU FFT paths require their compiled symbols and never fall back
-to CPU. GPU 3D fits do not support exact repulsion.}
+\item{negative_gradient_method}{\code{"auto"} or \code{"fft"}; both use FFT.
+Other methods fail explicitly. GPU FFT requires compiled native symbols.}
 
-\item{record_costs}{If \code{TRUE}, compute diagnostic KL/cost traces.}
+\item{record_costs}{If \code{TRUE}, compute diagnostic KL/cost traces.
+CUDA and three-dimensional Metal fits reject this option explicitly.}
 
 \item{auto_config}{If \code{TRUE}, choose missing t-SNE settings with a native
 C++ opt-SNE-inspired policy. The policy uses \code{n / early_exaggeration} for
 \code{"auto"} learning rate, chooses missing iteration limits, and enables
-KLD-based early stopping only on CPU/small exact runs where the monitor is
-not prohibitively expensive. Explicit user-supplied values are respected.}
+KLD-based early stopping on small CPU runs where the monitor is not
+prohibitively expensive. Explicit user-supplied values are respected.}
 
 \item{landmarks}{\code{FALSE} (the default) embeds all observations. A fraction
 in \verb{(0, 1)}, a positive landmark count, or explicit row indices enables
@@ -145,6 +156,34 @@ large fixed-reference transforms.}
 \item{initialization}{Initial placement for transformed rows: \code{"median"},
 \code{"weighted"}, or \code{"random"}.}
 
+\item{massive}{\code{"off"} (default), experimental \code{"landmark"}, or
+\code{"out_of_core_graph"} for a prepared t-SNE affinity graph.
+Landmarking is always explicit.}
+
+\item{output}{New \code{.f32} path for experimental file-backed coordinates.}
+
+\item{chunk_rows}{Maximum experimental query rows per batch.}
+
+\item{memory_limit}{Conservative experimental RAM budget.}
+
+\item{devices}{Optional CUDA device indices for experimental landmark
+query projection. Reference fitting and KNN use the first device.}
+
+\item{landmark_method}{Sampling method for experimental landmark mode:
+\code{"reservoir"} (default) or \code{"random"} for fast random-access storage.
+Auto mode uses ordinary t-SNE when its conservative memory estimate fits;
+otherwise it reports and runs approximate landmark t-SNE. The landmark
+route requires a file-backed \code{\link[=massive_matrix]{massive_matrix()}} and a new \code{.f32} output.
+Full-graph mode streams affinities into the CPU FFT optimizer and
+currently has no CUDA route.}
+
+\item{checkpoint}{Save experimental workflow stages. Full-graph t-SNE
+also saves coordinates, momentum updates, and adaptive gains every
+100 iterations and at the final iteration.}
+
+\item{resume}{Continue a matching interrupted experimental workflow.
+Changed input, backend, or fit controls fail without recomputation.}
+
 \item{...}{Additional low-level parameters passed to \code{\link[=tsne_knn]{tsne_knn()}}.}
 }
 \value{
@@ -164,7 +203,7 @@ t-SNE methods and provides independent CPU, Metal, and CUDA kernels.
 The t-SNE API exposes the principal
 scientifically consequential optimizer controls: perplexity,
 initialization, iteration counts, early and normal exaggeration,
-learning rate, momentum, clipping, and exact-versus-FFT repulsion. Setting
+learning rate, momentum, and clipping. FFT repulsion is fixed. Setting
 \code{auto_config = FALSE} disables automatic iteration and stopping choices;
 explicit values always override automatic values. The matrix-input function
 deliberately does not expose a nearest-neighbor index type or tuning
@@ -175,8 +214,8 @@ controlled independently. The resolved settings are returned in
 \code{k = ceiling(perplexity)} non-self neighbors. Landmark mode embeds the
 selected reference rows with the same t-SNE implementation and transforms
 all remaining rows while keeping the reference coordinates fixed.
-Precomputed KNN input and explicit \code{init_data} or \code{Y_init} cannot be combined
-with landmarking.
+Resident precomputed KNN input and explicit \code{init_data} or \code{Y_init}
+cannot be combined with landmarking.
 }
 \examples{
 fit <- tsne(

@@ -220,6 +220,30 @@ test_that("transform_tsne reports GPU transform backends honestly", {
     expect_equal(cfg$repulsion, "sampled_reference_metal")
 })
 
+test_that("CUDA fixed-reference transform supports 2D and 3D", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    set.seed(440)
+    reference <- matrix(rnorm(48L * 3L, sd = 0.2), ncol = 3L)
+    query <- reference[1:8, , drop = FALSE] + 0.02
+    knn <- test_exact_knn(reference, query, k = 10L)
+    initial <- matrix(rnorm(8L * 3L, sd = 0.1), ncol = 3L)
+    for (dimensions in c(2L, 3L)) {
+        layout <- reference[, seq_len(dimensions), drop = FALSE]
+        start <- initial[, seq_len(dimensions), drop = FALSE]
+        controls <- list(reference_layout = layout, knn = knn,
+            Y_init = start, perplexity = 5, n_iter = 1L,
+            exact_repulsion_threshold = 48L, seed = 440L)
+        cpu <- do.call(transform_tsne,
+            c(controls, list(backend = "cpu")))
+        gpu <- do.call(transform_tsne,
+            c(controls, list(backend = "cuda")))
+        expect_identical(dim(gpu), c(8L, dimensions))
+        expect_identical(attr(gpu, "backend"), "cuda")
+        expect_equal(as.numeric(gpu), as.numeric(cpu),
+            tolerance = 2e-3)
+    }
+})
+
 test_that("tsne landmark mode returns a compact full embedding object", {
     set.seed(402)
     x <- rbind(
@@ -392,7 +416,7 @@ test_that("tsne landmark mode uses native Metal reference-query KNN", {
         keep_knn = TRUE,
         backend = "metal",
         n.cores = 2L,
-        negative_gradient_method = "exact"
+        negative_gradient_method = "fft"
     )
 
     expect_s3_class(fit, "fastEmbedR_embedding")
@@ -432,7 +456,7 @@ test_that("tsne landmark mode keeps Metal search and transform native", {
         backend = "metal",
         n.cores = 2L,
         record_costs = FALSE,
-        negative_gradient_method = "exact"
+        negative_gradient_method = "fft"
     )
 
     expect_s3_class(fit, "fastEmbedR_embedding")

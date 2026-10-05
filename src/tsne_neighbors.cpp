@@ -14,6 +14,7 @@
 #include <array>
 #include <cctype>
 #include <cfloat>
+#include <climits>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -22,6 +23,8 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <mutex>
@@ -31,6 +34,9 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include "tsne_affinity_common.h"
+#include "massive_graph_attraction.h"
 
 using Rcpp::IntegerMatrix;
 using Rcpp::IntegerVector;
@@ -378,43 +384,15 @@ std::vector<float> copy_distances_float_sexp(SEXP distances, const int n_threads
   return out;
 }
 
-std::string tsne_repulsion_mode(const int n,
-                                const int dims,
-                                const double theta,
+std::string tsne_repulsion_mode(const int dims,
                                 const std::string& requested_method) {
   const std::string requested = lowercase(requested_method);
-  if (requested == "bh" || requested == "barnes_hut" || requested == "barnes-hut") {
-    Rcpp::stop(
-      "Barnes-Hut repulsion is unavailable. Use `fft` or `exact`."
-    );
+  if (requested != "fft" && requested != "auto") {
+    Rcpp::stop("Only FFT t-SNE repulsion is supported.");
   }
-  if (requested == "exact" || requested == "pair" || requested == "pair_symmetric") {
-    return "pair_symmetric";
+  if (dims != 2 && dims != 3) {
+    Rcpp::stop("FFT t-SNE requires two or three output components.");
   }
-  if (requested == "fft" || requested == "interpolation" || requested == "fitsne") {
-    return dims == 3 ? "fft_grid_3d" : "fft_grid";
-  }
-  if (requested != "auto") {
-    Rcpp::stop("Unknown t-SNE repulsion method. Use `auto`, `fft`, or `exact`.");
-  }
-
-  const char* raw = std::getenv("FASTEMBEDR_TSNE_REPULSION");
-  if (raw != nullptr && raw[0] != '\0') {
-    const std::string value = lowercase(std::string(raw));
-    if (value == "barnes_hut" || value == "barnes-hut" || value == "bh" ||
-        value == "rtsne") {
-      Rcpp::stop(
-        "FASTEMBEDR_TSNE_REPULSION requests Barnes-Hut, which has been "
-        "removed from fastEmbedR. Use `fft` or `exact`."
-      );
-    }
-    if (value == "pair" || value == "pair_symmetric" || value == "legacy" ||
-        value == "exact") {
-      return "pair_symmetric";
-    }
-  }
-
-  if (theta <= 0.0 || dims == 1) return "pair_symmetric";
   if (dims == 3) return "fft_grid_3d";
   return "fft_grid";
 }
@@ -551,83 +529,9 @@ void compute_row_probabilities_float(const std::vector<float>& distances,
                                      const int k,
                                      const double perplexity,
                                      float* row_p) {
-  std::fill(row_p, row_p + k, 0.0f);
-
   const std::size_t row_base = static_cast<std::size_t>(row) * k;
-  float min_d2 = FLT_MAX;
-  float max_d2 = 0.0f;
-  for (int j = 0; j < k; ++j) {
-    const float d = distances[row_base + j];
-    const float d2 = d * d;
-    min_d2 = std::min(min_d2, d2);
-    max_d2 = std::max(max_d2, d2);
-  }
-  const float spread = max_d2 - min_d2;
-  if (spread <= FLT_EPSILON * std::max(1.0f, max_d2)) {
-    const float uniform = 1.0f / static_cast<float>(k);
-    std::fill(row_p, row_p + k, uniform);
-    return;
-  }
-
-  bool found = false;
-  float beta = 1.0f;
-  float min_beta = -FLT_MAX;
-  float max_beta = FLT_MAX;
-  const float tol = 1e-5f;
-  float sum_p = FLT_MIN;
-
-  for (int iter = 0; !found && iter < 200; ++iter) {
-    sum_p = FLT_MIN;
-    for (int j = 0; j < k; ++j) {
-      const float d = distances[row_base + j];
-      const float d2 = d * d - min_d2;
-      const float p = std::exp(-beta * d2);
-      row_p[j] = p;
-      sum_p += p;
-    }
-
-    float entropy = 0.0f;
-    for (int j = 0; j < k; ++j) {
-      const float d = distances[row_base + j];
-      entropy += beta * ((d * d - min_d2) * row_p[j]);
-    }
-    entropy = entropy / sum_p + std::log(sum_p);
-    const float diff = entropy - static_cast<float>(std::log(perplexity));
-
-    if (std::abs(diff) < tol) {
-      found = true;
-    } else if (diff > 0.0f) {
-      min_beta = beta;
-      beta = (max_beta == FLT_MAX || max_beta == -FLT_MAX) ?
-        beta * 2.0f :
-        (beta + max_beta) * 0.5f;
-    } else {
-      max_beta = beta;
-      beta = (min_beta == -FLT_MAX || min_beta == FLT_MAX) ?
-        beta * 0.5f :
-        (beta + min_beta) * 0.5f;
-    }
-    if (!std::isfinite(beta)) break;
-  }
-
-  if (!std::isfinite(sum_p) || sum_p <= FLT_MIN) {
-    int tied = 0;
-    for (int j = 0; j < k; ++j) {
-      const float d = distances[row_base + j];
-      const float d2 = d * d;
-      if (std::abs(d2 - min_d2) <= FLT_EPSILON * std::max(1.0f, min_d2)) ++tied;
-    }
-    const float tied_mass = 1.0f / static_cast<float>(std::max(1, tied));
-    for (int j = 0; j < k; ++j) {
-      const float d = distances[row_base + j];
-      const float d2 = d * d;
-      row_p[j] = std::abs(d2 - min_d2) <= FLT_EPSILON * std::max(1.0f, min_d2) ?
-        tied_mass : 0.0f;
-    }
-    return;
-  }
-  const float inv_sum_p = 1.0f / sum_p;
-  for (int j = 0; j < k; ++j) row_p[j] *= inv_sum_p;
+  tsne_row_probabilities_float(distances.data() + row_base,
+                               k, perplexity, row_p);
 }
 
 SparseProbabilitiesF build_tsne_probabilities_float(const IntegerMatrix& indices,
@@ -1175,7 +1079,7 @@ void compute_gradient_pair_symmetric_f(const SparseProbabilitiesF& p,
 
 #include "tsne_fft_3d.h"
 
-void compute_gradient_fft_grid_f(const SparseProbabilitiesF& p,
+void compute_gradient_fft_grid_f(const SparseProbabilitiesF* p,
                                  const std::vector<float>& y,
                                  const int n,
                                  const int dims,
@@ -1281,7 +1185,10 @@ void compute_gradient_fft_grid_f(const SparseProbabilitiesF& p,
       grad[base + 1u] = -(y[base + 1u] * q2_value - yq2_value) * inv_sum_q;
     }
   });
-  add_sparse_attractive_gradient_f(p, y, n, dims, exaggeration, n_threads, grad);
+  if (p != nullptr) {
+    add_sparse_attractive_gradient_f(*p, y, n, dims,
+                                     exaggeration, n_threads, grad);
+  }
 }
 
 void compute_gradient_f(const SparseProbabilitiesF& p,
@@ -1296,14 +1203,12 @@ void compute_gradient_f(const SparseProbabilitiesF& p,
                         std::vector<float>& grad) {
   if (repulsion_mode == "fft_grid") {
     compute_gradient_fft_grid_f(
-      p, y, n, dims, exaggeration, n_threads, fft_workspace, grad, 0
+      &p, y, n, dims, exaggeration, n_threads, fft_workspace, grad, 0
     );
   } else if (repulsion_mode == "fft_grid_3d") {
     compute_gradient_fft_3d_f(
-      p, y, n, exaggeration, n_threads, *fft_3d_workspace, grad
+      &p, y, n, exaggeration, n_threads, *fft_3d_workspace, grad
     );
-  } else if (repulsion_mode == "pair_symmetric") {
-    compute_gradient_pair_symmetric_f(p, y, n, dims, exaggeration, n_threads, grad);
   } else {
     Rcpp::stop("Unknown t-SNE repulsion mode.");
   }
@@ -1790,7 +1695,7 @@ List opentsne_force_diagnostic_cpp(IntegerMatrix indices,
   FftGridWorkspaceT<float> fft_workspace;
   std::vector<float> fft_total(y.size(), 0.0f);
   compute_gradient_fft_grid_f(
-    probabilities, y, n, dims, static_cast<float>(exaggeration), threads,
+    &probabilities, y, n, dims, static_cast<float>(exaggeration), threads,
     &fft_workspace, fft_total, grid_size
   );
   std::vector<float> fft_repulsive(y.size(), 0.0f);
@@ -1894,7 +1799,7 @@ List tsne_fft_3d_force_diagnostic_cpp(IntegerMatrix indices,
   );
   TsneFft3dWorkspace workspace;
   compute_gradient_fft_3d_f(
-    p, y, n, static_cast<float>(exaggeration), threads,
+    &p, y, n, static_cast<float>(exaggeration), threads,
     workspace, fft, grid_size
   );
   auto force_matrix = [&](const std::vector<float>& values) {
@@ -2000,7 +1905,7 @@ List knn_tsne_opentsne_float_cpp(IntegerMatrix indices,
   const int k = indices.ncol();
   if (n < 2 || k < 1) Rcpp::stop("KNN input must have at least two rows and one neighbor column.");
   if (n - 1 < 3.0 * perplexity) Rcpp::stop("perplexity is too large for the number of samples.");
-  if (n_components < 1 || n_components > 3) Rcpp::stop("`n_components` must be 1, 2, or 3 for t-SNE.");
+  if (n_components < 2 || n_components > 3) Rcpp::stop("`n_components` must be 2 or 3 for t-SNE.");
   if (early_exaggeration_iter < 0 || n_iter < 0) Rcpp::stop("iteration counts must be non-negative.");
   if (early_exaggeration_iter + n_iter < 1) Rcpp::stop("at least one optimization iteration is required.");
   if (learning_rate <= 0.0 && !learning_rate_auto) Rcpp::stop("`learning_rate` must be positive or automatic.");
@@ -2027,7 +1932,7 @@ List knn_tsne_opentsne_float_cpp(IntegerMatrix indices,
   const auto affinity_end = std::chrono::steady_clock::now();
 
   const std::string repulsion_mode = tsne_repulsion_mode(
-    n, n_components, theta, negative_gradient_method
+    n_components, negative_gradient_method
   );
   if (repulsion_mode == "fft_grid_3d" && n_components != 3) {
     Rcpp::stop("Three-dimensional FFT repulsion requires three coordinates.");
@@ -2036,9 +1941,8 @@ List knn_tsne_opentsne_float_cpp(IntegerMatrix indices,
     Rcpp::stop("FFT repulsion requires two coordinates.");
   }
   std::string optimizer_name = repulsion_mode == "fft_grid_3d" ?
-    "tsne_fft_grid_3d_sparse_knn_float32" : repulsion_mode == "fft_grid" ?
-    "opentsne_fitsne_fft_grid_sparse_knn_float32" :
-    "opentsne_exact_sparse_knn_float32";
+    "tsne_fft_grid_3d_sparse_knn_float32" :
+    "opentsne_fitsne_fft_grid_sparse_knn_float32";
 
   std::vector<float> y(static_cast<std::size_t>(n) * n_components);
   if (init) {
@@ -2234,6 +2138,184 @@ List knn_tsne_opentsne_float_cpp(IntegerMatrix indices,
     Rcpp::Named("n_iter_actual") = actual_normal_iter,
     Rcpp::Named("max_iter_actual") = completed_iter,
     Rcpp::Named("auto_iter_end") = auto_iter_end
+  );
+}
+
+namespace {
+
+void massive_tsne_read_state(const std::string& path,
+    std::vector<float>& y, std::vector<float>& update,
+    std::vector<float>& gains) {
+  const auto bytes = y.size() * sizeof(float);
+  if (!std::filesystem::exists(path) ||
+      std::filesystem::file_size(path) != 3 * bytes) {
+    Rcpp::stop("Massive t-SNE checkpoint state has invalid size.");
+  }
+  std::ifstream input(path, std::ios::binary);
+  input.read(reinterpret_cast<char*>(y.data()), bytes);
+  input.read(reinterpret_cast<char*>(update.data()), bytes);
+  input.read(reinterpret_cast<char*>(gains.data()), bytes);
+  const auto finite = [](float value) { return std::isfinite(value); };
+  if (!input || !std::all_of(y.begin(), y.end(), finite) ||
+      !std::all_of(update.begin(), update.end(), finite) ||
+      !std::all_of(gains.begin(), gains.end(),
+        [](float value) { return std::isfinite(value) && value > 0; })) {
+    Rcpp::stop("Massive t-SNE checkpoint state is invalid.");
+  }
+}
+
+void massive_tsne_write_state(const std::string& path,
+    const std::vector<float>& y, const std::vector<float>& update,
+    const std::vector<float>& gains) {
+  const auto partial = path + ".part";
+  if (std::filesystem::exists(path) ||
+      std::filesystem::exists(partial)) {
+    Rcpp::stop("Massive t-SNE checkpoint path already exists.");
+  }
+  std::ofstream output(partial, std::ios::binary);
+  for (const auto* values : {&y, &update, &gains}) {
+    output.write(reinterpret_cast<const char*>(values->data()),
+                 values->size() * sizeof(float));
+  }
+  output.close();
+  if (!output) Rcpp::stop("Massive t-SNE checkpoint write failed.");
+  std::error_code error;
+  std::filesystem::rename(partial, path, error);
+  if (error) Rcpp::stop("Massive t-SNE checkpoint rename failed: " +
+                        error.message());
+}
+
+}  // namespace
+
+// [[Rcpp::export]]
+List massive_tsne_optimize_cpp(std::string offsets_path,
+    std::string indices_path, std::string weights_path,
+    std::string access, std::string init_path,
+    std::string output_path, int n, int dims,
+    int early_iter, int normal_iter, double early_exaggeration,
+    double exaggeration, double learning_rate,
+    bool learning_rate_auto, double initial_momentum,
+    double final_momentum, double min_gain,
+    double max_step_norm, int n_threads,
+    int start_iter = 0, std::string state_path = "",
+    int checkpoint_every = 0,
+    SEXP checkpoint_callback = R_NilValue) {
+  if (n < 2 || (dims != 2 && dims != 3) ||
+      static_cast<double>(n) * dims > INT_MAX ||
+      early_iter < 0 || normal_iter < 0 ||
+      static_cast<double>(early_iter) + normal_iter > INT_MAX ||
+      early_iter + normal_iter < 1 ||
+      !std::isfinite(early_exaggeration) ||
+      early_exaggeration <= 0.0 ||
+      !std::isfinite(exaggeration) || exaggeration <= 0.0 ||
+      (!learning_rate_auto &&
+        (!std::isfinite(learning_rate) || learning_rate <= 0.0)) ||
+      !std::isfinite(initial_momentum) || initial_momentum < 0.0 ||
+      !std::isfinite(final_momentum) || final_momentum < 0.0 ||
+      !std::isfinite(min_gain) || min_gain <= 0.0 ||
+      (std::isfinite(max_step_norm) && max_step_norm <= 0.0) ||
+      start_iter < 0 ||
+      start_iter > static_cast<double>(early_iter) + normal_iter ||
+      checkpoint_every < 0 ||
+      (start_iter > 0 && (state_path.empty() ||
+        checkpoint_every == 0)) ||
+      (start_iter == 0 && !state_path.empty()) ||
+      (checkpoint_every > 0 && checkpoint_callback == R_NilValue) ||
+      (checkpoint_every == 0 && checkpoint_callback != R_NilValue)) {
+    Rcpp::stop("Invalid massive t-SNE optimizer controls.");
+  }
+  const std::size_t elements = static_cast<std::size_t>(n) * dims;
+  const auto bytes = elements * sizeof(float);
+  if (!std::filesystem::exists(init_path) ||
+      std::filesystem::file_size(init_path) != bytes ||
+      std::filesystem::exists(output_path) ||
+      std::filesystem::exists(output_path + ".part")) {
+    Rcpp::stop("Massive t-SNE input or output file is invalid.");
+  }
+  const int threads = resolve_threads(n_threads, n);
+  ParallelExecutor parallel_executor(threads);
+  ParallelExecutorScope parallel_scope(&parallel_executor);
+  std::vector<float> y(elements);
+  std::vector<float> grad(elements, 0.0f);
+  std::vector<float> update(elements, 0.0f);
+  std::vector<float> gains(elements, 1.0f);
+  if (start_iter > 0) {
+    massive_tsne_read_state(state_path, y, update, gains);
+  } else {
+    std::ifstream input(init_path, std::ios::binary);
+    input.read(reinterpret_cast<char*>(y.data()),
+               static_cast<std::streamsize>(bytes));
+    if (!input || !std::all_of(y.begin(), y.end(),
+        [](float value) { return std::isfinite(value); })) {
+      Rcpp::stop("Massive t-SNE initialization is invalid.");
+    }
+    zero_mean_f(y, n, dims);
+  }
+  FftGridWorkspaceT<float> fft_workspace;
+  TsneFft3dWorkspace fft_3d_workspace;
+  const auto started = std::chrono::steady_clock::now();
+  const int total = early_iter + normal_iter;
+  int next_percent = 10;
+  for (int iter = start_iter; iter < total; ++iter) {
+    const bool early = iter < early_iter;
+    const double phase_exag = early ? early_exaggeration : exaggeration;
+    const float phase_lr = static_cast<float>(learning_rate_auto ?
+      static_cast<double>(n) / phase_exag : learning_rate);
+    const float momentum = static_cast<float>(early ?
+      initial_momentum : final_momentum);
+    if (dims == 2) {
+      compute_gradient_fft_grid_f(nullptr, y, n, dims, 1.0f,
+        threads, &fft_workspace, grad, 0);
+    } else {
+      compute_gradient_fft_3d_f(nullptr, y, n, 1.0f,
+        threads, fft_3d_workspace, grad);
+    }
+    massive_csr_attraction(offsets_path, indices_path,
+      weights_path, n, access, y, dims,
+      static_cast<float>(phase_exag), grad);
+    apply_open_tsne_update_f(y, update, gains, grad, n, dims,
+      phase_lr, momentum, static_cast<float>(min_gain),
+      static_cast<float>(max_step_norm), threads);
+    zero_mean_f(y, n, dims);
+    if (checkpoint_every > 0 &&
+        ((iter + 1) % checkpoint_every == 0 || iter + 1 == total)) {
+      const auto snapshot = output_path + ".iter_" +
+        std::to_string(iter + 1) + ".state.f32";
+      massive_tsne_write_state(snapshot, y, update, gains);
+      Rcpp::Function callback(checkpoint_callback);
+      const auto elapsed = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - started).count();
+      callback(iter + 1, snapshot, elapsed);
+    }
+    const int percent = static_cast<int>(
+      100.0 * static_cast<double>(iter + 1) / total);
+    if (percent >= next_percent) {
+      Rcpp::Rcout << "  t-SNE iterations: " << percent << "%\n";
+      next_percent = (percent / 10 + 1) * 10;
+    }
+    if ((iter & 7) == 0) Rcpp::checkUserInterrupt();
+  }
+  if (!std::all_of(y.begin(), y.end(),
+      [](float value) { return std::isfinite(value); })) {
+    Rcpp::stop("Massive t-SNE produced non-finite coordinates.");
+  }
+  std::ofstream output(output_path + ".part", std::ios::binary);
+  output.write(reinterpret_cast<const char*>(y.data()),
+               static_cast<std::streamsize>(bytes));
+  output.close();
+  if (!output) Rcpp::stop("Massive t-SNE output write failed.");
+  std::filesystem::rename(output_path + ".part", output_path);
+  const auto elapsed = std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - started).count();
+  return List::create(
+    Rcpp::Named("backend_used") = "native_cpu_fft_graph_stream",
+    Rcpp::Named("repulsion") = dims == 2 ? "fft_grid" : "fft_grid_3d",
+    Rcpp::Named("fft_grid_size") = dims == 2 ?
+      tsne_fft_grid_size(n) : tsne_fft_3d_grid_size(n),
+    Rcpp::Named("iterations") = total,
+    Rcpp::Named("resumed_from_iteration") = start_iter,
+    Rcpp::Named("n_threads") = threads,
+    Rcpp::Named("elapsed_seconds") = elapsed
   );
 }
 

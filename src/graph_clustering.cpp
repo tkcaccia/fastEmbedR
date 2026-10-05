@@ -24,6 +24,8 @@
 #include <utility>
 #include <vector>
 
+#include "louvain_objective.h"
+
 // Native graph storage and modularity optimization following the published
 // Louvain and Leiden algorithms.
 
@@ -227,7 +229,8 @@ LocalMoveResult local_move(const Graph& graph,
   std::vector<int> touched;
   touched.reserve(128);
   std::mt19937_64 generator(seed);
-  const double tolerance = 1e-12 * std::max(1.0, graph.total_edge_weight);
+  const double tolerance = louvain_move_tolerance(
+    graph.total_edge_weight);
 
   for (int pass = 0; pass < max_passes; ++pass) {
     std::shuffle(order.begin(), order.end(), generator);
@@ -252,8 +255,9 @@ LocalMoveResult local_move(const Graph& graph,
       if (counts[static_cast<std::size_t>(old)] == 0) free_labels.insert(old);
 
       const double old_inside = community_weight[static_cast<std::size_t>(old)];
-      const double old_score = old_inside - resolution * node_degree *
-        volumes[static_cast<std::size_t>(old)] / graph.volume;
+      const double old_score = louvain_move_score(
+        old_inside, node_degree, volumes[static_cast<std::size_t>(old)],
+        graph.volume, resolution);
       int best = old;
       double best_score = old_score;
       bool choose_empty = false;
@@ -263,9 +267,10 @@ LocalMoveResult local_move(const Graph& graph,
       }
       for (const int candidate : touched) {
         if (candidate == old || counts[static_cast<std::size_t>(candidate)] == 0) continue;
-        const double score = community_weight[static_cast<std::size_t>(candidate)] -
-          resolution * node_degree * volumes[static_cast<std::size_t>(candidate)] /
-            graph.volume;
+        const double score = louvain_move_score(
+          community_weight[static_cast<std::size_t>(candidate)],
+          node_degree, volumes[static_cast<std::size_t>(candidate)],
+          graph.volume, resolution);
         if (score > best_score + tolerance) {
           best = candidate;
           best_score = score;

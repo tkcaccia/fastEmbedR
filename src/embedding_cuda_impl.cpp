@@ -66,22 +66,6 @@ int fastembedr_cuda_spectral_init_from_knn(const int* indices,
                                            unsigned int seed,
                                            int index_offset,
                                            float* out);
-int fastembedr_cuda_exact_tsne_from_knn(const int* indices,
-                                        const double* distances,
-                                        const float* init,
-                                        int n,
-                                        int k,
-                                        int n_epochs,
-                                        float perplexity,
-                                        float learning_rate,
-                                        int stop_lying_iter,
-                                        int mom_switch_iter,
-                                        float momentum,
-                                        float final_momentum,
-                                        float exaggeration_factor,
-                                        unsigned int seed,
-                                        int index_offset,
-                                        float* out);
 int fastembedr_cuda_opentsne_fft_from_knn(const int* indices,
                                           const double* distances,
                                           const float* init,
@@ -326,6 +310,7 @@ int fastembedr_cuda_transform_tsne_from_host_knn(
   const float* initial_layout,
   int n_reference,
   int n_query,
+  int n_components,
   int k,
   float perplexity,
   int n_iter,
@@ -382,6 +367,15 @@ int fastembedr_cuda_project_embedding(const double* reference_layout,
                                       int k,
                                       int n_components,
                                       double* out);
+void* fastembedr_cuda_massive_project_create(const double* layout,
+                                             int n_reference,
+                                             int n_components,
+                                             int k, int capacity);
+int fastembedr_cuda_massive_project_run(void* pointer,
+                                        const int* indices,
+                                        const double* distances,
+                                        int rows, double* output);
+void fastembedr_cuda_massive_project_destroy(void* pointer);
 int fastembedr_cuda_interpolate_landmark_layout(const double* landmark_layout,
                                                 const int* landmark_indices,
                                                 const int* projection_indices,
@@ -1077,14 +1071,18 @@ std::vector<float> initialize_tsne_transform_cuda(
     int seed) {
   const int n_query = indices.nrow();
   const int k = indices.ncol();
-  std::vector<float> out(static_cast<std::size_t>(n_query) * 2u, 0.0f);
+  const int dimensions = reference_layout.ncol();
+  std::vector<float> out(
+    static_cast<std::size_t>(n_query) * dimensions, 0.0f);
   if (init) {
-    if (y_init.nrow() != n_query || y_init.ncol() != 2) {
-      Rcpp::stop("`Y_init` must have one row per query and two columns.");
+    if (y_init.nrow() != n_query || y_init.ncol() != dimensions) {
+      Rcpp::stop("`Y_init` must match query rows and layout columns.");
     }
     for (int i = 0; i < n_query; ++i) {
-      out[static_cast<std::size_t>(i) * 2u] = y_init(i, 0);
-      out[static_cast<std::size_t>(i) * 2u + 1u] = y_init(i, 1);
+      for (int dim = 0; dim < dimensions; ++dim) {
+        out[static_cast<std::size_t>(i) * dimensions + dim] =
+          y_init(i, dim);
+      }
     }
     return out;
   }
@@ -1096,7 +1094,7 @@ std::vector<float> initialize_tsne_transform_cuda(
   }
   std::vector<float> values(static_cast<std::size_t>(k));
   for (int i = 0; i < n_query; ++i) {
-    for (int dim = 0; dim < 2; ++dim) {
+    for (int dim = 0; dim < dimensions; ++dim) {
       if (initialization == "weighted") {
         double numerator = 0.0;
         double denominator = std::numeric_limits<double>::min();
@@ -1106,7 +1104,7 @@ std::vector<float> initialize_tsne_transform_cuda(
           numerator += weight * reference_layout(ref, dim);
           denominator += weight;
         }
-        out[static_cast<std::size_t>(i) * 2u + dim] =
+        out[static_cast<std::size_t>(i) * dimensions + dim] =
           static_cast<float>(numerator / denominator);
         continue;
       }
@@ -1124,7 +1122,7 @@ std::vector<float> initialize_tsne_transform_cuda(
         );
         median = 0.5f * (median + values[static_cast<std::size_t>(middle - 1)]);
       }
-      out[static_cast<std::size_t>(i) * 2u + dim] = median;
+      out[static_cast<std::size_t>(i) * dimensions + dim] = median;
     }
   }
   return out;
@@ -1194,6 +1192,85 @@ NumericMatrix project_embedding_knn_cuda_impl(NumericMatrix reference_layout,
     Rcpp::stop("CUDA projection failed: %s", cuda_embedding_error_message());
   }
   return out;
+}
+
+struct MassiveCudaProjectorHandle {
+  void* native = nullptr;
+  int reference_rows = 0;
+  int components = 0;
+  int k = 0;
+  int capacity = 0;
+
+  ~MassiveCudaProjectorHandle() {
+    fastembedr_cuda_massive_project_destroy(native);
+  }
+};
+
+SEXP massive_cuda_projector_create_impl(NumericMatrix layout,
+                                        int k, int capacity) {
+  if (!fastembedr_cuda_available()) {
+    Rcpp::stop("Persistent CUDA projection requires an available GPU.");
+  }
+  if (layout.nrow() < 1 || layout.ncol() < 1 ||
+      k < 1 || k > kMaxCudaProjectionNeighbors || capacity < 1) {
+    Rcpp::stop("Invalid persistent CUDA projection dimensions.");
+  }
+  for (double value : layout) {
+    if (!std::isfinite(value)) {
+      Rcpp::stop("Persistent CUDA projection layout must be finite.");
+    }
+  }
+  Rcpp::XPtr<MassiveCudaProjectorHandle> state(
+    new MassiveCudaProjectorHandle(), true);
+  state->native = fastembedr_cuda_massive_project_create(
+    layout.begin(), layout.nrow(), layout.ncol(), k, capacity);
+  if (!state->native) {
+    Rcpp::stop("Persistent CUDA projection failed: %s",
+      cuda_embedding_error_message());
+  }
+  state->reference_rows = layout.nrow();
+  state->components = layout.ncol();
+  state->k = k;
+  state->capacity = capacity;
+  return state;
+}
+
+NumericMatrix massive_cuda_projector_batch_impl(
+    SEXP pointer, IntegerMatrix indices, NumericMatrix distances) {
+  if (TYPEOF(pointer) != EXTPTRSXP) {
+    Rcpp::stop("Persistent CUDA projector pointer is invalid.");
+  }
+  Rcpp::XPtr<MassiveCudaProjectorHandle> state(pointer);
+  if (!state.get() || !state->native || indices.nrow() < 1 ||
+      indices.nrow() > state->capacity || indices.ncol() != state->k ||
+      distances.nrow() != indices.nrow() ||
+      distances.ncol() != state->k) {
+    Rcpp::stop("Persistent CUDA projection batch dimensions differ.");
+  }
+  for (R_xlen_t i = 0; i < indices.size(); ++i) {
+    if (indices[i] < 1 || indices[i] > state->reference_rows ||
+        !std::isfinite(distances[i]) || distances[i] < 0.0) {
+      Rcpp::stop("Persistent CUDA projection KNN rows are invalid.");
+    }
+  }
+  NumericMatrix out(indices.nrow(), state->components);
+  if (fastembedr_cuda_massive_project_run(state->native,
+      indices.begin(), distances.begin(), indices.nrow(),
+      out.begin())) {
+    Rcpp::stop("Persistent CUDA projection failed: %s",
+      cuda_embedding_error_message());
+  }
+  return out;
+}
+
+void massive_cuda_projector_release_impl(SEXP pointer) {
+  if (TYPEOF(pointer) != EXTPTRSXP) {
+    Rcpp::stop("Persistent CUDA projector pointer is invalid.");
+  }
+  Rcpp::XPtr<MassiveCudaProjectorHandle> state(pointer);
+  if (!state.get()) return;
+  fastembedr_cuda_massive_project_destroy(state->native);
+  state->native = nullptr;
 }
 
 NumericMatrix interpolate_landmark_layout_cuda_impl(NumericMatrix landmark_layout,
@@ -1926,74 +2003,6 @@ NumericMatrix knn_umap_cuda_fused_gpu_impl(SEXP gpu_knn,
   return result;
 }
 
-NumericMatrix knn_tsne_exact_cuda_impl(IntegerMatrix indices,
-                                       NumericMatrix distances,
-                                       NumericMatrix init,
-                                       int n_epochs,
-                                       double perplexity,
-                                       double learning_rate,
-                                       int stop_lying_iter,
-                                       int mom_switch_iter,
-                                       double momentum,
-                                       double final_momentum,
-                                       double exaggeration_factor,
-                                       int seed) {
-  if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
-    Rcpp::stop("indices and distances must have the same dimensions");
-  }
-  if (init.nrow() != indices.nrow() || init.ncol() != 2) {
-    Rcpp::stop("CUDA exact t-SNE currently requires a two-dimensional initialization.");
-  }
-  if (indices.ncol() > kMaxCudaNeighbors) {
-    Rcpp::stop("CUDA exact t-SNE currently supports at most %d neighbors.", kMaxCudaNeighbors);
-  }
-  if (n_epochs < 1) Rcpp::stop("n_epochs must be positive");
-  if (perplexity <= 0.0) Rcpp::stop("perplexity must be positive");
-  if (learning_rate <= 0.0) Rcpp::stop("learning_rate must be positive");
-  if (stop_lying_iter < 0 || mom_switch_iter < 0) {
-    Rcpp::stop("t-SNE switch iterations must be non-negative.");
-  }
-  if (momentum < 0.0 || final_momentum < 0.0) {
-    Rcpp::stop("t-SNE momentum values must be non-negative.");
-  }
-  if (exaggeration_factor <= 0.0) {
-    Rcpp::stop("t-SNE exaggeration factor must be positive.");
-  }
-  if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
-
-  const int n = indices.nrow();
-  std::vector<float> init_float = init_to_float_2d(init);
-  std::vector<float> out(init_float.size());
-  const int status = fastembedr_cuda_exact_tsne_from_knn(
-    indices.begin(),
-    distances.begin(),
-    init_float.data(),
-    n,
-    indices.ncol(),
-    n_epochs,
-    static_cast<float>(perplexity),
-    static_cast<float>(learning_rate),
-    stop_lying_iter,
-    mom_switch_iter,
-    static_cast<float>(momentum),
-    static_cast<float>(final_momentum),
-    static_cast<float>(exaggeration_factor),
-    static_cast<unsigned int>(seed),
-    knn_index_offset(indices),
-    out.data()
-  );
-  if (status != 0) {
-    Rcpp::stop("CUDA exact t-SNE failed: %s", cuda_embedding_error_message());
-  }
-
-  NumericMatrix result(n, 2);
-  for (int i = 0; i < n; ++i) {
-    result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);
-    result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
-  }
-  return result;
-}
-
 List umap_cuda_graph_dump_impl(IntegerMatrix indices,
                                NumericMatrix distances) {
   if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
@@ -2134,7 +2143,9 @@ List knn_tsne_opentsne_cuda_impl(IntegerMatrix indices,
                                  std::string negative_gradient_method,
                                  int seed,
                                  bool record_costs) {
-  (void)record_costs;
+  if (record_costs) {
+    Rcpp::stop("CUDA t-SNE `record_costs` is not available.");
+  }
   std::transform(
     negative_gradient_method.begin(),
     negative_gradient_method.end(),
@@ -2142,9 +2153,6 @@ List knn_tsne_opentsne_cuda_impl(IntegerMatrix indices,
     [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); }
   );
   if (negative_gradient_method == "fft" ||
-      negative_gradient_method == "fitsne" ||
-      negative_gradient_method == "fit_sne" ||
-      negative_gradient_method == "interpolation" ||
       negative_gradient_method == "auto") {
     if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
       Rcpp::stop("indices and distances must have the same dimensions");
@@ -2253,8 +2261,7 @@ List knn_tsne_opentsne_cuda_impl(IntegerMatrix indices,
     );
   }
   Rcpp::stop(
-    "CUDA openTSNE supports `negative_gradient_method = \"fft\"` only. "
-    "Use the FFT/FIt-SNE path for CUDA; exact CUDA t-SNE is kept separate and is not labelled as openTSNE."
+    "Only FFT t-SNE repulsion is supported."
   );
 }
 
@@ -2277,21 +2284,19 @@ List knn_tsne_opentsne_cuda_float_impl(IntegerMatrix indices,
                                        std::string negative_gradient_method,
                                        int seed,
                                        bool record_costs) {
-  (void)record_costs;
+  if (record_costs) {
+    Rcpp::stop("CUDA t-SNE `record_costs` is not available.");
+  }
   std::transform(
     negative_gradient_method.begin(),
     negative_gradient_method.end(),
     negative_gradient_method.begin(),
     [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); }
   );
-  if (!(negative_gradient_method == "fft" ||
-        negative_gradient_method == "fitsne" ||
-        negative_gradient_method == "fit_sne" ||
-        negative_gradient_method == "interpolation" ||
-        negative_gradient_method == "auto")) {
+  if (negative_gradient_method != "fft" &&
+      negative_gradient_method != "auto") {
     Rcpp::stop(
-      "CUDA openTSNE supports `negative_gradient_method = \"fft\"` only. "
-      "Use the FFT/FIt-SNE path for CUDA; exact CUDA t-SNE is kept separate and is not labelled as openTSNE."
+      "Only FFT t-SNE repulsion is supported."
     );
   }
   if (!cuda_is_float32_s4(distances)) {
@@ -2446,7 +2451,9 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
                                      std::string negative_gradient_method,
                                      int seed,
                                      bool record_costs) {
-  (void)record_costs;
+  if (record_costs) {
+    Rcpp::stop("CUDA t-SNE `record_costs` is not available.");
+  }
   if (!Rf_isNewList(gpu_knn)) {
     Rcpp::stop("CUDA GPU-resident openTSNE requires a GPU KNN list contract.");
   }
@@ -2457,14 +2464,10 @@ List knn_tsne_opentsne_cuda_gpu_impl(SEXP gpu_knn,
     negative_gradient_method.begin(),
     [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); }
   );
-  if (!(negative_gradient_method == "fft" ||
-        negative_gradient_method == "fitsne" ||
-        negative_gradient_method == "fit_sne" ||
-        negative_gradient_method == "interpolation" ||
-        negative_gradient_method == "auto")) {
+  if (negative_gradient_method != "fft" &&
+      negative_gradient_method != "auto") {
     Rcpp::stop(
-      "CUDA openTSNE supports `negative_gradient_method = \"fft\"` only. "
-      "Use the FFT/FIt-SNE path for CUDA; exact CUDA t-SNE is kept separate and is not labelled as openTSNE."
+      "Only FFT t-SNE repulsion is supported."
     );
   }
   if (!src.containsElementNamed("indices_ptr") ||
@@ -2766,8 +2769,9 @@ List transform_tsne_cuda_impl(NumericMatrix reference_layout,
                               int seed) {
   const int n_reference = reference_layout.nrow();
   const int n_query = indices.nrow();
+  const int dimensions = reference_layout.ncol();
   const int k = indices.ncol();
-  if (n_reference < 1 || reference_layout.ncol() != 2 ||
+  if (n_reference < 1 || (dimensions != 2 && dimensions != 3) ||
       n_query < 1 || k < 1 || distances.nrow() != n_query ||
       distances.ncol() != k) {
     Rcpp::stop("CUDA t-SNE transform inputs have incompatible dimensions.");
@@ -2798,18 +2802,20 @@ List transform_tsne_cuda_impl(NumericMatrix reference_layout,
     distance_values[static_cast<std::size_t>(i)] = value;
   }
   std::vector<float> reference = cuda_copy_matrix_float(
-    reference_layout, n_reference, 2, "reference_layout"
+    reference_layout, n_reference, dimensions, "reference_layout"
   );
   std::vector<float> initial = initialize_tsne_transform_cuda(
     reference_layout, indices, distances, y_init, init, initialization,
     index_offset, seed
   );
-  std::vector<float> output(static_cast<std::size_t>(n_query) * 2u);
+  std::vector<float> output(
+    static_cast<std::size_t>(n_query) * dimensions);
   n_negatives = std::max(1, std::min(n_negatives, n_reference));
   exact_repulsion_threshold = std::max(1, exact_repulsion_threshold);
   const int status = fastembedr_cuda_transform_tsne_from_host_knn(
     indices.begin(), distance_values.data(), index_offset, reference.data(),
-    initial.data(), n_reference, n_query, k, perplexity, n_iter,
+    initial.data(), n_reference, n_query, dimensions, k,
+    perplexity, n_iter,
     early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration,
     initial_momentum, final_momentum, max_grad_norm, max_step_norm,
     n_negatives, exact_repulsion_threshold,
@@ -2821,10 +2827,12 @@ List transform_tsne_cuda_impl(NumericMatrix reference_layout,
       "CUDA t-SNE transform failed: %s", cuda_embedding_error_message()
     );
   }
-  NumericMatrix layout(n_query, 2);
+  NumericMatrix layout(n_query, dimensions);
   for (int row = 0; row < n_query; ++row) {
-    layout(row, 0) = output[static_cast<std::size_t>(row) * 2u];
-    layout(row, 1) = output[static_cast<std::size_t>(row) * 2u + 1u];
+    for (int dim = 0; dim < dimensions; ++dim) {
+      layout(row, dim) =
+        output[static_cast<std::size_t>(row) * dimensions + dim];
+    }
   }
   const bool exact_repulsion = n_reference <= exact_repulsion_threshold ||
     n_negatives >= n_reference;

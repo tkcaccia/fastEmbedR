@@ -54,6 +54,21 @@ test_that("CUDA UMAP accepts host KNN in three dimensions", {
     )
 })
 
+test_that("CUDA 3D UMAP reports nonfinite optimizer coordinates", {
+    skip_if_not(embedding_cuda_available_cpp())
+    set.seed(83)
+    x <- matrix(rnorm(48L * 4L), nrow = 48L)
+    knn <- precompute_knn(x, k = 8L, backend = "cpu")
+    expect_error(
+        fastEmbedR:::fast_knn_umap_core(
+            knn, n_components = 3L, backend = "cuda",
+            n_epochs = 2L, seed = 83L,
+            config_override = list(learning_rate = 1e100)
+        ),
+        "nonfinite coordinates"
+    )
+})
+
 test_that("CUDA 3D landmarks never use two-dimensional refinement", {
     skip_if_not(embedding_cuda_available_cpp())
     x <- scale(as.matrix(iris[seq_len(45L), 1:4]))

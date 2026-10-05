@@ -1,0 +1,833 @@
+---
+title: "EXPERIMENTAL: out-of-core analysis with fastEmbedR"
+author: "Stefano Cacciatore"
+output: rmarkdown::html_vignette
+vignette: >
+    %\VignetteIndexEntry{EXPERIMENTAL: out-of-core analysis with fastEmbedR}
+    %\VignetteEngine{knitr::rmarkdown}
+    %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+# Scope
+
+This interface is **EXPERIMENTAL**. The current implementation reads a
+row-major float32 file in bounded blocks, performs streamed covariance PCA
+on CPU or CUDA, or randomized streamed PCA on CPU or CUDA for wide
+matrices, and writes float32 PCA scores to another file. CUDA uses
+the GPU for covariance or sketch blocks and score projection; the
+streamed mean/scale and small eigendecomposition run on CPU. It also
+supports
+streaming reservoir landmarks, file-backed query-to-landmark KNN, and
+fixed-reference landmark projection for UMAP or t-SNE, and landmark
+Walktrap, Louvain, or Leiden clustering. CPU voting supports multiple
+workers; CUDA can run landmark-graph Louvain or Leiden. CUDA can
+search a resident landmark reference with exact cuVS or IVF-Flat and
+write the query KNN in bounded batches. Explicit
+`method = "sharded_exact"` builds one bounded CUDA reference shard at a
+time and merges exact neighbors into disk-backed output. It avoids
+requiring the complete reference in VRAM but rereads every query for
+each shard. The single-GPU route can checkpoint every 100 query blocks
+and resume a matching partial search. With multiple CUDA devices,
+disjoint query ranges search bounded reference shards independently
+and are merged in source order; shard and merge checkpoints can resume
+matching partial work.
+Neither configuration is a scalable ANN index. CUDA can also
+project saved UMAP KNN rows when `refinement_epochs = 0L`, or apply the
+existing fixed-reference t-SNE transform to 2D layouts in bounded
+batches. Results record the CUDA backend and a VRAM estimate. CUDA
+landmark UMAP refinement and Metal streaming are **not implemented**.
+Experimental CPU and single-device CUDA full-graph UMAP are available
+from a symmetric disk-backed fuzzy graph. File-backed t-SNE consumes
+a prepared affinity graph; its CUDA optimizer currently supports 2D.
+The fuzzy graph supports
+experimental CPU Louvain, Leiden, and partitioned Walktrap. The
+Walktrap result is approximate when more than one block is needed.
+By default CUDA keeps the 2D
+or 3D layout on one GPU and rejects a layout beyond its VRAM budget.
+Explicit managed storage can page coordinates from host memory on a
+supporting GPU; it is not a disk-backed layout.
+Independent CUDA KNN and
+landmark-projection query ranges can use multiple devices. Out-of-core
+CUDA PCA computes its decomposition on the first selected device and
+can project disjoint score rows on multiple devices. This PCA route
+requires file-backed input. Optional checkpointing saves the shared
+decomposition and completed shard blocks for resume with the same
+devices. Landmark fitting still uses one GPU. Each KNN worker builds
+its own resident landmark index, or bounded reference shards when
+explicit `method = "sharded_exact"` is selected.
+Unsupported routes fail explicitly.
+
+The ordinary `pca()`, `umap()`, and `tsne()` routes are unchanged. To opt
+in, pass a `massive_matrix()` descriptor with `massive = "out_of_core"`
+for PCA or `massive = "landmark"` for UMAP and t-SNE. UMAP also accepts
+`massive = "out_of_core_graph"` with a prepared fuzzy graph and file-backed
+initial coordinates; this full-graph route currently uses one CPU worker.
+Experimental landmark UMAP and t-SNE require the suggested `float`
+package: selected float32 rows enter the reference fit without an R
+double-matrix expansion. If `float` is absent, these routes fail
+explicitly; out-of-core PCA and graph workflows do not require it.
+PCA also accepts `massive = "auto"`. It estimates ordinary PCA's peak
+memory, caps the supplied budget using currently available host RAM, and
+uses the in-memory route only below half that effective budget and when
+dimensions fit an R matrix. It reports its choice. When it selects
+streaming, provide a persistent `.f32` `output` path. A resident R matrix
+that exceeds the budget must first be supplied as a file-backed source;
+auto mode does not make a hidden full-size copy. For a small source with
+an output path, request `"out_of_core"` explicitly.
+`massive_cluster()` composes landmark selection, the resident landmark
+graph, and file-backed weighted-vote assignment. It accepts
+`massive = "landmark"` or `massive = "auto"`; auto mode uses ordinary
+`graph_cluster()` when the input fits its conservative memory budget.
+The landmark route is approximate and requires an output prefix. It
+does not replace `graph_cluster()` or cluster the full data graph.
+UMAP and t-SNE require an explicit choice between the ordinary resident
+route, approximate landmark projection, and a prepared full-graph route.
+They reject `massive = "auto"` because memory pressure must not change
+which observations participate in optimization. Landmark mode requires
+a file-backed source, a chosen landmark count, and a persistent `.f32`
+output path. The full-graph route consumes a prepared file-backed graph
+and initial coordinates; it does not build the graph automatically.
+Metal can run the ordinary in-memory route but has no experimental
+streamed embedding route. A requested unavailable backend fails.
+On Linux, PCA's auto free-RAM check respects a visible cgroup limit;
+on macOS it uses the system memory-pressure report. If availability
+cannot be measured, PCA auto mode asks for an explicit mode.
+The public `as.matrix()` inspection method remains capped at 128 MB.
+`memory_limit` budgets algorithm buffers and any resident R-matrix input;
+it is not a process-memory limit. `resources$peak_ram_bytes` estimates
+the largest workflow stage, including the landmark fit, KNN, and projection
+for landmark embeddings. `resources$peak_vram_bytes` similarly covers the
+reported CUDA stages. These are estimates, not measured peaks or guaranteed
+ceilings. The R runtime, linked libraries, and CUDA context can raise actual
+resident set size (RSS) substantially.
+
+# File layout
+
+- `.f32`: raw, little-endian, row-major float32 values. Supply `nrow` and
+  `ncol` to `massive_matrix()`.
+- `.fbin`: two little-endian unsigned 32-bit dimensions, followed by the
+  same float32 values. Dimensions come from the header.
+
+The file must have exactly the expected byte count. `access = "stream"`
+performs sequential reads; `access = "mmap"` uses a read-only mapping on
+POSIX systems. Mapping does not itself load the entire file into RAM.
+`massive_coarse_postings()` can group rows by supplied centers into
+physical posting files with original row IDs and 64-bit offsets. It
+builds storage only: no ANN search or recall guarantee is implied.
+After a successful build, `massive_open_postings()` loads the saved
+manifest and centers for use in a later R session without rebuilding.
+`checkpoint = TRUE` saves completed write-pass blocks. After an
+interruption, rerun with `resume = TRUE` and unchanged source, centers,
+output prefix, and controls. An interrupted count pass starts again;
+recovery during final file renames or manifest writing is not supported.
+
+# Example
+
+```{r}
+data <- as.matrix(iris[, 1:4])
+input <- tempfile(fileext = ".f32")
+scores_file <- tempfile(fileext = ".f32")
+connection <- file(input, "wb")
+writeBin(as.vector(t(data)), connection, size = 4L, endian = "little")
+close(connection)
+
+source <- fastEmbedR::massive_matrix(
+    input, nrow = nrow(data), ncol = ncol(data)
+)
+posting_prefix <- tempfile()
+centers <- data[c(1L, 51L, 101L), , drop = FALSE]
+postings <- fastEmbedR::massive_coarse_postings(
+    source, centers,
+    output = posting_prefix, chunk_rows = 32L,
+    n.cores = 2L, memory_limit = "128MB"
+)
+reopened <- fastEmbedR::massive_open_postings(posting_prefix)
+postings <- reopened$postings
+centers <- reopened$centers
+postings$counts
+fastEmbedR::massive_read_posting(postings, 1L, n = 2L)$row_id
+neighbors <- fastEmbedR::massive_search_postings(
+    source, postings, centers, n = 6L, k = 3L,
+    nprobe = postings$nlist, exclude_self = TRUE,
+    memory_limit = "128MB"
+)
+neighbors$indices
+pilot <- fastEmbedR::massive_posting_recall_pilot(
+    source, postings, centers, k = 3L,
+    nprobe = postings$nlist, sample_rows = 6L,
+    memory_limit = "128MB"
+)
+pilot[c("observed_recall", "minimum_row_recall",
+    "sampled_rows_below_target", "sample_target_met")]
+stopifnot(pilot$sample_target_met)
+posting_graph <- fastEmbedR::massive_full_knn_graph(
+    source, k = 3L, output = tempfile(),
+    method = "coarse_postings", postings = postings,
+    centers = centers, nprobe = postings$nlist,
+    chunk_rows = 32L, reference_chunk_rows = 32L,
+    memory_limit = "128MB", audit_rows = 5L,
+    query_order = "posting"
+)
+posting_graph$observed_recall
+posting_graph[c("minimum_row_recall", "sampled_rows_below_target",
+    "sample_target_met")]
+fit <- fastEmbedR::pca(
+    source, ncomp = 2L, backend = "cpu", n.cores = 2L,
+    massive = "out_of_core", output = scores_file,
+    chunk_rows = 32L, memory_limit = "64MB",
+    checkpoint = TRUE
+)
+fit <- fastEmbedR::massive_open_pca(scores_file)
+fit$method
+head(fit$scores)
+
+landmark_file <- tempfile(fileext = ".f32")
+neighbors_prefix <- tempfile()
+selection <- fastEmbedR::massive_select_landmarks(
+    source, landmarks = 30L, output = landmark_file,
+    seed = 42L, chunk_rows = 32L
+)
+neighbors <- fastEmbedR::massive_landmark_knn(
+    source, selection, k = 5L, output = neighbors_prefix,
+    n.cores = 2L, chunk_rows = 32L, memory_limit = "256MB",
+    checkpoint = TRUE
+)
+neighbors[c("nrow", "ncol", "method", "indices_path")]
+audited <- fastEmbedR::massive_audit_landmark_knn(
+    neighbors, source, selection, sample_rows = 6L,
+    memory_limit = "256MB"
+)
+audited[c("observed_recall", "minimum_row_recall",
+    "sampled_rows_below_target", "sample_target_met",
+    "audit_sample_rows")]
+
+stream_prefix <- tempfile()
+stream_neighbors <- fastEmbedR::massive_landmark_knn(
+    source, selection, k = 5L, output = stream_prefix,
+    backend = "cpu", method = "stream_exact", n.cores = 2L,
+    chunk_rows = 16L, reference_chunk_rows = 12L,
+    memory_limit = "256MB"
+)
+stopifnot(identical(
+    head(stream_neighbors)$indices, head(neighbors)$indices
+))
+
+reference <- fastEmbedR::massive_read_rows(selection$data, n = 30L)
+reference_fit <- fastEmbedR::umap(
+    reference, n_neighbors = 5L, backend = "cpu", n.cores = 2L
+)
+layout_file <- tempfile(fileext = ".f32")
+projected <- fastEmbedR::massive_project_landmarks(
+    reference_fit, neighbors, output = layout_file,
+    selection = selection,
+    n.cores = 2L, chunk_rows = 32L, refinement_epochs = 0L,
+    checkpoint = TRUE
+)
+head(projected$layout)
+
+local_file <- tempfile(fileext = ".f32")
+local_projected <- fastEmbedR::massive_project_landmarks(
+    reference_fit, neighbors, output = local_file,
+    selection = selection, source = source,
+    local_refine = TRUE, local_neighbors = 3L,
+    overlap_rows = 4L, refinement_epochs = 2L,
+    n.cores = 2L, chunk_rows = 32L, memory_limit = "256MB"
+)
+head(local_projected$layout)
+
+umap_file <- tempfile(fileext = ".f32")
+streamed_umap <- fastEmbedR::umap(
+    source, massive = "landmark", landmarks = 30L,
+    landmark_method = "random",
+    n_neighbors = 5L, transform_k = 5L, backend = "cpu",
+    output = umap_file, chunk_rows = 32L,
+    memory_limit = "256MB", refinement_epochs = 0L,
+    checkpoint = TRUE
+)
+head(streamed_umap$layout)
+
+tsne_file <- tempfile(fileext = ".f32")
+streamed_tsne <- fastEmbedR::tsne(
+    source, massive = "landmark", landmarks = 30L,
+    perplexity = 5, early_exaggeration_iter = 5L, n_iter = 5L,
+    transform_perplexity = 3, transform_iter = 5L,
+    backend = "cpu", output = tsne_file, chunk_rows = 32L,
+    memory_limit = "256MB", checkpoint = TRUE
+)
+head(streamed_tsne$layout)
+
+reference_graph <- fastEmbedR::knn_graph(
+    reference, k = 5L, backend = "cpu"
+)
+cluster_prefix <- tempfile()
+clusters <- fastEmbedR::massive_cluster_landmarks(
+    reference_graph, neighbors, output = cluster_prefix,
+    method = "leiden", selection = selection,
+    n.cores = 2L, chunk_rows = 32L
+)
+head(clusters)
+
+cluster_workflow <- fastEmbedR::massive_cluster(
+    source, method = "leiden", massive = "landmark",
+    landmarks = 30L, k = 5L, backend = "cpu",
+    n.cores = 2L, chunk_rows = 32L, memory_limit = "256MB",
+    output = tempfile()
+)
+head(cluster_workflow)
+unlink(c(input, scores_file, paste0(scores_file, ".manifest.rds"),
+    landmark_file, layout_file, local_file,
+    postings$features$path, postings$ids_path, postings$offsets_path,
+    postings$manifest_path,
+    neighbors$indices_path, neighbors$distances_path,
+    stream_neighbors$indices_path, stream_neighbors$distances_path,
+    clusters$membership_path, clusters$confidence_path))
+unlink(c(cluster_workflow$selection$data$path,
+    cluster_workflow$knn$indices_path,
+    cluster_workflow$knn$distances_path,
+    cluster_workflow$membership_path,
+    cluster_workflow$confidence_path))
+for (result in list(streamed_umap, streamed_tsne)) {
+    unlink(c(result$layout$path, result$selection$data$path,
+        result$reference_fit_path, result$graph$indices_path,
+        result$graph$distances_path))
+}
+```
+
+The optional posting-order full-graph route groups queries by physical
+posting before searching, then externally restores original row order in
+the saved graph. It can reduce repeated posting reads when RAM limits
+force small query batches, at the cost of temporary disk space and a
+reorder pass. The default `query_order = "original"` avoids that pass.
+Both routes are CPU-only; neither is a general ANN recall guarantee.
+With `checkpoint = TRUE`, a completed grouped search can be reused if
+the reorder pass fails; rerun with `resume = TRUE` and identical inputs.
+
+For CUDA landmark Louvain or Leiden, `devices = c(0L, 1L)` assigns
+disjoint query-to-landmark searches to two GPUs. The first device builds
+and clusters the resident landmark graph; CPU workers still vote labels
+from file-backed neighbor rows. Each selected GPU must hold the reference
+index. A multi-GPU landmark run requires an explicitly installed CUDA
+backend and fails if either device is unavailable; it never switches to CPU.
+
+`fit$scores` is a file descriptor, not a full R matrix. Use
+`massive_read_rows()` to inspect a bounded range. `as.matrix()` refuses
+materialization above 128 MB. The output path must not already exist and
+the destination disk must have sufficient free space. A completed PCA saves
+its loadings and score-file identity beside the `.f32` file; reopen it in a
+later R session with `massive_open_pca(output)`. Reopening rejects a changed
+or incomplete score file, so downstream graph jobs do not silently consume
+stale coordinates.
+
+With `checkpoint = TRUE`, covariance PCA saves completed mean and
+covariance blocks;
+wide randomized PCA saves completed column moments. Both then save the
+fitted decomposition and each flushed score batch. Resume with the same
+settings and `resume = TRUE`; it verifies the saved stage before reuse.
+Covariance work since the last saved block repeats after interruption.
+An interrupted wide moments pass or sketch action restarts that pass.
+Projection leaves `output.part` and `output.checkpoint.rds` until complete.
+For public landmark `umap()` and `tsne()`, `checkpoint = TRUE` also saves
+selection, reference-fit, and completed-graph identities. After an
+interruption, repeat the same call with `resume = TRUE`; changed inputs or
+settings fail rather than silently repeating completed stages. Keep all
+sidecar files and partial outputs together until the run completes.
+
+The streamed covariance route handles up to 1,024 columns on CPU and
+2,048 columns on CUDA. Wider matrices use a seeded randomized feature
+sketch with two streamed
+covariance-action passes. Its accuracy depends on the spectrum and sketch
+size; it is an approximation, and the result reports the selected method.
+Wider CUDA matrices use a streamed GPU randomized sketch. Metal streaming
+is not implemented. The CUDA covariance route keeps reusable device buffers
+for each covariance or projection pass; it still reads each block into
+host RAM before transfer. The
+eigendecomposition itself is CPU-based and requires only the small
+covariance matrix. File-backed PCA scores can be passed directly to experimental
+`umap(massive = "landmark")` or `tsne(massive = "landmark")` without
+materializing all scores. This is a landmark approximation, not full
+out-of-core optimization of either objective or the complete graph.
+The unified calls save the landmark sample, reference fit, neighbor
+files, and output layout beside the requested `.f32` file. With
+`checkpoint = TRUE`, both calls save completed workflow stages and
+projection batches. `massive_cluster()` likewise saves the selected
+landmarks, resident reference graph, query-to-landmark KNN, and completed
+label batches. To continue after interruption, preserve the output and
+sidecars and repeat the same call with `resume = TRUE`. The resident
+reference graph is serialized in the checkpoint, so opt-in checkpointing
+requires additional disk space. A crash between finalizing a stage file
+and committing its workflow checkpoint still needs manual inspection;
+the package refuses to overwrite that uncommitted artifact.
+
+`massive_select_landmarks()` is a separate experimental preparation step.
+It selects row identifiers with a seeded reservoir algorithm, then streams
+the source once to write those rows to a new `.f32` file in source order.
+For fast random access, `landmark_method = "random"` selects in time
+proportional to the landmark count and reads only the sampled source
+rows. The option also works in experimental landmark `umap()`, `tsne()`,
+and `massive_cluster()` calls. It may be slower on storage with expensive
+random reads.
+The returned `data` is file-backed; it is not yet a fitted UMAP or t-SNE
+landmark model. `massive_landmark_knn()` normally keeps the landmark
+reference and its search index in RAM or VRAM, searches the input in
+bounded batches, and writes row-major, one-based `uint32` landmark IDs
+and float32 distances.
+The optional audit compares selected rows with a streamed exact CPU
+reference. Its measured recall describes only those rows; it does not
+guarantee the requested target for the remaining observations.
+File-backed HNSW and CUDA references enter the native index as float32;
+`reference_storage` reports this as `"native_float32"`. Small CPU exact
+search still uses a resident R double reference.
+For a reference that does not fit in RAM, set `method = "stream_exact"`
+on CPU and optionally set `reference_chunk_rows`. This scans bounded
+query and reference blocks without loading the reference. It is exact
+but quadratic in the number of queries and landmarks, so it is a
+correctness and memory-limited route rather than a scalable ANN index.
+It does not silently select CUDA or replace the default method.
+For fewer than 5,000 landmarks, the default is exact search; otherwise a
+persistent HNSW index is built once. CUDA uses exact cuVS below 100,000
+landmarks and IVF-Flat above that threshold. HNSW's 0.99 recall target
+is not an observed-recall guarantee; IVF-Flat reports a first-batch
+pilot recall only. The returned KNN files are not a full fuzzy UMAP
+graph.
+
+An external full-data KNN producer can write the same pair of files with
+exactly `k` distinct, non-self neighbors for every row. Import them without
+copying the files:
+
+```{r eval=FALSE}
+graph <- fastEmbedR::massive_knn_graph(
+    "deep1b_knn", n_vertices = 1e9, k = 30, access = "mmap"
+)
+edges <- fastEmbedR::massive_read_graph_edges(graph, first = 1, n = 100)
+partitions <- fastEmbedR::massive_graph_partitions(graph,
+    max_bytes = 64e6)
+first_partition <- fastEmbedR::massive_read_graph_partition(
+    partitions, 1)
+```
+
+For a small or moderate file-backed matrix, an exact CPU graph can be
+built without loading the whole matrix:
+
+```{r eval=FALSE}
+graph <- fastEmbedR::massive_full_knn_graph(
+    source, k = 30L, output = "full_knn",
+    n.cores = 8L, chunk_rows = 256L,
+    reference_chunk_rows = 8192L,
+    memory_limit = "8GB", checkpoint = TRUE,
+    checkpoint_every = 100L
+)
+```
+
+This route streams query and reference blocks, writes the same two graph
+files, and can resume completed query blocks. It is quadratic in row
+count and is a correctness baseline, not an ANN route suitable for
+million- or billion-row production graphs. CUDA exact search is also
+available: it builds one cuVS index per bounded reference shard and
+merges the neighbor candidates into the same file-backed output.
+
+```{r eval=FALSE}
+cuda_graph <- fastEmbedR::massive_full_knn_graph(
+    source, k = 30L, output = "full_knn_cuda",
+    backend = "cuda", chunk_rows = 256L,
+    reference_chunk_rows = 8192L,
+    memory_limit = "8GB"
+)
+```
+
+The exact CUDA route is likewise quadratic, requires `k <= 255`, and supports
+opt-in checkpoints. By default a checkpoint is written every 100 query
+blocks and at every shard boundary; uncommitted blocks are replayed on
+resume. Use the same `checkpoint_every` value when resuming. An explicit
+`method = "ivf_sharded"` uses native cuVS IVF-Flat within each reference
+shard. It is approximate: the 0.99 target is requested, not guaranteed
+for the merged graph. Set `audit_rows` to measure sampled recall. Both
+CUDA methods fail when native cuVS is unavailable; neither falls back
+to CPU. Repeated query scans still limit scaling. The saved graph can
+feed the CPU full-graph
+UMAP route below. The derived fuzzy graph can also feed experimental
+Louvain clustering as described below.
+
+For an explicitly approximate CPU route, `method = "hnsw_sharded"`
+builds one bounded native HNSW index per reference shard and merges its
+query results into the same file-backed graph format. It reports the
+index-build and query/merge times separately. Set `audit_rows` to compare
+evenly spaced query rows against streamed exact neighbors and record mean
+and minimum row recall. Each audited row scans the full source, so budget
+this separately. Opt-in checkpoints use the same commit interval.
+Resume rebuilds the shard index and compares a pilot query before
+continuing. Repeated full query scans can make the route I/O-intensive,
+and billion-row performance is not established.
+
+Import scans all edges for malformed IDs, distances, self edges, and
+duplicates using bounded sequential reads, even when later edge reads use
+mmap. A bounded read returns directed edges with distances, not UMAP
+fuzzy weights. The partition plan is constant-size even for a billion-row
+graph and caps each returned R edge list. The sharded HNSW route avoids a
+full-matrix index but is not yet a scale-validated full-data ANN builder.
+Only the symmetric fuzzy graph produced below can feed the experimental
+full-graph UMAP optimizer. It can also be scanned to measure modularity
+or clustered with file-backed Louvain. Contracted levels remain
+file-backed while too large for a conservative resident-memory check.
+The storage API permits no more than
+2^31 - 1 vertices and uses exact 64-bit byte offsets internally.
+Directed UMAP memberships can be calculated from a distance graph without
+loading all edges into memory:
+
+```{r eval=FALSE}
+weighted <- fastEmbedR::massive_umap_memberships(graph, n.cores = 4L)
+weighted_edges <- fastEmbedR::massive_read_graph_edges(
+    weighted, first = 1, n = 100)
+```
+
+This scans the distances twice and writes `full_knn.weights.f32` beside
+the existing KNN files. Independent rows can use multiple CPU workers;
+graph sorting and full-graph optimization have separate threading limits.
+An explicit CUDA request fails. Set `checkpoint = TRUE` to save completed
+mean-scan and weight blocks; after interruption, rerun with
+`resume = TRUE`.
+
+The directed memberships can be symmetrized with the UMAP fuzzy union
+without holding all edges in memory:
+
+```{r eval=FALSE}
+fuzzy <- fastEmbedR::massive_umap_fuzzy_graph(
+    weighted, output = "full_knn_fuzzy", memory_limit = "8GB",
+    checkpoint = TRUE, checkpoint_every = 100L
+)
+fuzzy_edges <- fastEmbedR::massive_read_graph_edges(
+    fuzzy, first = 1, n = 100)
+```
+
+This CPU route externally sorts edges into a variable-degree CSR graph.
+It checks temporary disk space before starting. If interrupted, repeat
+the same call with `resume = TRUE` and unchanged inputs and controls.
+Completed pair-sort runs are reused; the final merge and CSR write repeat.
+Checkpointed sorting retains more temporary data than an uninterrupted
+sort. A failed final output commit may need manual inspection. It writes a
+`full_knn_fuzzy.fuzzy.rds` manifest containing graph hashes. After a
+restart, reload the same graph without recomputing neighbors or fuzzy
+memberships:
+
+```{r eval=FALSE}
+fuzzy <- fastEmbedR::massive_fuzzy_graph(
+    "full_knn_fuzzy", n_vertices = graph$n_vertices
+)
+```
+
+Reloading scans and hashes the CSR files. A generic `massive_csr_graph()`
+import does not certify a graph as UMAP fuzzy input.
+
+The fuzzy graph can supply a multilevel Louvain fit:
+
+```{r eval=FALSE}
+communities <- fastEmbedR::massive_cluster(
+    fuzzy, method = "louvain", massive = "out_of_core_graph",
+    output = "full_louvain.clusters.u32",
+    memory_limit = "8GB"
+)
+head(communities)
+```
+
+This experimental CPU-only route memory-maps community state, scans
+graph blocks, and externally contracts edges. Contracted levels remain
+file-backed until a conservative memory check permits resident Louvain.
+Use `massive_louvain_level()` to request only the first local-moving level.
+The same fuzzy graph also supports file-backed Leiden:
+
+```{r eval=FALSE}
+leiden <- fastEmbedR::massive_cluster(
+    fuzzy, method = "leiden", massive = "out_of_core_graph",
+    output = "full_leiden.clusters.u32",
+    memory_limit = "8GB", checkpoint = TRUE
+)
+head(leiden)
+```
+
+Leiden keeps every graph level file-backed and carries each refined
+partition into the next local-moving level. Partitioned Walktrap reuses
+the native exact walk kernel within bounded induced blocks, contracts
+their communities, and repeats on the contracted graph:
+
+```{r eval=FALSE}
+walktrap <- fastEmbedR::massive_cluster(
+    fuzzy, method = "walktrap", massive = "out_of_core_graph",
+    output = "full_walktrap.clusters.u32", steps = 4L,
+    chunk_rows = 4000L, memory_limit = "8GB"
+)
+head(walktrap)
+walktrap$approximate
+```
+
+Cross-block walks are absent from the first level. This CPU-only route
+is sensitive to vertex order, is not mathematically identical to
+whole-graph Walktrap, and cannot yet
+checkpoint or resume. If a level cannot contract, it fails and retains
+partial labels for inspection. Full-graph Leiden uses one CPU worker and does
+support restart from completed graph levels with `resume = TRUE` and
+unchanged inputs and controls.
+Mapped pages may count toward resident memory; `memory_limit` is not a
+peak-RSS guarantee. For stage-boundary restart, use `checkpoint = TRUE`
+in a full-graph Louvain or Leiden `massive_cluster()` call. Repeat with
+`resume = TRUE` and unchanged inputs and controls. Partial
+native scans and contraction work files cannot yet resume; Leiden retains
+its completed contracted levels, while Louvain checkpoints only its
+first level and first contraction.
+
+A distance-valued full KNN graph can also be converted to file-backed
+t-SNE affinities with the same native float32 probability policy:
+
+```{r eval=FALSE}
+affinities <- fastEmbedR::massive_tsne_affinities(
+    graph, perplexity = 30, output = "full_knn_tsne",
+    memory_limit = "8GB", checkpoint = TRUE
+)
+```
+
+The affinity graph can feed the experimental full-data FFT optimizer on
+CPU or CUDA. CUDA currently accepts two-dimensional coordinates only.
+Supply pre-scaled PCA or spectral coordinates in a row-major float32 file,
+with the same row count and two or three columns:
+
+```{r eval=FALSE}
+tsne_initial <- fastEmbedR::massive_matrix(
+    "tsne_initial.f32", nrow = affinities$n_vertices, ncol = 2L
+)
+tsne_layout <- fastEmbedR::tsne(
+    affinities, perplexity = 30, Y_init = tsne_initial,
+    massive = "out_of_core_graph", backend = "cuda",
+    output = "full_tsne.f32", memory_limit = "32GB",
+    checkpoint = TRUE
+)
+```
+
+The optimizer streams the affinity graph on every iteration. CPU retains
+float32 optimizer state in RAM; CUDA retains it on one GPU and fails when
+the layout and fast Fourier transform workspace exceed free GPU memory.
+The graph remains file-backed in both routes. Large-graph runtime and
+quality still need measurement.
+An interrupted fit can continue with the same call and `resume = TRUE`.
+Snapshots retain coordinates, momentum updates, and adaptive gains;
+uncommitted partial snapshots require inspection before resume.
+The optional `n.cores` argument in affinity construction
+parallelizes conditional-probability rows,
+not the external graph sort; it did not improve total time in a
+million-row compact-support check. An interrupted pair sort can resume
+with `resume = TRUE` and identical inputs and controls.
+
+To fit an experimental UMAP layout from the fuzzy graph, supply a
+file-backed 2D or 3D initialization with one row per observation:
+
+```{r eval=FALSE}
+layout <- fastEmbedR::umap(
+    fuzzy, massive = "out_of_core_graph", init = fit$scores,
+    output = "full_umap.f32", memory_limit = "8GB",
+    n_components = 2L, backend = "cpu", n.cores = 1L,
+    layout_storage = "mmap"
+)
+```
+
+For checkpointing and optimizer controls, use the same graph with the
+lower-level function and a different output file:
+
+```{r eval=FALSE}
+layout <- fastEmbedR::massive_umap_optimize(
+    fuzzy, init = fit$scores,
+    output = "full_umap_checkpointed.f32", memory_limit = "8GB",
+    checkpoint = TRUE, checkpoint_every = 10L
+)
+```
+
+The optimizer streams the graph for each epoch and currently uses one CPU
+worker. The default retains float32 coordinates in RAM. Explicit
+`layout_storage = "mmap"` keeps coordinates in a writable file instead;
+this requires a POSIX system, sufficient disk space, and can be slower
+because edge updates access coordinates irregularly. The OS may cache
+mapped pages in RAM, so `memory_limit` is not a hard process-RSS cap.
+An interrupted fit in either storage mode can be restarted with the same
+inputs and controls plus `resume = TRUE`; only complete epoch snapshots
+are reused. Checkpointing writes a full snapshot at each interval and
+needs space for two coordinate files in RAM mode or three in mapped mode.
+CUDA full-graph optimization streams bounded edge batches from the same
+prepared fuzzy graph. The default keeps 2D or 3D coordinates on one GPU
+and requires the layout to fit device memory. Opt in to
+`layout_storage = "managed"` to use CUDA unified memory on a GPU that
+supports concurrent managed access. Managed coordinates count against
+the host-memory budget and may page slowly if they exceed VRAM. This
+does not provide disk-backed coordinates. CUDA rejects `"mmap"`.
+CUDA can use the same completed-epoch checkpoint controls;
+each snapshot downloads the full layout and needs additional disk space.
+Resume requires the same backend, graph, initialization, and controls.
+It does not silently use CPU optimization.
+The reported `device_buffer_bytes` counts CUDA device allocations;
+`managed_layout_bytes` reports the separate coordinate allocation.
+Neither includes CUDA runtime or allocator overhead. Chunk boundaries
+change the order
+of asynchronous edge updates, so streamed and resident coordinates need
+not match exactly even with identical graph, seed, and initialization.
+CUDA graph sorting is not implemented.
+An external producer may also supply
+`.indices.u32` and `.weights.f32` for `massive_weighted_graph()`.
+Weight import checks values in [0, 1] and returns a `weight` field, but
+does not verify graph symmetry.
+
+For a variable-degree weighted graph, use a CSR file triple:
+
+```{r eval=FALSE}
+graph <- fastEmbedR::massive_csr_graph(
+    "deep1b_csr", n_vertices = 1e9, access = "mmap"
+)
+partitions <- fastEmbedR::massive_graph_partitions(graph)
+edges <- fastEmbedR::massive_read_graph_partition(partitions, 1)
+```
+
+The files are `.offsets.u64`, `.indices.u32`, and `.weights.f32`.
+Offsets are zero-based positions in the edge files; neighbor IDs are
+one-based and strictly increasing within each row. Validation reads every
+edge sequentially, and the partition plan uses the maximum row degree to
+bound returned R edge lists. Import does not calculate fuzzy memberships
+or prove that an externally supplied graph is symmetric. Graphs returned
+by `massive_umap_fuzzy_graph()` have been constructed with fuzzy union.
+
+For long KNN searches, `checkpoint = TRUE` saves completed rows in a
+`.checkpoint.rds` sidecar beside the two `.part` files. After an
+interruption, rerun the same call with `resume = TRUE`. The reference
+index is rebuilt, and its original first-batch output must match the
+saved pilot before either output file is extended. The file-backed
+inputs must retain their paths, sizes, and modification times. This
+pilot detects changed search behavior but is not a proof that every
+approximate-index entry is identical after a restart. For exact search,
+it also validates the original input batch. A completed run removes
+the sidecar and finalizes both output files. With `backend = "cuda"` and
+`devices = c(0L, 1L)`, KNN searches disjoint query ranges and merges
+their row-major output files. Resident exact/IVF search requires the
+landmark reference and index to fit on each device. Explicit
+`method = "sharded_exact"` instead builds bounded reference shards on
+each device, at the cost of a complete query pass per shard. Multi-GPU
+KNN currently rejects `checkpoint` and `resume`; single-device KNN
+retains the checkpoint behavior above.
+
+`massive_project_landmarks()` fits no new reference embedding: fit
+`umap()` or `tsne()` on the selected landmark matrix first, then project
+query rows from the saved KNN graph. The output is a file-backed query
+layout. Landmark coordinates stay fixed during projection. When the
+queries include the source rows, `selection` replaces projected landmark
+rows with their fitted reference coordinates. With zero UMAP refinement
+epochs it is weighted
+KNN projection only. Positive refinement epochs or t-SNE transform
+iterations reuse the package's fixed-reference optimizers. Stochastic
+refinement is batch-dependent, so retain the chunk size and seed when
+comparing results.
+
+A high-level landmark fit can also reuse a previous fit's saved neighbor
+search. Pass the previous result as `nn` with the same source, landmark
+count, projection neighbor count, and backend. The second call fits its
+own reference embedding but does not select landmarks or search the
+queries again. It fails rather than rebuilding if the source, landmark
+reference, saved neighbor files, or requested neighbor count differs.
+
+```{r massive-reuse, eval=FALSE}
+first <- fastEmbedR::umap(source, massive = "landmark",
+    landmarks = 10000L, n_neighbors = 15L, transform_k = 15L,
+    output = "umap.f32", backend = "cpu")
+second <- fastEmbedR::tsne(source, massive = "landmark",
+    landmarks = 10000L, nn = first, perplexity = 10,
+    transform_k = 15L, transform_perplexity = 5,
+    output = "tsne.f32", backend = "cpu")
+stopifnot(second$graph_reused)
+```
+
+The same saved selection and query KNN can feed landmark Leiden,
+Louvain, or Walktrap clustering without another all-row search. The
+resident graph among landmarks is still constructed for clustering;
+cluster labels and confidence are written as file-backed outputs.
+
+```{r massive-cluster-reuse, eval=FALSE}
+communities <- fastEmbedR::massive_cluster(source,
+    method = "leiden", massive = "landmark", nn = first,
+    k = 15L, output = "communities", backend = "cpu")
+stopifnot(communities$graph_reused)
+```
+
+The reused result must retain its original source, landmark, and KNN
+files. A different source, backend, or neighbor count fails explicitly.
+
+`local_refine = TRUE` is an opt-in **EXPERIMENTAL** CPU UMAP variant.
+Pass the original file-backed query `source`, the exact saved KNN graph
+created from it, positive `refinement_epochs`, and a bounded
+`local_neighbors` count. It reconstructs query-to-query neighbors inside
+each chunk plus `overlap_rows` on both sides, then updates only the core
+query rows while preserving landmark coordinates. The KNN result records
+the source file identity, and mismatches fail before projection. A
+conservative memory preflight can reduce the effective chunk size.
+These local windows do not constitute a full-data UMAP graph. Boundary
+effects remain possible, and quality improvement is dataset-dependent.
+The extra KNN construction makes this route slower than anchor-only
+projection on some datasets; CUDA requests fail without CPU fallback.
+
+Set `checkpoint = TRUE` to save completed projection batches in a
+`.checkpoint.rds` sidecar while writing the `.part` output. If the
+process stops, rerun the same call with `resume = TRUE`. Resume requires
+the same layout, KNN files, settings, and effective chunk size; changed
+inputs fail rather than silently mixing results. The sidecar and `.part`
+file are removed or finalized after success. File paths, sizes, and
+modification times are checked, but this is not a cryptographic audit of
+the complete KNN files. Do not edit those files during a run.
+After completion, `massive_open_projection(output)` reopens the saved
+coordinates without loading them. Its local manifest requires the same
+coordinate and KNN paths, sizes, and modification times; it is not a
+portable content hash.
+
+On a CUDA-capable build, zero-epoch UMAP projection and 2D or 3D t-SNE
+fixed-reference transformation can use `backend = "cuda", n.cores = 1L`.
+t-SNE requires at most 128 saved neighbors. The landmark layout and each
+bounded KNN batch are uploaded to the GPU; the entire query graph and
+output never need to fit in VRAM. The batch size is capped from free
+VRAM, and the native transform checks its workspace before each batch.
+CUDA zero-epoch UMAP retains the reference layout and query buffers
+when the reference transfer exceeds the planned query-batch transfers;
+otherwise it uses the existing per-batch CUDA route. The chosen
+`projection_engine` is reported in `resources`. CUDA t-SNE still
+allocates per batch. Neither route is guaranteed to outperform CPU.
+
+`devices = c(0L, 1L)` also opts into experimental multi-GPU query
+projection on a machine exposing both CUDA devices. The reference fit
+uses the first selected device. KNN searches disjoint query ranges, then
+each device projects its own range from the merged KNN graph. Each
+process writes a shard, which is merged in input-row order using a
+bounded buffer. The returned `gpu_devices`, per-device resource
+estimates, and `shard_paths` document projection execution. This route
+requires additional disk space for KNN and projection shards alongside
+their final outputs. Projection supports `checkpoint = TRUE` and
+`resume = TRUE`: completed shards are reused, partial shards and an
+interrupted merge resume. The input files, selected devices, and
+effective batch settings must match; changed inputs fail explicitly.
+Checkpoint identity uses file paths, sizes, and modification times, not
+cryptographic hashes of complete KNN files. Reused shards report unknown
+peak VRAM rather than a fabricated estimate. This route does not
+distribute reference fitting or landmark optimization, and it does not
+support local refinement. An unavailable device fails without CPU
+fallback.
+
+`massive_cluster_landmarks()` reuses the ordinary `knn_graph()` and
+`graph_cluster()` implementations on the resident landmark subset. It
+then reads the saved query-to-landmark KNN graph in batches and assigns
+each query by inverse-distance weighted community vote. The confidence
+file holds the winning community's fraction of vote weight. This is a
+landmark approximation, not full-graph community detection. The reference
+graph must fit in RAM; query labels and confidence remain file-backed.
+The saved KNN graph may have been built on CPU or CUDA. Landmark-graph
+Louvain and Leiden can use `backend = "cuda"`, while Walktrap remains
+CPU-only. Query community voting remains on CPU in either case. The
+result reports `backend`, `assignment_backend`, and `graph_backend`.
+Conservative RAM and, for CUDA, VRAM estimates include the resident
+landmark graph before clustering starts.
+With `checkpoint = TRUE`, the landmark communities and completed query
+rows are saved beside the two partial output files. Rerunning the same
+call with `resume = TRUE` reuses the saved communities rather than
+clustering the landmark graph again. `checkpoint_every` controls how
+many query batches may need to be repeated after an interruption.
+Changing the graph, KNN inputs, method, or settings rejects the resume.

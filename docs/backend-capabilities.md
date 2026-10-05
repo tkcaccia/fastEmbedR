@@ -27,6 +27,7 @@ unavailable explicit accelerator request raises an error.
 | `umap()` | native exact/HNSW, then `umap_knn()` | native exact/IVF-Flat, then native Metal UMAP | native cuVS device KNN, then native CUDA UMAP | CPU uses exact search below 5,000 rows. CUDA KNN is not copied through R. Metal IVF exact-reranks candidates in the original dimensions and records its pilot recall. |
 | `tsne_knn()` | native C++ FFT-grid optimizer | native Metal FFT-grid optimizer | native CUDA FFT-grid optimizer using cuFFT | Use `Y_init` or `init_data` for explicit PCA initialization. |
 | `tsne()` | native exact/HNSW, then `tsne_knn()` | native exact/IVF-Flat, then Metal t-SNE | native cuVS device KNN, then CUDA t-SNE | CPU uses exact search below 5,000 rows. The package does not call Python openTSNE in public functions. |
+
 | `pca()` / t-SNE PCA init | native float32 blocked rSVD | native float32 MPS block-subspace rSVD | package-native rSVD; optional RAPIDS RAFT TSVD | CUDA selects from matrix shape and rank when RAFT is enabled, and otherwise uses native rSVD. GPU requests never silently fall back to CPU. |
 | `transform_tsne()` | native fixed-reference transform | native Metal projection/transform kernels where available | native CUDA projection/transform kernels where built | Used by t-SNE landmarking. |
 | `select_landmarks()` | native selection | shared selection | shared selection | Selection is independent of the embedding method and can be reused. |
@@ -37,6 +38,9 @@ unavailable explicit accelerator request raises an error.
 | `knn_graph()` | native C++ graph construction | Metal KNN followed by native CPU graph construction | CUDA KNN followed by native CPU graph construction | A GPU label applies to neighbor search only; graph conversion is never reported as GPU work. |
 | `graph_cluster()` | native C++ Louvain, Leiden, and Pons-Latapy Walktrap | native Metal Louvain and Leiden | native CUDA Louvain and Leiden | GPU local moving/refinement uses float32 CSR; graph compaction/coarsening is package-owned C++. Walktrap is CPU-only. Unsupported requests fail without fallback. |
 | `evaluate_embedding()` | native/R quality metrics | CPU metrics after final layout transfer | CPU metrics after final layout transfer | Metrics are not labelled as GPU work. |
+
+Here, "exact" describes nearest-neighbor search, not t-SNE repulsion.
+All 2D and 3D t-SNE fits use FFT repulsion.
 
 ## Distance Metrics
 

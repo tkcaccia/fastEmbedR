@@ -122,7 +122,7 @@ test_that("t-SNE auto configuration uses compact affinity support", {
     expect_false(large_fft$auto_kld_stop)
 })
 
-test_that("t-SNE exposes FFT and exact negative-gradient choices", {
+test_that("t-SNE fits only with FFT repulsion", {
     set.seed(312)
     x <- matrix(rnorm(42L * 4L), 42L, 4L)
     knn <- test_exact_knn(x, k = 13L, backend = "cpu")
@@ -137,7 +137,7 @@ test_that("t-SNE exposes FFT and exact negative-gradient choices", {
             n.cores = 2L,
             seed = 312L
         ),
-        "removed"
+        "Only FFT"
     )
     expect_error(
         tsne_knn(
@@ -149,19 +149,14 @@ test_that("t-SNE exposes FFT and exact negative-gradient choices", {
             n.cores = 2L,
             seed = 312L
         ),
-        "changes the optimization mathematics"
+        "Only FFT"
     )
 
-    exact <- tsne_knn(
-        knn,
-        perplexity = 4,
-        negative_gradient_method = "exact",
-        early_exaggeration_iter = 2L,
-        n_iter = 3L,
-        n.cores = 2L,
-        seed = 312L
+    expect_error(
+        tsne_knn(knn, perplexity = 4,
+            negative_gradient_method = "exact"),
+        "Only FFT"
     )
-    expect_equal(attr(exact, "fastEmbedR_config")$repulsion, "pair_symmetric")
 
     fft <- tsne_knn(
         knn,
@@ -177,6 +172,28 @@ test_that("t-SNE exposes FFT and exact negative-gradient choices", {
         attr(fft, "fastEmbedR_config")$optimizer,
         "^opentsne_fitsne_fft_grid_sparse_knn"
     )
+    old <- Sys.getenv("FASTEMBEDR_TSNE_REPULSION", unset = NA_character_)
+    on.exit(if (is.na(old)) {
+        Sys.unsetenv("FASTEMBEDR_TSNE_REPULSION")
+    } else {
+        Sys.setenv(FASTEMBEDR_TSNE_REPULSION = old)
+    }, add = TRUE)
+    Sys.setenv(FASTEMBEDR_TSNE_REPULSION = "exact")
+    auto <- tsne_knn(
+        knn, perplexity = 4, early_exaggeration_iter = 2L,
+        n_iter = 3L, n.cores = 2L, seed = 312L
+    )
+    expect_identical(attr(auto, "fastEmbedR_config")$repulsion,
+        "fft_grid")
+    zero_theta <- tsne_knn(
+        knn, perplexity = 4, theta = 0,
+        early_exaggeration_iter = 2L, n_iter = 3L,
+        n.cores = 2L, seed = 312L
+    )
+    expect_identical(attr(zero_theta, "fastEmbedR_config")$repulsion,
+        "fft_grid")
+    expect_error(tsne_knn(knn, perplexity = 4,
+        n_components = 1L), "2 or 3")
 })
 
 test_that("tsne has direct KNN input functions", {
@@ -358,13 +375,13 @@ test_that(paste(
             perplexity = 3,
             early_exaggeration_iter = 1L,
             n_iter = 1L,
-            negative_gradient_method = "exact",
+            negative_gradient_method = "fft",
             backend = "metal"
         )
         cfg <- attr(metal, "fastEmbedR_config")
         expect_equal(cfg$backend, "metal")
-        expect_equal(cfg$optimizer, "opentsne_exact_sparse_native_metal")
-        expect_equal(cfg$repulsion, "exact_metal")
+        expect_equal(cfg$optimizer, "opentsne_fitsne_fft_grid_native_metal")
+        expect_equal(cfg$repulsion, "fft_grid_metal")
         expect_equal(
             cfg$probabilities,
             "symmetric_sparse_knn_cpu_prepared_for_metal"

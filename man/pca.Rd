@@ -13,7 +13,14 @@ pca(
   backend = NULL,
   n.cores = NULL,
   seed = 4L,
-  tsne_init = FALSE
+  tsne_init = FALSE,
+  massive = "off",
+  output = NULL,
+  chunk_rows = NULL,
+  memory_limit = "512MB",
+  checkpoint = FALSE,
+  resume = FALSE,
+  devices = NULL
 )
 }
 \arguments{
@@ -32,18 +39,51 @@ deviation before decomposition.}
 
 \item{backend}{PCA backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}.}
 
-\item{n.cores}{Positive integer CPU core limit. It controls the linked
-BLAS/OpenMP numerical kernels when \code{backend = "cpu"} and is ignored by
-Metal and CUDA.}
+\item{n.cores}{Positive integer CPU worker limit. Small stages use fewer
+workers automatically. On Linux, BLAS and OpenMP are limited to one
+thread while native workers are active to prevent nested parallelism.
+On macOS, Accelerate may use the requested limit. In experimental
+out-of-core CUDA PCA it controls the streamed CPU mean pass. It is
+otherwise ignored by Metal and CUDA.}
 
-\item{seed}{Random seed for backends that use a Gaussian subspace sketch.
-The RAFT covariance-eigensolver route records this value but does not
-consume random numbers.}
+\item{seed}{Random seed for backends that use a Gaussian subspace sketch,
+including experimental wide streamed CPU or CUDA PCA. The RAFT
+covariance-eigensolver route records but does not consume this value.}
 
 \item{tsne_init}{If \code{TRUE}, add \code{tsne_init} to the returned PCA
 object. This matrix is centered and rescaled so its largest component
 standard deviation is \code{1e-4}, ready to pass as \code{Y_init} to \code{\link[=tsne]{tsne()}}
 or \code{\link[=tsne_knn]{tsne_knn()}}.}
+
+\item{massive}{\code{"off"} (default) keeps the existing in-memory route.
+\code{"auto"} estimates memory and selects the in-memory route when safe,
+otherwise streamed PCA. \code{"out_of_core"} explicitly activates
+covariance PCA for a \code{\link[=massive_matrix]{massive_matrix()}} source with at most 1024
+columns on CPU or 2048 on CUDA. Wider matrices use randomized
+streamed PCA. Wide CUDA streams the mean and scale passes on CPU,
+runs its sketch and projection on CUDA, and reports stage backends.
+Metal streaming is unavailable and fails explicitly.}
+
+\item{output}{Required \code{.f32} score-file path in out-of-core mode,
+including when auto mode selects that route.}
+
+\item{chunk_rows}{Maximum rows read per block in out-of-core mode.}
+
+\item{memory_limit}{Conservative RAM budget for out-of-core buffers
+and any resident R-matrix input, for example \code{"512MB"} or \code{"16GB"}.
+This does not limit R itself or linked-library memory.}
+
+\item{checkpoint}{Save the experimental out-of-core PCA model and
+completed score batches beside \code{output} for recovery.}
+
+\item{resume}{Continue from a matching PCA checkpoint and partial score
+file. Available when out-of-core processing is selected.}
+
+\item{devices}{Optional distinct CUDA device IDs for experimental
+file-backed PCA score projection. The decomposition runs on the first
+selected device; projection rows are sharded across devices. Optional
+checkpointing saves the decomposition and completed shard blocks;
+resume requires the same input, settings, and device list.}
 }
 \value{
 A \code{fastEmbedR_pca} list with \code{scores}, \code{loadings},
@@ -52,8 +92,7 @@ decomposition metadata. When \code{tsne_init = TRUE}, the list also
 contains \code{tsne_init}; when \code{xtest} is supplied, it also contains
 \code{scores_test}. Metal and CUDA preserve \code{float::float32} scores, loadings,
 initialization, and compatible test projections when the input is
-float32. CPU results also record \code{n.cores_requested},
-\code{n.cores_effective}, and \code{core_control}.
+float32. CPU results also record the worker and BLAS limits.
 }
 \description{
 \code{pca()} computes principal component scores with a backend-native truncated

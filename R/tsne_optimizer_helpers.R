@@ -58,28 +58,6 @@ validate_opentsne_iteration_counts <- function(auto_params) {
     list(early = early, normal = normal)
 }
 
-resolve_opentsne_gradient_method <- function(method,
-                                                optimizer_backend,
-                                                n,
-                                                n_components) {
-    if (identical(method, "auto")) {
-        method <- if (n_components == 1L) {
-            "exact"
-        } else {
-            "fft"
-        }
-    }
-    if (identical(optimizer_backend, "cpu") &&
-        identical(method, "fft") &&
-        n_components == 1L) {
-        stop(
-            "FFT repulsion requires two or three output components.",
-            call. = FALSE
-        )
-    }
-    method
-}
-
 # Initialization metadata is resolved before optimizer-specific dispatch.
 prepare_opentsne_initialization <- function(
     Y_init, gpu_resident_knn, cuda_init_data, optimizer_backend,
@@ -198,7 +176,9 @@ resolve_opentsne_controls <- function(
         ),
         min_gain = validate_opentsne_min_gain(min_gain),
         max_step_norm = resolve_opentsne_max_step_norm(max_step_norm),
-        record_costs = isTRUE(record_costs) || isTRUE(verbose)
+        record_costs = isTRUE(record_costs) ||
+            (isTRUE(verbose) && optimizer_backend != "cuda" &&
+                !(optimizer_backend == "metal" && n_components == 3L))
     )
 }
 

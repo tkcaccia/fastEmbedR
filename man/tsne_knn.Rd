@@ -45,15 +45,15 @@ its first columns. If omitted, the compact affinity policy uses
 \item{perplexity}{t-SNE perplexity. If \code{NULL}, the optimizer chooses a safe
 value from the supplied KNN width and sample size.}
 
-\item{n_components}{Output dimensionality, from 1 to 3. Two- and
-three-dimensional fits use FFT repulsion on all backends by default.
-One-dimensional CPU fits use exact repulsion.}
+\item{n_components}{Output dimensionality, 2 or 3. FFT repulsion is used
+on every backend.}
 
 \item{init_data}{Optional original high-dimensional data matrix used only to
 compute PCA initialization for KNN-input runs. It is not used for neighbor
 search or optimization.}
 
-\item{Y_init}{Optional explicit initial layout. Use
+\item{Y_init}{Optional explicit initial layout. In full-graph massive
+mode this must be a 2D or 3D file-backed \code{.f32} matrix. Use
 \code{pca(data, tsne_init = TRUE)$tsne_init} to precompute and reuse a PCA
 initialization.}
 
@@ -94,18 +94,17 @@ exaggeration.}
 same validated limit on CPU, Metal, and CUDA. Use \code{NULL} or \code{NA} to
 disable clipping.}
 
-\item{negative_gradient_method}{\code{"auto"}, \code{"exact"}, or \code{"fft"}.
-Two- and three-dimensional fits use grid-FFT repulsion by default.
-Native GPU FFT paths require their compiled symbols and never fall back
-to CPU. GPU 3D fits do not support exact repulsion.}
+\item{negative_gradient_method}{\code{"auto"} or \code{"fft"}; both use FFT.
+Other methods fail explicitly. GPU FFT requires compiled native symbols.}
 
-\item{record_costs}{If \code{TRUE}, compute diagnostic KL/cost traces.}
+\item{record_costs}{If \code{TRUE}, compute diagnostic KL/cost traces.
+CUDA and three-dimensional Metal fits reject this option explicitly.}
 
 \item{auto_config}{If \code{TRUE}, choose missing t-SNE settings with a native
 C++ opt-SNE-inspired policy. The policy uses \code{n / early_exaggeration} for
 \code{"auto"} learning rate, chooses missing iteration limits, and enables
-KLD-based early stopping only on CPU/small exact runs where the monitor is
-not prohibitively expensive. Explicit user-supplied values are respected.}
+KLD-based early stopping on small CPU runs where the monitor is not
+prohibitively expensive. Explicit user-supplied values are respected.}
 
 \item{...}{Additional low-level optimizer controls, including \code{theta} and
 \code{min_gain}.}

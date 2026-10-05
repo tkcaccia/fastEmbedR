@@ -19,7 +19,21 @@ umap(
   graph_mode = c("fuzzy", "binary"),
   verbose = FALSE,
   landmarks = FALSE,
-  transform_k = NULL
+  transform_k = NULL,
+  massive = "off",
+  output = NULL,
+  chunk_rows = NULL,
+  memory_limit = "8GB",
+  refinement_epochs = 0L,
+  local_refine = FALSE,
+  local_neighbors = 15L,
+  overlap_rows = 500L,
+  devices = NULL,
+  landmark_method = "reservoir",
+  init = NULL,
+  layout_storage = "memory",
+  checkpoint = FALSE,
+  resume = FALSE
 )
 }
 \arguments{
@@ -41,7 +55,10 @@ from the supplied matrix.}
 \item{metric}{KNN distance metric for one-call matrix input: \code{"euclidean"},
 \code{"cosine"}, or \code{"correlation"}.}
 
-\item{nn}{Optional precomputed KNN result when \code{data} is a matrix.}
+\item{nn}{Optional precomputed KNN result for resident matrix input. In
+EXPERIMENTAL \code{massive = "landmark"} mode, a previous massive landmark
+embedding reuses its saved selection and query-to-landmark KNN. Its
+source, reference, neighbor count, and backend must match.}
 
 \item{seed}{Random seed.}
 
@@ -55,10 +72,10 @@ GPU requests must resolve to a real native backend; the package does not
 relabel CPU work as GPU.}
 
 \item{n.cores}{Requested CPU core count. For matrix input, the value is
-passed to native CPU KNN and CPU UMAP; UMAP currently uses at most four
-workers and records both requested and effective values. \code{NULL} uses one
-KNN worker and a size-aware UMAP default from one to four workers. Native
-GPU stages ignore this argument.}
+passed to CPU PCA preprocessing, KNN, and UMAP. UMAP uses at most four
+workers and records both requested and effective values. With \code{NULL},
+PCA uses \code{options(n.cores)} (one by default); KNN and UMAP use their
+stage defaults. Native GPU stages ignore this argument.}
 
 \item{keep_knn}{Keep KNN matrices in the returned object.}
 
@@ -77,6 +94,52 @@ rows.}
 \item{transform_k}{Number of landmark neighbors used to project non-landmark
 observations. Used only when \code{landmarks} enables landmarking and defaults
 to \code{n_neighbors}.}
+
+\item{massive}{\code{"off"} (default), experimental \code{"landmark"},
+or \code{"out_of_core_graph"}. Landmarking is always explicit. The
+full-graph route needs a symmetric fuzzy
+\code{\link[=massive_umap_fuzzy_graph]{massive_umap_fuzzy_graph()}} and file-backed \code{init}. The experimental
+CUDA full-graph route requires a device-resident 2D layout.}
+
+\item{output}{New \code{.f32} path for experimental file-backed coordinates.}
+
+\item{chunk_rows}{Maximum experimental query rows per batch.}
+
+\item{memory_limit}{Conservative experimental RAM budget.}
+
+\item{refinement_epochs}{Fixed-reference UMAP projection epochs in
+experimental mode. Defaults to zero on CPU and CUDA; CUDA currently
+rejects positive values.}
+
+\item{local_refine}{Enable EXPERIMENTAL bounded query-to-query graph
+refinement in massive landmark mode. Requires CPU and positive epochs.}
+
+\item{local_neighbors}{Non-self neighbors in each local query window.}
+
+\item{overlap_rows}{Extra rows on each side of a local query window;
+at least \code{local_neighbors}.}
+
+\item{devices}{Optional CUDA device indices for experimental landmark
+query projection. Reference fitting and KNN use the first device.}
+
+\item{landmark_method}{Sampling method for experimental landmark mode:
+\code{"reservoir"} (default) or \code{"random"} for fast random-access storage.
+Auto mode uses ordinary UMAP when its conservative memory estimate fits;
+otherwise it reports and runs approximate landmark UMAP. The landmark
+route requires a file-backed \code{\link[=massive_matrix]{massive_matrix()}} and a new \code{.f32} output.}
+
+\item{init}{File-backed 2D or 3D initial coordinates for experimental
+full-graph UMAP. Other routes do not accept this argument.}
+
+\item{layout_storage}{\code{"memory"} (default), \code{"mmap"} for a writable
+CPU mapping, or \code{"managed"} for CUDA managed-memory coordinates in
+experimental full-graph UMAP. CUDA rejects \code{"mmap"}.}
+
+\item{checkpoint}{Save experimental workflow stages and completed batches.
+Only available for massive landmark or full-graph mode.}
+
+\item{resume}{Continue a matching interrupted experimental workflow.
+Changed input, backend, or fit controls fail without recomputation.}
 }
 \value{
 A \code{fastEmbedR_embedding} object. Landmark fits also contain \code{model},
@@ -117,8 +180,8 @@ Landmark mode fits the requested fuzzy or binary UMAP graph on the
 landmark rows, projects the remaining rows with query-to-reference KNN, and
 optionally refines only projected rows while landmark coordinates remain
 fixed. Metal and CUDA landmark refinement currently requires 2D output;
-3D landmark requests fail explicitly. Precomputed KNN input cannot be
-combined with landmarking.
+3D landmark requests fail explicitly. Resident precomputed KNN input
+cannot be combined with landmarking.
 The returned \code{model} retains the fitted preprocessing transform so new data
 can be supplied in the same original feature space.
 }

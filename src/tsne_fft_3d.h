@@ -233,7 +233,7 @@ void tsne_fft_3d_near(const std::vector<float>& y, int i,
   }
 }
 
-void compute_gradient_fft_3d_f(const SparseProbabilitiesF& p,
+void compute_gradient_fft_3d_f(const SparseProbabilitiesF* p,
                                const std::vector<float>& y, int n,
                                float exaggeration, int n_threads,
                                TsneFft3dWorkspace& ws,
@@ -437,6 +437,8 @@ void compute_gradient_fft_3d_f(const SparseProbabilitiesF& p,
   });
   ws.correction_elapsed_sec += std::chrono::duration<double>(
     std::chrono::steady_clock::now() - fft_finished).count();
-  add_sparse_attractive_gradient_f(p, y, n, 3, exaggeration,
-                                   n_threads, grad);
+  if (p != nullptr) {
+    add_sparse_attractive_gradient_f(*p, y, n, 3, exaggeration,
+                                     n_threads, grad);
+  }
 }

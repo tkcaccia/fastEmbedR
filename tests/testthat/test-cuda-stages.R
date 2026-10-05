@@ -304,7 +304,7 @@ test_that("CUDA UMAP reports pooled allocation and graph capture", {
         seed = 74L
     )
     expect_false(isTRUE(ordinary$parameters$cuda_graph_capture))
-    expect_true(all(is.finite(as.matrix(ordinary))))
+    expect_true(all(is.finite(as.matrix(ordinary$layout))))
 })
 
 test_that("CUDA landmark t-SNE returns every projected row", {

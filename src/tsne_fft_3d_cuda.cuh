@@ -5,6 +5,9 @@
  * Cubic-grid three-dimensional CUDA t-SNE repulsion.
  */
 
+#include <cfloat>
+#include <cstddef>
+
 struct CudaTsneGrid3d {
   int n;
   int grid;
@@ -335,13 +338,36 @@ __global__ void cuda_tsne_gather_fft_3d(
   }
 }
 
-__global__ void cuda_tsne_sum_q_3d(const float* row_q,
-                                   float* inv_sum, int n) {
-  if (blockIdx.x != 0 || threadIdx.x != 0) return;
+__global__ void cuda_tsne_sum_q_blocks_3d(
+    const float* row_q, double* partial, int n) {
+  __shared__ double sums[256];
+  const int lane = static_cast<int>(threadIdx.x);
+  const int row = static_cast<int>(blockIdx.x) * 256 + lane;
+  sums[lane] = row < n ? static_cast<double>(row_q[row]) : 0.0;
+  __syncthreads();
+  for (int stride = 128; stride > 0; stride >>= 1) {
+    if (lane < stride) sums[lane] += sums[lane + stride];
+    __syncthreads();
+  }
+  if (lane == 0) partial[blockIdx.x] = sums[0];
+}
+
+__global__ void cuda_tsne_sum_q_3d(
+    const double* partial, float* inv_sum, int blocks) {
+  __shared__ double sums[256];
+  const int lane = static_cast<int>(threadIdx.x);
   double total = 0.0;
-  for (int i = 0; i < n; ++i) total += row_q[i];
-  inv_sum[0] = isfinite(total) && total > 0.0 ?
-    1.0f / static_cast<float>(total) : CUDART_NAN_F;
+  for (int i = lane; i < blocks; i += 256) total += partial[i];
+  sums[lane] = total;
+  __syncthreads();
+  for (int stride = 128; stride > 0; stride >>= 1) {
+    if (lane < stride) sums[lane] += sums[lane + stride];
+    __syncthreads();
+  }
+  if (lane == 0) {
+    inv_sum[0] = isfinite(sums[0]) && sums[0] > 0.0 ?
+      1.0f / static_cast<float>(sums[0]) : CUDART_NAN_F;
+  }
 }
 
 __global__ void cuda_tsne_scale_repulsion_3d(
@@ -546,6 +572,7 @@ int cuda_tsne_fft_3d_from_knn(
       sizeof(int) +
     static_cast<std::size_t>(bound_blocks) *
       sizeof(CudaTsneBounds3d) +
+    static_cast<std::size_t>(bound_blocks) * sizeof(double) +
     sizeof(CudaTsneGrid3d) + 3u * sizeof(float) +
     sizeof(float) +
     (use_pca ? layout_items * sizeof(float) + pca_bytes : 0u) +
@@ -618,6 +645,10 @@ int cuda_tsne_fft_3d_from_knn(
   float* inv_sum = workspace.alloc<float>(
     1u, "3d tsne inverse sum q"
   );
+  double* q_partial = workspace.alloc<double>(
+    static_cast<std::size_t>(bound_blocks),
+    "3d tsne q partial sums"
+  );
   auto* bounds = workspace.alloc<CudaTsneBounds3d>(
     static_cast<std::size_t>(bound_blocks),
     "3d tsne bounds"
@@ -633,7 +664,8 @@ int cuda_tsne_fft_3d_from_knn(
       update == nullptr || mass == nullptr ||
       kernel == nullptr || bin_head == nullptr ||
       bin_next == nullptr || row_q == nullptr ||
-      inv_sum == nullptr || bounds == nullptr ||
+      inv_sum == nullptr || q_partial == nullptr ||
+      bounds == nullptr ||
       params == nullptr || center == nullptr) return 1;
 
   if (has_init) {
@@ -761,8 +793,12 @@ int cuda_tsne_fft_3d_from_knn(
       current, mass, bin_head, bin_next,
       gradient, row_q, params, n, fft_scale
     );
-    cuda_tsne_sum_q_3d<<<1, 1, 0, stream>>>(
-      row_q, inv_sum, n
+    cuda_tsne_sum_q_blocks_3d<<<bound_blocks, threads,
+                                  0, stream>>>(
+      row_q, q_partial, n
+    );
+    cuda_tsne_sum_q_3d<<<1, threads, 0, stream>>>(
+      q_partial, inv_sum, bound_blocks
     );
     cuda_tsne_scale_repulsion_3d<<<(
       static_cast<int>(layout_items) + threads - 1) /

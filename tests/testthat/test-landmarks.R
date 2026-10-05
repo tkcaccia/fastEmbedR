@@ -16,6 +16,55 @@ test_that("landmark selection is deterministic and exhaustive", {
     expect_length(intersect(first$indices, first$query_indices), 0L)
 })
 
+test_that("landmark states release the full prepared matrix", {
+    x <- matrix(seq_len(120), nrow = 30)
+    umap_state <- prepare_landmark_umap(
+        x, 12L, 5L, 2L, FALSE, NULL, "euclidean", 4L,
+        "cpu", 1L, "fuzzy"
+    )
+    expect_null(umap_state$x)
+    expect_null(umap_state$prepared$data)
+    expect_equal(umap_state$p, ncol(x))
+    expect_equal(
+        umap_state$partition$query,
+        x[umap_state$selection$query_indices, , drop = FALSE]
+    )
+
+    selection <- select_landmarks(x, 12L, seed = 4L)
+    tsne_state <- partition_landmark_tsne(
+        list(x = x, prepared = list(data = x), selection = selection),
+        list(n_threads = 1L)
+    )
+    expect_null(tsne_state$x)
+    expect_null(tsne_state$prepared$data)
+    expect_equal(
+        tsne_state$x_landmarks,
+        x[selection$indices, , drop = FALSE]
+    )
+})
+
+test_that("landmark output retains float32 precision", {
+    skip_if_not_installed("float")
+    set.seed(621)
+    x <- float::fl(matrix(rnorm(40 * 4), nrow = 40))
+    old_refine <- getOption("fastEmbedR.landmark_umap_refine_epochs")
+    on.exit(options(fastEmbedR.landmark_umap_refine_epochs = old_refine))
+    options(fastEmbedR.landmark_umap_refine_epochs = 0L)
+    umap_fit <- umap(
+        x, landmarks = 20L, n_neighbors = 5L,
+        backend = "cpu", n.cores = 1L
+    )
+    tsne_fit <- tsne(
+        x, landmarks = 20L, perplexity = 3,
+        early_exaggeration_iter = 1L, n_iter = 1L,
+        transform_iter = 0L, backend = "cpu", n.cores = 1L
+    )
+    expect_true(is_float32_matrix(umap_fit$layout))
+    expect_true(is_float32_matrix(tsne_fit$layout))
+    expect_equal(dim(umap_fit$layout), c(40L, 2L))
+    expect_equal(dim(tsne_fit$layout), c(40L, 2L))
+})
+
 test_that("landmark UMAP preserves its requested graph mode", {
     set.seed(614)
     x <- matrix(rnorm(80 * 5), nrow = 80)
@@ -138,7 +187,7 @@ test_that("integrated landmark t-SNE returns a reusable model", {
     fit <- tsne(
         x, landmarks = 18L, perplexity = 3,
         early_exaggeration_iter = 1L, n_iter = 1L,
-        transform_iter = 0L, negative_gradient_method = "exact",
+        transform_iter = 0L, negative_gradient_method = "fft",
         backend = "cpu", n.cores = 2L, seed = 15L
     )
     projected <- project_landmark_model(

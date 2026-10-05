@@ -23,6 +23,9 @@
 #include <utility>
 #include <vector>
 
+#include "umap_membership.h"
+#include "umap_optimizer_common.h"
+
 using Rcpp::IntegerMatrix;
 using Rcpp::IntegerVector;
 using Rcpp::NumericMatrix;
@@ -881,9 +884,6 @@ void smooth_knn_dist(const FloatDistanceView& distances,
                      const int n_threads) {
   const int n = distances.nrow;
   const int k = distances.ncol;
-  const double target = std::log2(static_cast<double>(k));
-  const double tol = 1.0e-5;
-  const double min_k_dist_scale = 1.0e-3;
   sigmas.assign(static_cast<std::size_t>(n), 1.0f);
   rhos.assign(static_cast<std::size_t>(n), 0.0f);
 
@@ -926,74 +926,13 @@ void smooth_knn_dist(const FloatDistanceView& distances,
     static_cast<double>(global_sum / static_cast<long double>(global_count)) :
     1.0;
 
-  auto membership_sum = [&](const float* row_values, const double rho, const double sigma) {
-    double psum = 0.0;
-    const double safe_sigma = std::max(sigma, 1.0e-12);
-    for (int j = 0; j < k; ++j) {
-      const float raw = row_values[j];
-      if (!std::isfinite(raw)) continue;
-      const double d = static_cast<double>(raw) - rho;
-      psum += d <= 0.0 ? 1.0 : std::exp(-d / safe_sigma);
-    }
-    return psum;
-  };
-
   auto worker = [&](const int begin, const int end, const int) {
     for (int i = begin; i < end; ++i) {
       const float* row_values = distances.row_data(i);
-      double rho = std::numeric_limits<double>::infinity();
-      double row_sum = 0.0;
-      int row_count = 0;
-      for (int j = 0; j < k; ++j) {
-        const float d = row_values[j];
-        if (!std::isfinite(d)) continue;
-        if (d >= 0.0f) {
-          row_sum += static_cast<double>(d);
-          ++row_count;
-        }
-        if (d > 0.0f && static_cast<double>(d) < rho) {
-          rho = static_cast<double>(d);
-        }
-      }
-
-      if (!std::isfinite(rho)) rho = 0.0;
-      rhos[static_cast<std::size_t>(i)] = static_cast<float>(rho);
-
-      constexpr double sigma_max = (std::numeric_limits<double>::max)();
-      double sigma = 1.0;
-      double sigma_best = sigma;
-      double best_diff = sigma_max;
-      double lo = 0.0;
-      double hi = sigma_max;
-
-      for (int iter = 0; iter < 64; ++iter) {
-        const double psum = membership_sum(row_values, rho, sigma);
-        const double diff = std::abs(psum - target);
-        if (diff < best_diff) {
-          best_diff = diff;
-          sigma_best = sigma;
-        }
-        if (psum > target) {
-          hi = sigma;
-          sigma = 0.5 * (lo + hi);
-        } else {
-          lo = sigma;
-          if (hi == sigma_max) {
-            sigma *= 2.0;
-          } else {
-            sigma = 0.5 * (lo + hi);
-          }
-        }
-        if (diff < tol) break;
-      }
-
-      const double row_mean = row_count > 0 ?
-        row_sum / static_cast<double>(row_count) :
-        global_mean;
-      const double sigma_floor = min_k_dist_scale * (rho > 0.0 ? row_mean : global_mean);
-      sigma_best = std::max(sigma_best, sigma_floor);
-      sigmas[static_cast<std::size_t>(i)] =
-        static_cast<float>(std::max(sigma_best, 1.0e-12));
+      const auto scale = umap_membership_scale(
+        row_values, k, global_mean);
+      rhos[static_cast<std::size_t>(i)] = scale.rho;
+      sigmas[static_cast<std::size_t>(i)] = scale.sigma;
     }
   };
 
@@ -3882,6 +3821,19 @@ NumericMatrix optimize_layout_csr_masked(const int n,
 }
 
 } // namespace
+
+std::pair<double, double> fastembedr_umap_curve(double min_dist) {
+  return find_ab_params(1.0, min_dist);
+}
+
+double fastembedr_umap_pow(double value, double exponent) {
+  return umap_pow(value, exponent);
+}
+
+int fastembedr_umap_negative_vertex(int n, int seed, int epoch,
+                                   std::size_t edge, int sample) {
+  return deterministic_vertex(n, seed, epoch, edge, sample);
+}
 
 // [[Rcpp::export]]
 Rcpp::List knn_connectivity_range_cpp(IntegerMatrix indices,

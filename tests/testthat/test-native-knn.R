@@ -182,6 +182,26 @@ test_that("precompute_knn preserves the float32 host path", {
     expect_identical(dim(observed$distances), c(180L, 9L))
 })
 
+test_that("native exact KNN agrees across numeric input storage", {
+    skip_if_not_installed("float")
+    set.seed(47)
+    integers <- matrix(sample.int(255L, 40L * 12L, replace = TRUE), 40L)
+    reference <- native_exact_knn_cpp(
+        integers, 7L, 1L, "euclidean", 0.99
+    )
+    inputs <- list(
+        matrix(as.numeric(integers), nrow(integers)),
+        float::fl(integers)
+    )
+    for (input in inputs) {
+        observed <- native_exact_knn_cpp(
+            input, 7L, 1L, "euclidean", 0.99
+        )
+        expect_identical(observed$indices, reference$indices)
+        expect_equal(observed$distances, reference$distances)
+    }
+})
+
 test_that("precompute_knn exposes no search-algorithm selector", {
     expect_identical(
         names(formals(precompute_knn)),
@@ -598,5 +618,50 @@ test_that("native CUDA exact query KNN matches the CPU oracle", {
     expect_identical(dim(observed$indices), c(32L, 15L))
     expect_equal(knn_recall_test(observed, truth), 1, tolerance = 1e-8)
     expect_true(all(is.finite(observed$distances)))
+    expect_false(isTRUE(device_knn$cpu_fallback))
+})
+
+test_that("native CUDA query KNN bounds temporary query memory", {
+    skip_if_not(
+        isTRUE(native_cuda_knn_available_cpp()),
+        "native CUDA KNN is unavailable"
+    )
+    set.seed(43)
+    reference <- matrix(rnorm(32 * 6), nrow = 32)
+    query <- matrix(rnorm(32769 * 6), nrow = 32769)
+    device_knn <- native_cuda_query_knn_cpp(
+        reference, query, 5L, "exact", "euclidean", 0.99,
+        keep_gpu = TRUE
+    )
+    observed <- native_cuda_knn_to_host_cpp(device_knn)
+    rows <- c(1L, 32768L, 32769L)
+    truth <- test_exact_knn(reference, query[rows, , drop = FALSE], 5L)
+
+    expect_identical(device_knn$search_batch_size, 32768L)
+    expect_equal(device_knn$peak_temporary_query_bytes, 32768 * 6 * 4)
+    expect_lt(device_knn$peak_temporary_query_bytes, nrow(query) * 6 * 4)
+    expect_identical(observed$indices[rows, , drop = FALSE], truth$indices)
+    expect_false(isTRUE(device_knn$cpu_fallback))
+})
+
+test_that("native CUDA IVF query KNN reuses its batch buffer", {
+    skip_if_not(
+        isTRUE(native_cuda_knn_available_cpp()),
+        "native CUDA KNN is unavailable"
+    )
+    set.seed(44)
+    reference <- matrix(rnorm(2000 * 6), nrow = 2000)
+    query <- matrix(rnorm(32769 * 6), nrow = 32769)
+    device_knn <- native_cuda_query_knn_cpp(
+        reference, query, 5L, "ivf", "euclidean", 0.99,
+        keep_gpu = TRUE
+    )
+    observed <- native_cuda_knn_to_host_cpp(device_knn)
+
+    expect_identical(dim(observed$indices), c(32769L, 5L))
+    expect_true(all(observed$indices >= 1L))
+    expect_true(all(observed$indices <= nrow(reference)))
+    expect_identical(device_knn$search_batch_size, 32768L)
+    expect_equal(device_knn$peak_temporary_query_bytes, 32768 * 6 * 4)
     expect_false(isTRUE(device_knn$cpu_fallback))
 })

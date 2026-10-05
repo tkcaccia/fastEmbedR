@@ -13,6 +13,16 @@ Rcpp::List native_hnsw_query_impl(SEXP data,
                                   int n_threads,
                                   const std::string& metric,
                                   double target_recall);
+Rcpp::List native_hnsw_index_build_impl(SEXP data,
+                                        int k,
+                                        int n_threads,
+                                        const std::string& metric,
+                                        double target_recall);
+Rcpp::List native_hnsw_index_search_impl(SEXP pointer,
+                                         SEXP query,
+                                         int k,
+                                         int n_threads,
+                                         int ef_search);
 Rcpp::List native_exact_knn_impl(SEXP data,
                                  int k,
                                  int n_threads,
@@ -24,6 +34,11 @@ Rcpp::List native_exact_query_impl(SEXP data,
                                    int n_threads,
                                    const std::string& metric,
                                    double target_recall);
+SEXP native_exact_index_build_impl(SEXP data);
+Rcpp::List native_exact_index_search_impl(SEXP pointer,
+                                          SEXP query,
+                                          int k,
+                                          int n_threads);
 bool native_metal_knn_available_impl();
 Rcpp::List native_metal_knn_impl(SEXP data,
                                  int k,
@@ -37,6 +52,7 @@ Rcpp::List native_metal_query_knn_impl(SEXP data,
                                        const std::string& metric,
                                        double target_recall);
 bool native_cuda_knn_available_impl();
+Rcpp::List native_cuda_memory_info_impl();
 Rcpp::List native_cuda_knn_impl(SEXP data,
                                 int k,
                                 const std::string& method,
@@ -52,6 +68,13 @@ Rcpp::List native_cuda_query_knn_impl(SEXP data,
                                       double target_recall,
                                       bool keep_gpu);
 Rcpp::List native_cuda_knn_to_host_impl(SEXP knn);
+SEXP native_cuda_index_build_impl(SEXP data,
+                                  int k,
+                                  const std::string& method,
+                                  double target_recall);
+Rcpp::List native_cuda_index_search_impl(SEXP pointer,
+                                         SEXP query,
+                                         int k);
 
 // [[Rcpp::export]]
 Rcpp::List native_hnsw_knn_cpp(SEXP data,
@@ -71,6 +94,28 @@ Rcpp::List native_hnsw_query_cpp(SEXP data,
                                  double target_recall = 0.99) {
   return native_hnsw_query_impl(
     data, query, k, n_threads, metric, target_recall
+  );
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_hnsw_index_build_cpp(SEXP data,
+                                       int k,
+                                       int n_threads = 1,
+                                       std::string metric = "euclidean",
+                                       double target_recall = 0.99) {
+  return native_hnsw_index_build_impl(
+    data, k, n_threads, metric, target_recall
+  );
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_hnsw_index_search_cpp(SEXP pointer,
+                                        SEXP query,
+                                        int k,
+                                        int n_threads = 1,
+                                        int ef_search = 0) {
+  return native_hnsw_index_search_impl(
+    pointer, query, k, n_threads, ef_search
   );
 }
 
@@ -95,6 +140,19 @@ Rcpp::List native_exact_query_cpp(SEXP data,
   return native_exact_query_impl(
     data, query, k, n_threads, metric, target_recall
   );
+}
+
+// [[Rcpp::export]]
+SEXP native_exact_index_build_cpp(SEXP data) {
+  return native_exact_index_build_impl(data);
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_exact_index_search_cpp(SEXP pointer,
+                                         SEXP query,
+                                         int k,
+                                         int n_threads = 1) {
+  return native_exact_index_search_impl(pointer, query, k, n_threads);
 }
 
 // [[Rcpp::export]]
@@ -129,6 +187,11 @@ bool native_cuda_knn_available_cpp() {
 }
 
 // [[Rcpp::export]]
+Rcpp::List native_cuda_memory_info_cpp() {
+  return native_cuda_memory_info_impl();
+}
+
+// [[Rcpp::export]]
 Rcpp::List native_cuda_knn_cpp(SEXP data,
                                int k,
                                std::string method = "auto",
@@ -157,4 +220,17 @@ Rcpp::List native_cuda_query_knn_cpp(SEXP data,
 // [[Rcpp::export]]
 Rcpp::List native_cuda_knn_to_host_cpp(SEXP knn) {
   return native_cuda_knn_to_host_impl(knn);
+}
+
+// [[Rcpp::export]]
+SEXP native_cuda_index_build_cpp(SEXP data,
+                                 int k,
+                                 std::string method,
+                                 double target_recall = 0.99) {
+  return native_cuda_index_build_impl(data, k, method, target_recall);
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_cuda_index_search_cpp(SEXP pointer, SEXP query, int k) {
+  return native_cuda_index_search_impl(pointer, query, k);
 }

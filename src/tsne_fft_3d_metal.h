@@ -320,15 +320,37 @@ kernel void gather_fft_3d(
   }
 }
 
-kernel void sum_q_3d(
+kernel void sum_q_blocks_3d(
   device const float* row_q [[buffer(0)]],
-  device float* inv_sum_q [[buffer(1)]],
+  device float* block_sums [[buffer(1)]],
   constant uint& n [[buffer(2)]],
+  constant uint& block_size [[buffer(3)]],
+  uint block [[thread_position_in_grid]]
+) {
+  uint begin = block * block_size;
+  if (begin >= n) return;
+  float total = 0.0f;
+  for (uint i = begin; i < min(n, begin + block_size); ++i) {
+    total += row_q[i];
+  }
+  block_sums[block] = total;
+}
+
+kernel void sum_q_3d(
+  device const float* block_sums [[buffer(0)]],
+  device float* inv_sum_q [[buffer(1)]],
+  constant uint& count [[buffer(2)]],
   uint id [[thread_position_in_grid]]
 ) {
   if (id != 0u) return;
   float total = 0.0f;
-  for (uint i = 0u; i < n; ++i) total += row_q[i];
+  float correction = 0.0f;
+  for (uint i = 0u; i < count; ++i) {
+    float value = block_sums[i] - correction;
+    float next = total + value;
+    correction = (next - total) - value;
+    total = next;
+  }
   inv_sum_q[0] = isfinite(total) && total > 0.0f ?
     1.0f / total : NAN;
 }
@@ -421,6 +443,7 @@ struct MetalTsne3dPipelines {
   id<MTLComputePipelineState> kernel = nil;
   id<MTLComputePipelineState> scatter = nil;
   id<MTLComputePipelineState> gather = nil;
+  id<MTLComputePipelineState> sum_blocks = nil;
   id<MTLComputePipelineState> sum = nil;
   id<MTLComputePipelineState> update = nil;
   id<MTLComputePipelineState> center = nil;
@@ -429,6 +452,7 @@ struct MetalTsne3dPipelines {
     [center release];
     [update release];
     [sum release];
+    [sum_blocks release];
     [gather release];
     [scatter release];
     [kernel release];
@@ -476,6 +500,7 @@ MetalTsne3dPipelines& metal_tsne_3d_pipelines(
   kernels.kernel = load("kernel_fft_3d");
   kernels.scatter = load("scatter_fft_3d");
   kernels.gather = load("gather_fft_3d");
+  kernels.sum_blocks = load("sum_q_blocks_3d");
   kernels.sum = load("sum_q_3d");
   kernels.update = load("update_tsne_3d");
   kernels.center = load("center_tsne_3d");
@@ -604,6 +629,9 @@ List run_metal_tsne_3d(
   id<MTLBuffer> row_q = memory.make(
     static_cast<std::size_t>(n) * sizeof(float)
   );
+  id<MTLBuffer> q_blocks = memory.make(
+    static_cast<std::size_t>(blocks) * sizeof(float)
+  );
   id<MTLBuffer> inv_sum_q = memory.make(sizeof(float));
   id<MTLBuffer> block_bounds = memory.make(
     static_cast<std::size_t>(blocks) * 9u * sizeof(float)
@@ -680,8 +708,11 @@ List run_metal_tsne_3d(
     metal_tsne_3d_encode(optimize, pipe.gather, rows,
                          {current, potential, head, links,
                           gradient, row_q, params});
+    metal_tsne_3d_encode(optimize, pipe.sum_blocks, blocks,
+                         {row_q, q_blocks},
+                         {scalar(rows), scalar(block_size)});
     metal_tsne_3d_encode(optimize, pipe.sum, 1u,
-                         {row_q, inv_sum_q}, {scalar(rows)});
+                         {q_blocks, inv_sum_q}, {scalar(blocks)});
     const bool early = iteration < early_iter;
     const double phase_exaggeration = early ?
       early_exaggeration : exaggeration;

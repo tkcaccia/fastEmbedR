@@ -186,8 +186,6 @@ struct MetalEmbeddingState {
   id<MTLComputePipelineState> spectral_stats_pipeline;
   id<MTLComputePipelineState> spectral_normalize_pipeline;
   id<MTLComputePipelineState> tsne_transform_pipeline;
-  id<MTLComputePipelineState> opentsne_sum_q_pipeline;
-  id<MTLComputePipelineState> opentsne_epoch_pipeline;
   id<MTLComputePipelineState> opentsne_center_pipeline;
   id<MTLComputePipelineState> opentsne_fft_clear_pipeline;
   id<MTLComputePipelineState> opentsne_fft_scatter_pipeline;
@@ -269,7 +267,6 @@ struct OpenTsneLayoutStats {
   float sum_y;
 };
 
-constexpr int kMetalOpenTsneExactDenseThreshold = 6000;
 
 struct WeightedEdge {
   std::uint64_t key;
@@ -375,8 +372,6 @@ MetalEmbeddingState& metal_embedding_state() {
       state.refine_rows_pipeline != nil &&
       state.affine_project_pipeline != nil &&
       state.pca_center_scale_pipeline != nil &&
-      state.opentsne_sum_q_pipeline != nil &&
-      state.opentsne_epoch_pipeline != nil &&
       state.opentsne_center_pipeline != nil &&
       state.opentsne_fft_clear_pipeline != nil &&
       state.opentsne_fft_scatter_pipeline != nil &&
@@ -442,8 +437,6 @@ MetalEmbeddingState& metal_embedding_state() {
   state.spectral_stats_pipeline = make_pipeline(state, "spectral_init_stats");
   state.spectral_normalize_pipeline = make_pipeline(state, "spectral_normalize");
   state.tsne_transform_pipeline = make_pipeline(state, "tsne_transform_epoch");
-  state.opentsne_sum_q_pipeline = make_pipeline(state, "opentsne_sum_q_rows");
-  state.opentsne_epoch_pipeline = make_pipeline(state, "opentsne_epoch_exact");
   state.opentsne_center_pipeline = make_pipeline(state, "opentsne_apply_center");
   state.opentsne_fft_clear_pipeline = make_pipeline(state, "opentsne_fft_clear_grids");
   state.opentsne_fft_scatter_pipeline = make_pipeline(state, "opentsne_fft_scatter_bilinear");
@@ -2336,81 +2329,6 @@ kernel void tsne_transform_epoch(
   updates[row] = update;
 }
 
-kernel void opentsne_sum_q_rows(
-  device const float2* current [[buffer(0)]],
-  device float* row_sums [[buffer(1)]],
-  constant OpenTsneMetalParams& p [[buffer(2)]],
-  uint row [[thread_position_in_grid]]
-) {
-  if (row >= p.n) return;
-  float2 yi = current[row];
-  float sum_q = 0.0f;
-  for (uint j = 0u; j < p.n; ++j) {
-    if (j == row) continue;
-    float2 diff = yi - current[j];
-    float d2 = dot(diff, diff);
-    sum_q += 1.0f / (1.0f + d2);
-  }
-  row_sums[row] = sum_q;
-}
-
-kernel void opentsne_epoch_exact(
-  device const int* row_ptr [[buffer(0)]],
-  device const int* col_idx [[buffer(1)]],
-  device const float* p_val [[buffer(2)]],
-  device const float2* current [[buffer(3)]],
-  device float2* next_current [[buffer(4)]],
-  device float2* gains [[buffer(5)]],
-  device float2* updates [[buffer(6)]],
-  constant OpenTsneMetalParams& p [[buffer(7)]],
-  uint row [[thread_position_in_grid]]
-) {
-  if (row >= p.n) return;
-  constexpr float eps = 1.0e-12f;
-  float2 yi = current[row];
-  float2 grad = float2(0.0f, 0.0f);
-
-  for (uint j = 0u; j < p.n; ++j) {
-    if (j == row) continue;
-    float2 diff = yi - current[j];
-    float d2 = dot(diff, diff);
-    float q = 1.0f / (1.0f + d2);
-    grad += (-(q * q) * p.inv_sum_q) * diff;
-  }
-
-  int begin = row_ptr[row];
-  int end = row_ptr[row + 1u];
-  for (int pos = begin; pos < end; ++pos) {
-    int j = col_idx[pos];
-    if (j < 0 || uint(j) >= p.n || uint(j) == row) continue;
-    float2 diff = yi - current[uint(j)];
-    float d2 = dot(diff, diff);
-    float q = 1.0f / (1.0f + d2);
-    grad += (p.exaggeration * p_val[pos] * q) * diff;
-  }
-
-  float2 gain = gains[row];
-  float2 update = updates[row];
-  float sx0 = sign_component(update.x);
-  float sx1 = sign_component(update.y);
-  float sg0 = sign_component(grad.x);
-  float sg1 = sign_component(grad.y);
-  gain.x = sx0 != sg0 ? gain.x + 0.2f : gain.x * 0.8f + p.min_gain;
-  gain.y = sx1 != sg1 ? gain.y + 0.2f : gain.y * 0.8f + p.min_gain;
-  gain = max(gain, float2(p.min_gain, p.min_gain));
-
-  update = p.momentum * update - p.learning_rate * gain * grad;
-  float step_norm2 = dot(update, update);
-  float max_step2 = p.max_step_norm * p.max_step_norm;
-  if (isfinite(max_step2) && max_step2 > 0.0f && step_norm2 > max_step2) {
-    update *= p.max_step_norm / (sqrt(step_norm2) + eps);
-  }
-
-  next_current[row] = yi + update;
-  gains[row] = gain;
-  updates[row] = update;
-}
-
 kernel void opentsne_apply_center(
   device float2* current [[buffer(0)]],
   constant float2& center [[buffer(1)]],
@@ -4084,9 +4002,7 @@ int metal_tsne_fft_grid_size(const int n) {
   // MNIST-scale data, 128 cells is too coarse, while 512 costs too much without
   // improving the plot once Metal uses stable step clipping. Use 256 for large
   // runs by default; FASTEMBEDR_TSNE_FFT_GRID remains an explicit override.
-  // Match the CPU accuracy floor for explicit small-data FFT runs. The
-  // automatic small-data route remains exact, so this does not penalize its
-  // normal execution path.
+  // Match the CPU accuracy floor for small-data FFT runs.
   const int fallback = n >= 50000 ? 256 : (n >= 10000 ? 256 : 128);
   const int requested = metal_env_positive_int("FASTEMBEDR_TSNE_FFT_GRID", fallback);
   int grid = 32;
@@ -5645,28 +5561,13 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
   std::transform(method.begin(), method.end(), method.begin(), [](unsigned char ch) {
     return static_cast<char>(std::tolower(ch));
   });
-  if (method == "auto") method = "fft";
-  const bool use_fft_grid =
-    method == "fft" || method == "fitsne" || method == "fit_sne" || method == "interpolation";
-  const bool use_exact =
-    method == "exact" || method == "pair" || method == "pair_symmetric";
-  if (!use_fft_grid && !use_exact) {
-    Rcpp::stop("Metal openTSNE supports `negative_gradient_method = \"fft\"` or `\"exact\"`.");
-  }
-  if (n_components == 3 && !use_fft_grid) {
-    Rcpp::stop("Metal 3D t-SNE requires FFT repulsion.");
+  if (method != "auto" && method != "fft") {
+    Rcpp::stop("Only FFT t-SNE repulsion is supported.");
   }
   if (n_components == 3 && record_costs) {
     Rcpp::stop("Metal 3D t-SNE optimizer tracing is not available.");
   }
-  if (use_exact && n > kMetalOpenTsneExactDenseThreshold) {
-    Rcpp::stop(
-      "Native Metal openTSNE exact optimization is limited to n <= %d until "
-      "using `negative_gradient_method = \"fft\"`.",
-      kMetalOpenTsneExactDenseThreshold
-    );
-  }
-  const bool use_private_fft_buffers = use_fft_grid && !record_costs;
+  const bool use_private_fft_buffers = !record_costs;
 
   @autoreleasepool {
     MetalEmbeddingState& state = metal_embedding_state();
@@ -5759,7 +5660,7 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
       static_cast<float>(max_step_norm) :
       std::numeric_limits<float>::max();
 
-    if (use_fft_grid) {
+    {
       const int requested_early_iter = early_exaggeration_iter;
       const int requested_normal_iter = n_iter;
       const int requested_total_iter = total_iter;
@@ -6817,130 +6718,6 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
 	      );
     }
 
-    const NSUInteger threads_sum = bounded_threads(state.opentsne_sum_q_pipeline);
-    const NSUInteger threads_epoch = bounded_threads(state.opentsne_epoch_pipeline);
-    const NSUInteger threads_center = bounded_threads(state.opentsne_center_pipeline);
-    const MTLSize grid_size = MTLSizeMake(static_cast<NSUInteger>(n), 1, 1);
-    const MTLSize sum_threadgroup = MTLSizeMake(threads_sum, 1, 1);
-    const MTLSize epoch_threadgroup = MTLSizeMake(threads_epoch, 1, 1);
-    const MTLSize center_threadgroup = MTLSizeMake(threads_center, 1, 1);
-
-    for (int iter = 0; iter < total_iter; ++iter) {
-      const bool in_early = iter < early_exaggeration_iter;
-      const double phase_exaggeration = in_early ? early_exaggeration : exaggeration;
-      const double phase_lr = learning_rate_auto ?
-        static_cast<double>(n) / std::max(phase_exaggeration, std::numeric_limits<double>::min()) :
-        learning_rate;
-
-      OpenTsneMetalParams sum_params{
-        static_cast<std::uint32_t>(n),
-        static_cast<std::uint32_t>(seed == NA_INTEGER ? 5489 : seed),
-        static_cast<float>(phase_lr),
-        static_cast<float>(phase_exaggeration),
-        static_cast<float>(in_early ? initial_momentum : final_momentum),
-        static_cast<float>(min_gain),
-        max_step,
-        1.0f
-      };
-
-      id<MTLCommandBuffer> sum_command = [state.queue commandBuffer];
-      id<MTLComputeCommandEncoder> sum_encoder = [sum_command computeCommandEncoder];
-      [sum_encoder setComputePipelineState:state.opentsne_sum_q_pipeline];
-      [sum_encoder setBuffer:current_buffer offset:0 atIndex:0];
-      [sum_encoder setBuffer:row_sums_buffer offset:0 atIndex:1];
-      [sum_encoder setBytes:&sum_params length:sizeof(OpenTsneMetalParams) atIndex:2];
-      [sum_encoder dispatchThreads:grid_size threadsPerThreadgroup:sum_threadgroup];
-      [sum_encoder endEncoding];
-      [sum_command commit];
-      [sum_command waitUntilCompleted];
-      if (sum_command.status == MTLCommandBufferStatusError) {
-        Rcpp::stop("Metal openTSNE normalization command failed: %s", ns_error_message(sum_command.error).c_str());
-      }
-
-      std::memcpy(row_sums.data(), [row_sums_buffer contents], row_sums.size() * sizeof(float));
-      double sum_q = 0.0;
-      for (float value : row_sums) sum_q += static_cast<double>(value);
-      if (!std::isfinite(sum_q) || sum_q <= 0.0) sum_q = std::numeric_limits<double>::min();
-
-      OpenTsneMetalParams params = sum_params;
-      params.inv_sum_q = static_cast<float>(1.0 / sum_q);
-
-      id<MTLCommandBuffer> epoch_command = [state.queue commandBuffer];
-      id<MTLComputeCommandEncoder> epoch_encoder = [epoch_command computeCommandEncoder];
-      [epoch_encoder setComputePipelineState:state.opentsne_epoch_pipeline];
-      [epoch_encoder setBuffer:row_ptr_buffer offset:0 atIndex:0];
-      [epoch_encoder setBuffer:col_buffer offset:0 atIndex:1];
-      [epoch_encoder setBuffer:val_buffer offset:0 atIndex:2];
-      [epoch_encoder setBuffer:current_buffer offset:0 atIndex:3];
-      [epoch_encoder setBuffer:next_buffer offset:0 atIndex:4];
-      [epoch_encoder setBuffer:gains_buffer offset:0 atIndex:5];
-      [epoch_encoder setBuffer:updates_buffer offset:0 atIndex:6];
-      [epoch_encoder setBytes:&params length:sizeof(OpenTsneMetalParams) atIndex:7];
-      [epoch_encoder dispatchThreads:grid_size threadsPerThreadgroup:epoch_threadgroup];
-      [epoch_encoder endEncoding];
-      [epoch_command commit];
-      [epoch_command waitUntilCompleted];
-      if (epoch_command.status == MTLCommandBufferStatusError) {
-        Rcpp::stop("Metal openTSNE epoch command failed: %s", ns_error_message(epoch_command.error).c_str());
-      }
-
-      std::memcpy(current.data(), [next_buffer contents], current.size() * sizeof(float));
-      double mean_x = 0.0;
-      double mean_y = 0.0;
-      for (int i = 0; i < n; ++i) {
-        mean_x += current[static_cast<std::size_t>(i) * 2u];
-        mean_y += current[static_cast<std::size_t>(i) * 2u + 1u];
-      }
-      mean_x /= static_cast<double>(n);
-      mean_y /= static_cast<double>(n);
-      const Center2 center{static_cast<float>(mean_x), static_cast<float>(mean_y)};
-      id<MTLCommandBuffer> center_command = [state.queue commandBuffer];
-      id<MTLComputeCommandEncoder> center_encoder = [center_command computeCommandEncoder];
-      [center_encoder setComputePipelineState:state.opentsne_center_pipeline];
-      [center_encoder setBuffer:next_buffer offset:0 atIndex:0];
-      [center_encoder setBytes:&center length:sizeof(Center2) atIndex:1];
-      [center_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
-      [center_encoder dispatchThreads:grid_size threadsPerThreadgroup:center_threadgroup];
-      [center_encoder endEncoding];
-      [center_command commit];
-      [center_command waitUntilCompleted];
-      if (center_command.status == MTLCommandBufferStatusError) {
-        Rcpp::stop("Metal openTSNE centering command failed: %s", ns_error_message(center_command.error).c_str());
-      }
-      std::swap(current_buffer, next_buffer);
-    }
-
-    std::memcpy(current.data(), [current_buffer contents], current.size() * sizeof(float));
-    NumericMatrix layout(n, 2);
-    for (int i = 0; i < n; ++i) {
-      layout(i, 0) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u]);
-      layout(i, 1) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u + 1u]);
-    }
-
-    [row_ptr_buffer release];
-    [col_buffer release];
-    [val_buffer release];
-    [current_buffer release];
-    [next_buffer release];
-    [gains_buffer release];
-    [updates_buffer release];
-    [row_sums_buffer release];
-    [inv_sum_q_buffer release];
-
-    return List::create(
-      Rcpp::Named("Y") = layout,
-      Rcpp::Named("costs") = NumericVector(0),
-      Rcpp::Named("itercosts") = NumericVector(0),
-      Rcpp::Named("optimizer") = "opentsne_exact_sparse_native_metal",
-      Rcpp::Named("repulsion") = "exact_metal",
-      Rcpp::Named("fft_grid_size") = NA_INTEGER,
-      Rcpp::Named("probabilities") = "symmetric_sparse_knn_cpu_prepared_for_metal",
-      Rcpp::Named("precision") = "float32",
-      Rcpp::Named("n_threads") = NA_INTEGER,
-      Rcpp::Named("learning_rate") = learning_rate_auto ? NA_REAL : learning_rate,
-      Rcpp::Named("learning_rate_early") = static_cast<double>(n) / std::max(early_exaggeration, std::numeric_limits<double>::min()),
-      Rcpp::Named("learning_rate_normal") = static_cast<double>(n) / std::max(exaggeration, std::numeric_limits<double>::min())
-    );
   }
 }
 

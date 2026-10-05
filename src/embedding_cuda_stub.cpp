@@ -1,10 +1,51 @@
 #include <Rcpp.h>
 
+#include "massive_pca_cuda.h"
+
 using Rcpp::IntegerMatrix;
 using Rcpp::IntegerVector;
 using Rcpp::List;
 using Rcpp::NumericMatrix;
 using Rcpp::NumericVector;
+
+extern "C" void* fastembedr_massive_pca_cuda_create(
+    int, int, int, const float*, const float*, const float*) {
+  return nullptr;
+}
+
+extern "C" int fastembedr_massive_pca_cuda_cross(
+    void*, const float*, int, float*) {
+  return 1;
+}
+
+extern "C" int fastembedr_massive_pca_cuda_project(
+    void*, const float*, int, float*) {
+  return 1;
+}
+
+extern "C" int fastembedr_massive_pca_cuda_action(
+    void*, const float*, int, float*) {
+  return 1;
+}
+
+extern "C" void fastembedr_massive_pca_cuda_destroy(void*) {}
+
+extern "C" const char* fastembedr_massive_pca_cuda_error() {
+  return "EXPERIMENTAL out-of-core CUDA PCA is unavailable in this build.";
+}
+
+extern "C" int fastembedr_massive_pca_cuda_memory(
+    std::size_t*, std::size_t*, int*) {
+  return 1;
+}
+
+extern "C" int fastembedr_massive_cuda_device_count(int*) {
+  return 1;
+}
+
+extern "C" int fastembedr_massive_cuda_select_device(int) {
+  return 1;
+}
 
 bool embedding_cuda_available_impl() {
   return false;
@@ -95,21 +136,6 @@ NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector,
   Rcpp::stop("CUDA COO UMAP optimizer is available only when the package is built with CUDA support.");
 }
 
-NumericMatrix knn_tsne_exact_cuda_impl(IntegerMatrix,
-                                       NumericMatrix,
-                                       NumericMatrix,
-                                       int,
-                                       double,
-                                       double,
-                                       int,
-                                       int,
-                                       double,
-                                       double,
-                                       double,
-                                       int) {
-  Rcpp::stop("CUDA exact t-SNE is available only when the package is built with CUDA support.");
-}
-
 List knn_tsne_opentsne_cuda_impl(IntegerMatrix,
                                  NumericMatrix,
                                  NumericMatrix,
@@ -185,6 +211,19 @@ NumericMatrix project_embedding_knn_cuda_impl(NumericMatrix,
                                               IntegerMatrix,
                                               NumericMatrix) {
   Rcpp::stop("CUDA projection is available only when the package is built with CUDA support.");
+}
+
+SEXP massive_cuda_projector_create_impl(NumericMatrix, int, int) {
+  Rcpp::stop("Persistent CUDA projection is unavailable; no CPU fallback was used.");
+}
+
+NumericMatrix massive_cuda_projector_batch_impl(
+    SEXP, IntegerMatrix, NumericMatrix) {
+  Rcpp::stop("Persistent CUDA projection is unavailable; no CPU fallback was used.");
+}
+
+void massive_cuda_projector_release_impl(SEXP) {
+  Rcpp::stop("Persistent CUDA projection is unavailable; no CPU fallback was used.");
 }
 
 NumericMatrix interpolate_landmark_layout_cuda_impl(NumericMatrix,
