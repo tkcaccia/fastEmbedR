@@ -55,10 +55,24 @@ massive_macos_available_ram <- function(report = NULL) {
     bytes * fraction
 }
 
+massive_windows_available_ram <- function(report = NULL) {
+    if (is.null(report)) report <- tryCatch(suppressWarnings(
+        system2("powershell.exe", c("-NoProfile", "-NonInteractive",
+            "-Command", shQuote(paste0(
+                "(Get-CimInstance Win32_OperatingSystem).",
+                "FreePhysicalMemory"))), stdout = TRUE, stderr = FALSE)),
+        error = function(e) character())
+    number <- grep("^[[:space:]]*[0-9]+[[:space:]]*$", report,
+        value = TRUE)
+    if (length(number) != 1L) return(NA_real_)
+    as.numeric(trimws(number)) * 1024
+}
+
 massive_available_ram_bytes <- function() {
     system <- Sys.info()[["sysname"]]
     if (identical(system, "Linux")) return(massive_linux_available_ram())
     if (identical(system, "Darwin")) return(massive_macos_available_ram())
+    if (identical(system, "Windows")) return(massive_windows_available_ram())
     NA_real_
 }
 
@@ -407,7 +421,8 @@ massive_open_pca <- function(output) {
         is.na(output) || tolower(tools::file_ext(output)) != "f32") {
         stop("`output` must be one .f32 PCA path.", call. = FALSE)
     }
-    path <- file.path(normalizePath(dirname(output), mustWork = TRUE),
+    path <- file.path(normalizePath(dirname(output), winslash = "/",
+        mustWork = TRUE),
         basename(output))
     manifest <- paste0(path, ".manifest.rds")
     if (!file.exists(manifest)) stop(
@@ -420,9 +435,9 @@ massive_open_pca <- function(output) {
     valid <- is.list(saved) && identical(saved$version, 1L) &&
         inherits(fit, "fastEmbedR_massive_pca") &&
         inherits(fit$scores, "fastEmbedR_massive_matrix") &&
-        identical(fit$scores$path, path) &&
+        massive_checkpoint_same_paths(fit$scores$path, path) &&
         identical(fit$scores$format, "f32") &&
-        identical(fit$manifest_path, manifest) &&
+        massive_checkpoint_same_paths(fit$manifest_path, manifest) &&
         isTRUE(fit$experimental) &&
         isTRUE(fit$backend %in% c("cpu", "cuda")) &&
         is.numeric(fit$ncomp) && length(fit$ncomp) == 1L &&

@@ -1,11 +1,26 @@
 massive_checkpoint_file_identity <- function(paths) {
-    paths <- normalizePath(paths, mustWork = TRUE)
+    paths <- normalizePath(paths, winslash = "/", mustWork = TRUE)
     details <- file.info(paths)
     if (anyNA(details$size) || anyNA(details$mtime)) {
         stop("Cannot inspect checkpoint inputs.", call. = FALSE)
     }
     list(paths = paths, bytes = as.numeric(details$size),
         modified = as.numeric(details$mtime))
+}
+
+massive_checkpoint_same_paths <- function(left, right) {
+    if (length(left) != length(right) ||
+        !all(file.exists(left)) || !all(file.exists(right))) return(FALSE)
+    identical(normalizePath(left, winslash = "/", mustWork = TRUE),
+        normalizePath(right, winslash = "/", mustWork = TRUE))
+}
+
+massive_checkpoint_same_names <- function(left, right) {
+    if (.Platform$OS.type == "windows") {
+        left <- gsub("\\\\", "/", left)
+        right <- gsub("\\\\", "/", right)
+    }
+    identical(left, right)
 }
 
 massive_checkpoint_source_identity <- function(source) {

@@ -34,7 +34,7 @@ massive_matrix <- function(x, nrow = NULL, ncol = NULL,
             stop("`x` must be one file path or a double matrix.",
                 call. = FALSE)
         }
-        path <- normalizePath(x, mustWork = TRUE)
+        path <- normalizePath(x, winslash = "/", mustWork = TRUE)
         format <- format %||% sub("^.*\\.", "", path)
         format <- match.arg(format, c("f32", "fbin"))
         access <- match.arg(access)

@@ -93,7 +93,8 @@ massive_posting_prefix <- function(output) {
     if (!is.character(output) || length(output) != 1L ||
         is.na(output) || !nzchar(output)) stop(
         "`output` must be one posting-file prefix.", call. = FALSE)
-    file.path(normalizePath(dirname(output), mustWork = TRUE),
+    file.path(normalizePath(dirname(output), winslash = "/",
+        mustWork = TRUE),
         basename(output))
 }
 
@@ -195,7 +196,7 @@ massive_open_postings <- function(output) {
     valid <- identical(saved$version, 1L) &&
         inherits(index, "fastEmbedR_massive_postings") &&
         inherits(index$features, "fastEmbedR_massive_matrix") &&
-        identical(index$manifest_path, manifest) &&
+        massive_checkpoint_same_paths(index$manifest_path, manifest) &&
         identical(index$backend, "cpu") &&
         identical(index$method,
             "nearest_center_physical_postings") &&
@@ -208,8 +209,8 @@ massive_open_postings <- function(output) {
     if (!valid) stop("Posting manifest is missing or invalid.", call. = FALSE)
     paths <- c(index$features$path, index$ids_path,
         index$offsets_path)
-    if (!identical(paths, paste0(prefix, c(".features.f32",
-        ".ids.u32", ".offsets.u64"))) ||
+    if (!massive_checkpoint_same_paths(paths, paste0(prefix,
+        c(".features.f32", ".ids.u32", ".offsets.u64"))) ||
         !identical(index$features$nrow, index$nrow) ||
         !identical(index$features$ncol, index$ncol) ||
         !is.numeric(index$counts) ||
@@ -619,7 +620,7 @@ massive_posting_grouped_saved <- function(manifest, signature,
     staged <- stats::setNames(paste0(paths, ".part"), names(paths))
     prior <- saved$files
     valid <- identical(prior, current) ||
-        (identical(prior$paths, unname(staged)) &&
+        (massive_checkpoint_same_names(prior$paths, unname(staged)) &&
             identical(prior$bytes, current$bytes) &&
             identical(prior$modified, current$modified))
     if (!valid) stop("Completed grouped graph changed.",
@@ -644,7 +645,8 @@ massive_posting_restore_pair <- function(paths, manifest,
     current <- ifelse(finished, paths, parts)
     identity <- massive_checkpoint_file_identity(current)
     expected <- saved$files
-    if (!identical(expected$paths, unname(parts)) ||
+    if (!massive_checkpoint_same_names(expected$paths,
+        unname(parts)) ||
         !identical(expected$bytes, identity$bytes) ||
         !identical(expected$modified, identity$modified)) stop(
         "Graph mixed files changed.", call. = FALSE)
@@ -766,7 +768,7 @@ massive_posting_completed <- function(marker, signature, final,
         !identical(saved$files,
             massive_checkpoint_file_identity(final)) ||
         !is.list(saved$setup) ||
-        !identical(saved$setup$paths, final) ||
+        !massive_checkpoint_same_names(saved$setup$paths, final) ||
         !is.list(saved$measurement)) stop(
         "Completed posting graph does not match its inputs.",
         call. = FALSE)
@@ -777,7 +779,8 @@ massive_posting_completed <- function(marker, signature, final,
     grouped <- paste0(sub("\\.indices\\.u32$", "",
         final[["indices"]]), ".grouped",
         c(".indices.u32", ".distances.f32"))
-    if (!identical(saved$grouped$paths, grouped)) stop(
+    if (!massive_checkpoint_same_names(saved$grouped$paths,
+        grouped)) stop(
         "Completed posting graph has invalid work paths.",
         call. = FALSE)
     present <- file.exists(grouped)

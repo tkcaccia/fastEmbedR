@@ -20,6 +20,7 @@ articles:
     navbar: ~
     contents:
       - getting-started
+      - massive-data
 
 reference:
   - title: t-SNE Embeddings
@@ -59,6 +60,58 @@ reference:
     desc: Score local preservation, labels, and global structure.
     contents:
       - evaluate_embedding
+  - title: Massive Matrices and PCA
+    desc: File-backed data access and streamed principal components.
+    contents:
+      - massive_matrix
+      - massive_read_rows
+      - massive_open_pca
+  - title: Massive Neighbors and Postings
+    desc: Disk-backed nearest-neighbor construction and inspection.
+    contents:
+      - massive_coarse_postings
+      - massive_open_postings
+      - massive_read_posting
+      - massive_search_postings
+      - massive_posting_recall_pilot
+      - massive_select_landmarks
+      - massive_landmark_knn
+      - massive_audit_landmark_knn
+      - massive_read_knn_rows
+      - massive_knn_graph
+      - massive_full_knn_graph
+      - massive_read_graph_edges
+  - title: Massive Embeddings
+    desc: File-backed graph, affinity, optimizer, and projection stages.
+    contents:
+      - massive_umap_memberships
+      - massive_umap_fuzzy_graph
+      - massive_fuzzy_graph
+      - massive_affinity_graph
+      - massive_tsne_affinities
+      - massive_tsne_optimize
+      - massive_umap_optimize
+      - massive_project_landmarks
+      - massive_open_projection
+  - title: Massive Graphs and Clustering
+    desc: File-backed graph access and community detection.
+    contents:
+      - massive_weighted_graph
+      - massive_csr_graph
+      - massive_graph_modularity
+      - massive_louvain_level
+      - massive_leiden_refine_level
+      - massive_leiden
+      - massive_read_leiden_rows
+      - massive_louvain
+      - massive_read_louvain_rows
+      - massive_walktrap
+      - massive_read_walktrap_rows
+      - massive_graph_partitions
+      - massive_read_graph_partition
+      - massive_cluster_landmarks
+      - massive_cluster
+      - massive_read_cluster_rows
   - title: Object Methods
     desc: Print and plot package result objects.
     contents:

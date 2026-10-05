@@ -971,6 +971,12 @@ test_that("fuzzy union accepts a hub larger than the input KNN", {
     louvain_path <- tempfile(fileext = ".clusters.u32")
     leiden_path <- tempfile(fileext = ".clusters.u32")
     on.exit(unlink(c(louvain_path, leiden_path)), add = TRUE)
+    if (.Platform$OS.type == "windows") {
+        expect_error(massive_louvain_level(fuzzy, louvain_path,
+            max_passes = 1L, chunk_rows = 64L,
+            memory_limit = "256MB"), "POSIX memory mapping")
+        return(invisible(NULL))
+    }
     louvain <- massive_louvain_level(fuzzy, louvain_path,
         max_passes = 1L, chunk_rows = 64L,
         memory_limit = "256MB")

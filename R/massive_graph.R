@@ -543,7 +543,7 @@ massive_graph_sort_state <- function(x, plan, signature, resume) {
         is.finite(rows) && rows >= 0 && rows <= x$n_vertices &&
         rows == floor(rows) &&
         (rows == x$n_vertices || rows %% block == 0) &&
-        identical(runs$paths, expected) &&
+        massive_checkpoint_same_paths(runs$paths, expected) &&
         is.numeric(runs$bytes) &&
         all(is.finite(runs$bytes)) &&
         all(runs$bytes > 0) &&
@@ -560,7 +560,8 @@ massive_graph_sort_progress <- function(plan, state, k) {
     function(done, paths) {
         old <- state$runs$paths
         if (done < state$completed_rows || length(paths) < length(old) ||
-            !identical(utils::head(paths, length(old)), old)) stop(
+            !massive_checkpoint_same_paths(
+                utils::head(paths, length(old)), old)) stop(
             "Graph sort progress is inconsistent.", call. = FALSE)
         fresh <- if (length(paths) > length(old)) {
             paths[seq.int(length(old) + 1L, length(paths))]

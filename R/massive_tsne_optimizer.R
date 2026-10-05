@@ -160,7 +160,8 @@ massive_tsne_checkpoint_load <- function(plan, sidecar,
     expected <- if (valid) paste0(plan$output, ".iter_",
         saved$iteration, ".state.f32") else NULL
     if (!identical(saved$signature, signature) ||
-        !valid || !identical(saved$state_path, expected) ||
+        !valid ||
+        !massive_checkpoint_same_paths(saved$state_path, expected) ||
         !is.numeric(saved$elapsed_seconds) ||
         length(saved$elapsed_seconds) != 1L ||
         !is.finite(saved$elapsed_seconds) ||
@@ -174,7 +175,7 @@ massive_tsne_checkpoint_load <- function(plan, sidecar,
         "t-SNE checkpoint does not match inputs or controls.",
         call. = FALSE)
     snapshots <- normalizePath(Sys.glob(paste0(plan$output,
-        ".iter_*.state.f32*")), mustWork = TRUE)
+        ".iter_*.state.f32*")), winslash = "/", mustWork = TRUE)
     if (length(setdiff(snapshots, saved$state_path))) stop(
         "Uncommitted t-SNE snapshot exists; inspect it before ",
         "resuming.", call. = FALSE)
@@ -184,10 +185,10 @@ massive_tsne_checkpoint_load <- function(plan, sidecar,
 massive_tsne_checkpoint_commit <- function(plan, sidecar,
         signature, state, iteration, snapshot,
         elapsed_seconds) {
-    snapshot <- normalizePath(snapshot, mustWork = TRUE)
+    snapshot <- normalizePath(snapshot, winslash = "/", mustWork = TRUE)
     expected <- paste0(plan$output, ".iter_", iteration,
         ".state.f32")
-    if (!identical(snapshot, expected)) stop(
+    if (!massive_checkpoint_same_paths(snapshot, expected)) stop(
         "t-SNE snapshot path does not match its iteration.",
         call. = FALSE)
     if (!identical(plan$source_identity,

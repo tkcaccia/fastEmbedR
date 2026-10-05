@@ -330,7 +330,7 @@ test_that("embedding approximation requires explicit opt-in", {
         "use.*landmark.*explicitly")
 })
 
-test_that("auto RAM probe respects Linux cgroup and macOS reports", {
+test_that("auto RAM probe respects host and container reports", {
     directory <- tempfile()
     dir.create(directory)
     on.exit(unlink(directory, recursive = TRUE))
@@ -358,6 +358,10 @@ test_that("auto RAM probe respects Linux cgroup and macOS reports", {
         "The system has 8589934592 (524288 pages).",
         "System-wide memory free percentage: 35%")),
         8589934592 * 0.35)
+    expect_equal(fastEmbedR:::massive_windows_available_ram(
+        " 1048576 "), 1024^3)
+    expect_true(is.na(fastEmbedR:::massive_windows_available_ram(
+        "unavailable")))
     expect_error(fastEmbedR:::massive_auto_memory_limit(
         "8GB", NA_real_), "cannot determine available RAM")
 })
@@ -762,6 +766,9 @@ test_that("wide CUDA PCA resumes moments without a CPU rescan", {
 })
 
 test_that("auto PCA reports its route and preserves explicit limits", {
+    testthat::local_mocked_bindings(
+        massive_available_ram_bytes = function() 4 * 1024^3,
+        .package = "fastEmbedR")
     x <- matrix(sin(seq_len(120) / 7), nrow = 30L)
     raw <- make_massive_fixture(x)
     output <- tempfile(fileext = ".f32")
@@ -3190,14 +3197,20 @@ test_that("massive clustering composes selection, graph, and voting", {
         expect_identical(result$reference_graph_parameters$weight,
             "snn")
     }
-    automatic <- massive_cluster(source, massive = "auto",
-        method = "leiden", k = 4L, memory_limit = "1GB")
+    automatic <- with_mocked_bindings(
+        massive_available_ram_bytes = function() 4 * 1024^3,
+        massive_cluster(source, massive = "auto",
+            method = "leiden", k = 4L, memory_limit = "1GB"),
+        .package = "fastEmbedR")
     expect_s3_class(automatic, "fastEmbedR_graph_cluster")
     expect_identical(automatic$massive_auto, "in_memory")
     auto_prefix <- file.path(directory, "automatic")
-    approximate <- massive_cluster(source, massive = "auto",
-        method = "leiden", k = 4L, output = auto_prefix,
-        chunk_rows = 7L, memory_limit = "256MB")
+    approximate <- with_mocked_bindings(
+        massive_available_ram_bytes = function() 4 * 1024^3,
+        massive_cluster(source, massive = "auto",
+            method = "leiden", k = 4L, output = auto_prefix,
+            chunk_rows = 7L, memory_limit = "256MB"),
+        .package = "fastEmbedR")
     expect_s3_class(approximate, "fastEmbedR_massive_clusters")
     expect_identical(approximate$massive_auto, "landmark")
     expect_equal(massive_read_cluster_rows(approximate, 1L,
@@ -3277,9 +3290,12 @@ test_that("massive clustering rejects unsafe requests before writing", {
 
 test_that("Walktrap landmark planning respects native RAM limits", {
     source <- fastEmbedR:::massive_synthetic_matrix(1e9, 96L)
-    plan <- fastEmbedR:::massive_cluster_auto_plan(source,
-        NULL, 30L, "cpu", 1L, "8GB", "auto", tempfile(),
-        NULL, "walktrap")
+    plan <- with_mocked_bindings(
+        massive_available_ram_bytes = function() 16 * 1024^3,
+        fastEmbedR:::massive_cluster_auto_plan(source,
+            NULL, 30L, "cpu", 1L, "8GB", "auto", tempfile(),
+            NULL, "walktrap"),
+        .package = "fastEmbedR")
     expect_identical(plan$mode, "landmark")
     expect_identical(plan$count, 4000L)
     expect_lte(16 * plan$count^2 +

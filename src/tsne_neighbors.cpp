@@ -1168,10 +1168,16 @@ void compute_gradient_fft_grid_f(const SparseProbabilitiesF* p,
     }
     ws.partial_sum_q[static_cast<std::size_t>(thread_id)] = local_sum_q;
   });
-  const float inv_sum_q = static_cast<float>(1.0 / std::max(
-    std::accumulate(ws.partial_sum_q.begin(), ws.partial_sum_q.end(), 0.0) - static_cast<double>(n),
-    static_cast<double>(FLT_MIN)
-  ));
+  const double grid_sum_q = std::accumulate(
+    ws.partial_sum_q.begin(), ws.partial_sum_q.end(), 0.0
+  ) - static_cast<double>(n);
+  // Subtracting self-mass is cancellation-prone for small sparse layouts.
+  const double sum_q = n <= 256 ?
+    compute_sum_q_f(y, n, dims, n_threads) : grid_sum_q;
+  if (!std::isfinite(sum_q) || sum_q <= 0.0) {
+    Rcpp::stop("FFT t-SNE repulsion normalization is invalid.");
+  }
+  const float inv_sum_q = static_cast<float>(1.0 / sum_q);
 
   parallel_for(n, n_threads, [&](const int begin, const int end, const int) {
     for (int i = begin; i < end; ++i) {

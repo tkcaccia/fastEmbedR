@@ -40,6 +40,16 @@ test_that("small two-dimensional CPU t-SNE selects FFT automatically", {
     expect_identical(config$fft_grid_size, 128L)
 })
 
+test_that("small FFT layouts stay finite through long optimization", {
+    x <- scale(as.matrix(iris[, 1:4]))
+    fit <- tsne(x, landmarks = 0.5, perplexity = 10,
+        standardize = FALSE, backend = "cpu", n.cores = 2L,
+        seed = 4L, early_exaggeration_iter = 0L,
+        n_iter = 350L, auto_config = FALSE)
+    expect_true(all(is.finite(fit$layout)))
+    expect_identical(fit$parameters$backend, "cpu")
+})
+
 test_that("CPU FFT grid switches to 256 cells at 40,000 rows", {
     for (n in c(39999L, 40000L)) {
         indices <- vapply(seq_len(5L), function(offset) {

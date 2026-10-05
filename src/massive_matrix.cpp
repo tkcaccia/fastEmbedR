@@ -40,6 +40,11 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#elif defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 
 using Rcpp::List;
@@ -237,6 +242,26 @@ class FileMatrixSource final : public MatrixSource {
       close(descriptor);
       if (address == MAP_FAILED) Rcpp::stop("Cannot mmap massive input.");
       mapped_ = static_cast<const unsigned char*>(address);
+#elif defined(_WIN32)
+      if (info_.bytes > std::numeric_limits<std::size_t>::max()) {
+        Rcpp::stop("Massive input exceeds the mmap address range.");
+      }
+      const auto wide_path = std::filesystem::u8path(path).wstring();
+      HANDLE file = CreateFileW(wide_path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (file == INVALID_HANDLE_VALUE) {
+        Rcpp::stop("Cannot open massive input for mmap.");
+      }
+      HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY,
+        0, 0, nullptr);
+      CloseHandle(file);
+      if (mapping == nullptr) Rcpp::stop("Cannot map massive input.");
+      void* address = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+      CloseHandle(mapping);
+      if (address == nullptr) Rcpp::stop("Cannot mmap massive input.");
+      mapped_size_ = static_cast<std::size_t>(info_.bytes);
+      mapped_ = static_cast<const unsigned char*>(address);
 #else
       Rcpp::stop("Experimental mmap input is unavailable on this system.");
 #endif
@@ -250,6 +275,8 @@ class FileMatrixSource final : public MatrixSource {
     if (mapped_ != nullptr) munmap(
       const_cast<unsigned char*>(mapped_), mapped_size_
     );
+#elif defined(_WIN32)
+    if (mapped_ != nullptr) UnmapViewOfFile(mapped_);
 #endif
   }
 
@@ -473,6 +500,25 @@ class GraphFile {
       close(fd);
       if (address == MAP_FAILED) Rcpp::stop("Cannot mmap massive graph.");
       mapped_ = static_cast<const unsigned char*>(address);
+#elif defined(_WIN32)
+      if (expected > std::numeric_limits<std::size_t>::max()) {
+        Rcpp::stop("Massive graph exceeds the mmap address range.");
+      }
+      const auto wide_path = std::filesystem::u8path(path).wstring();
+      HANDLE file = CreateFileW(wide_path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (file == INVALID_HANDLE_VALUE) {
+        Rcpp::stop("Cannot open massive graph for mmap.");
+      }
+      HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY,
+        0, 0, nullptr);
+      CloseHandle(file);
+      if (mapping == nullptr) Rcpp::stop("Cannot map massive graph.");
+      void* address = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+      CloseHandle(mapping);
+      if (address == nullptr) Rcpp::stop("Cannot mmap massive graph.");
+      mapped_ = static_cast<const unsigned char*>(address);
 #else
       Rcpp::stop("Massive graph mmap is unavailable on this system.");
 #endif
@@ -485,6 +531,8 @@ class GraphFile {
 #if defined(__unix__) || defined(__APPLE__)
     if (mapped_) munmap(const_cast<unsigned char*>(mapped_),
                        static_cast<std::size_t>(size_));
+#elif defined(_WIN32)
+    if (mapped_) UnmapViewOfFile(mapped_);
 #endif
   }
 
@@ -2242,10 +2290,14 @@ List massive_symmetrize_graph_cpp(std::string indices_path,
   for (R_xlen_t i = 0; i < resume_runs.size(); ++i) {
     const auto expected = directory + "/pairs_run_" +
       std::to_string(i) + ".bin";
-    if (Rcpp::as<std::string>(resume_runs[i]) != expected) {
+    std::error_code path_error;
+    const auto saved = Rcpp::as<std::string>(resume_runs[i]);
+    if (!std::filesystem::equivalent(saved, expected, path_error) ||
+        path_error) {
       Rcpp::stop("Graph sort checkpoint run path is invalid.");
     }
-    saved_runs.push_back(expected);
+    saved_runs.push_back(
+      std::filesystem::path(expected).generic_string());
   }
   const std::unordered_set<std::string> retained(
     saved_runs.begin(), saved_runs.end());
@@ -2258,7 +2310,7 @@ List massive_symmetrize_graph_cpp(std::string indices_path,
     }
     for (const auto& entry :
          std::filesystem::directory_iterator(directory)) {
-      const auto path = entry.path().string();
+      const auto path = entry.path().generic_string();
       if (retained.count(path) != 0) continue;
       const auto name = entry.path().filename().string();
       if (!entry.is_regular_file() ||

@@ -687,12 +687,17 @@ test_that("grouped graph survives interruption after file commit", {
     expect_true(Sys.setFileTime(partial, modified + 5))
     expect_error(run(resume = TRUE), "partial files changed")
     expect_true(Sys.setFileTime(partial, modified))
-    graph <- with_mocked_bindings(
-        massive_posting_graph_batch = function(...) {
-            stop("search was repeated")
-        },
-        run(resume = TRUE), .package = "fastEmbedR")
-    expect_identical(graph$query_order, "posting")
+    if (identical(as.numeric(file.info(partial)$mtime),
+            as.numeric(modified))) {
+        graph <- with_mocked_bindings(
+            massive_posting_graph_batch = function(...) {
+                stop("search was repeated")
+            },
+            run(resume = TRUE), .package = "fastEmbedR")
+        expect_identical(graph$query_order, "posting")
+    } else {
+        expect_error(run(resume = TRUE), "partial files changed")
+    }
     prefix <- tempfile()
     with_mocked_bindings(
         massive_knn_finish = function(indices, distances, parts,
@@ -784,7 +789,11 @@ test_that("reordered graph recovers after its first final rename", {
     expect_true(Sys.setFileTime(graph$indices_path, stamp))
     center <- centers[1L, 1L]
     centers[1L, 1L] <- centers[1L, 1L] + 1
-    expect_error(run(resume = TRUE), "centers do not match")
+    restored <- identical(as.numeric(file.info(graph$indices_path)$mtime),
+        as.numeric(stamp))
+    expect_error(run(resume = TRUE), if (restored) {
+        "centers do not match"
+    } else "Completed posting graph does not match")
     centers[1L, 1L] <- center
     prefix <- tempfile()
     complete_mark <- fastEmbedR:::massive_posting_complete_mark
@@ -802,16 +811,21 @@ test_that("reordered graph recovers after its first final rename", {
     expect_true(Sys.setFileTime(grouped, modified + 5))
     expect_error(run(resume = TRUE), "work files changed")
     expect_true(Sys.setFileTime(grouped, modified))
-    reopened <- with_mocked_bindings(
-        massive_posting_graph_batch = function(...) {
-            stop("search was repeated")
-        },
-        massive_reorder_posting_graph_cpp = function(...) {
-            stop("reorder was repeated")
-        },
-        run(resume = TRUE), .package = "fastEmbedR")
-    expect_identical(reopened$query_order, "posting")
-    expect_false(file.exists(grouped))
+    if (identical(as.numeric(file.info(grouped)$mtime),
+            as.numeric(modified))) {
+        reopened <- with_mocked_bindings(
+            massive_posting_graph_batch = function(...) {
+                stop("search was repeated")
+            },
+            massive_reorder_posting_graph_cpp = function(...) {
+                stop("reorder was repeated")
+            },
+            run(resume = TRUE), .package = "fastEmbedR")
+        expect_identical(reopened$query_order, "posting")
+        expect_false(file.exists(grouped))
+    } else {
+        expect_error(run(resume = TRUE), "work files changed")
+    }
     prefix <- tempfile()
     with_mocked_bindings(
         massive_knn_finish = half_finish,

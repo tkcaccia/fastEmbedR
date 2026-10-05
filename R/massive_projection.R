@@ -456,7 +456,8 @@ massive_open_projection <- function(output) {
         stop("`output` must be one .f32 projection path.",
             call. = FALSE)
     }
-    path <- file.path(normalizePath(dirname(output), mustWork = TRUE),
+    path <- file.path(normalizePath(dirname(output), winslash = "/",
+        mustWork = TRUE),
         basename(output))
     manifest <- paste0(path, ".manifest.rds")
     if (!file.exists(manifest)) stop(
@@ -469,9 +470,9 @@ massive_open_projection <- function(output) {
         inherits(result, "fastEmbedR_massive_projection") &&
         inherits(result$layout, "fastEmbedR_massive_matrix") &&
         inherits(result$graph, "fastEmbedR_massive_knn") &&
-        identical(result$layout$path, path) &&
+        massive_checkpoint_same_paths(result$layout$path, path) &&
         identical(result$layout$format, "f32") &&
-        identical(result$manifest_path, manifest) &&
+        massive_checkpoint_same_paths(result$manifest_path, manifest) &&
         isTRUE(result$experimental) &&
         isTRUE(result$backend %in% c("cpu", "cuda")) &&
         isTRUE(result$method %in% c("umap", "tsne")) &&

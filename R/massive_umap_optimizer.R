@@ -125,8 +125,17 @@ massive_umap_result <- function(plan, graph, init, built, saved,
     }
     result$source_identity <- plan$source_identity
     if (!is.null(saved$sidecar))
-        unlink(c(saved$latest(), saved$sidecar))
+        massive_umap_checkpoint_cleanup(plan$output, saved$sidecar)
     result
+}
+
+massive_umap_checkpoint_cleanup <- function(output, sidecar) {
+    snapshots <- Sys.glob(paste0(output, ".epoch_*.f32"))
+    checkpoint_files <- c(snapshots, sidecar)
+    unlink(checkpoint_files)
+    if (any(file.exists(checkpoint_files))) stop(
+        "Could not remove completed UMAP checkpoints.",
+        call. = FALSE)
 }
 
 massive_umap_checkpoint_prepare <- function(plan, checkpoint,
@@ -206,7 +215,8 @@ massive_umap_checkpoint_load <- function(plan, sidecar, signature) {
         length(value) == 1L && is.finite(value) &&
         value >= 0 && value == floor(value)
     if (!identical(saved$signature, signature) ||
-        !valid_epoch || !identical(saved$snapshot, expected) ||
+        !valid_epoch ||
+        !massive_checkpoint_same_paths(saved$snapshot, expected) ||
         !valid_count(saved$positive) ||
         !valid_count(saved$negative) ||
         !valid_count(saved$edge_visits) ||
@@ -218,7 +228,7 @@ massive_umap_checkpoint_load <- function(plan, sidecar, signature) {
             call. = FALSE)
     }
     snapshots <- normalizePath(Sys.glob(paste0(
-        plan$output, ".epoch_*.f32*")), mustWork = TRUE)
+        plan$output, ".epoch_*.f32*")), winslash = "/", mustWork = TRUE)
     if (length(setdiff(snapshots, saved$snapshot))) stop(
         "Uncommitted UMAP snapshot exists; inspect it before ",
         "resuming.", call. = FALSE)
@@ -228,9 +238,9 @@ massive_umap_checkpoint_load <- function(plan, sidecar, signature) {
 massive_umap_checkpoint_commit <- function(plan, sidecar, signature,
         state, epoch, snapshot, positive, negative,
         edge_visits = 0) {
-    snapshot <- normalizePath(snapshot, mustWork = TRUE)
+    snapshot <- normalizePath(snapshot, winslash = "/", mustWork = TRUE)
     expected <- paste0(plan$output, ".epoch_", epoch, ".f32")
-    if (!identical(snapshot, expected)) stop(
+    if (!massive_checkpoint_same_paths(snapshot, expected)) stop(
         "UMAP snapshot path does not match its epoch: ",
         snapshot, " != ", expected, call. = FALSE)
     if (!identical(plan$source_identity,
