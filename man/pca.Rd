@@ -40,9 +40,8 @@ deviation before decomposition.}
 \item{backend}{PCA backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}.}
 
 \item{n.cores}{Positive integer CPU worker limit. Small stages use fewer
-workers automatically. On Linux, BLAS and OpenMP are limited to one
-thread while native workers are active to prevent nested parallelism.
-On macOS, Accelerate may use the requested limit. In experimental
+workers automatically. BLAS and native preprocessing use this limit in
+sequential stages to avoid nested parallelism. In experimental
 out-of-core CUDA PCA it controls the streamed CPU mean pass. It is
 otherwise ignored by Metal and CUDA.}
 
@@ -106,7 +105,10 @@ problems favor TSVD. Without RAFT, CUDA uses native rSVD. CUDA requests
 fail explicitly when CUDA is unavailable; they never fall back to CPU PCA.
 }
 \details{
-CPU matrix products and factorizations use the BLAS/LAPACK linked to R.
+CPU matrix products use single-precision OpenBLAS when linked to R;
+otherwise the portable native kernels are used. QR and SVD
+use the BLAS/LAPACK linked to R. The returned \code{gemm_backend} reports the
+matrix-product implementation.
 Set \code{n.cores} to control their CPU core limit. The requested value is
 applied temporarily through standard BLAS/OpenMP environment variables and,
 when installed, \code{RhpcBLASctl}; the prior process settings are restored after

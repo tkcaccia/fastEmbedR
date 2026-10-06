@@ -16,6 +16,13 @@
 #undef COMPLEX
 #endif
 
+#ifdef FASTEMBEDR_HAVE_OPENBLAS_SGEMM
+#include <R_ext/BLAS.h>
+extern "C" void F77_NAME(sgemm)(const char*, const char*, const int*,
+    const int*, const int*, const float*, const float*, const int*,
+    const float*, const int*, const float*, float*, const int* FCLEN FCLEN);
+#endif
+
 #include "native_knn_common.h"
 
 using Rcpp::IntegerMatrix;
@@ -304,6 +311,12 @@ void pca_gemm_nn(const float* left,
     output,
     nrow
   );
+#elif defined(FASTEMBEDR_HAVE_OPENBLAS_SGEMM)
+  const char normal = 'N';
+  const float one = 1.0f;
+  const float zero = 0.0f;
+  F77_CALL(sgemm)(&normal, &normal, &nrow, &ncol, &shared, &one,
+    left, &nrow, right, &shared, &zero, output, &nrow FCONE FCONE);
 #else
   parallel_for_rows(ncol, n_threads, [&](const int begin, const int end, const int) {
     for (int col = begin; col < end; ++col) {
@@ -345,6 +358,14 @@ void pca_gemm_tn(const float* left,
     output,
     left_cols
   );
+#elif defined(FASTEMBEDR_HAVE_OPENBLAS_SGEMM)
+  const char transposed = 'T';
+  const char normal = 'N';
+  const float one = 1.0f;
+  const float zero = 0.0f;
+  F77_CALL(sgemm)(&transposed, &normal, &left_cols, &right_cols,
+    &shared, &one, left, &shared, right, &shared, &zero, output,
+    &left_cols FCONE FCONE);
 #else
   const int total = left_cols * right_cols;
   parallel_for_rows(total, n_threads, [&](const int begin, const int end, const int) {
@@ -599,6 +620,13 @@ List pca_rsvd_cpu_cpp(SEXP data,
     retained_singular_values[component] = singular_values[component];
   }
   const bool return_float32 = x.input_float32;
+#ifdef __APPLE__
+  const char* gemm_backend = "accelerate_sgemm";
+#elif defined(FASTEMBEDR_HAVE_OPENBLAS_SGEMM)
+  const char* gemm_backend = "openblas_sgemm";
+#else
+  const char* gemm_backend = "native";
+#endif
   return List::create(
     Rcpp::Named("scores") = pca_output_matrix(
       scores, x.nrow, usable, return_float32
@@ -610,6 +638,7 @@ List pca_rsvd_cpu_cpp(SEXP data,
     Rcpp::Named("center") = center_values,
     Rcpp::Named("scale") = scale_values,
     Rcpp::Named("precision") = "float32",
+    Rcpp::Named("gemm_backend") = gemm_backend,
     Rcpp::Named("input_float32") = x.input_float32,
     Rcpp::Named("oversample") = sketch_rank - rank,
     Rcpp::Named("power") = power,

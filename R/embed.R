@@ -561,17 +561,15 @@ restore_pca_rhpc_threads <- function(blas, omp) {
 
 with_pca_cpu_threads <- function(n_threads, code) {
     n_threads <- normalize_pca_threads(n_threads)
-    is_linux <- identical(Sys.info()[["sysname"]], "Linux")
-    blas_threads <- if (is_linux) 1L else n_threads
-    restore_env <- set_pca_thread_environment(blas_threads)
+    restore_env <- set_pca_thread_environment(n_threads)
     on.exit(restore_env(), add = TRUE)
-    control <- set_pca_rhpc_threads(blas_threads)
+    control <- set_pca_rhpc_threads(n_threads)
     on.exit(control$restore(), add = TRUE)
     list(
         value = force(code),
         control = control$control,
         effective = control$effective,
-        blas_threads = blas_threads
+        blas_threads = n_threads
     )
 }
 
@@ -642,7 +640,10 @@ finish_cpu_pca_fit <- function(fit, seed) {
         method = "rsvd",
         backend = "cpu_rsvd",
         backend_reason = NA_character_,
-        engine = "native_cpu_float32",
+        engine = if (identical(fit$gemm_backend, "native")) {
+            "native_cpu_float32"
+        } else paste0("cpu_float32_", fit$gemm_backend),
+        gemm_backend = fit$gemm_backend,
         precision = "float32",
         oversample = as.integer(fit$oversample),
         power = as.integer(fit$power),
@@ -722,7 +723,10 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' problems favor TSVD. Without RAFT, CUDA uses native rSVD. CUDA requests
 #' fail explicitly when CUDA is unavailable; they never fall back to CPU PCA.
 #'
-#' CPU matrix products and factorizations use the BLAS/LAPACK linked to R.
+#' CPU matrix products use single-precision OpenBLAS when linked to R;
+#' otherwise the portable native kernels are used. QR and SVD
+#' use the BLAS/LAPACK linked to R. The returned `gemm_backend` reports the
+#' matrix-product implementation.
 #' Set `n.cores` to control their CPU core limit. The requested value is
 #' applied temporarily through standard BLAS/OpenMP environment variables and,
 #' when installed, `RhpcBLASctl`; the prior process settings are restored after
@@ -742,9 +746,8 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #'   deviation before decomposition.
 #' @param backend PCA backend: `"cpu"`, `"cuda"`, or `"metal"`.
 #' @param n.cores Positive integer CPU worker limit. Small stages use fewer
-#'   workers automatically. On Linux, BLAS and OpenMP are limited to one
-#'   thread while native workers are active to prevent nested parallelism.
-#'   On macOS, Accelerate may use the requested limit. In experimental
+#'   workers automatically. BLAS and native preprocessing use this limit in
+#'   sequential stages to avoid nested parallelism. In experimental
 #'   out-of-core CUDA PCA it controls the streamed CPU mean pass. It is
 #'   otherwise ignored by Metal and CUDA.
 #' @param seed Random seed for backends that use a Gaussian subspace sketch,

@@ -230,7 +230,7 @@ use hardware-appropriate execution:
 
 | Backend | PCA implementation |
 | --- | --- |
-| CPU | Package-native float32 blocked rSVD. Centering/scaling and large matrix products run in C++; Apple builds use Accelerate SGEMM and other platforms use a threaded float32 kernel. `n.cores` controls the temporary numerical-library/thread limit. |
+| CPU | Float32 blocked rSVD. Centering/scaling runs in C++; large matrix products use Accelerate SGEMM on Apple systems, OpenBLAS SGEMM when its probe succeeds on Linux, or the native kernel otherwise. `gemm_backend` reports the route, and `n.cores` limits its threads. |
 | Metal | Package-native float32 block-subspace rSVD using MPS matrix multiplication and a resident unified-memory workspace. |
 | CUDA | Package-native float32 rSVD, with optional RAPIDS RAFT TSVD selected for suitable matrix shapes when RAFT is enabled. Float32 input is read from its payload without constructing an R double matrix; scores and loadings remain float32 until the requested R return boundary. |
 

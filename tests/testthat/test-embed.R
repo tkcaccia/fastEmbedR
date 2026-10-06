@@ -792,12 +792,18 @@ test_that("public PCA API uses randomized SVD", {
     expect_equal(dim(fit$loadings), c(5L, 2L))
     expect_equal(fit$method, "rsvd")
     expect_equal(fit$backend, "cpu_rsvd")
-    expect_equal(fit$engine, "native_cpu_float32")
+    expect_true(fit$gemm_backend %in% c(
+        "native", "openblas_sgemm", "accelerate_sgemm"
+    ))
+    expect_identical(fit$engine, if (fit$gemm_backend == "native") {
+        "native_cpu_float32"
+    } else paste0("cpu_float32_", fit$gemm_backend))
     expect_equal(fit$precision, "float32")
     expect_true(all(is.finite(fit$scores)))
     expect_true(all(is.finite(fit$loadings)))
     expect_true(all(is.finite(fit$singular_values)))
     expect_identical(fit$n.cores_requested, 2L)
+    expect_identical(fit$blas.n.cores_requested, 2L)
     expect_true(is.na(fit$n.cores_effective) || fit$n.cores_effective >= 1L)
     expect_match(fit$core_control, "environment")
     expect_error(pca(x, n.cores = 0L), "positive integer")

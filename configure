@@ -250,6 +250,41 @@ cuda_enabled=0
 enable_cuvs=0
 enable_raft=0
 build_mode=cpu_only
+gemm_enabled=0
+
+if [ "$os_name" = "Linux" ] && ! is_true "$diagnostic_only"; then
+  blas_probe_dir=$(mktemp -d "${TMPDIR:-/tmp}/fastembedr-blas.XXXXXX")
+  cat > "$blas_probe_dir/sgemm.cpp" <<'EOF_SGEMM'
+#include <R_ext/BLAS.h>
+extern "C" char* openblas_get_config(void);
+extern "C" void F77_NAME(sgemm)(const char*, const char*, const int*,
+    const int*, const int*, const float*, const float*, const int*,
+    const float*, const int*, const float*, float*, const int* FCLEN FCLEN);
+int main() {
+  const char normal = 'N';
+  const int one = 1;
+  const float alpha = 1.0f, beta = 0.0f, a = 2.0f, b = 3.0f;
+  float result = 0.0f;
+  F77_CALL(sgemm)(&normal, &normal, &one, &one, &one, &alpha,
+      &a, &one, &b, &one, &beta, &result, &one FCONE FCONE);
+  return result == 6.0f && openblas_get_config() ? 0 : 1;
+}
+EOF_SGEMM
+  r_cxx17=$("$r_binary" CMD config CXX17)
+  r_cxx17flags=$("$r_binary" CMD config CXX17FLAGS)
+  r_ldflags=$("$r_binary" CMD config LDFLAGS)
+  r_blas_libs=$("$r_binary" CMD config BLAS_LIBS)
+  r_flibs=$("$r_binary" CMD config FLIBS)
+  r_include="$("$r_binary" RHOME)/include"
+  if $r_cxx17 $r_cxx17flags -std=c++17 -I"$r_include" \
+      "$blas_probe_dir/sgemm.cpp" $r_ldflags $r_blas_libs $r_flibs \
+      -o "$blas_probe_dir/sgemm" > "$blas_probe_dir/probe.log" 2>&1 && \
+      "$blas_probe_dir/sgemm" >> "$blas_probe_dir/probe.log" 2>&1; then
+    gemm_enabled=1
+    cppflags="$cppflags -DFASTEMBEDR_HAVE_OPENBLAS_SGEMM=1"
+  fi
+  rm -rf "$blas_probe_dir"
+fi
 
 if is_true "$diagnostic_only"; then
   cppflags="$cppflags -DFASTEMBEDR_DIAGNOSTIC_ONLY=1"
@@ -668,6 +703,7 @@ echo "fastEmbedR configuration:"
 echo "  operating system:       $os_name"
 echo "  build mode:             $build_mode"
 echo "  C++ standard:           C++17"
+echo "  CPU PCA OpenBLAS SGEMM: $gemm_enabled"
 echo "  Metal compiled:         $metal_enabled"
 echo "  CUDA compiled:          $cuda_enabled"
 echo "  strict CUDA required:   $(is_true "$require_cuda" && echo yes || echo no)"

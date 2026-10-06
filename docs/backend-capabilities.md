@@ -28,7 +28,7 @@ unavailable explicit accelerator request raises an error.
 | `tsne_knn()` | native C++ FFT-grid optimizer | native Metal FFT-grid optimizer | native CUDA FFT-grid optimizer using cuFFT | Use `Y_init` or `init_data` for explicit PCA initialization. |
 | `tsne()` | native exact/faissR HNSW, then `tsne_knn()` | native exact/IVF-Flat, then Metal t-SNE | native cuVS device KNN, then CUDA t-SNE | CPU uses exact search below 5,000 rows. The package does not call Python openTSNE in public functions. |
 
-| `pca()` / t-SNE PCA init | native float32 blocked rSVD | native float32 MPS block-subspace rSVD | package-native rSVD; optional RAPIDS RAFT TSVD | CUDA selects from matrix shape and rank when RAFT is enabled, and otherwise uses native rSVD. GPU requests never silently fall back to CPU. |
+| `pca()` / t-SNE PCA init | float32 blocked rSVD with OpenBLAS or native products | native float32 MPS block-subspace rSVD | package-native rSVD; optional RAPIDS RAFT TSVD | CUDA selects from matrix shape and rank when RAFT is enabled, and otherwise uses native rSVD. GPU requests never silently fall back to CPU. |
 | `transform_tsne()` | native fixed-reference transform | native Metal projection/transform kernels where available | native CUDA projection/transform kernels where built | Used by t-SNE landmarking. |
 | `select_landmarks()` | native selection | shared selection | shared selection | Selection is independent of the embedding method and can be reused. |
 | `precompute_query_knn()` | native exact below 5,000 reference rows; faissR HNSW otherwise | native exact/recall-tuned IVF-Flat reference-query search | native exact/IVF-Flat reference-query search | Searches only the fixed reference; CUDA output remains device resident. |

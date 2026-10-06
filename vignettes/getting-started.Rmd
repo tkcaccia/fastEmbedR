@@ -344,7 +344,8 @@ layout_tsne_fixed_init <- tsne(
 )
 ```
 
-CPU PCA uses the package-native float32 blocked rSVD path. Metal uses a native
+CPU PCA uses float32 blocked rSVD. Its matrix products use OpenBLAS when R is
+linked to it. `pca_fit$gemm_backend` reports that route. Metal uses a native
 float32 block-subspace rSVD with Metal Performance Shaders matrix products.
 CUDA always provides package-native rSVD and may select RAPIDS RAFT TSVD for
 narrower or less-truncated problems when that optional route is enabled. No
