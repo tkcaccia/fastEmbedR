@@ -10,7 +10,7 @@ fastEmbedR provides an opinionated fixed-policy float32 UMAP implementation
 and a configurable native interpolation-based t-SNE implementation from
 data or
 precomputed nearest-neighbor matrices. Use \code{\link[=umap]{umap()}} or \code{\link[=tsne]{tsne()}}
-for one-call workflows, \code{\link[=precompute_knn]{precompute_knn()}} to run the package-native CPU,
+for one-call workflows, \code{\link[=precompute_knn]{precompute_knn()}} to run CPU,
 Metal, or CUDA search separately, or pass reusable KNN \code{indices} and
 \code{distances} to \code{\link[=umap_knn]{umap_knn()}} or \code{\link[=tsne_knn]{tsne_knn()}}.
 Use \code{\link[=pca]{pca()}} for reusable backend-native PCA and request

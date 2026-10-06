@@ -1107,6 +1107,24 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// faissr_hnsw_search_cpp
+SEXP faissr_hnsw_search_cpp(SEXP data, SEXP query, SEXP n, SEXP p, SEXP k, SEXP target_recall, SEXP n_threads, SEXP distance_storage);
+RcppExport SEXP _fastEmbedR_faissr_hnsw_search_cpp(SEXP dataSEXP, SEXP querySEXP, SEXP nSEXP, SEXP pSEXP, SEXP kSEXP, SEXP target_recallSEXP, SEXP n_threadsSEXP, SEXP distance_storageSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type query(querySEXP);
+    Rcpp::traits::input_parameter< SEXP >::type n(nSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type p(pSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type k(kSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type target_recall(target_recallSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type distance_storage(distance_storageSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_hnsw_search_cpp(data, query, n, p, k, target_recall, n_threads, distance_storage));
+    return rcpp_result_gen;
+END_RCPP
+}
 // knn_connectivity_range_cpp
 Rcpp::List knn_connectivity_range_cpp(IntegerMatrix indices, int col_start, int n_cols);
 RcppExport SEXP _fastEmbedR_knn_connectivity_range_cpp(SEXP indicesSEXP, SEXP col_startSEXP, SEXP n_colsSEXP) {
@@ -2923,6 +2941,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_project_embedding_knn_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_knn_cpp, 3},
     {"_fastEmbedR_project_embedding_affine_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_cpp, 8},
     {"_fastEmbedR_project_embedding_affine_parallel_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_parallel_cpp, 9},
+    {"_fastEmbedR_faissr_hnsw_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_search_cpp, 8},
     {"_fastEmbedR_knn_connectivity_range_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_range_cpp, 3},
     {"_fastEmbedR_knn_connectivity_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_cpp, 1},
     {"_fastEmbedR_umap_graph_csr_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_cpp, 6},

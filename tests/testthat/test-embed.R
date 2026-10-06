@@ -388,7 +388,7 @@ test_that("one-call KNN policy selects native CPU and Metal defaults", {
     )
 })
 
-test_that("CPU matrix input supports native exact and HNSW search", {
+test_that("CPU matrix input uses native exact and FAISS HNSW search", {
     set.seed(45)
     x <- matrix(rnorm(40L), 10L, 4L)
     out <- fastEmbedR:::fastembedr_nn_without_self(
@@ -402,7 +402,8 @@ test_that("CPU matrix input supports native exact and HNSW search", {
 
     expect_equal(dim(out$indices), c(10L, 2L))
     expect_identical(attr(out, "backend"), "cpu")
-    expect_identical(attr(out, "method"), "native_hnsw")
+    expect_identical(attr(out, "method"), "faiss_hnsw")
+    expect_identical(out$backend_used, "faiss_hnsw")
     exact <- fastEmbedR:::fastembedr_nn_without_self(
         x,
         k = 2L, backend = "cpu", method = "exact"

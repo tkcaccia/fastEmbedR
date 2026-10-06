@@ -23,7 +23,7 @@ primary contributions are:
 - native CPU, Apple Metal, and CUDA embedding backends where available;
 - float32 input/output support with float32 native optimizer buffers;
 - explicit backend reporting, with no silent CPU fallback labelled as GPU;
-- native CPU exact/HNSW and Apple Metal exact/IVF-Flat KNN for one-call
+- native CPU exact, faissR HNSW, and Apple Metal exact/IVF-Flat KNN for one-call
   embeddings;
 - optional GPU-resident exact/IVF-Flat CUDA KNN through RAPIDS cuVS.
 
@@ -170,8 +170,8 @@ R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 
 See [Installation](docs/installation.md) for `fastEmbedR` CPU, Metal, and CUDA
 embedding builds, including RAPIDS cuVS linkage for CUDA KNN.
-The portable CPU build requires R, Rcpp, and a C++17 compiler. Accelerator
-libraries are optional and are detected during source installation.
+The CPU build requires R 4.6 or later, Rcpp, faissR, and a C++17 compiler.
+Accelerator libraries are optional and detected during source installation.
 
 ## License
 

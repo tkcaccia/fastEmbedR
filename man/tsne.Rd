@@ -85,7 +85,8 @@ source, reference, neighbor count, and backend must match.}
 \item{seed}{Random seed.}
 
 \item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. CPU KNN
-uses package-native exact search below 5,000 rows and HNSW otherwise.
+uses native exact search below 5,000 rows, compiled FAISS HNSW for larger
+Euclidean searches, and native HNSW for other supported metrics.
 Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
 cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
 that threshold. Device pointers pass directly to the native CUDA t-SNE

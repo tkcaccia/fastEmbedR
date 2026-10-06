@@ -265,6 +265,10 @@ project_embedding_affine_parallel_cpp <- function(reference_data_sexp, query_dat
     .Call(`_fastEmbedR_project_embedding_affine_parallel_cpp`, reference_data_sexp, query_data_sexp, reference_layout_sexp, projection_indices, projection_distances_sexp, max_neighbors, ridge, max_extrapolation, n_threads)
 }
 
+faissr_hnsw_search_cpp <- function(data, query, n, p, k, target_recall, n_threads, distance_storage) {
+    .Call(`_fastEmbedR_faissr_hnsw_search_cpp`, data, query, n, p, k, target_recall, n_threads, distance_storage)
+}
+
 knn_connectivity_range_cpp <- function(indices, col_start, n_cols) {
     .Call(`_fastEmbedR_knn_connectivity_range_cpp`, indices, col_start, n_cols)
 }

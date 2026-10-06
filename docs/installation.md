@@ -9,17 +9,26 @@
 
 ## CPU
 
-A CPU build needs R, Rcpp, and the C++17 toolchain configured for that R
-installation. It does not need CUDA, cuVS, or a linked FAISS library.
+A CPU build needs R 4.6 or later, Rcpp, faissR (including its FAISS
+dependency), and the C++17 toolchain configured for that R installation.
+It does not need CUDA or
+cuVS. In-memory Euclidean CPU searches with at least 5,000 rows call faissR's
+compiled HNSW interface directly. Smaller searches use fastEmbedR's native
+exact implementation; cosine and correlation HNSW remain package-native.
+
+Install faissR first, following its
+[installation guide](https://github.com/tkcaccia/faissR/blob/main/docs/installation.md).
+The required faissR release must be available in the Bioconductor software
+repository or CRAN before submitting fastEmbedR to CRAN. A Bioconductor
+submission under review does not yet satisfy this requirement.
 
 ```sh
 FASTEMBEDR_USE_CUDA=0 \
 R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 ```
 
-The CPU exact and HNSW sources are compiled into fastEmbedR. Retained FAISS
-and faissR notices describe source provenance; they do not imply a runtime
-libfaiss or faissR dependency.
+The compiled native HNSW implementation remains for file-backed, sharded
+search. It is not substituted for faissR in ordinary in-memory CPU fits.
 
 ## Apple Metal
 

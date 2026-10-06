@@ -4,7 +4,7 @@
 #' and a configurable native interpolation-based t-SNE implementation from
 #' data or
 #' precomputed nearest-neighbor matrices. Use [umap()] or [tsne()]
-#' for one-call workflows, [precompute_knn()] to run the package-native CPU,
+#' for one-call workflows, [precompute_knn()] to run CPU,
 #' Metal, or CUDA search separately, or pass reusable KNN `indices` and
 #' `distances` to [umap_knn()] or [tsne_knn()].
 #' Use [pca()] for reusable backend-native PCA and request

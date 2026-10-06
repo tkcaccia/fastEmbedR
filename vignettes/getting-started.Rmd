@@ -649,7 +649,8 @@ par(old_par)
 ```
 
 CPU uses exhaustive exact query-to-reference search below 5,000 reference
-rows and native HNSW otherwise. Metal uses native exact search for small
+rows and compiled faissR HNSW for larger Euclidean searches. Other CPU
+metrics use native HNSW. Metal uses native exact search for small
 references and recall-tuned IVF-Flat for larger references, followed by
 fixed-reference transforms. CUDA uses native exact or IVF-Flat query search
 and keeps KNN, layouts, and refinement buffers resident on the GPU. The result

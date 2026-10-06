@@ -23,7 +23,8 @@
 #'   source, reference, neighbor count, and backend must match.
 #' @param seed Random seed.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. CPU KNN
-#'   uses package-native exact search below 5,000 rows and HNSW otherwise.
+#'   uses native exact search below 5,000 rows, compiled FAISS HNSW for larger
+#'   Euclidean searches, and native HNSW for other supported metrics.
 #'   Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
 #'   cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
 #'   that threshold. The KNN result stays on the device through graph
@@ -166,7 +167,9 @@ compute_umap_matrix_knn <- function(x, nn, n_neighbors, metric, state) {
         result <- if (is.null(nn)) {
             policy <- fastembedr_embedding_nn_policy(state$backend, nrow(x))
             keep_gpu <- identical(state$backend, "cuda")
-            engine <- fastembedr_nn_policy_engine(policy, keep_gpu = keep_gpu)
+            engine <- fastembedr_nn_policy_engine(
+                policy, keep_gpu = keep_gpu, metric = metric
+            )
             fastembedr_nn_without_self(
                 x,
                 k = as.integer(n_neighbors), backend = policy$backend,

@@ -14,7 +14,7 @@ Copyright: See inst/COPYRIGHTS and inst/NOTICE for source-level ownership,
 Description: A native float32 UMAP implementation and a configurable
     interpolation-based t-SNE implementation for embeddings from data
     matrices or precomputed nearest-neighbor indices and distances. One-call
-    workflows use package-native CPU exact or HNSW search and Apple Metal
+    workflows use native CPU exact or FAISS HNSW search and Apple Metal
     exact or IVF-Flat search. Optional CUDA support links to the RAPIDS cuVS
     C API while
     retaining nearest-neighbor results on the device.
@@ -33,8 +33,9 @@ URL: https://github.com/tkcaccia/fastEmbedR,
 BugReports: https://github.com/tkcaccia/fastEmbedR/issues
 Encoding: UTF-8
 Depends:
-    R (>= 4.0.0)
+    R (>= 4.6.0)
 Imports:
+    faissR (>= 0.99.49),
     methods,
     parallel,
     Rcpp,
@@ -50,8 +51,10 @@ Suggests:
     rmarkdown,
     testthat
 LinkingTo:
+    faissR (>= 0.99.49),
     Rcpp (>= 1.0.13)
-SystemRequirements: C++17, optional acceleration uses either the Apple SDK
+SystemRequirements: C++17; FAISS CPU library for the imported faissR package.
+    Optional acceleration uses either the Apple SDK
     Metal frameworks on Apple Silicon (macOS 14 or later and Xcode 15 or
     later), or an NVIDIA CUDA Toolkit. RAPIDS cuVS is needed only for CUDA
     nearest-neighbor search from matrix inputs. RAPIDS RAFT/RMM is an optional

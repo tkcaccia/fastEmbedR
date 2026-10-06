@@ -35,16 +35,16 @@ one-based indices into \code{reference}.
 }
 \description{
 \code{precompute_query_knn()} searches a fixed reference matrix for every row of
-a query matrix. It uses the same package-native backend family and routing
+a query matrix. It uses the same backend family and routing
 policy as \code{\link[=precompute_knn]{precompute_knn()}}, but does not compute unnecessary
 reference-to-reference or query-to-query neighbors.
 }
 \details{
 CPU uses exhaustive reference-query search when the reference has fewer than
-5,000 rows and HNSW otherwise. HNSW uses metric-, shape-, and \code{k}-aware
-target-0.99 parameters and does not claim a per-call recall audit.
-\code{tuning_reference_target_met} describes the faissR calibration cell and is
-not measured recall for the current call. Metal routes between a native
+5,000 rows and faissR's compiled FAISS HNSW interface for Euclidean
+distance otherwise. Cosine and correlation retain native HNSW. HNSW
+targets recall 0.99 but does not claim a per-call recall audit. Metal
+routes between a native
 query-only exact kernel and recall-tuned IVF-Flat from the estimated
 reference-query distance workload. CUDA routes between cuVS brute-force
 exact search and cuVS IVF-Flat using the reference size, query batch size,

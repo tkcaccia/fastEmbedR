@@ -436,8 +436,8 @@ compute_tsne_matrix_knn <- function(
     if (is.null(nn)) {
         policy <- fastembedr_embedding_nn_policy(backend, n = n)
         engine <- fastembedr_nn_policy_engine(
-            policy,
-            keep_gpu = policy$backend == "cuda"
+            policy, keep_gpu = policy$backend == "cuda",
+            metric = metric
         )
         nn <- fastembedr_nn_without_self(
             x,
@@ -698,7 +698,8 @@ tsne_landmark_controls <- function(landmarks, transform_k,
 #'   source, reference, neighbor count, and backend must match.
 #' @param seed Random seed.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. CPU KNN
-#'   uses package-native exact search below 5,000 rows and HNSW otherwise.
+#'   uses native exact search below 5,000 rows, compiled FAISS HNSW for larger
+#'   Euclidean searches, and native HNSW for other supported metrics.
 #'   Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
 #'   cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
 #'   that threshold. Device pointers pass directly to the native CUDA t-SNE

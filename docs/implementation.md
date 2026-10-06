@@ -16,20 +16,20 @@ interpolation-based t-SNE. UMAP follows the fuzzy simplicial-set graph formulati
 introduced by McInnes and colleagues [7,13]. The t-SNE path follows the
 probabilistic neighbor-embedding objective of van der Maaten and Hinton [1],
 with modern interpolation-based optimization ideas from FIt-SNE and openTSNE [3-4].
-The package is intentionally KNN-first. fastEmbedR implements its CPU
-exact/HNSW and Apple Metal exact/IVF-Flat one-call KNN paths natively. CUDA
-builds link to the Apache-2.0 RAPIDS cuVS C API for exact and IVF-Flat search.
-They do not call another R package, Python, or `reticulate`. Graph/affinity
+The package is intentionally KNN-first. CPU one-call KNN uses native exact
+search or faissR HNSW. Metal exact/IVF-Flat is native; CUDA builds link to
+the Apache-2.0 RAPIDS cuVS C API. Embedding does not call Python or
+`reticulate`. Graph/affinity
 construction,
 initialization, stochastic optimization, native fixed-reference transforms,
 backend reporting, and quality metrics remain inside fastEmbedR.
 
 The public package surface is deliberately small:
 
-- `precompute_knn()` exposes the same native backend policy used by the
+- `precompute_knn()` exposes the same backend policy used by the
   one-call functions, while keeping algorithm and recall tuning internal.
 - `tsne_knn()` and `umap_knn()` consume a supplied KNN object.
-- `tsne()` and `umap()` select native CPU/Metal KNN or direct cuVS CUDA KNN and
+- `tsne()` and `umap()` select CPU/Metal KNN or direct cuVS CUDA KNN and
   then call the corresponding KNN entry point.
 - `pca()` computes backend-native truncated PCA scores and loadings. CPU uses
   fastEmbedR's native blocked rSVD implementation, Metal uses a resident
@@ -110,41 +110,26 @@ backend, and CPU thread count; it applies the same internally selected search
 policy as the one-call embedding functions. The KNN-input functions also
 accept a plain host list of indices and distances from another implementation.
 
-For fewer than 5,000 observations, the CPU route uses exhaustive float32
-distance evaluation and deterministic top-k selection. Euclidean, cosine, and
-correlation preprocessing and zero-row handling follow the documented
-`method = "exact"` behavior of faissR 0.99.48. The code is package-owned C++
-and does not include, call, or link FAISS or faissR. Because every candidate is
-examined, recall is one by construction. The same rule applies to
-query-to-reference search when the reference has fewer than 5,000 rows.
+For fewer than 5,000 observations, the CPU route uses package-owned exhaustive
+float32 distance evaluation and deterministic top-k selection. Every candidate
+is examined, so recall is one by construction. The same rule applies to
+query-to-reference search with fewer than 5,000 reference rows.
 
-For larger inputs, the CPU implementation distils the HNSW organization in
-FAISS 1.14.3 [8]:
-exponentially sampled hierarchy levels, greedy descent through upper layers,
-bounded `efConstruction` expansion at each insertion layer, diversity-aware
-neighbor pruning, reciprocal graph links, and independent parallel queries.
-All vectors, graph distances, and search buffers are float32; indices are
-int32. The target-0.99 policy selects `M`, `efConstruction`, and `efSearch`
-from the metric, dataset size, feature count, and a `k` bucket. The policy was
-adapted from the deterministic faissR 0.99.48 calibration tables at commit
-`09f4c88fe8af431053a35a945db809a1da22033e`. Those tables were fitted on
-FAISS HNSW, so fastEmbedR records the selected values and calibration source
-without claiming a per-call recall measurement or a guarantee on unseen data.
-`tuning_reference_target_met` describes whether the faissR calibration cell
-met its target; it is not measured recall for the current fastEmbedR call. The
-native implementation is tested against exact neighbors on representative
-inputs.
+For larger Euclidean in-memory inputs, fastEmbedR calls faissR's public
+`faissR_hnsw_search_v1` C-callable interface through its native bridge; it
+does not call an R function from faissR. The target recall is 0.99. faissR
+selects `M`,
+`efConstruction`, and `efSearch` using its calibration policy. The
+result records the actual FAISS HNSW engine and effort parameters; the recall
+target is not a per-call recall measurement or guarantee on unseen data.
+If faissR cannot run Euclidean HNSW, the matrix fit fails rather than switching
+to native HNSW. Cosine and correlation retain the native HNSW route and report
+that engine explicitly.
 
-Construction uses one persistent worker team, reusable visit tables and
-bounded heaps, early-exit squared-distance comparisons, and parallel
-reciprocal-row updates. Temporary construction distances are released before
-query. These changes preserve the selected graph and query output: exact KNN
-indices and distances matched the pre-optimization implementation on
-MNIST70k, Fashion-MNIST70k, USPS, and MetRef. On the validated four-thread
-Linux environment, MNIST70k construction decreased from 23.730 to 17.345
-seconds and complete KNN time from 27.653 to 21.288 seconds. A separate
-`-O3 -march=native` build was slower and was rejected, which is why compiler
-tuning is not presented as an algorithmic improvement.
+File-backed, sharded CPU search retains a separate native HNSW index because
+that route builds and queries bounded partitions without loading the full
+matrix. Its native tuning and recall evidence must be evaluated separately
+from faissR-backed in-memory fits.
 
 The Metal implementation has two routes. Exact search assigns one SIMD group
 to each candidate distance and merges per-group top-k lists on device. IVF-Flat
@@ -167,7 +152,7 @@ For reproducibility, the one-call API fixes only the requested KNN device class
 and a small/large data policy:
 
 - CPU one-call embeddings use native exact KNN below 5,000 observations and
-  HNSW otherwise. Metal uses native exact KNN below 4,096 observations and
+  faissR HNSW otherwise. Metal uses native exact KNN below 4,096 observations and
   recall-tuned IVF-Flat for larger inputs.
 - CUDA one-call embeddings use cuVS brute force below 100,000 samples and
   recall-tuned cuVS IVF-Flat at or above 100,000 samples. Input is converted

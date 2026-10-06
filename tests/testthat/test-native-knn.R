@@ -319,29 +319,53 @@ test_that("native CPU exact query search matches an exhaustive reference", {
     expect_true(observed$exact_recall_by_construction)
 })
 
-test_that("fastEmbedR has no faissR package dependency or runtime bridge", {
-    desc <- utils::packageDescription("fastEmbedR")
-    dependency_text <- paste(
-        unlist(
-            desc[c("Depends", "Imports", "Suggests", "Enhances")],
-            use.names = FALSE
-        ),
-        collapse = " "
+test_that("large CPU matrix search uses faissR HNSW without fallback", {
+    set.seed(42)
+    x <- matrix(rnorm(5000L * 4L), nrow = 5000L)
+    observed <- precompute_knn(x, k = 8L, backend = "cpu", n.cores = 2L)
+    expect_identical(observed$engine, "faissr_cpu_hnsw")
+    expect_identical(observed$backend_used, "faiss_hnsw")
+    expect_identical(observed$method, "faiss_hnsw")
+    expect_false(any(observed$indices == row(observed$indices)))
+    expect_false(observed$recall_audited)
+    expect_identical(
+        observed$recall_status,
+        "calibration_informed_not_runtime_audited"
     )
-    expect_false(grepl("faissR", dependency_text, fixed = TRUE))
-
-    runtime_functions <- c(
-        "fastembedr_nn_without_self",
-        "fastembedr_native_query_knn",
-        "fastembedr_gpu_knn_to_host"
+    query <- precompute_query_knn(
+        x, x[1:4, , drop = FALSE], k = 8L,
+        backend = "cpu", n.cores = 2L
     )
-    runtime_text <- vapply(runtime_functions, function(name) {
-        paste(
-            deparse(body(get(name, envir = asNamespace("fastEmbedR")))),
-            collapse = "\n"
+    expect_identical(query$engine, "faissr_cpu_hnsw")
+    expect_identical(query$backend_used, "faiss_hnsw")
+    expect_identical(query$method, "faiss_hnsw_query")
+    expect_identical(dim(query$indices), c(4L, 8L))
+    cosine <- precompute_knn(
+        x, k = 8L, metric = "cosine", backend = "cpu", n.cores = 2L
+    )
+    expect_identical(cosine$engine, "native_cpu_hnsw")
+    expect_identical(cosine$method, "native_hnsw")
+    if (requireNamespace("float", quietly = TRUE)) {
+        float_knn <- precompute_knn(
+            float::fl(x), k = 8L, backend = "cpu", n.cores = 2L
         )
-    }, character(1))
-    expect_false(any(grepl("faissR", runtime_text, fixed = TRUE)))
+        expect_identical(float_knn$engine, "faissr_cpu_hnsw")
+        expect_true(inherits(float_knn$distances, "float32"))
+    }
+})
+
+test_that("a failed FAISS HNSW call never switches to native HNSW", {
+    x <- matrix(rnorm(40), nrow = 10L)
+    local_mocked_bindings(
+        run_faissr_hnsw = function(...) stop("FAISS HNSW unavailable"),
+        .package = "fastEmbedR"
+    )
+    expect_error(
+        fastEmbedR:::fastembedr_nn_without_self(
+            x, k = 2L, backend = "cpu", method = "hnsw"
+        ),
+        "FAISS HNSW unavailable"
+    )
 })
 
 test_that("native KNN consumes float32 input without a double input copy", {

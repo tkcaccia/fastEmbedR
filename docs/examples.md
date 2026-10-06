@@ -48,7 +48,8 @@ fit$metrics
 Use `backend = "metal"` on Apple Silicon or `backend = "cuda"` on a CUDA build.
 Explicit GPU requests fail clearly if the backend is unavailable.
 For matrix input, CPU uses exhaustive exact search below 5,000 observations
-and native HNSW otherwise. Metal uses native exact or recall-tuned IVF-Flat.
+and compiled faissR HNSW for larger Euclidean searches. Other supported
+CPU metrics use native HNSW. Metal uses native exact or recall-tuned IVF-Flat.
 CUDA uses package-native cuVS GPU-resident KNN. The default compact non-self
 affinity support is `ceiling(perplexity)`. The supplied KNN is trimmed to that
 width. Use `tsne_knn()` with a plain
@@ -237,8 +238,9 @@ Presentation assets:
 - [plotted medians and IQRs](assets/mnist70k_presentation_runtime_20260801/mnist70k_runtime_linear_plot_data.csv)
 - [reproducible plotting script](https://github.com/tkcaccia/fastEmbedR-extra/blob/main/benchmarks/legacy/fastEmbedR-benchmark/tools/make_mnist70k_presentation_runtime_plot.R)
 
-The single-run example output remains below so that its table, machine
-description, and embedding panels stay tied to the executable R example.
+The single-run example output below records the package build and R 4.5.3
+environment used for that run. It is not a measurement of the current
+R 4.6-or-later source.
 
 ![MNIST 70k computational time](assets/mnist70k_cuda_codex_20260621_4threads/mnist70k_github_benchmark_time_barplot.png)
 

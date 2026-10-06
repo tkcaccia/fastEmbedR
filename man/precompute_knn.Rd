@@ -2,7 +2,7 @@
 % Please edit documentation in R/native_knn.R
 \name{precompute_knn}
 \alias{precompute_knn}
-\title{Precompute native nearest neighbors}
+\title{Precompute nearest neighbors}
 \usage{
 precompute_knn(
   data,
@@ -32,17 +32,16 @@ A \code{fastEmbedR_knn} object. Host results contain \code{indices} and
 and own device-resident index and distance buffers.
 }
 \description{
-\code{precompute_knn()} exposes the same package-native nearest-neighbor search
+\code{precompute_knn()} exposes the same nearest-neighbor search
 used internally by \code{\link[=umap]{umap()}} and \code{\link[=tsne]{tsne()}}. The search algorithm is chosen
 by fastEmbedR for the requested backend and is deliberately not a user
 parameter.
 }
 \details{
-CPU uses native exhaustive float32 search below 5,000 observations and HNSW
-otherwise. HNSW applies a metric-, shape-, and \code{k}-aware policy calibrated
-for target recall 0.99; its recall is not audited during each call.
-\code{tuning_reference_target_met} describes the faissR calibration cell and is
-not measured recall for the current call. Metal uses native exact search for
+CPU uses native exhaustive float32 search below 5,000 observations and
+faissR's compiled FAISS HNSW interface for Euclidean distance otherwise.
+Cosine and correlation retain native HNSW. HNSW targets recall 0.99; its
+recall is not audited during each call. Metal uses native exact search for
 small inputs and recall-tuned IVF-Flat for larger inputs. CUDA uses RAPIDS
 cuVS brute-force exact search below 100,000 observations and cuVS IVF-Flat
 above that threshold. Approximate Metal and CUDA routes use an internal
