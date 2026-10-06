@@ -467,6 +467,31 @@ test_that("row views preserve source offsets without materialization", {
             fastEmbedR:::massive_matrix_rows(source, 5, 8))))
 })
 
+test_that("full KNN checkpoints a file-backed row view", {
+    set.seed(759)
+    x <- matrix(rnorm(18L * 4L), ncol = 4L)
+    raw <- make_massive_fixture(x, format = "fbin")
+    directory <- tempfile()
+    dir.create(directory)
+    on.exit(unlink(c(raw, directory), recursive = TRUE))
+    source <- massive_matrix(raw)
+    view <- fastEmbedR:::massive_matrix_rows(source, 3L, 14L)
+    graph <- massive_full_knn_graph(view, k = 2L,
+        output = file.path(directory, "graph"), backend = "cpu",
+        n.cores = 1L, chunk_rows = 5L,
+        reference_chunk_rows = 7L, memory_limit = "256MB",
+        method = "hnsw_sharded", audit_rows = 2L,
+        checkpoint = TRUE)
+    expect_equal(graph$nrow, 14)
+    expect_true(graph$checkpoint)
+    expect_length(graph$audit_row_recall, 2L)
+    expect_false(file.exists(file.path(directory,
+        "graph.checkpoint.rds")))
+    expect_error(massive_full_knn_graph(massive_matrix(x), k = 2L,
+        output = file.path(directory, "memory"), checkpoint = TRUE),
+        "file source")
+})
+
 test_that("streamed PCA agrees with an independent dense SVD", {
     rows <- seq_len(41)
     x <- cbind(rows / 9, sin(rows / 3), cos(rows / 5),

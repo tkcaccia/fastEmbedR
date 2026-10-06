@@ -1498,7 +1498,13 @@ massive_full_knn_controls <- function(x, k, backend, method,
     if (!inherits(x, "fastEmbedR_massive_matrix") || x$nrow < 2 ||
         x$nrow > .Machine$integer.max) stop(
         "Full KNN requires 2 to 2^31 - 1 matrix rows.")
-    if (checkpoint && is.null(x$path)) stop("Checkpoint needs a file source.")
+    if (checkpoint) {
+        origin <- x
+        while (identical(origin$format, "view")) {
+            origin <- origin$source
+        }
+        if (is.null(origin$path)) stop("Checkpoint needs a file source.")
+    }
     if (is.na(k) || k < 1L || k >= x$nrow || k > 65536L)
         stop("`k` must be a valid non-self neighbor count.")
     if (is.na(audit_rows) || audit_rows < 0L ||
