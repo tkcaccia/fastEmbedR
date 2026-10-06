@@ -76,6 +76,41 @@ test_that("native CPU HNSW applies metric-aware recall-0.99 tuning", {
     }
 })
 
+test_that("small Euclidean k30 HNSW uses validated search effort", {
+    set.seed(46)
+    x <- matrix(rnorm(600 * 12), nrow = 600)
+    truth <- exact_knn_reference(x, 30L)
+    observed <- native_hnsw_knn_cpp(x, 30L, 2L, "euclidean", 0.99)
+
+    expect_identical(observed$tuning_shape_group, "small_n")
+    expect_identical(observed$tuning_k_bucket, 30L)
+    expect_identical(observed$M, 12L)
+    expect_identical(observed$efConstruction, 80L)
+    expect_identical(observed$efSearch, 120L)
+    expect_match(observed$tuning_rule, "native_adjusted_faissr")
+    expect_gte(knn_recall_test(observed, truth), 0.99)
+
+    query <- native_hnsw_query_cpp(
+        x, x[1:12, , drop = FALSE], 30L, 2L, "euclidean", 0.99
+    )
+    expect_identical(query$efSearch, 120L)
+    expect_match(query$tuning_rule, "native_adjusted_faissr")
+})
+
+test_that("in-sample HNSW keeps neighbors of an early graph point", {
+    set.seed(192)
+    x <- matrix(rnorm(1500L * 128L), nrow = 1500L)
+    x[1401:1500, ] <- x[1401:1500, ] + 20
+    observed <- native_hnsw_knn_cpp(x, 30L, 2L, "euclidean", 0.99)
+    distance <- rowSums(sweep(x, 2L, x[18L, ], "-")^2)
+    distance[18L] <- Inf
+    expected <- head(order(distance, method = "radix"), 30L)
+
+    expect_setequal(observed$indices[18L, ], expected)
+    expect_identical(observed$method, "native_hnsw")
+    expect_false(observed$recall_audited)
+})
+
 test_that("native CPU HNSW rejects unsupported recall tiers", {
     x <- matrix(rnorm(120), nrow = 30)
     expect_error(

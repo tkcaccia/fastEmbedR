@@ -678,7 +678,7 @@ class CompactHNSW {
   }
 
   std::vector<NodeDistance> search_query(int query_id, int ef, VisitTable& visited) const {
-    return search_vector(point(query_id), ef, visited);
+    return search_layer(point(query_id), query_id, ef, 0, visited);
   }
 
   std::vector<NodeDistance> search_vector(const float* query,

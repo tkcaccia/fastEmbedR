@@ -6,6 +6,7 @@
  * 09f4c88fe8af431053a35a945db809a1da22033e. The source policy was
  * calibrated for FAISS HNSW. fastEmbedR records that provenance without
  * treating it as a per-call recall measurement for its native HNSW.
+ * Native Euclidean small-n k30 uses efSearch 120 after a recall check.
  */
 
 #ifndef FASTEMBEDR_NATIVE_KNN_HNSW_TUNING_H
@@ -72,7 +73,7 @@ inline HnswTuning hnsw_euclidean_99(HnswShape shape, int bucket) {
     if (bucket == 15) {
       return {12, 60, 45, "small_n", bucket, true, ""};
     }
-    const int search = bucket == 100 ? 100 : 60;
+    const int search = bucket == 30 ? 120 : (bucket == 100 ? 100 : 60);
     return {12, 80, search, "small_n", bucket, true, ""};
   }
   return {24, 160, 120, "other", bucket, false, ""};
@@ -153,7 +154,11 @@ inline HnswTuning tune_native_hnsw(int n, int p, int k,
   tuning.ef_search = std::max(k, tuning.ef_search);
   const char* metric_name = metric == KnnMetric::Euclidean ? "euclidean" :
     (metric == KnnMetric::Cosine ? "cosine" : "correlation");
-  tuning.rule = std::string("faissr_cpu_hnsw_") + metric_name + "_" +
+  const bool native_adjustment = metric == KnnMetric::Euclidean &&
+    shape == HnswShape::Small && bucket == 30;
+  tuning.rule = std::string(native_adjustment ?
+    "native_adjusted_faissr_cpu_hnsw_" : "faissr_cpu_hnsw_") +
+    metric_name + "_" +
     tuning.shape + "_k" + std::to_string(bucket) + "_recall99";
   return tuning;
 }
