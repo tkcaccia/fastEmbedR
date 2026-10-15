@@ -1,10 +1,29 @@
 #include <Rcpp.h>
+#include "massive_umap_metal.h"
 
 using Rcpp::IntegerMatrix;
 using Rcpp::IntegerVector;
 using Rcpp::List;
 using Rcpp::NumericMatrix;
 using Rcpp::NumericVector;
+
+extern "C" void* fastembedr_massive_umap_metal_create(
+    const float*, int, int, int, int, double, double, double,
+    double, int) {
+  Rcpp::stop("Full-graph Metal UMAP requires macOS Metal.");
+}
+
+extern "C" std::uint64_t fastembedr_massive_umap_metal_step(
+    void*, const int*, const int*, const int*, int, int) {
+  Rcpp::stop("Full-graph Metal UMAP requires macOS Metal.");
+}
+
+extern "C" void fastembedr_massive_umap_metal_download(
+    void*, float*) {
+  Rcpp::stop("Full-graph Metal UMAP requires macOS Metal.");
+}
+
+extern "C" void fastembedr_massive_umap_metal_destroy(void*) {}
 
 bool embedding_metal_available_impl() {
   return false;

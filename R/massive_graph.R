@@ -19,10 +19,10 @@ massive_graph_import <- function(prefix, n_vertices, k, access, kind) {
     suffix <- if (kind == "weight") ".weights.f32" else ".distances.f32"
     paths <- normalizePath(paste0(prefix, c(".indices.u32", suffix)),
         mustWork = TRUE)
-    identity <- massive_checkpoint_file_identity(paths)
+    identity <- massive_checkpoint_input_files_identity(paths)
     checked <- massive_validate_graph_cpp(paths[[1L]], paths[[2L]],
         n_vertices, as.integer(k), "stream", kind)
-    if (!identical(identity, massive_checkpoint_file_identity(paths))) {
+    if (!identical(identity, massive_checkpoint_input_files_identity(paths))) {
         stop("Massive graph files changed during validation.",
             call. = FALSE)
     }
@@ -39,7 +39,9 @@ massive_graph_import <- function(prefix, n_vertices, k, access, kind) {
         directed = TRUE, symmetrized = FALSE,
         edge_value = kind, backend = "external",
         access = access, validation_access = "stream",
-        validated = checked$validated, file_identity = identity,
+        validated = checked$validated,
+        file_identity = identity[c("paths", "bytes", "modified")],
+        validated_input_identity = identity,
         experimental = TRUE)
     graph[[paste0(kind, "s_path")]] <- paths[[2L]]
     graph[[paste0(kind, "_dtype")]] <- "float32"
@@ -103,10 +105,7 @@ massive_umap_memberships <- function(x, checkpoint = FALSE,
     if (is.na(workers) || workers < 1L || workers > 256L) stop(
         "`n.cores` must be an integer from 1 to 256.", call. = FALSE)
     paths <- c(x$indices_path, x$values_path)
-    if (!identical(massive_checkpoint_file_identity(paths),
-        x$file_identity)) stop(
-            "Massive KNN graph files changed since import.",
-            call. = FALSE)
+    massive_checkpoint_validated_graph_identity(x, paths)
     prefix <- sub("\\.indices\\.u32$", "", x$indices_path)
     if (identical(prefix, x$indices_path)) stop(
         "Massive KNN indices path has an invalid suffix.",
@@ -122,11 +121,7 @@ massive_umap_memberships <- function(x, checkpoint = FALSE,
         x$n_vertices, x$k, output, prepared$mean, prepared$rows,
         prepared$progress, prepared$resume_part, checkpoint_every,
         workers)
-    if (!identical(massive_checkpoint_file_identity(paths),
-        x$file_identity)) {
-        stop("Massive KNN graph files changed during weighting.",
-            call. = FALSE)
-    }
+    massive_checkpoint_validated_graph_identity(x, paths)
     graph <- massive_weighted_graph(prefix, x$n_vertices, x$k,
         access = x$access)
     graph$backend <- "cpu"
@@ -271,14 +266,19 @@ massive_weighted_graph <- function(prefix, n_vertices, k,
         "weight")
 }
 
-#' Symmetrize an experimental disk-backed UMAP membership graph
+#' Symmetrize an experimental disk-backed UMAP graph
 #'
 #' Externally sorts directed membership pairs in bounded native buffers,
 #' applies fuzzy union, and writes a symmetric weighted CSR graph and a
-#' content-hashed manifest. The sort needs substantial temporary disk space
-#' and is currently CPU-only. Use [massive_fuzzy_graph()] after a restart.
+#' content-hashed manifest. With `sort_method = "bucketed"`, distances
+#' from a KNN graph are converted to memberships while routing pairs into
+#' bounded vertex buckets; no directed weight file is written. The bucketed
+#' path does not yet support checkpoints. Both sorts are CPU-only.
+#' Use [massive_fuzzy_graph()] after a restart.
 #'
-#' @param x A result of [massive_umap_memberships()].
+#' @param x Directed memberships from [massive_umap_memberships()] for the
+#'   global sort, or KNN distances from [massive_knn_graph()] for the
+#'   bucketed sort.
 #' @param output New prefix for `.offsets.u64`, `.indices.u32`, and
 #'   `.weights.f32` output files.
 #' @param memory_limit RAM budget for external sorting, at least 64 MB.
@@ -286,52 +286,101 @@ massive_weighted_graph <- function(prefix, n_vertices, k,
 #' @param checkpoint Save completed sorted-pair runs for resume.
 #' @param resume Continue a matching interrupted graph sort.
 #' @param checkpoint_every Save progress after this many input blocks.
+#' @param sort_method Global restartable sort or lower-SSD bucketed sort.
+#' @param consume_knn Explicitly delete package-built KNN files after
+#'   bucket staging. The KNN graph cannot then be reused or resumed;
+#'   rebuilding it is required if later graph construction fails.
 #' @return An experimental symmetric `fastEmbedR_massive_graph` descriptor.
 #' @export
 massive_umap_fuzzy_graph <- function(x, output,
         memory_limit = "8GB", backend = "cpu", checkpoint = FALSE,
-        resume = FALSE, checkpoint_every = 100L) {
+        resume = FALSE, checkpoint_every = 100L,
+        sort_method = c("global", "bucketed"),
+        consume_knn = FALSE) {
+    sort_method <- match.arg(sort_method)
     if (!identical(backend, "cpu")) stop(
         "EXPERIMENTAL fuzzy graph sorting requires CPU; ",
         "no backend fallback was used.", call. = FALSE)
-    if (!inherits(x, "fastEmbedR_massive_graph") ||
-        !identical(x$storage, "fixed_knn") ||
-        !identical(x$weight_method, "umap_directed_membership")) {
-        stop("`x` must contain directed UMAP memberships.",
-            call. = FALSE)
-    }
+    massive_fuzzy_sort_input(x, sort_method, checkpoint, resume)
+    release_input <- massive_graph_release_knn(x, consume_knn, sort_method)
     plan <- massive_umap_fuzzy_preflight(x, output, memory_limit,
-        resume = resume)
+        resume = resume, bucketed = sort_method == "bucketed",
+        consume_knn = consume_knn)
     prefix <- plan$prefix
     paths <- c(x$indices_path, x$values_path)
-    message("EXPERIMENTAL fuzzy graph sort: ",
-        format(x$n_edges, scientific = FALSE),
-        " directed edges; temporary disk budget=",
+    massive_checkpoint_validated_graph_identity(x, paths)
+    message("EXPERIMENTAL fuzzy graph sort: ", x$n_edges,
+        " directed edges; initial disk admission=",
         round(plan$disk_bytes / 1024^3, 2), " GiB")
-    sorted <- massive_graph_sort_run(x, plan, "umap", 0, 1L,
-        checkpoint, resume, checkpoint_every)
+    method <- if (sort_method == "bucketed") "umap_bucketed" else "umap"
+    sorted <- massive_graph_sort_run(x, plan, method, 0, 1L,
+        checkpoint, resume, checkpoint_every, release_input)
     built <- sorted$built
-    if (!identical(massive_checkpoint_file_identity(paths),
-        x$file_identity)) stop(
-        "Massive membership files changed during sorting.",
-        call. = FALSE)
+    if (!consume_knn) massive_checkpoint_validated_graph_identity(x, paths)
     graph <- massive_csr_graph(prefix, x$n_vertices, x$access)
     if (graph$n_edges != built$n_edges) stop(
         "Fuzzy graph edge count changed after construction.",
         call. = FALSE)
-    graph$symmetrized <- TRUE
-    graph$backend <- "cpu"
+    graph$symmetrized <- TRUE; graph$backend <- "cpu"
     graph$weight_method <- "umap_fuzzy_union"
-    graph$source_k <- x$k
+    graph$sort_method <- sort_method; graph$source_k <- x$k
     graph$source_identity <- x$file_identity
+    graph$consumed_knn_bytes <- built$released_input_bytes
+    graph$sort_resources <- massive_graph_sort_resources(
+        built$peak_sort_payload_bytes, built$disk_budget_bytes)
+    graph$peak_graph_stage_bytes <- built$peak_with_knn_bytes
     graph$manifest_path <- paste0(prefix, ".fuzzy.rds")
     manifest <- list(version = 1L, method = graph$weight_method,
         n_vertices = graph$n_vertices, n_edges = graph$n_edges,
         max_degree = graph$max_degree, source_k = graph$source_k,
+        sort_method = sort_method,
+        consumed_knn_bytes = graph$consumed_knn_bytes,
+        peak_graph_stage_bytes = graph$peak_graph_stage_bytes,
+        sort_resources = graph$sort_resources,
         hashes = massive_graph_hash(graph$file_identity))
     massive_checkpoint_write(manifest, graph$manifest_path)
     if (!is.null(sorted$sidecar)) unlink(sorted$sidecar)
     graph
+}
+
+massive_graph_release_knn <- function(x, consume_knn, sort_method) {
+    if (!is.logical(consume_knn) || length(consume_knn) != 1L ||
+        is.na(consume_knn)) stop("`consume_knn` must be TRUE or FALSE.",
+            call. = FALSE)
+    if (!consume_knn) return(NULL)
+    if (sort_method != "bucketed" || is.null(x$source_identity) ||
+        !identical(x$implementation_identity,
+            massive_checkpoint_implementation_identity()) ||
+        !identical(x$edge_value, "distance")) stop(
+        "KNN consumption requires a package-built bucketed KNN graph.",
+        call. = FALSE)
+    paths <- c(x$indices_path, x$values_path)
+    massive_checkpoint_validated_graph_identity(x, paths)
+    bytes <- sum(file.info(paths)$size)
+    function() {
+        sizes <- file.info(paths)$size
+        if (anyNA(sizes) || any(sizes != 0)) stop(
+            "Consumed KNN files were not fully staged.",
+            call. = FALSE)
+        if (unlink(paths) != 0L || any(file.exists(paths))) stop(
+            "Could not retire the consumed KNN files.", call. = FALSE)
+        as.double(bytes)
+    }
+}
+
+massive_fuzzy_sort_input <- function(x, method, checkpoint, resume) {
+    weighted <- identical(x$weight_method,
+        "umap_directed_membership")
+    distances <- identical(x$edge_value, "distance")
+    if (!inherits(x, "fastEmbedR_massive_graph") ||
+        !identical(x$storage, "fixed_knn") ||
+        !(if (method == "global") weighted else distances)) stop(
+        "Global sorting needs directed UMAP memberships; ",
+        "bucketed sorting needs KNN distances.", call. = FALSE)
+    if (method == "bucketed" && (checkpoint || resume)) stop(
+        "Bucketed graph sorting does not support checkpoints.",
+        call. = FALSE)
+    invisible(NULL)
 }
 
 massive_graph_hash <- function(identity) {
@@ -343,6 +392,37 @@ massive_graph_hash <- function(identity) {
             call. = FALSE)
     }
     hashes
+}
+
+massive_graph_sort_resources <- function(peak, budget) {
+    if (!is.numeric(peak) || length(peak) != 1L ||
+        !is.finite(peak) || peak < 0 ||
+        !is.numeric(budget) || length(budget) != 1L ||
+        !is.finite(budget) || budget < peak) stop(
+        "Graph sort disk accounting is invalid.", call. = FALSE)
+    list(peak_payload_bytes = peak, budget_bytes = budget)
+}
+
+massive_graph_manifest_knn_bytes <- function(manifest, graph) {
+    bytes <- manifest$consumed_knn_bytes %||% 0
+    if (!is.numeric(bytes) || length(bytes) != 1L ||
+        !is.finite(bytes) ||
+        !bytes %in% c(0, 8 * graph$n_vertices * manifest$source_k)) {
+        stop("Invalid consumed KNN byte count in graph manifest.",
+            call. = FALSE)
+    }
+    bytes
+}
+
+massive_graph_manifest_stage_peak <- function(manifest, graph) {
+    peak <- manifest$peak_graph_stage_bytes
+    if (is.null(peak)) return(NULL)
+    lower <- graph$sort_resources$peak_payload_bytes
+    upper <- lower + 8 * graph$n_vertices * manifest$source_k
+    if (!is.numeric(peak) || length(peak) != 1L ||
+        !is.finite(peak) || peak < lower || peak > upper) stop(
+        "Invalid graph-stage peak in manifest.", call. = FALSE)
+    peak
 }
 
 #' Reload a package-built experimental fuzzy UMAP graph
@@ -360,17 +440,14 @@ massive_fuzzy_graph <- function(prefix, n_vertices,
     graph <- massive_csr_graph(prefix, n_vertices, access)
     path <- paste0(sub("\\.offsets\\.u64$", "",
         graph$offsets_path), ".fuzzy.rds")
-    manifest <- if (file.exists(path)) {
-        tryCatch(readRDS(path), error = function(e) NULL)
-    } else NULL
+    manifest <- tryCatch(readRDS(path), error = function(e) NULL)
     if (!is.list(manifest) ||
         !identical(manifest$version, 1L) ||
         !identical(manifest$method, "umap_fuzzy_union") ||
         !identical(manifest$n_vertices, graph$n_vertices) ||
         !identical(manifest$n_edges, graph$n_edges) ||
         !identical(manifest$max_degree, graph$max_degree) ||
-        !is.numeric(manifest$source_k) ||
-        length(manifest$source_k) != 1L ||
+        !is.numeric(manifest$source_k) || length(manifest$source_k) != 1L ||
         !is.finite(manifest$source_k) ||
         manifest$source_k < 1 ||
         manifest$source_k != floor(manifest$source_k) ||
@@ -385,11 +462,24 @@ massive_fuzzy_graph <- function(prefix, n_vertices,
         "Fuzzy graph content differs from its manifest.",
         call. = FALSE)
     graph$symmetrized <- TRUE
+    graph$consumed_knn_bytes <- massive_graph_manifest_knn_bytes(
+        manifest, graph)
     graph$backend <- "cpu"
     graph$weight_method <- manifest$method
+    graph$sort_method <- manifest$sort_method %||% "global"
+    if (!graph$sort_method %in% c("global", "bucketed")) stop(
+        "Invalid fuzzy graph sort method.", call. = FALSE)
     graph$source_k <- manifest$source_k
-    graph$manifest_path <- path
-    graph
+    if (!is.null(manifest$sort_resources)) {
+        reported <- manifest$sort_resources
+        graph$sort_resources <- massive_graph_sort_resources(
+            reported$peak_payload_bytes, reported$budget_bytes)
+        if (!identical(reported, graph$sort_resources)) stop(
+            "Graph sort disk accounting is invalid.", call. = FALSE)
+    }
+    graph$peak_graph_stage_bytes <- massive_graph_manifest_stage_peak(
+        manifest, graph)
+    graph$manifest_path <- path; graph
 }
 
 #' Construct experimental file-backed t-SNE affinities
@@ -410,12 +500,64 @@ massive_fuzzy_graph <- function(prefix, n_vertices,
 #' @param checkpoint Save completed sorted-pair runs for resume.
 #' @param resume Continue a matching interrupted graph sort.
 #' @param checkpoint_every Save progress after this many input blocks.
+#' @param sort_method Global restartable sort or lower-SSD bucketed sort.
+#' @param consume_knn Explicitly delete package-built KNN files after
+#'   bucket staging. Rebuilding KNN is required if construction fails.
 #' @return An experimental symmetric `fastEmbedR_massive_graph` descriptor.
 #' @export
 massive_tsne_affinities <- function(x, perplexity, output,
         memory_limit = "8GB", backend = "cpu", n.cores = 1L,
         checkpoint = FALSE, resume = FALSE,
-        checkpoint_every = 100L) {
+        checkpoint_every = 100L,
+        sort_method = c("global", "bucketed"),
+        consume_knn = FALSE) {
+    sort_method <- match.arg(sort_method)
+    if (sort_method == "bucketed" && (checkpoint || resume)) stop(
+        "Bucketed graph sorting does not support checkpoints.",
+        call. = FALSE)
+    workers <- massive_tsne_affinity_controls(x, perplexity,
+        backend, n.cores)
+    release_input <- massive_graph_release_knn(x, consume_knn,
+        sort_method)
+    paths <- c(x$indices_path, x$values_path)
+    massive_checkpoint_validated_graph_identity(x, paths)
+    plan <- massive_umap_fuzzy_preflight(x, output, memory_limit,
+        ".affinity.rds", resume, sort_method == "bucketed",
+        consume_knn)
+    method <- if (sort_method == "bucketed") "tsne_bucketed" else "tsne"
+    sorted <- massive_graph_sort_run(x, plan, method, perplexity,
+        workers, checkpoint, resume, checkpoint_every, release_input)
+    if (!consume_knn) massive_checkpoint_validated_graph_identity(x, paths)
+    graph <- massive_csr_graph(plan$prefix, x$n_vertices, x$access)
+    if (graph$n_edges != sorted$built$n_edges) stop(
+        "t-SNE affinity edge count changed after construction.",
+        call. = FALSE)
+    graph$symmetrized <- TRUE
+    graph$weight_method <- "tsne_compact_affinity"
+    graph$perplexity <- perplexity; graph$source_k <- x$k
+    graph$source_identity <- x$file_identity
+    graph$consumed_knn_bytes <- sorted$built$released_input_bytes
+    graph$backend <- "cpu"; graph$n.cores <- workers
+    graph$sort_method <- sort_method
+    graph$sort_resources <- massive_graph_sort_resources(
+        sorted$built$peak_sort_payload_bytes, sorted$built$disk_budget_bytes)
+    graph$peak_graph_stage_bytes <- sorted$built$peak_with_knn_bytes
+    graph$manifest_path <- paste0(plan$prefix, ".affinity.rds")
+    manifest <- list(version = 1L, method = graph$weight_method,
+        n_vertices = graph$n_vertices, n_edges = graph$n_edges,
+        max_degree = graph$max_degree, source_k = graph$source_k,
+        perplexity = perplexity, sort_method = sort_method,
+        consumed_knn_bytes = graph$consumed_knn_bytes,
+        peak_graph_stage_bytes = graph$peak_graph_stage_bytes,
+        sort_resources = graph$sort_resources,
+        hashes = massive_graph_hash(graph$file_identity))
+    massive_checkpoint_write(manifest, graph$manifest_path)
+    if (!is.null(sorted$sidecar)) unlink(sorted$sidecar)
+    graph
+}
+
+massive_tsne_affinity_controls <- function(x, perplexity,
+        backend, n.cores) {
     if (!identical(backend, "cpu")) stop(
         "EXPERIMENTAL t-SNE affinities require CPU; ",
         "no backend fallback was used.", call. = FALSE)
@@ -432,39 +574,12 @@ massive_tsne_affinities <- function(x, perplexity, output,
     workers <- integer_scalar(n.cores)
     if (is.na(workers) || workers < 1L || workers > 256L) stop(
         "`n.cores` must be an integer from 1 to 256.", call. = FALSE)
-    plan <- massive_umap_fuzzy_preflight(x, output, memory_limit,
-        ".affinity.rds", resume)
-    sorted <- massive_graph_sort_run(x, plan, "tsne",
-        perplexity, workers, checkpoint, resume,
-        checkpoint_every)
-    if (!identical(massive_checkpoint_file_identity(
-        c(x$indices_path, x$values_path)), x$file_identity)) stop(
-        "Massive KNN files changed during affinity construction.",
-        call. = FALSE)
-    graph <- massive_csr_graph(plan$prefix, x$n_vertices, x$access)
-    if (graph$n_edges != sorted$built$n_edges) stop(
-        "t-SNE affinity edge count changed after construction.",
-        call. = FALSE)
-    graph$symmetrized <- TRUE
-    graph$weight_method <- "tsne_compact_affinity"
-    graph$perplexity <- perplexity
-    graph$source_k <- x$k
-    graph$source_identity <- x$file_identity
-    graph$backend <- "cpu"
-    graph$n.cores <- workers
-    graph$manifest_path <- paste0(plan$prefix, ".affinity.rds")
-    manifest <- list(version = 1L, method = graph$weight_method,
-        n_vertices = graph$n_vertices, n_edges = graph$n_edges,
-        max_degree = graph$max_degree, source_k = graph$source_k,
-        perplexity = perplexity,
-        hashes = massive_graph_hash(graph$file_identity))
-    massive_checkpoint_write(manifest, graph$manifest_path)
-    if (!is.null(sorted$sidecar)) unlink(sorted$sidecar)
-    graph
+    workers
 }
 
 massive_umap_fuzzy_preflight <- function(x, output, memory_limit,
-        manifest_suffix = ".fuzzy.rds", resume = FALSE) {
+        manifest_suffix = ".fuzzy.rds", resume = FALSE,
+        bucketed = FALSE, consume_knn = FALSE) {
     if (!is.character(output) || length(output) != 1L ||
         is.na(output) || !nzchar(output)) {
         stop("`output` must be one new graph prefix.", call. = FALSE)
@@ -485,7 +600,9 @@ massive_umap_fuzzy_preflight <- function(x, output, memory_limit,
         (resume && (!file.exists(sidecar) ||
             (file.exists(work) && !dir.exists(work))))) stop(
         "Graph output or work files already exist.", call. = FALSE)
-    needed <- 96 * x$n_edges + 8 * (x$n_vertices + 1)
+    needed <- (if (bucketed && consume_knn) 4 else if (bucketed)
+        12 else 19) * x$n_edges + 8 * (x$n_vertices + 1) +
+        (if (bucketed && consume_knn) 12 * 65536 else 0)
     existing <- c(list.files(work, full.names = TRUE),
         pending[file.exists(pending) & !dir.exists(pending)])
     occupied <- if (length(existing)) sum(file.info(existing)$size)
@@ -518,6 +635,45 @@ massive_graph_sort_signature <- function(x, plan, method,
         native = native))
 }
 
+massive_graph_sort_run_identity <- function(state, x, work) {
+    runs <- state$runs
+    phase <- state$phase %||% "pairs_input"
+    names <- basename(runs$paths)
+    reduced <- identical(phase, "pairs_reduced")
+    generated <- identical(phase, "rows_generated")
+    rows_reduced <- identical(phase, "rows_reduced")
+    expected <- if (reduced || generated || rows_reduced) {
+        paste0(work, names)
+    } else if (length(names)) {
+        paste0(work, "pairs_run_", seq_along(names) - 1L,
+            ".bin")
+    } else character()
+    names_ok <- if (reduced) {
+        all(grepl("^pairs_(run_[0-9]+|merge_[0-9]+_0)[.]bin$",
+            names))
+    } else if (generated) {
+        all(grepl("^rows_run_[0-9]+[.]bin$", names))
+    } else if (rows_reduced) {
+        all(grepl("^rows_(run_[0-9]+|merge_[0-9]+_0)[.]bin$",
+            names))
+    } else TRUE
+    bytes <- sum(runs$bytes)
+    sizes_ok <- if (generated || rows_reduced) {
+        bytes > 0 && bytes %% 12 == 0 &&
+            bytes <= 24 * x$n_edges
+    } else bytes == state$completed_rows * x$k * 12
+    phase %in% c("pairs_input", "pairs_reduced",
+        "rows_generated", "rows_reduced") && names_ok &&
+        !anyDuplicated(names) &&
+        (phase == "pairs_input" ||
+            (state$completed_rows == x$n_vertices && length(names))) &&
+        massive_checkpoint_same_paths(runs$paths, expected) &&
+        is.numeric(runs$bytes) && all(is.finite(runs$bytes)) &&
+        all(runs$bytes > 0) && sizes_ok &&
+        identical(runs, tryCatch(massive_checkpoint_file_identity(
+            runs$paths), error = function(e) NULL))
+}
+
 massive_graph_sort_state <- function(x, plan, signature, resume) {
     sidecar <- paste0(plan$prefix, ".sort-checkpoint.rds")
     if (!resume) {
@@ -531,35 +687,74 @@ massive_graph_sort_state <- function(x, plan, signature, resume) {
     if (!is.list(state) || !is.list(state$runs)) stop(
         "Graph sort checkpoint is unreadable.", call. = FALSE)
     rows <- state$completed_rows
-    runs <- state$runs
+    phase <- state$phase %||% "pairs_input"
     block <- max(1L, 65536L %/% x$k)
-    expected <- if (length(runs$paths)) paste0(plan$prefix,
-        ".work/pairs_run_", seq_along(runs$paths) - 1L,
-        ".bin") else character()
-    current <- tryCatch(massive_checkpoint_file_identity(
-        runs$paths), error = function(e) NULL)
+    work <- paste0(plan$prefix, ".work/")
     valid <- identical(state$signature, signature) &&
         is.numeric(rows) && length(rows) == 1L &&
         is.finite(rows) && rows >= 0 && rows <= x$n_vertices &&
         rows == floor(rows) &&
         (rows == x$n_vertices || rows %% block == 0) &&
-        massive_checkpoint_same_paths(runs$paths, expected) &&
-        is.numeric(runs$bytes) &&
-        all(is.finite(runs$bytes)) &&
-        all(runs$bytes > 0) &&
-        sum(runs$bytes) == rows * x$k * 16 &&
-        identical(runs, current)
+        (!phase %in% c("rows_generated", "rows_reduced") ||
+            (is.numeric(state$total_mass) &&
+            length(state$total_mass) == 1L &&
+            is.finite(state$total_mass) &&
+            state$total_mass >= 0)) &&
+        massive_graph_sort_run_identity(state, x, work)
     if (!isTRUE(valid)) stop(
         "Graph sort checkpoint does not match inputs or runs.",
         call. = FALSE)
     state
 }
 
+massive_graph_sort_phase_progress <- function(state, sidecar, done,
+        paths, phase, total_mass, k) {
+    previous <- state$phase %||% "pairs_input"
+    allowed <- switch(phase,
+        pairs_reduced = previous %in% c("pairs_input",
+            "pairs_reduced"),
+        rows_generated = previous %in% c("pairs_input",
+            "pairs_reduced"),
+        rows_reduced = previous %in% c("rows_generated",
+            "rows_reduced"), FALSE)
+    previous_bytes <- sum(state$runs$bytes)
+    if (!allowed || done != state$completed_rows ||
+        !length(paths)) stop(
+        "Graph sort phase is inconsistent.", call. = FALSE)
+    state$runs <- massive_checkpoint_file_identity(paths)
+    expected <- if (phase == "pairs_reduced") {
+        done * k * 12
+    } else if (phase == "rows_reduced") {
+        previous_bytes
+    } else sum(state$runs$bytes)
+    if (sum(state$runs$bytes) != expected ||
+        (phase %in% c("rows_generated", "rows_reduced") &&
+        (expected <= 0 || expected %% 12 != 0 ||
+        expected > 24 * done * k ||
+        !is.numeric(total_mass) || length(total_mass) != 1L ||
+        !is.finite(total_mass) || total_mass < 0))) stop(
+        "Reduced graph runs have invalid sizes.", call. = FALSE)
+    state$phase <- phase
+    if (phase %in% c("rows_generated", "rows_reduced")) {
+        state$total_mass <- total_mass
+    }
+    massive_checkpoint_write(state, sidecar)
+    state
+}
+
 massive_graph_sort_progress <- function(plan, state, k) {
     sidecar <- paste0(plan$prefix, ".sort-checkpoint.rds")
-    function(done, paths) {
-        old <- state$runs$paths
-        if (done < state$completed_rows || length(paths) < length(old) ||
+    function(done, paths, phase = "pairs_input", total_mass = NULL) {
+        next_state <- state
+        if (phase %in% c("pairs_reduced", "rows_generated",
+            "rows_reduced")) {
+            state <<- massive_graph_sort_phase_progress(next_state,
+                sidecar, done, paths, phase, total_mass, k)
+            return(invisible(NULL))
+        }
+        old <- next_state$runs$paths
+        if (done < next_state$completed_rows ||
+            length(paths) < length(old) ||
             !massive_checkpoint_same_paths(
                 utils::head(paths, length(old)), old)) stop(
             "Graph sort progress is inconsistent.", call. = FALSE)
@@ -568,21 +763,23 @@ massive_graph_sort_progress <- function(plan, state, k) {
         } else character()
         if (length(fresh)) {
             added <- massive_checkpoint_file_identity(fresh)
-            for (key in names(state$runs)) {
-                state$runs[[key]] <- c(state$runs[[key]],
+            for (key in names(next_state$runs)) {
+                next_state$runs[[key]] <- c(next_state$runs[[key]],
                     added[[key]])
             }
         }
-        if (sum(state$runs$bytes) != done * k * 16) stop(
+        if (sum(next_state$runs$bytes) != done * k * 12) stop(
             "Graph sort run sizes disagree with input progress.",
             call. = FALSE)
-        state$completed_rows <- done
-        massive_checkpoint_write(state, sidecar)
+        next_state$completed_rows <- done
+        massive_checkpoint_write(next_state, sidecar)
+        state <<- next_state
     }
 }
 
 massive_graph_sort_run <- function(x, plan, method, perplexity,
-        workers, checkpoint, resume, checkpoint_every) {
+        workers, checkpoint, resume, checkpoint_every,
+        release_input = NULL) {
     massive_checkpoint_validate_controls(checkpoint, resume)
     every <- integer_scalar(checkpoint_every)
     if (is.na(every) || every < 1L) stop(
@@ -592,14 +789,23 @@ massive_graph_sort_run <- function(x, plan, method, perplexity,
             method, perplexity, workers, every)
         massive_graph_sort_state(x, plan, signature, resume)
     } else NULL
+    if (!is.null(release_input)) on.exit({
+        paths <- c(x$indices_path, x$values_path)
+        sizes <- file.info(paths)$size
+        if (any(!is.na(sizes) & sizes != x$file_bytes_each)) {
+            unlink(paths)
+        }
+    }, add = TRUE)
     progress <- if (checkpoint) massive_graph_sort_progress(
         plan, state, x$k) else NULL
     built <- massive_symmetrize_graph_cpp(x$indices_path,
         x$values_path, x$n_vertices, x$k, plan$prefix,
         plan$limit, method, perplexity, workers, resume,
         state$completed_rows %||% 0, state$runs$paths %||%
-            character(), if (checkpoint) every else 0L,
-        progress)
+            character(), state$phase %||% "pairs_input",
+        state$total_mass %||% 0,
+        if (checkpoint) every else 0L,
+        progress, release_input)
     list(built = built, sidecar = if (checkpoint)
         paste0(plan$prefix, ".sort-checkpoint.rds") else NULL)
 }
@@ -618,17 +824,14 @@ massive_affinity_graph <- function(prefix, n_vertices,
     graph <- massive_csr_graph(prefix, n_vertices, access)
     path <- paste0(sub("\\.offsets\\.u64$", "",
         graph$offsets_path), ".affinity.rds")
-    manifest <- if (file.exists(path)) {
-        tryCatch(readRDS(path), error = function(e) NULL)
-    } else NULL
+    manifest <- tryCatch(readRDS(path), error = function(e) NULL)
     if (!is.list(manifest) ||
         !identical(manifest$version, 1L) ||
         !identical(manifest$method, "tsne_compact_affinity") ||
         !identical(manifest$n_vertices, graph$n_vertices) ||
         !identical(manifest$n_edges, graph$n_edges) ||
         !identical(manifest$max_degree, graph$max_degree) ||
-        !is.numeric(manifest$source_k) ||
-        length(manifest$source_k) != 1L ||
+        !is.numeric(manifest$source_k) || length(manifest$source_k) != 1L ||
         !is.finite(manifest$source_k) ||
         manifest$source_k < 1 ||
         manifest$source_k != floor(manifest$source_k) ||
@@ -647,13 +850,24 @@ massive_affinity_graph <- function(prefix, n_vertices,
         massive_graph_hash(graph$file_identity))) stop(
         "t-SNE affinity content differs from its manifest.",
         call. = FALSE)
-    graph$symmetrized <- TRUE
-    graph$backend <- "cpu"
+    graph$symmetrized <- TRUE; graph$backend <- "cpu"
+    graph$consumed_knn_bytes <- massive_graph_manifest_knn_bytes(
+        manifest, graph)
     graph$weight_method <- manifest$method
-    graph$source_k <- manifest$source_k
-    graph$perplexity <- manifest$perplexity
-    graph$manifest_path <- path
-    graph
+    graph$source_k <- manifest$source_k; graph$perplexity <- manifest$perplexity
+    graph$sort_method <- manifest$sort_method %||% "global"
+    if (!graph$sort_method %in% c("global", "bucketed")) stop(
+        "Invalid affinity graph sort method.", call. = FALSE)
+    if (!is.null(manifest$sort_resources)) {
+        reported <- manifest$sort_resources
+        graph$sort_resources <- massive_graph_sort_resources(
+            reported$peak_payload_bytes, reported$budget_bytes)
+        if (!identical(reported, graph$sort_resources)) stop(
+            "Graph sort disk accounting is invalid.", call. = FALSE)
+    }
+    graph$peak_graph_stage_bytes <- massive_graph_manifest_stage_peak(
+        manifest, graph)
+    graph$manifest_path <- path; graph
 }
 
 #' Import an experimental file-backed weighted CSR graph
@@ -687,13 +901,16 @@ massive_csr_graph <- function(prefix, n_vertices,
     }
     paths <- normalizePath(paste0(prefix, c(".offsets.u64",
         ".indices.u32", ".weights.f32")), mustWork = TRUE)
-    identity <- massive_checkpoint_file_identity(paths)
+    validated_input_identity <-
+        massive_checkpoint_input_files_identity(paths)
     checked <- massive_validate_csr_graph_cpp(paths[[1L]],
         paths[[2L]], paths[[3L]], n_vertices)
-    if (!identical(identity, massive_checkpoint_file_identity(paths))) {
+    if (!identical(validated_input_identity,
+        massive_checkpoint_input_files_identity(paths))) {
         stop("Massive graph files changed during validation.",
             call. = FALSE)
     }
+    identity <- validated_input_identity[c("paths", "bytes", "modified")]
     graph <- list(offsets_path = paths[[1L]],
         indices_path = paths[[2L]], weights_path = paths[[3L]],
         values_path = paths[[3L]], n_vertices = checked$n_vertices,
@@ -704,9 +921,73 @@ massive_csr_graph <- function(prefix, n_vertices,
         symmetrized = FALSE, edge_value = "weight",
         backend = "external", access = match.arg(access),
         validation_access = "stream", validated = checked$validated,
-        file_identity = identity, experimental = TRUE)
+        file_identity = identity,
+        validated_input_identity = validated_input_identity,
+        experimental = TRUE)
     class(graph) <- "fastEmbedR_massive_graph"
     graph
+}
+
+massive_graph_owner_edge_counts <- function(graph, devices) {
+    count <- length(devices)
+    block <- ceiling(graph$n_vertices / count)
+    boundaries <- pmin(graph$n_vertices, seq.int(0, count) * block)
+    size <- file.info(graph$offsets_path)$size
+    if (is.na(size) || size != 8 * (graph$n_vertices + 1)) stop(
+        "Graph offsets cannot verify GPU edge ownership.",
+        call. = FALSE)
+    input <- file(graph$offsets_path, "rb")
+    on.exit(close(input), add = TRUE)
+    offsets <- vapply(boundaries, function(row) {
+        seek(input, where = 8 * row, origin = "start")
+        bytes <- readBin(input, raw(), n = 8L)
+        if (length(bytes) != 8L) stop(
+            "Graph offsets cannot verify GPU edge ownership.",
+            call. = FALSE)
+        sum(as.double(as.integer(bytes)) * 256^(0:7))
+    }, numeric(1L))
+    if (offsets[[1L]] != 0 ||
+        utils::tail(offsets, 1L) != graph$n_edges ||
+        any(diff(offsets) < 0)) stop(
+        "Graph offsets cannot verify GPU edge ownership.",
+        call. = FALSE)
+    diff(offsets)
+}
+
+massive_graph_owner_active_counts <- function(graph, devices,
+        max_weight, n_epochs) {
+    owners <- massive_graph_owner_edge_counts(graph, devices)
+    bytes <- file.info(graph$weights_path)$size
+    if (is.na(bytes) || bytes != 4 * graph$n_edges ||
+        !is.numeric(max_weight) || length(max_weight) != 1L ||
+        !is.finite(max_weight) || max_weight <= 0) stop(
+        "Graph weights cannot verify GPU edge ownership.",
+        call. = FALSE)
+    threshold <- readBin(writeBin(max_weight / n_epochs, raw(),
+        size = 4L, endian = "little"), numeric(), n = 1L,
+        size = 4L, endian = "little")
+    input <- file(graph$weights_path, "rb")
+    on.exit(close(input), add = TRUE)
+    active <- numeric(length(owners))
+    largest <- -Inf
+    for (i in seq_along(owners)) {
+        remaining <- owners[i]
+        while (remaining > 0) {
+            count <- as.integer(min(1048576, remaining))
+            values <- readBin(input, numeric(), n = count,
+                size = 4L, endian = "little")
+            if (length(values) != count || any(!is.finite(values))) stop(
+                "Graph weights cannot verify GPU edge ownership.",
+                call. = FALSE)
+            largest <- max(largest, values)
+            active[i] <- active[i] + sum(values >= threshold)
+            remaining <- remaining - count
+        }
+    }
+    if (largest != max_weight) stop(
+        "Graph weights cannot verify GPU edge ownership.",
+        call. = FALSE)
+    active
 }
 
 #' Read a bounded edge range from an experimental full KNN graph

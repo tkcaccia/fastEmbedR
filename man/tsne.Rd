@@ -167,8 +167,10 @@ Landmarking is always explicit.}
 
 \item{memory_limit}{Conservative experimental RAM budget.}
 
-\item{devices}{Optional CUDA device indices for experimental landmark
-query projection. Reference fitting and KNN use the first device.}
+\item{devices}{Optional CUDA device indices. With experimental
+full-graph 2D t-SNE, two devices coordinate one fit using NCCL.
+Landmark projection distributes query rows across devices while
+reference fitting and KNN use the first device.}
 
 \item{landmark_method}{Sampling method for experimental landmark mode:
 \code{"reservoir"} (default) or \code{"random"} for fast random-access storage.

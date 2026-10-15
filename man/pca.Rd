@@ -61,7 +61,8 @@ covariance PCA for a \code{\link[=massive_matrix]{massive_matrix()}} source with
 columns on CPU or 2048 on CUDA. Wider matrices use randomized
 streamed PCA. Wide CUDA streams the mean and scale passes on CPU,
 runs its sketch and projection on CUDA, and reports stage backends.
-Metal streaming is unavailable and fails explicitly.}
+Metal streams covariance and score projection for at most 1024
+columns using one CPU worker; the small eigendecomposition runs on CPU.}
 
 \item{output}{Required \code{.f32} score-file path in out-of-core mode,
 including when auto mode selects that route.}

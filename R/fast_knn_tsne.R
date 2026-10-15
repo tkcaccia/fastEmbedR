@@ -766,8 +766,10 @@ tsne_landmark_controls <- function(landmarks, transform_k,
 #'   100 iterations and at the final iteration.
 #' @param resume Continue a matching interrupted experimental workflow.
 #'   Changed input, backend, or fit controls fail without recomputation.
-#' @param devices Optional CUDA device indices for experimental landmark
-#'   query projection. Reference fitting and KNN use the first device.
+#' @param devices Optional CUDA device indices. With experimental
+#'   full-graph 2D t-SNE, two devices coordinate one fit using NCCL.
+#'   Landmark projection distributes query rows across devices while
+#'   reference fitting and KNN use the first device.
 #' @param ... Additional low-level parameters passed to [tsne_knn()].
 #' @details
 #' The t-SNE API exposes the principal

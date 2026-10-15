@@ -1,11 +1,16 @@
 massive_modularity_resources <- function(graph, chunk_rows, memory_limit,
-        n_communities) {
+        n_communities, connectivity = FALSE) {
     limit <- massive_memory_bytes(memory_limit)
     rows <- integer_scalar(chunk_rows)
     if (is.na(rows) || rows < 1L) {
         stop("`chunk_rows` must be a positive integer.", call. = FALSE)
     }
-    fixed <- 32 * 1024^2 + 16 * n_communities
+    if (connectivity && graph$n_vertices > .Machine$integer.max) stop(
+        "Connectivity audit exceeds the vertex-ID limit.",
+        call. = FALSE)
+    fixed <- 32 * 1024^2 + 16 * n_communities +
+        if (connectivity) 8 * graph$n_vertices +
+            4 * n_communities else 0
     available <- floor(0.7 * limit - fixed - 8 * (rows + 1))
     edges <- min(floor(available / 8), 16e6, 65536 * rows)
     if (!is.finite(edges) || edges < graph$max_degree) {
@@ -34,18 +39,21 @@ massive_modularity_resources <- function(graph, chunk_rows, memory_limit,
 #' @param memory_limit RAM budget for native scan buffers. Memory-mapped
 #'   label pages are tracked separately and are not a strict RSS cap.
 #' @param backend Only `"cpu"` is supported; other requests fail explicitly.
+#' @param connectivity Also audit connected components within each label.
+#'   This uses about eight additional RAM bytes per vertex and fails when
+#'   that allocation exceeds `memory_limit`.
 #' @return Modularity, internal and total edge weights, edge-pair count,
-#'   backend, and a buffer/mapping resource estimate.
+#'   optional connectivity counts, backend, and resource estimates.
 #' @export
 massive_graph_modularity <- function(graph, membership,
         n_communities = NULL, resolution = 1,
-        chunk_rows = 8192L, memory_limit = "1GB", backend = "cpu") {
+        chunk_rows = 8192L, memory_limit = "1GB", backend = "cpu",
+        connectivity = FALSE) {
     if (!identical(backend, "cpu")) stop(
         "Massive modularity requires CPU; no backend fallback was used.",
         call. = FALSE)
     if (.Platform$OS.type != "unix") stop(
-        "Massive modularity requires POSIX memory mapping.",
-        call. = FALSE)
+        "Massive modularity requires POSIX memory mapping.", call. = FALSE)
     if (!inherits(graph, "fastEmbedR_massive_graph") ||
         !identical(graph$storage, "csr") ||
         !identical(graph$weight_method, "umap_fuzzy_union") ||
@@ -66,8 +74,11 @@ massive_graph_modularity <- function(graph, membership,
         !is.numeric(resolution) || length(resolution) != 1L ||
         !is.finite(resolution) || resolution <= 0) stop(
         "Invalid community count or resolution.", call. = FALSE)
+    if (!is.logical(connectivity) || length(connectivity) != 1L ||
+        is.na(connectivity)) stop(
+        "`connectivity` must be TRUE or FALSE.", call. = FALSE)
     resources <- massive_modularity_resources(graph, chunk_rows,
-        memory_limit, groups)
+        memory_limit, groups, connectivity)
     path <- normalizePath(membership, mustWork = TRUE)
     paths <- c(graph$offsets_path, graph$indices_path,
         graph$weights_path, path)
@@ -79,10 +90,8 @@ massive_graph_modularity <- function(graph, membership,
         call. = FALSE)
     value <- massive_graph_modularity_cpp(paths[[1L]], paths[[2L]],
         paths[[3L]], path, graph$n_vertices, groups, resolution,
-        resources$chunk_rows, resources$edge_budget)
-    if (!identical(before, massive_checkpoint_file_identity(paths))) {
-        stop("Graph or membership files changed during scan.",
-            call. = FALSE)
-    }
+        resources$chunk_rows, resources$edge_budget, connectivity)
+    if (!identical(before, massive_checkpoint_file_identity(paths)))
+        stop("Graph or membership files changed during scan.", call. = FALSE)
     c(value, list(resources = resources, experimental = TRUE))
 }

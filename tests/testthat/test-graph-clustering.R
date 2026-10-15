@@ -250,6 +250,39 @@ test_that("Walktrap agrees with the igraph oracle", {
     )
 })
 
+test_that("Walktrap preserves sparse-walk partitions and modularity", {
+    skip_if_not_installed("igraph")
+    n <- 600L
+    group <- (seq_len(n) - 1L) %/% 100L
+    from <- rep(seq_len(n), each = 8L)
+    offset <- rep(seq_len(8L), times = n)
+    to <- group[from] * 100L + ((from - 1L + offset) %% 100L) + 1L
+    graph <- structure(list(
+        from = from, to = to, weight = rep(1, length(from)),
+        n_vertices = n, n_edges = length(from)
+    ), class = c("fastEmbedR_graph", "list"))
+    reference_graph <- igraph::graph_from_edgelist(
+        cbind(from, to), directed = FALSE
+    )
+    reference <- igraph::cluster_walktrap(
+        reference_graph, weights = graph$weight, steps = 4L
+    )
+    native <- graph_cluster(graph, method = "walktrap", steps = 4L)
+    expect_equal(
+        adjusted_rand_index(
+            native$membership, igraph::membership(reference)
+        ), 1
+    )
+    expect_equal(
+        native$modularity,
+        igraph::modularity(
+            reference_graph, native$membership,
+            weights = graph$weight
+        ),
+        tolerance = 1e-8
+    )
+})
+
 test_that("Louvain and Leiden remain competitive with igraph", {
     skip_if_not_installed("igraph")
     set.seed(103)

@@ -150,6 +150,12 @@ void massive_merge_knn_shard_cpp(std::string indices_path,
       static_cast<std::uint64_t>(shard_first),
       static_cast<std::uint64_t>(shard_rows),
       static_cast<int>(n_vertices), k, exclude_self);
+    if (exclude_self &&
+        shard_first + shard_rows - 1 == n_vertices &&
+        n_queries == n_vertices &&
+        static_cast<int>(selected.size()) != k) {
+      Rcpp::stop("Full KNN row has too few distinct non-self neighbors.");
+    }
     std::fill(old_ids.begin(), old_ids.end(), 0);
     std::fill(old_distances.begin(), old_distances.end(),
               std::numeric_limits<float>::infinity());

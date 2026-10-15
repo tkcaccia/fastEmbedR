@@ -8,8 +8,9 @@ massive_embedding_mode <- function(mode) {
 massive_embedding_paths <- function(data, count, k, dimensions,
                                     output, memory_limit, devices,
                                     reuse = FALSE, resume = FALSE) {
+    rows <- as.double(data$nrow)
     part <- paste0(output, ".part")
-    path <- massive_float_output(output, data$nrow * dimensions * 4,
+    path <- massive_float_output(output, rows * dimensions * 4,
         resume = resume && file.exists(part))
     stem <- sub("\\.f32$", "", path, ignore.case = TRUE)
     landmarks <- paste0(stem, ".landmarks.f32")
@@ -20,7 +21,7 @@ massive_embedding_paths <- function(data, count, k, dimensions,
     }
     if (!reuse && !resume) {
         massive_float_output(landmarks, count * data$ncol * 4)
-        massive_knn_paths(graph, data$nrow * k * 8)
+        massive_knn_paths(graph, rows * k * 8)
     }
     limit <- massive_memory_bytes(memory_limit)
     reference_ram <- 128 * 1024^2 + count *
@@ -30,11 +31,11 @@ massive_embedding_paths <- function(data, count, k, dimensions,
             call. = FALSE)
     }
     disk <- count * data$ncol * if (reuse) 8 else 12
-    disk <- disk + data$nrow *
-        (if (reuse) 0 else 8 * k) + data$nrow * 4 * dimensions
-    if (!is.null(devices)) disk <- disk + data$nrow * dimensions * 4
+    disk <- disk + rows *
+        (if (reuse) 0 else 8 * k) + rows * 4 * dimensions
+    if (!is.null(devices)) disk <- disk + rows * dimensions * 4
     if (length(devices) > 1L && !reuse) {
-        disk <- disk + data$nrow * k * 8
+        disk <- disk + rows * k * 8
     }
     if (resume) {
         finished <- c(landmarks, paste0(graph, ".indices.u32"),
@@ -51,8 +52,8 @@ massive_embedding_paths <- function(data, count, k, dimensions,
     }
     list(path = path, landmarks = landmarks, model = model,
         graph = graph, reference_ram_bytes = reference_ram,
-        output_bytes = data$nrow * dimensions * 4,
-        graph_bytes = data$nrow * k * 8)
+        output_bytes = rows * dimensions * 4,
+        graph_bytes = rows * k * 8)
 }
 
 massive_embedding_request <- function(data, landmarks, backend,
@@ -60,15 +61,13 @@ massive_embedding_request <- function(data, landmarks, backend,
         memory_limit, chunk_rows, devices, landmark_method,
         checkpoint, resume) {
     massive_checkpoint_validate_controls(checkpoint, resume)
-    if (!inherits(data, "fastEmbedR_massive_matrix")) {
-        stop("EXPERIMENTAL landmark mode requires `massive_matrix()`.",
-            call. = FALSE)
-    }
+    if (!inherits(data, "fastEmbedR_massive_matrix")) stop(
+        "EXPERIMENTAL landmark mode requires `massive_matrix()`.",
+        call. = FALSE)
     count <- integer_scalar(landmarks)
-    if (is.na(count) || count < 2L || count >= data$nrow) {
-        stop("`landmarks` must be a count between 2 and nrow - 1.",
-            call. = FALSE)
-    }
+    if (is.na(count) || count < 2L || count >= data$nrow) stop(
+        "`landmarks` must be a count between 2 and nrow - 1.",
+        call. = FALSE)
     metric <- match.arg(metric, c("euclidean", "cosine", "correlation"))
     if (metric != "euclidean" || !identical(standardize, FALSE) ||
         !is.null(pca_dims) ||
@@ -77,27 +76,29 @@ massive_embedding_request <- function(data, landmarks, backend,
             "without preprocessing or `keep_knn`.",
             call. = FALSE)
     }
-    if (!backend %in% c("cpu", "cuda")) {
-        stop("EXPERIMENTAL landmark mode requires CPU or CUDA; ",
-            "no backend fallback was used.", call. = FALSE)
-    }
-    if (!requireNamespace("float", quietly = TRUE)) {
-        stop("EXPERIMENTAL landmark embedding needs `float` for ",
-            "float32 reference fitting.", call. = FALSE)
-    }
+    if (!backend %in% c("cpu", "cuda", "metal")) stop(
+        "EXPERIMENTAL landmark mode requires CPU, CUDA, or Metal; ",
+        "no backend fallback was used.", call. = FALSE)
+    if (!requireNamespace("float", quietly = TRUE)) stop(
+        "EXPERIMENTAL landmark embedding needs `float` for ",
+        "float32 reference fitting.", call. = FALSE)
     if (backend == "cuda" &&
         (!isTRUE(embedding_cuda_available_cpp()) ||
             !isTRUE(native_cuda_knn_available_cpp()))) {
         stop("EXPERIMENTAL CUDA landmark mode is unavailable; ",
             "no CPU fallback was used.", call. = FALSE)
     }
+    if (backend == "metal" &&
+        (!isTRUE(embedding_metal_available_cpp()) ||
+            !isTRUE(native_metal_knn_available_cpp()))) stop(
+        "EXPERIMENTAL Metal landmark mode is unavailable; ",
+        "no backend fallback was used.", call. = FALSE)
     if (!is.null(chunk_rows) &&
         (length(chunk_rows) != 1L || !is.numeric(chunk_rows) ||
             !is.finite(chunk_rows) || chunk_rows < 1 ||
             chunk_rows != floor(chunk_rows) ||
-            chunk_rows > .Machine$integer.max)) {
+            chunk_rows > .Machine$integer.max))
         stop("`chunk_rows` must be one positive integer.", call. = FALSE)
-    }
     list(count = count, output = output, reuse = nn,
         memory_limit = memory_limit, chunk_rows = chunk_rows,
         devices = massive_validate_devices(devices, backend, data$nrow),
@@ -362,7 +363,7 @@ run_massive_umap_graph <- function(data, init, output, n_components,
         !identical(refinement_epochs, 0L) ||
         !identical(local_refine, FALSE) ||
         !identical(local_neighbors, 15L) ||
-        !identical(overlap_rows, 500L) || !is.null(devices) ||
+        !identical(overlap_rows, 500L) ||
         !identical(landmark_method, "reservoir") ||
         !identical(metric, c("euclidean", "cosine", "correlation")) ||
         !identical(graph_mode, c("fuzzy", "binary"))) {
@@ -381,7 +382,8 @@ run_massive_umap_graph <- function(data, init, output, n_components,
         backend = resolve_embedding_backend(backend),
         n.cores = resolve_n_cores(n.cores),
         layout_storage = layout_storage,
-        checkpoint = checkpoint, resume = resume)
+        checkpoint = checkpoint, resume = resume,
+        devices = devices)
 }
 
 massive_auto_cuda_free <- function(devices, rows) {
@@ -475,15 +477,14 @@ run_massive_umap_landmark <- function(data, landmarks, n_neighbors,
     k <- integer_scalar(transform_k %||% n_neighbors)
     if (is.na(k) || k < 1L || k > request$count)
         stop("Invalid experimental projection neighbors.", call. = FALSE)
-    if (state$backend == "cuda" && epochs != 0L) {
-        stop("EXPERIMENTAL CUDA UMAP requires ",
+    if (state$backend %in% c("cuda", "metal") && epochs != 0L) {
+        stop("EXPERIMENTAL GPU UMAP requires ",
             "`refinement_epochs = 0`; no CPU fallback was used.",
             call. = FALSE)
     }
     workers <- normalize_nn_threads(resolve_n_cores(n.cores))
-    if (state$backend == "cuda" && workers != 1L) {
-        stop("CUDA projection requires `n.cores = 1`.", call. = FALSE)
-    }
+    if (state$backend %in% c("cuda", "metal") && workers != 1L)
+        stop("GPU projection requires `n.cores = 1`.", call. = FALSE)
     fit_reference <- function(reference) umap(reference,
         n_neighbors = n_neighbors, n_components = state$n_components,
         backend = state$backend, n.cores = workers,
@@ -535,7 +536,8 @@ run_massive_tsne_graph <- function(data, nn, settings, extra,
         final_momentum = optimizer$final_momentum,
         max_step_norm = step, memory_limit = memory_limit,
         backend = settings$backend, n.cores = workers,
-        checkpoint = checkpoint, resume = resume)
+        checkpoint = checkpoint, resume = resume,
+        devices = devices)
 }
 
 massive_tsne_graph_controls <- function(data, nn, settings, extra,
@@ -562,7 +564,6 @@ massive_tsne_graph_controls <- function(data, nn, settings, extra,
         !identical(controls$initialization,
             c("median", "weighted", "random")) ||
         !is.null(chunk_rows) ||
-        !is.null(devices) ||
         !identical(landmark_method, "reservoir") ||
         isTRUE(settings$verbose) ||
         isTRUE(settings$optimizer$record_costs) ||
@@ -613,14 +614,13 @@ run_massive_tsne_landmark <- function(data, nn, settings, extra, controls,
     }
     workers <- normalize_nn_threads(resolve_n_cores(settings$n_threads))
     settings$n_threads <- workers
-    if (settings$backend == "cuda" && workers != 1L) {
-        stop("CUDA projection requires `n.cores = 1`.", call. = FALSE)
-    }
-    if (settings$backend == "cuda" &&
-        (!(settings$n_components %in% c(2L, 3L)) || k > 128L)) {
-        stop("EXPERIMENTAL CUDA t-SNE projection needs 2D or 3D ",
-            "and k <= 128; no CPU fallback was used.", call. = FALSE)
-    }
+    if (settings$backend %in% c("cuda", "metal") && workers != 1L)
+        stop("GPU projection requires `n.cores = 1`.", call. = FALSE)
+    if (settings$backend %in% c("cuda", "metal") &&
+        (k > 128L || !(settings$n_components %in% if (
+            settings$backend == "metal") 2L else c(2L, 3L)))) stop(
+        "EXPERIMENTAL GPU t-SNE projection needs supported dimensions ",
+        "and k <= 128; no CPU fallback was used.", call. = FALSE)
     fit_reference <- function(reference) run_matrix_input_tsne(
         reference, NULL, settings, extra, TRUE)
     massive_embedding_run(data, request, k, settings$n_components,

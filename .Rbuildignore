@@ -20,6 +20,8 @@
 ^\.Ruserdata$
 ^\.DS_Store$
 ^\.pytest_cache($|/)
+.*__pycache__($|/)
+.*[.]pyc$
 ^[A-Za-z0-9_.-]+[.](Rcheck|BiocCheck)($|/)
 ^[A-Za-z0-9_.-]+_[0-9.]+[.]tar[.]gz$
 ^_site($|/)

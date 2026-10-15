@@ -11,13 +11,15 @@ massive_landmark_knn(
   output,
   backend = "cpu",
   n.cores = 1L,
-  method = c("auto", "exact", "stream_exact", "hnsw", "ivf", "sharded_exact"),
+  method = c("auto", "exact", "stream_exact", "hnsw", "ivf", "sharded_exact",
+    "sharded_ivf"),
   chunk_rows = NULL,
   reference_chunk_rows = NULL,
   memory_limit = "8GB",
   checkpoint = FALSE,
   resume = FALSE,
-  devices = NULL
+  devices = NULL,
+  checkpoint_every = 100L
 )
 }
 \arguments{
@@ -30,31 +32,40 @@ massive_landmark_knn(
 
 \item{output}{New file prefix for \code{.indices.u32} and \code{.distances.f32}.}
 
-\item{backend}{\code{"cpu"} or \code{"cuda"}; CUDA never falls back to CPU.}
+\item{backend}{\code{"cpu"}, \code{"cuda"}, or \code{"metal"}. Metal uses exact
+search with bounded query batches and a resident reference.}
 
 \item{n.cores}{CPU worker count.}
 
-\item{method}{\code{"auto"}, \code{"exact"}, \code{"stream_exact"} (CPU with a
-file-backed reference), \code{"hnsw"} (CPU), \code{"ivf"} (CUDA), or
-\code{"sharded_exact"} (CUDA with a file-backed reference).}
+\item{method}{\code{"auto"}, \code{"exact"} (also Metal), \code{"stream_exact"} (CPU with a
+file-backed reference), \code{"hnsw"} (CPU faissR), \code{"ivf"} (CUDA), or
+\code{"sharded_exact"} or \code{"sharded_ivf"} (CUDA with a file-backed
+reference). Sharded IVF is approximate and needs a recall audit.}
 
 \item{chunk_rows}{Maximum query rows per batch.}
 
 \item{reference_chunk_rows}{Maximum reference rows per batch for
-\code{"stream_exact"} or \code{"sharded_exact"}; otherwise must be \code{NULL}.}
+\code{"stream_exact"}, \code{"sharded_exact"}, or \code{"sharded_ivf"};
+otherwise must be \code{NULL}.}
 
 \item{memory_limit}{Conservative RAM budget. CUDA also caps batches to a
 conservative fraction of currently free VRAM.}
 
-\item{checkpoint}{Save completed KNN batches to a sidecar file.}
+\item{checkpoint}{Save completed KNN batches to a sidecar file.
+Multi-GPU \code{"sharded_ivf"} checkpoints only completed GPU query shards.
+Single-GPU \code{"sharded_ivf"} does not support checkpointing.}
 
 \item{resume}{Continue from matching partial KNN files and checkpoint.
 Sharded exact CUDA search commits every 100 query blocks and at each
-reference-shard boundary.}
+reference-shard boundary. Multi-GPU sharded IVF reuses completed GPU
+shards but restarts an interrupted shard from its first query row.}
 
 \item{devices}{Optional CUDA device indices. Multiple devices search
 disjoint query ranges, including with \code{sharded_exact}. Checkpointing
 requires file-backed query and reference sources.}
+
+\item{checkpoint_every}{Commit every this many query blocks for sharded
+CUDA search. Other search methods use their existing checkpoint policy.}
 }
 \value{
 A lightweight \code{fastEmbedR_massive_knn} descriptor.
@@ -64,15 +75,19 @@ Searches a disk-backed matrix in bounded query batches. The default
 search keeps the landmark reference in RAM or VRAM. Explicit CPU
 \code{stream_exact} scans bounded reference blocks without materializing the
 full landmark matrix; this exact route is quadratic in query and
-landmark counts. CPU exact and HNSW, and CUDA exact or IVF-Flat search
-retain their native references across query batches. CUDA requires native
-cuVS support. IVF-Flat calibrates on the first query batch; the pilot
-recall is not a guarantee for all remaining rows. For CUDA IVF,
+landmark counts. CPU exact and persistent faissR HNSW, and CUDA exact
+or IVF-Flat search retain references across query batches. Metal exact
+search retains a host float32 reference but reuploads it each batch.
+CUDA needs cuVS support. IVF-Flat calibrates on the first query batch;
+pilot recall is not guaranteed for later rows. For CUDA IVF,
 \code{pilot_recall} counts distance-equivalent ties at the exact kth distance;
 \code{pilot_id_recall} reports strict neighbor-ID overlap.
 CPU uses exact search by default below 5,000 landmarks.
 Output files contain row-major, one-based \code{uint32} landmark indices and
 float32 distances. HNSW's 0.99 recall is a target, not a measured result.
+Checkpointed HNSW uses one index-build thread for reproducible resume;
+\code{n.cores} still controls query search. The effective build thread count
+is recorded in \code{hnsw_settings}.
 Explicit CUDA \code{sharded_exact} builds one bounded reference shard at a
 time and merges exact candidates on disk. It rereads every query for
 each shard and can be much slower than an in-VRAM index.

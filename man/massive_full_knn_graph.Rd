@@ -22,7 +22,9 @@ massive_full_knn_graph(
   centers = NULL,
   nprobe = NULL,
   query_order = c("original", "posting"),
-  ef_search = 0L
+  ef_search = 0L,
+  hnsw_build = NULL,
+  devices = NULL
 )
 }
 \arguments{
@@ -32,7 +34,8 @@ massive_full_knn_graph(
 
 \item{output}{New prefix for graph files.}
 
-\item{backend}{\code{"cpu"} or \code{"cuda"}; CUDA supports exact or IVF shards.}
+\item{backend}{\code{"cpu"}, \code{"cuda"}, or \code{"metal"}. Metal supports exact
+shards only and never falls back to CPU.}
 
 \item{n.cores}{CPU workers for each query block.}
 
@@ -46,9 +49,11 @@ resident index-shard size.}
 
 \item{memory_limit}{Conservative RAM budget.}
 
-\item{checkpoint}{Save completed query blocks, including sharded search.}
+\item{checkpoint}{Save completed query blocks, including sharded search.
+Multi-GPU IVF checkpoints completed GPU query shards only.}
 
-\item{resume}{Continue a matching checkpoint and partial graph.}
+\item{resume}{Continue a matching checkpoint and partial graph.
+An interrupted multi-GPU IVF shard restarts from its first query row.}
 
 \item{method}{\code{"exact"}, \code{"hnsw_sharded"}, \code{"ivf_sharded"}, or
 \code{"coarse_postings"}. The posting route requires the original
@@ -57,9 +62,12 @@ file-backed source, \code{postings}, and matching \code{centers}.}
 \item{audit_rows}{Query rows to compare with streamed exact search
 (maximum 10,000). Posting search also samples small posting lists
 and distant-from-center rows; other methods use evenly spaced rows.
+Multi-GPU IVF excludes each device's first tuning query batch and
+samples only untouched rows.
 Defaults to zero. Reported recall covers only sampled rows, not
-the full graph. \code{sample_target_met} requires every sampled row to
-meet 0.99.}
+the full graph. Strict ID \code{sample_target_met} requires every sampled
+row to meet 0.99. \code{distance_equivalent_recall} also accepts exact
+kth-distance ties, matching the CUDA IVF pilot metric.}
 
 \item{checkpoint_every}{Commit every this many query blocks. A shard
 boundary is always committed. Defaults to 100.}
@@ -74,20 +82,31 @@ boundary is always committed. Defaults to 100.}
 order; \code{"posting"} scans grouped posting rows and externally restores
 original graph order with bounded memory and additional disk space.}
 
-\item{ef_search}{CPU HNSW search effort per shard. Zero uses the native
+\item{ef_search}{CPU HNSW search effort per shard. Zero uses the tuned
 shape-based default. A positive value must be at least \code{k + 1} and
 cannot exceed the smallest reference shard. Other methods reject it.}
+
+\item{hnsw_build}{Optional named list with \code{m} and \code{ef_construction} for
+an explicitly calibrated CPU HNSW build. \code{NULL} uses faissR's
+shape-based policy. Other methods and backends reject this setting.}
+
+\item{devices}{Optional CUDA device indices. Two or more devices require
+exact or IVF sharded search and a file-backed source. CPU and Metal
+requests fail explicitly; the graph is never moved to another route.}
 }
 \value{
 A validated \code{fastEmbedR_massive_graph} descriptor.
 }
 \description{
 Exact search scans all reference blocks for each query block.
-\code{method = "hnsw_sharded"} instead builds one bounded native HNSW index
+\code{method = "hnsw_sharded"} builds one persistent faissR CPU HNSW index
 per reference shard, searches all query blocks against it, and merges
 candidates into the file-backed output. It is approximate; its target
 recall is not measured unless \code{audit_rows} is positive. Multiple shard
 passes can be I/O-heavy.
+Checkpointed HNSW builds each shard with one thread for reproducible
+resume; queries still use \code{n.cores} threads. Each shard records the
+effective build thread count in \code{hnsw_settings}.
 CUDA \code{method = "exact"} builds and queries bounded cuVS reference shards.
 It also scans the full query source per shard, so this exact route is a
 correctness baseline rather than a billion-row ANN solution. A CUDA
@@ -96,4 +115,8 @@ within each shard. It remains approximate across shards; request
 \code{audit_rows} to measure sampled full-graph ID recall. The per-shard
 pilot accepts distance-equivalent ties with different IDs. CUDA
 requests never fall back to CPU.
+Metal exact search reads bounded float32 reference and query batches,
+executes the existing native Metal query kernel, and merges global IDs
+into the same file-backed graph. It re-uploads each reference shard for
+every query batch; this is a correctness route, not an ANN index.
 }

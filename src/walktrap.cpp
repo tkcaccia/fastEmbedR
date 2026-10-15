@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <iterator>
 #include <limits>
 #include <numeric>
 #include <queue>
@@ -96,16 +97,31 @@ double walk_distance_squared(const std::vector<double>& probability,
                              int n,
                              int left_slot,
                              int right_slot,
-                             const std::vector<double>& degree) {
+                             const std::vector<double>& inverse_degree,
+                             const std::vector<std::vector<int>>& support) {
   const std::size_t left_offset = static_cast<std::size_t>(left_slot) *
     static_cast<std::size_t>(n);
   const std::size_t right_offset = static_cast<std::size_t>(right_slot) *
     static_cast<std::size_t>(n);
   double distance = 0.0;
-  for (int k = 0; k < n; ++k) {
-    const double difference = probability[left_offset + static_cast<std::size_t>(k)] -
-      probability[right_offset + static_cast<std::size_t>(k)];
-    distance += difference * difference / degree[static_cast<std::size_t>(k)];
+  const auto& left = support[static_cast<std::size_t>(left_slot)];
+  const auto& right = support[static_cast<std::size_t>(right_slot)];
+  std::size_t i = 0;
+  std::size_t j = 0;
+  while (i < left.size() || j < right.size()) {
+    int k;
+    if (j == right.size() || (i < left.size() && left[i] < right[j])) {
+      k = left[i++];
+    } else if (i == left.size() || right[j] < left[i]) {
+      k = right[j++];
+    } else {
+      k = left[i++];
+      ++j;
+    }
+    const std::size_t offset = static_cast<std::size_t>(k);
+    const double difference = probability[left_offset + offset] -
+      probability[right_offset + offset];
+    distance += difference * difference * inverse_degree[offset];
   }
   return distance;
 }
@@ -209,6 +225,15 @@ Rcpp::List fastembedr_walktrap_cpp(Rcpp::IntegerVector from,
     );
   }
 
+  std::vector<std::vector<std::pair<int, double>>> walk_neighbors(
+    static_cast<std::size_t>(n));
+  for (int u = 0; u < n; ++u) {
+    const auto& source = adjacency[static_cast<std::size_t>(u)];
+    auto& target = walk_neighbors[static_cast<std::size_t>(u)];
+    target.assign(source.begin(), source.end());
+    std::sort(target.begin(), target.end());
+  }
+
   // Walktrap adds a self-loop whose weight is the mean incident edge weight.
   std::vector<double> self_weight(static_cast<std::size_t>(n), 1.0);
   std::vector<double> walk_degree(static_cast<std::size_t>(n), 1.0);
@@ -220,6 +245,11 @@ Rcpp::List fastembedr_walktrap_cpp(Rcpp::IntegerVector from,
     }
     walk_degree[static_cast<std::size_t>(u)] =
       graph_degree[static_cast<std::size_t>(u)] + self_weight[static_cast<std::size_t>(u)];
+  }
+  std::vector<double> inverse_walk_degree(static_cast<std::size_t>(n));
+  for (int u = 0; u < n; ++u) {
+    inverse_walk_degree[static_cast<std::size_t>(u)] =
+      1.0 / walk_degree[static_cast<std::size_t>(u)];
   }
 
   std::vector<double> probability(dense_entries, 0.0);
@@ -239,12 +269,23 @@ Rcpp::List fastembedr_walktrap_cpp(Rcpp::IntegerVector from,
         const double normalized = mass / walk_degree[static_cast<std::size_t>(state)];
         next[row + static_cast<std::size_t>(state)] +=
           normalized * self_weight[static_cast<std::size_t>(state)];
-        for (const auto& item : adjacency[static_cast<std::size_t>(state)]) {
+        for (const auto& item : walk_neighbors[static_cast<std::size_t>(state)]) {
           next[row + static_cast<std::size_t>(item.first)] += normalized * item.second;
         }
       }
     }
     probability.swap(next);
+  }
+
+  std::vector<std::vector<int>> support(static_cast<std::size_t>(n));
+  for (int source = 0; source < n; ++source) {
+    const std::size_t row = static_cast<std::size_t>(source) *
+      static_cast<std::size_t>(n);
+    for (int state = 0; state < n; ++state) {
+      if (probability[row + static_cast<std::size_t>(state)] != 0.0) {
+        support[static_cast<std::size_t>(source)].push_back(state);
+      }
+    }
   }
 
   const int max_communities = 2 * n - 1;
@@ -263,7 +304,7 @@ Rcpp::List fastembedr_walktrap_cpp(Rcpp::IntegerVector from,
                       WalkCandidateGreater> heap;
   for (const WalkEdge& edge : edges) {
     const double distance = walk_distance_squared(
-      probability, n, edge.u, edge.v, walk_degree);
+      probability, n, edge.u, edge.v, inverse_walk_degree, support);
     const double delta = distance / (2.0 * static_cast<double>(n));
     communities[static_cast<std::size_t>(edge.u)].neighbors.emplace(
       edge.v, WalkNeighbor{delta, edge.weight});
@@ -317,13 +358,21 @@ Rcpp::List fastembedr_walktrap_cpp(Rcpp::IntegerVector from,
     const std::size_t right_offset = static_cast<std::size_t>(right_slot) *
       static_cast<std::size_t>(n);
     const double inverse_size = 1.0 / static_cast<double>(left_size + right_size);
-    for (int k = 0; k < n; ++k) {
+    std::vector<int> merged_support;
+    const auto& left_support = support[static_cast<std::size_t>(left_slot)];
+    const auto& right_support = support[static_cast<std::size_t>(right_slot)];
+    merged_support.reserve(left_support.size() + right_support.size());
+    std::set_union(left_support.begin(), left_support.end(),
+                   right_support.begin(), right_support.end(),
+                   std::back_inserter(merged_support));
+    for (const int k : merged_support) {
       probability[left_offset + static_cast<std::size_t>(k)] =
         (static_cast<double>(left_size) *
            probability[left_offset + static_cast<std::size_t>(k)] +
          static_cast<double>(right_size) *
            probability[right_offset + static_cast<std::size_t>(k)]) * inverse_size;
     }
+    support[static_cast<std::size_t>(left_slot)] = std::move(merged_support);
 
     std::vector<int> adjacent;
     adjacent.reserve(left_community.neighbors.size() + right_community.neighbors.size());
@@ -355,7 +404,7 @@ Rcpp::List fastembedr_walktrap_cpp(Rcpp::IntegerVector from,
       } else {
         const double distance = walk_distance_squared(
           probability, n, merged_community.probability_slot,
-          other_community.probability_slot, walk_degree);
+          other_community.probability_slot, inverse_walk_degree, support);
         delta = (1.0 / static_cast<double>(n)) *
           (static_cast<double>(merged_community.size) *
            static_cast<double>(other_community.size) /

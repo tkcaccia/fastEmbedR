@@ -31,16 +31,16 @@ Current use in `fastEmbedR`:
   `src/graph_clustering_metal_impl.mm` implement the shared multilevel
   orchestration and independent CUDA/Metal local-moving and refinement
   kernels. Public cuGraph documentation informed the CSR/parallel-processing
-  design, but no cuGraph source, binary, Python module, or runtime symbol is
-  copied, linked, or called.
+  design. These native kernels do not copy, link, or call cuGraph.
 - `src/walktrap.cpp` independently implements the Pons-Latapy transition
   probabilities, degree-scaled random-walk distance, Ward/Lance-Williams
   updates on adjacent communities, and modularity-selected cut.
 - `tests/testthat/test-graph-clustering.R` compares canonical and stochastic
   graph results with guarded igraph reference implementations. igraph is not a
   runtime dependency.
-- cuGraph was evaluated as a possible GPU dependency and deliberately omitted;
-  fastEmbedR retains its own graph representation and device kernels.
+- The optional full-graph multi-GPU Leiden/Louvain route calls an external
+  Python cuGraph-Dask installation. It does not bundle cuGraph source or
+  binaries and does not alter the ordinary native clustering kernels.
 
 ## annembed
 

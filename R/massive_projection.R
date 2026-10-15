@@ -50,9 +50,16 @@ massive_projection_resources <- function(graph, dimensions,
     if (!is.null(gpu)) rows <- gpu$rows
     result <- list(chunk_rows = rows,
         peak_ram_bytes = fixed + rows * per_row,
-        peak_vram_bytes = gpu$peak_vram_bytes %||% 0,
+        peak_vram_bytes = if (backend == "metal") NA_real_ else
+            gpu$peak_vram_bytes %||% 0,
         memory_limit_bytes = limit,
         output_bytes = graph$nrow * dimensions * 4)
+    if (backend == "metal") {
+        result$metal_memory_model <- "unified_shared"
+        result$metal_buffer_bytes_estimate <-
+            8 * graph$n_reference * dimensions +
+            rows * (12 * graph$ncol + 8 * dimensions)
+    }
     if (!is.null(gpu)) {
         result$free_vram_bytes <- gpu$free_vram_bytes
         result$gpu_device <- gpu$gpu_device
@@ -103,7 +110,10 @@ massive_project_batch <- function(fit, layout, graph, first,
     batch_seed <- as.integer((as.double(seed) + first - 1) %%
         .Machine$integer.max)
     projected <- if (fit$method == "umap") {
-        if (backend == "cuda") {
+        if (backend == "metal") {
+            project_embedding_knn_metal_cpp(layout,
+                knn$indices, knn$distances)
+        } else if (backend == "cuda") {
             if (is.null(projector)) {
                 project_embedding_knn_cuda_cpp(layout,
                     knn$indices, knn$distances)
@@ -137,7 +147,7 @@ massive_project_batch <- function(fit, layout, graph, first,
 
 massive_projection_signature <- function(fit, graph, resources,
         settings, reference_rows) {
-    files <- massive_checkpoint_file_identity(c(
+    files <- massive_checkpoint_input_files_identity(c(
         graph$indices_path, graph$distances_path))
     params <- if (fit$method == "umap") {
         landmark_umap_optimizer_parameters(fit)
@@ -336,10 +346,9 @@ massive_projection_controls <- function(fit, graph, backend,
                                         transform_iter,
                                         transform_perplexity, seed) {
     if (inherits(fit$layout, "float32") &&
-        !requireNamespace("float", quietly = TRUE)) {
-        stop("A saved float32 reference requires `float`.",
-            call. = FALSE)
-    }
+        !requireNamespace("float", quietly = TRUE)) stop(
+        "A saved float32 reference requires `float`.",
+        call. = FALSE)
     if (!inherits(fit, "fastEmbedR_embedding") ||
         !(fit$method %in% c("umap", "tsne")) ||
         !inherits(graph, "fastEmbedR_massive_knn") ||
@@ -348,35 +357,38 @@ massive_projection_controls <- function(fit, graph, backend,
         stop("Fit and graph must share a landmark reference.",
             call. = FALSE)
     }
-    if (!(backend %in% c("cpu", "cuda")) ||
-        !(graph$backend %in% c("cpu", "cuda"))) {
-        stop("EXPERIMENTAL projection requires CPU or CUDA inputs.",
+    if (!(backend %in% c("cpu", "cuda", "metal")) ||
+        !(graph$backend %in% c("cpu", "cuda", "metal"))) {
+        stop("EXPERIMENTAL projection requires CPU, CUDA, or Metal.",
             call. = FALSE)
     }
+    if (backend == "metal" && graph$backend != "metal")
+        stop("Metal projection requires Metal landmark graph.", call. = FALSE)
     epochs <- integer_scalar(refinement_epochs)
     iterations <- integer_scalar(transform_iter)
     seed <- integer_scalar(seed)
     if (anyNA(c(epochs, iterations, seed)) ||
-        epochs < 0L || iterations < 0L || seed < 0L) {
-        stop("Epochs, iterations, and seed must be non-negative integers.",
-            call. = FALSE)
-    }
+        epochs < 0L || iterations < 0L || seed < 0L) stop(
+        "Epochs, iterations, and seed must be non-negative integers.",
+        call. = FALSE)
     if (fit$method == "tsne" &&
         (!is.numeric(transform_perplexity) ||
         length(transform_perplexity) != 1L ||
         !is.finite(transform_perplexity) ||
         transform_perplexity <= 0 ||
-        transform_perplexity > graph$ncol)) {
-        stop("`transform_perplexity` must be in (0, graph k].",
-            call. = FALSE)
-    }
-    if (fit$method == "tsne" && iterations == 0L) {
+        transform_perplexity > graph$ncol)) stop(
+        "`transform_perplexity` must be in (0, graph k].",
+        call. = FALSE)
+    if (fit$method == "tsne" && iterations == 0L)
         stop("t-SNE projection requires `transform_iter` > 0.",
             call. = FALSE)
-    }
-    if (backend == "cuda") {
+    if (backend == "cuda")
         massive_projection_cuda_controls(fit, graph, epochs)
-    }
+    if (backend == "metal" &&
+        (ncol(fit$layout) != 2L || graph$ncol > 128L ||
+            (fit$method == "umap" && epochs != 0L))) stop(
+        "Metal landmark projection needs 2D, k <= 128, and ",
+        "zero UMAP refinement epochs.", call. = FALSE)
     list(epochs = epochs, iterations = iterations, seed = seed)
 }
 
@@ -422,8 +434,8 @@ massive_projection_complete <- function(result) {
     graph <- result$graph
     files <- c(path, graph$indices_path, graph$distances_path)
     identity <- massive_checkpoint_file_identity(files)
-    expected <- c(result$layout$nrow * result$layout$ncol,
-        rep(graph$nrow * graph$ncol, 2L)) * 4
+    expected <- c(as.double(result$layout$nrow) * result$layout$ncol,
+        rep(as.double(graph$nrow) * graph$ncol, 2L)) * 4
     if (!identical(identity$bytes, as.numeric(expected))) {
         stop("Completed projection files have unexpected sizes.",
             call. = FALSE)
@@ -474,7 +486,7 @@ massive_open_projection <- function(output) {
         identical(result$layout$format, "f32") &&
         massive_checkpoint_same_paths(result$manifest_path, manifest) &&
         isTRUE(result$experimental) &&
-        isTRUE(result$backend %in% c("cpu", "cuda")) &&
+        isTRUE(result$backend %in% c("cpu", "cuda", "metal")) &&
         isTRUE(result$method %in% c("umap", "tsne")) &&
         identical(result$layout$nrow,
             diff(c(result$row_start, result$row_end)) + 1)
@@ -484,8 +496,8 @@ massive_open_projection <- function(output) {
         result$graph$distances_path)
     identity <- tryCatch(massive_checkpoint_file_identity(files),
         error = function(e) NULL)
-    expected <- c(result$layout$nrow * result$layout$ncol,
-        rep(result$graph$nrow * result$graph$ncol, 2L)) * 4
+    expected <- c(as.double(result$layout$nrow) * result$layout$ncol,
+        rep(as.double(result$graph$nrow) * result$graph$ncol, 2L)) * 4
     if (!identical(identity, result$file_identity) ||
         !identical(identity$bytes, as.numeric(expected))) stop(
         "Projection or KNN files changed since completion.",
@@ -503,6 +515,8 @@ massive_projection_setup <- function(fit, graph, output,
     if (backend == "cuda" && workers != 1L) {
         stop("CUDA projection requires `n.cores = 1`.", call. = FALSE)
     }
+    if (backend == "metal" && workers != 1L) stop(
+        "Metal projection requires `n.cores = 1`.", call. = FALSE)
     resources <- massive_projection_resources(
         graph, dimensions, chunk_rows, memory_limit, backend)
     resources$projection_engine <- if (backend == "cuda" &&
@@ -549,9 +563,9 @@ massive_projection_setup <- function(fit, graph, output,
 #' @param selection Optional result of `massive_select_landmarks()` from
 #'   the same query source. Its rows retain the fitted reference coordinates.
 #' @param output New row-major float32 `.f32` output path.
-#' @param backend `"cpu"` or `"cuda"`. CUDA supports zero-epoch UMAP
-#'   projection and 2D or 3D t-SNE fixed-reference transformation.
-#'   Unsupported CUDA routes fail without CPU fallback.
+#' @param backend `"cpu"`, `"cuda"`, or `"metal"`. Metal supports
+#'   zero-epoch 2D UMAP projection and 2D t-SNE transformation with
+#'   k <= 128. Unsupported routes fail without backend fallback.
 #' @param n.cores Number of CPU workers.
 #' @param chunk_rows Maximum query rows per projection batch.
 #' @param memory_limit Conservative RAM budget.

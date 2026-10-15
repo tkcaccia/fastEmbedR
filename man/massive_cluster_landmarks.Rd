@@ -27,7 +27,7 @@ massive_cluster_landmarks(
 \arguments{
 \item{reference_graph}{A \code{knn_graph()} result for the landmark rows.}
 
-\item{knn}{Saved CPU- or CUDA-built query-to-landmark graph from
+\item{knn}{Saved CPU-, CUDA-, or Metal-built query-to-landmark graph from
 \code{massive_landmark_knn()}.}
 
 \item{output}{New prefix for label and confidence output files.}
@@ -37,9 +37,9 @@ massive_cluster_landmarks(
 \item{selection}{Optional result of \code{massive_select_landmarks()} from the
 query source; selected rows retain their fitted community labels.}
 
-\item{backend}{\code{"cpu"} for all methods, or \code{"cuda"} for landmark-graph
-Louvain and Leiden. Streamed community voting remains on CPU. A CUDA
-request fails explicitly if the backend is unavailable.}
+\item{backend}{\code{"cpu"} for all methods, or \code{"cuda"} or \code{"metal"} for
+landmark-graph Louvain and Leiden. Streamed community voting remains
+on CPU. GPU requests fail explicitly if unavailable.}
 
 \item{n.cores}{CPU workers used for weighted community voting.}
 
@@ -69,7 +69,7 @@ one-based \code{uint32} labels, float32 confidence, and landmark metadata.
 }
 \description{
 Runs the existing native Leiden, Louvain, or Walktrap implementation on
-a resident landmark graph. Saved CPU- or CUDA-built KNN rows are streamed
-through inverse-distance weighted community voting. A supplied landmark
-selection preserves reference labels at their original source rows.
+a resident landmark graph. Saved CPU-, CUDA-, or Metal-built KNN rows
+are streamed through inverse-distance weighted community voting. A supplied
+landmark selection preserves reference labels at their source rows.
 }

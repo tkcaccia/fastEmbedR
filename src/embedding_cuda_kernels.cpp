@@ -9,6 +9,7 @@
  */
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstddef>
@@ -26,6 +27,9 @@
 #include <cuda_runtime.h>
 #include <cufft.h>
 #include <math_constants.h>
+#ifdef FASTEMBEDR_HAS_NCCL
+#include <nccl.h>
+#endif
 
 #ifndef CCCL_IGNORE_DEPRECATED_STREAM_REF_HEADER
 #define CCCL_IGNORE_DEPRECATED_STREAM_REF_HEADER
@@ -415,7 +419,7 @@ int check_embedding_memory_available(std::size_t required_bytes, const char* whe
   std::size_t free_bytes = 0;
   std::size_t total_bytes = 0;
   const cudaError_t code = cudaMemGetInfo(&free_bytes, &total_bytes);
-  if (code != cudaSuccess) return 0;
+  if (check_cuda(code, "cudaMemGetInfo(embedding preflight)")) return 1;
   const std::size_t reserve = free_bytes / 20u;
   if (required_bytes > free_bytes - reserve) {
     set_embedding_error(
@@ -3049,15 +3053,30 @@ __global__ void embed_epoch_coo_atomic_kernel(float* layout,
   }
 }
 
+__device__ void add_umap_delta(float* delta, std::size_t index,
+                               float gradient, double) {
+  atomicAdd(delta + index, gradient);
+}
+
+__device__ void add_umap_delta(unsigned long long* delta,
+                               std::size_t index, float gradient,
+                               double scale) {
+  const auto value = __double2ll_rn(
+    static_cast<double>(gradient) * scale);
+  atomicAdd(delta + index, static_cast<unsigned long long>(value));
+}
+
+template <int Dimensions, typename Delta>
 __global__ void embed_epoch_coo_delta_kernel(const float* layout,
-                                             float* delta,
+                                             Delta* delta,
                                              const int* heads,
                                              const int* tails,
                                              const float* weights,
                                              const float* epochs_per_sample,
                                              EmbedParams p,
                                              unsigned int epoch,
-                                             int n_edges_capacity) {
+                                             int n_edges_capacity,
+                                             double delta_scale) {
   const int gid = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
   if (gid >= n_edges_capacity) return;
 
@@ -3074,23 +3093,27 @@ __global__ void embed_epoch_coo_delta_kernel(const float* layout,
   const float eps = 1.1920928955078125e-7f;
 
   for (int sample = 0; sample < positive_samples; ++sample) {
-    const std::size_t head_base = static_cast<std::size_t>(head) * 2u;
-    const std::size_t tail_base = static_cast<std::size_t>(tail) * 2u;
-    const float head_x = layout[head_base];
-    const float head_y = layout[head_base + 1u];
-    const float tail_x = layout[tail_base];
-    const float tail_y = layout[tail_base + 1u];
-    const float dx = head_x - tail_x;
-    const float dy = head_y - tail_y;
-    const float d2 = fmaxf(eps, dx * dx + dy * dy);
+    const std::size_t head_base =
+      static_cast<std::size_t>(head) * Dimensions;
+    const std::size_t tail_base =
+      static_cast<std::size_t>(tail) * Dimensions;
+    float diff[Dimensions];
+    float d2 = 0.0f;
+    for (int axis = 0; axis < Dimensions; ++axis) {
+      diff[axis] = layout[head_base + axis] -
+        layout[tail_base + axis];
+      d2 += diff[axis] * diff[axis];
+    }
+    d2 = fmaxf(eps, d2);
     const float w = weights[gid];
     const float coeff = attractive_coeff(d2, w, p);
-    const float gx = clip4(coeff * dx) * alpha;
-    const float gy = clip4(coeff * dy) * alpha;
-    atomicAdd(delta + head_base, gx);
-    atomicAdd(delta + head_base + 1u, gy);
-    atomicAdd(delta + tail_base, -gx);
-    atomicAdd(delta + tail_base + 1u, -gy);
+    for (int axis = 0; axis < Dimensions; ++axis) {
+      const float gradient = clip4(coeff * diff[axis]) * alpha;
+      add_umap_delta(delta, head_base + axis, gradient,
+        delta_scale);
+      add_umap_delta(delta, tail_base + axis, -gradient,
+        delta_scale);
+    }
   }
 
   const int neg_samples = negative_samples_this_epoch_umap_schedule(period, p, epoch);
@@ -3105,18 +3128,23 @@ __global__ void embed_epoch_coo_delta_kernel(const float* layout,
     );
     if (static_cast<int>(neg) == head || static_cast<int>(neg) == tail) continue;
 
-    const std::size_t head_base = static_cast<std::size_t>(head) * 2u;
-    const std::size_t neg_base = static_cast<std::size_t>(neg) * 2u;
-    const float head_x = layout[head_base];
-    const float head_y = layout[head_base + 1u];
-    const float neg_x = layout[neg_base];
-    const float neg_y = layout[neg_base + 1u];
-    const float ndx = head_x - neg_x;
-    const float ndy = head_y - neg_y;
-    const float nd2 = fmaxf(eps, ndx * ndx + ndy * ndy);
+    const std::size_t head_base =
+      static_cast<std::size_t>(head) * Dimensions;
+    const std::size_t neg_base =
+      static_cast<std::size_t>(neg) * Dimensions;
+    float diff[Dimensions];
+    float nd2 = 0.0f;
+    for (int axis = 0; axis < Dimensions; ++axis) {
+      diff[axis] = layout[head_base + axis] -
+        layout[neg_base + axis];
+      nd2 += diff[axis] * diff[axis];
+    }
+    nd2 = fmaxf(eps, nd2);
     const float rcoeff = repulsive_coeff(nd2, p);
-    atomicAdd(delta + head_base, clip4(rcoeff * ndx) * alpha);
-    atomicAdd(delta + head_base + 1u, clip4(rcoeff * ndy) * alpha);
+    for (int axis = 0; axis < Dimensions; ++axis) {
+      add_umap_delta(delta, head_base + axis,
+        clip4(rcoeff * diff[axis]) * alpha, delta_scale);
+    }
   }
 }
 
@@ -3217,21 +3245,42 @@ __global__ void embed_epoch_row_atomic_kernel(float* layout,
   }
 }
 
+template <int Dimensions>
 __global__ void apply_delta_sanitize_layout_kernel(float* layout,
                                                    const float* delta,
                                                    int n,
                                                    float max_abs_coord) {
   const int row = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
   if (row >= n) return;
-  const std::size_t base = static_cast<std::size_t>(row) * 2u;
-  float x = layout[base] + delta[base];
-  float y = layout[base + 1u] + delta[base + 1u];
-  if (!isfinite(x)) x = 0.0f;
-  if (!isfinite(y)) y = 0.0f;
-  x = fminf(max_abs_coord, fmaxf(-max_abs_coord, x));
-  y = fminf(max_abs_coord, fmaxf(-max_abs_coord, y));
-  layout[base] = x;
-  layout[base + 1u] = y;
+  const std::size_t base = static_cast<std::size_t>(row) * Dimensions;
+  for (int axis = 0; axis < Dimensions; ++axis) {
+    float value = layout[base + axis] + delta[base + axis];
+    if (!isfinite(value)) value = 0.0f;
+    layout[base + axis] = fminf(max_abs_coord,
+      fmaxf(-max_abs_coord, value));
+  }
+}
+
+template <int Dimensions>
+__global__ void apply_fixed_delta_layout_kernel(float* layout,
+    const unsigned long long* delta, int n, float max_abs_coord,
+    double scale) {
+  const int row = static_cast<int>(blockIdx.x * blockDim.x +
+    threadIdx.x);
+  if (row >= n) return;
+  const std::size_t base = static_cast<std::size_t>(row) * Dimensions;
+  for (int axis = 0; axis < Dimensions; ++axis) {
+    const auto bits = delta[base + axis];
+    const double signed_value = bits <=
+      static_cast<unsigned long long>(LLONG_MAX) ?
+      static_cast<double>(bits) :
+      -static_cast<double>(~bits + 1ull);
+    float value = layout[base + axis] +
+      static_cast<float>(signed_value / scale);
+    if (!isfinite(value)) value = 0.0f;
+    layout[base + axis] = fminf(max_abs_coord,
+      fmaxf(-max_abs_coord, value));
+  }
 }
 
 __global__ void umap_sanitize_layout_kernel(float* layout,
@@ -6028,12 +6077,12 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
           )) {
         return 1;
       }
-      embed_epoch_coo_delta_kernel<<<
+      embed_epoch_coo_delta_kernel<2><<<
         edge_blocks, threads, 0, stream
       >>>(
         d_current, d_delta, d_coo_heads, d_coo_tails, d_coo_weights,
         d_coo_epochs_per_sample, params, static_cast<unsigned int>(epoch),
-        edge_items
+        edge_items, 1.0
       );
       if (check_launches && check_cuda(
             cudaGetLastError(),
@@ -6041,7 +6090,7 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
           )) {
         return 1;
       }
-      apply_delta_sanitize_layout_kernel<<<
+      apply_delta_sanitize_layout_kernel<2><<<
         blocks, threads, 0, stream
       >>>(d_current, d_delta, n, max_abs_coord);
       if (check_launches && check_cuda(
@@ -6390,15 +6439,17 @@ extern "C" int fastembedr_cuda_umap_optimize_coo(const int* heads,
         cleanup();
         return 1;
       }
-      embed_epoch_coo_delta_kernel<<<edge_blocks, threads>>>(
+      embed_epoch_coo_delta_kernel<2><<<edge_blocks, threads>>>(
         d_layout, d_delta, d_heads, d_tails, d_weights, d_epochs,
-        params, static_cast<unsigned int>(epoch), n_edges_capacity
+        params, static_cast<unsigned int>(epoch), n_edges_capacity,
+        1.0
       );
       if (check_cuda(cudaGetLastError(), "embed_epoch_coo_delta_kernel(coo umap) launch")) {
         cleanup();
         return 1;
       }
-      apply_delta_sanitize_layout_kernel<<<row_blocks, threads>>>(d_layout, d_delta, n, max_abs_coord);
+      apply_delta_sanitize_layout_kernel<2><<<
+        row_blocks, threads>>>(d_layout, d_delta, n, max_abs_coord);
       if (check_cuda(cudaGetLastError(), "apply_delta_sanitize_layout_kernel(coo umap) launch")) {
         cleanup();
         return 1;
@@ -6609,6 +6660,339 @@ extern "C" int fastembedr_massive_umap_cuda_download(
     cudaMemcpyDeviceToHost), "cudaMemcpy(massive UMAP download)");
 }
 
+#ifdef FASTEMBEDR_HAS_NCCL
+struct MassiveUmapMultiCudaContext {
+  int vertices = 0;
+  int dimensions = 2;
+  int block_rows = 0;
+  int previous_device = 0;
+  double delta_scale = 1.0;
+  double collective_seconds = 0.0;
+  std::vector<int> devices;
+  std::vector<MassiveUmapCudaContext*> workers;
+  std::vector<unsigned long long*> deltas;
+  std::vector<ncclComm_t> comms;
+};
+
+int massive_umap_nccl_check(ncclResult_t status, const char* where) {
+  if (status == ncclSuccess) return 0;
+  set_embedding_error(std::string(where) + ": " +
+    ncclGetErrorString(status));
+  return 1;
+}
+
+extern "C" void fastembedr_massive_umap_multigpu_destroy(void* raw) {
+  auto* ctx = static_cast<MassiveUmapMultiCudaContext*>(raw);
+  if (ctx == nullptr) return;
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    cudaSetDevice(ctx->devices[rank]);
+    if (ctx->comms[rank] != nullptr)
+      ncclCommDestroy(ctx->comms[rank]);
+    if (ctx->deltas[rank] != nullptr)
+      cudaFree(ctx->deltas[rank]);
+    fastembedr_massive_umap_cuda_destroy(ctx->workers[rank]);
+  }
+  cudaSetDevice(ctx->previous_device);
+  delete ctx;
+}
+
+extern "C" void* fastembedr_massive_umap_multigpu_create(
+    int vertices, int dimensions, int edge_capacity, int epochs,
+    int negatives,
+    float learning_rate, float a, float b, float repulsion,
+    float max_weight, unsigned int seed, const int* devices,
+    int device_count, double delta_scale) {
+  embedding_last_error.clear();
+  if (vertices < 2 || (dimensions != 2 && dimensions != 3) ||
+      edge_capacity < 1 || devices == nullptr ||
+      device_count < 1 || device_count > 4 ||
+      !std::isfinite(delta_scale) || delta_scale < 256.0) {
+    set_embedding_error("invalid multi-GPU UMAP device request");
+    return nullptr;
+  }
+  int available = 0;
+  int previous = 0;
+  if (check_cuda(cudaGetDeviceCount(&available),
+        "cudaGetDeviceCount(multi-GPU UMAP)") ||
+      check_cuda(cudaGetDevice(&previous),
+        "cudaGetDevice(multi-GPU UMAP)")) return nullptr;
+  for (int rank = 0; rank < device_count; ++rank) {
+    if (devices[rank] < 0 || devices[rank] >= available) {
+      set_embedding_error("multi-GPU UMAP device is unavailable");
+      return nullptr;
+    }
+    for (int other = 0; other < rank; ++other) {
+      if (devices[rank] == devices[other]) {
+        set_embedding_error("multi-GPU UMAP devices must be distinct");
+        return nullptr;
+      }
+    }
+  }
+  const auto block = (static_cast<std::int64_t>(vertices) +
+    device_count - 1) / device_count;
+  const auto padded = block * device_count;
+  if (vertices <= (device_count - 1) * block || padded > INT_MAX) {
+    set_embedding_error("multi-GPU UMAP needs rows on every device");
+    return nullptr;
+  }
+  auto* ctx = new MassiveUmapMultiCudaContext();
+  ctx->vertices = vertices;
+  ctx->dimensions = dimensions;
+  ctx->block_rows = static_cast<int>(block);
+  ctx->previous_device = previous;
+  ctx->delta_scale = delta_scale;
+  ctx->devices.assign(devices, devices + device_count);
+  ctx->workers.resize(device_count, nullptr);
+  ctx->deltas.resize(device_count, nullptr);
+  ctx->comms.resize(device_count, nullptr);
+  const auto layout_bytes = static_cast<std::size_t>(padded) *
+    dimensions * sizeof(float);
+  const auto edge_bytes = static_cast<std::size_t>(edge_capacity) * 16u;
+  for (int rank = 0; rank < device_count; ++rank) {
+    if (check_cuda(cudaSetDevice(devices[rank]),
+          "cudaSetDevice(multi-GPU UMAP)") ||
+        check_embedding_memory_available(3u * layout_bytes +
+          edge_bytes, "multi-GPU UMAP allocation")) {
+      fastembedr_massive_umap_multigpu_destroy(ctx);
+      return nullptr;
+    }
+    ctx->workers[rank] = static_cast<MassiveUmapCudaContext*>(
+      fastembedr_massive_umap_cuda_create(
+        static_cast<int>(padded), dimensions, edge_capacity, epochs,
+        negatives, learning_rate, a, b, repulsion, max_weight,
+        seed, 0));
+    if (ctx->workers[rank] == nullptr ||
+        check_cuda(cudaMalloc(
+          reinterpret_cast<void**>(&ctx->deltas[rank]),
+          2u * layout_bytes),
+          "cudaMalloc(multi-GPU UMAP delta)") ||
+        check_cuda(cudaMemset(ctx->workers[rank]->layout, 0,
+          layout_bytes), "cudaMemset(multi-GPU UMAP layout)")) {
+      fastembedr_massive_umap_multigpu_destroy(ctx);
+      return nullptr;
+    }
+    ctx->workers[rank]->params.n = vertices;
+  }
+  if (massive_umap_nccl_check(ncclCommInitAll(ctx->comms.data(),
+        device_count, devices), "ncclCommInitAll(multi-GPU UMAP)")) {
+    fastembedr_massive_umap_multigpu_destroy(ctx);
+    return nullptr;
+  }
+  cudaSetDevice(previous);
+  return ctx;
+}
+
+extern "C" int fastembedr_massive_umap_multigpu_upload(
+    void* raw, int first, int rows, const float* layout) {
+  auto* ctx = static_cast<MassiveUmapMultiCudaContext*>(raw);
+  if (ctx == nullptr || first < 0 || rows < 1 ||
+      first > ctx->vertices - rows) {
+    set_embedding_error("invalid multi-GPU UMAP upload range");
+    return 1;
+  }
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(multi-GPU UMAP upload)") ||
+        fastembedr_massive_umap_cuda_upload(ctx->workers[rank],
+          first, rows, layout)) return 1;
+  }
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(multi-GPU UMAP restore)");
+}
+
+extern "C" int fastembedr_massive_umap_multigpu_start_epoch(
+    void* raw) {
+  auto* ctx = static_cast<MassiveUmapMultiCudaContext*>(raw);
+  if (ctx == nullptr) {
+    set_embedding_error("invalid multi-GPU UMAP context");
+    return 1;
+  }
+  const auto bytes = static_cast<std::size_t>(ctx->block_rows) *
+    ctx->devices.size() * ctx->dimensions *
+    sizeof(unsigned long long);
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(multi-GPU UMAP epoch)") ||
+        check_cuda(cudaMemset(ctx->deltas[rank], 0, bytes),
+          "cudaMemset(multi-GPU UMAP delta)")) return 1;
+  }
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(multi-GPU UMAP epoch barrier)") ||
+        check_cuda(cudaDeviceSynchronize(),
+          "cudaDeviceSynchronize(multi-GPU UMAP epoch)")) return 1;
+  }
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(multi-GPU UMAP restore)");
+}
+
+extern "C" int fastembedr_massive_umap_multigpu_step(
+    void* raw, int rank, const int* heads, const int* tails,
+    const float* weights, const float* periods, int edges,
+    int epoch) {
+  auto* ctx = static_cast<MassiveUmapMultiCudaContext*>(raw);
+  if (ctx == nullptr || rank < 0 ||
+      rank >= static_cast<int>(ctx->devices.size()) ||
+      heads == nullptr || tails == nullptr || weights == nullptr ||
+      periods == nullptr || edges < 1) {
+    set_embedding_error("invalid multi-GPU UMAP edge batch");
+    return 1;
+  }
+  auto* worker = ctx->workers[rank];
+  if (edges > worker->capacity || epoch < 0 ||
+      epoch >= worker->params.n_epochs) {
+    set_embedding_error("multi-GPU UMAP edge batch exceeds capacity");
+    return 1;
+  }
+  const int first = rank * ctx->block_rows;
+  const int last = first + ctx->block_rows;
+  for (int i = 0; i < edges; ++i) {
+    if (heads[i] < first || heads[i] >= last ||
+        tails[i] < 0 || tails[i] >= ctx->vertices) {
+      set_embedding_error("multi-GPU UMAP edge owner is inconsistent");
+      return 1;
+    }
+  }
+  if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+        "cudaSetDevice(multi-GPU UMAP edges)")) return 1;
+  const auto ids_bytes = static_cast<std::size_t>(edges) *
+    sizeof(int);
+  const auto weights_bytes = static_cast<std::size_t>(edges) *
+    sizeof(float);
+  if (check_cuda(cudaMemcpy(worker->heads, heads, ids_bytes,
+        cudaMemcpyHostToDevice), "cudaMemcpy(multi-GPU UMAP heads)") ||
+      check_cuda(cudaMemcpy(worker->tails, tails, ids_bytes,
+        cudaMemcpyHostToDevice), "cudaMemcpy(multi-GPU UMAP tails)") ||
+      check_cuda(cudaMemcpy(worker->weights, weights, weights_bytes,
+        cudaMemcpyHostToDevice), "cudaMemcpy(multi-GPU UMAP weights)") ||
+      check_cuda(cudaMemcpy(worker->periods, periods, weights_bytes,
+        cudaMemcpyHostToDevice), "cudaMemcpy(multi-GPU UMAP periods)"))
+    return 1;
+  if (ctx->dimensions == 3) {
+    embed_epoch_coo_delta_kernel<3><<<
+      (edges + 255) / 256, 256>>>(worker->layout,
+      ctx->deltas[rank], worker->heads, worker->tails,
+      worker->weights, worker->periods, worker->params,
+      static_cast<unsigned int>(epoch), edges, ctx->delta_scale);
+  } else {
+    embed_epoch_coo_delta_kernel<2><<<
+      (edges + 255) / 256, 256>>>(worker->layout,
+      ctx->deltas[rank], worker->heads, worker->tails,
+      worker->weights, worker->periods, worker->params,
+      static_cast<unsigned int>(epoch), edges, ctx->delta_scale);
+  }
+  return check_cuda(cudaGetLastError(),
+      "multi-GPU UMAP delta launch") ||
+    check_cuda(cudaDeviceSynchronize(),
+      "multi-GPU UMAP edge synchronization") ||
+    check_cuda(cudaSetDevice(ctx->previous_device),
+      "cudaSetDevice(multi-GPU UMAP restore)");
+}
+
+extern "C" int fastembedr_massive_umap_multigpu_finish_epoch(
+    void* raw) {
+  auto* ctx = static_cast<MassiveUmapMultiCudaContext*>(raw);
+  if (ctx == nullptr) {
+    set_embedding_error("invalid multi-GPU UMAP context");
+    return 1;
+  }
+  const auto count = static_cast<std::size_t>(ctx->block_rows) *
+    ctx->dimensions;
+  const auto reduce_started = std::chrono::steady_clock::now();
+  if (massive_umap_nccl_check(ncclGroupStart(),
+        "ncclGroupStart(UMAP reduce)")) return 1;
+  int failed = 0;
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    failed |= check_cuda(cudaSetDevice(ctx->devices[rank]),
+      "cudaSetDevice(UMAP reduce)");
+    if (!failed) failed |= massive_umap_nccl_check(
+      ncclReduceScatter(ctx->deltas[rank],
+        ctx->deltas[rank] + rank * count, count,
+        ncclUint64, ncclSum, ctx->comms[rank], 0),
+      "ncclReduceScatter(UMAP delta)");
+  }
+  failed |= massive_umap_nccl_check(ncclGroupEnd(),
+    "ncclGroupEnd(UMAP reduce)");
+  if (failed) return 1;
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(UMAP owner update)") ||
+        check_cuda(cudaDeviceSynchronize(),
+          "UMAP reduce synchronization")) return 1;
+  }
+  ctx->collective_seconds += std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - reduce_started).count();
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(UMAP owner update)")) return 1;
+    auto* worker = ctx->workers[rank];
+    if (ctx->dimensions == 3) {
+      apply_fixed_delta_layout_kernel<3><<<
+        (ctx->block_rows + 255) / 256, 256>>>(
+        worker->layout + rank * count,
+        ctx->deltas[rank] + rank * count,
+        ctx->block_rows, 16.0f, ctx->delta_scale);
+    } else {
+      apply_fixed_delta_layout_kernel<2><<<
+        (ctx->block_rows + 255) / 256, 256>>>(
+        worker->layout + rank * count,
+        ctx->deltas[rank] + rank * count,
+        ctx->block_rows, 16.0f, ctx->delta_scale);
+    }
+    if (check_cuda(cudaGetLastError(),
+          "multi-GPU UMAP owner update")) return 1;
+  }
+  const auto gather_started = std::chrono::steady_clock::now();
+  if (massive_umap_nccl_check(ncclGroupStart(),
+        "ncclGroupStart(UMAP gather)")) return 1;
+  failed = 0;
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    failed |= check_cuda(cudaSetDevice(ctx->devices[rank]),
+      "cudaSetDevice(UMAP gather)");
+    if (!failed) failed |= massive_umap_nccl_check(
+      ncclAllGather(ctx->workers[rank]->layout + rank * count,
+        ctx->workers[rank]->layout, count, ncclFloat32,
+        ctx->comms[rank], 0), "ncclAllGather(UMAP layout)");
+  }
+  failed |= massive_umap_nccl_check(ncclGroupEnd(),
+    "ncclGroupEnd(UMAP gather)");
+  if (failed) return 1;
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(UMAP barrier)") ||
+        check_cuda(cudaDeviceSynchronize(),
+          "UMAP gather synchronization")) return 1;
+  }
+  ctx->collective_seconds += std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - gather_started).count();
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(multi-GPU UMAP restore)");
+}
+
+extern "C" double fastembedr_massive_umap_multigpu_collective_seconds(
+    void* raw) {
+  auto* ctx = static_cast<MassiveUmapMultiCudaContext*>(raw);
+  return ctx == nullptr ? 0.0 : ctx->collective_seconds;
+}
+
+extern "C" int fastembedr_massive_umap_multigpu_download(
+    void* raw, int first, int rows, float* layout) {
+  auto* ctx = static_cast<MassiveUmapMultiCudaContext*>(raw);
+  if (ctx == nullptr || first < 0 || rows < 1 ||
+      first > ctx->vertices - rows) {
+    set_embedding_error("invalid multi-GPU UMAP download range");
+    return 1;
+  }
+  if (check_cuda(cudaSetDevice(ctx->devices[0]),
+        "cudaSetDevice(multi-GPU UMAP download)")) return 1;
+  const int status = fastembedr_massive_umap_cuda_download(
+    ctx->workers[0], first, rows, layout);
+  if (status != 0) return status;
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(multi-GPU UMAP restore)");
+}
+#endif
+
 int resolve_cuda_tsne_fft_grid_size(const int n) {
   int grid_size = 512;
   if (n < 20000) grid_size = 256;
@@ -6714,6 +7098,9 @@ struct TsneFft2dIteration {
 struct MassiveTsneCudaContext {
   CudaWorkspace workspace;
   cudaStream_t stream = nullptr;
+  cudaEvent_t repulsion_start = nullptr;
+  cudaEvent_t repulsion_end = nullptr;
+  bool owns_stream = false;
   cufftHandle forward = 0;
   cufftHandle inverse = 0;
   float* current = nullptr;
@@ -6734,6 +7121,12 @@ struct MassiveTsneCudaContext {
   int point_blocks = 0;
   int layout_blocks = 0;
   int fft_blocks = 0;
+
+  ~MassiveTsneCudaContext() {
+    if (repulsion_start != nullptr) cudaEventDestroy(repulsion_start);
+    if (repulsion_end != nullptr) cudaEventDestroy(repulsion_end);
+    if (owns_stream && stream != nullptr) cudaStreamDestroy(stream);
+  }
 };
 
 extern "C" void fastembedr_massive_tsne_cuda_destroy(void* raw) {
@@ -6743,55 +7136,78 @@ extern "C" void fastembedr_massive_tsne_cuda_destroy(void* raw) {
   delete ctx;
 }
 
-extern "C" void* fastembedr_massive_tsne_cuda_create(
-    int vertices, int edge_capacity) {
+MassiveTsneCudaContext* massive_tsne_cuda_create_impl(
+    int vertices, int edge_capacity, bool fft_enabled,
+    bool own_stream, int actual_vertices) {
   embedding_last_error.clear();
   if (vertices < 2 || vertices > INT_MAX / 2 ||
+      actual_vertices < 2 || actual_vertices > vertices ||
       edge_capacity < 1 || edge_capacity > INT_MAX / 3) {
     set_embedding_error("invalid massive CUDA t-SNE dimensions");
     return nullptr;
   }
   auto* ctx = new MassiveTsneCudaContext();
-  ctx->n = vertices;
+  ctx->n = actual_vertices;
   ctx->capacity = edge_capacity;
-  ctx->grid_size = resolve_cuda_tsne_fft_grid_size(vertices);
+  ctx->grid_size = resolve_cuda_tsne_fft_grid_size(actual_vertices);
   ctx->fft_size = ctx->grid_size * 2;
   constexpr int threads = 256;
-  ctx->point_blocks = (vertices - 1) / threads + 1;
+  ctx->point_blocks = (actual_vertices - 1) / threads + 1;
   ctx->layout_blocks = std::min(1024, ctx->point_blocks);
   const int fft_items = ctx->fft_size * ctx->fft_size;
   ctx->fft_blocks = (fft_items - 1) / threads + 1;
-  CudaStreamOwner& owner = cuda_execution_stream();
-  if (owner.init()) {
+  if (!own_stream) {
+    CudaStreamOwner& owner = cuda_execution_stream();
+    if (owner.init()) {
+      delete ctx;
+      return nullptr;
+    }
+    ctx->stream = owner.get();
+  } else {
+    if (check_cuda(cudaStreamCreateWithFlags(&ctx->stream,
+          cudaStreamNonBlocking), "cudaStreamCreate(massive t-SNE)")) {
+      delete ctx;
+      return nullptr;
+    }
+    ctx->owns_stream = true;
+  }
+  if (fft_enabled &&
+      (check_cuda(cudaEventCreate(&ctx->repulsion_start),
+        "cudaEventCreate(t-SNE repulsion start)") ||
+       check_cuda(cudaEventCreate(&ctx->repulsion_end),
+        "cudaEventCreate(t-SNE repulsion end)"))) {
     delete ctx;
     return nullptr;
   }
-  ctx->stream = owner.get();
-  CudaFftPlanCache& cache = cuda_fft_plan_cache();
-  if (cache.acquire(ctx->fft_size, ctx->stream)) {
-    delete ctx;
-    return nullptr;
+  CudaFftPlanCache* cache = fft_enabled ? &cuda_fft_plan_cache() : nullptr;
+  if (cache != nullptr) {
+    if (cache->acquire(ctx->fft_size, ctx->stream)) {
+      delete ctx;
+      return nullptr;
+    }
+    ctx->forward = cache->forward();
+    ctx->inverse = cache->inverse();
   }
-  ctx->forward = cache.forward();
-  ctx->inverse = cache.inverse();
   const std::size_t n = static_cast<std::size_t>(vertices);
   const std::size_t grid = static_cast<std::size_t>(fft_items);
   const std::size_t partial = static_cast<std::size_t>(
     std::max(ctx->layout_blocks * 4, ctx->point_blocks * 2));
   const std::size_t bytes = n * (8u * sizeof(float) + sizeof(float2)) +
-    grid * 9u * sizeof(cufftComplex) + partial * sizeof(double) +
+    (fft_enabled ? grid * 9u * sizeof(cufftComplex) : 0u) +
+    partial * sizeof(double) +
     4u * sizeof(double) +
     static_cast<std::size_t>(edge_capacity) * 12u +
-    cache.work_bytes() + 16u * 256u;
+    (cache == nullptr ? 0u : cache->work_bytes()) + 16u * 256u;
   if (check_embedding_memory_available(bytes,
       "massive CUDA t-SNE allocation") ||
       ctx->workspace.init(bytes, "massive t-SNE")) {
     delete ctx;
     return nullptr;
   }
+  const auto work_bytes = cache == nullptr ? 0u : cache->work_bytes();
   void* work = ctx->workspace.alloc<unsigned char>(
-    cache.work_bytes(), "massive t-SNE cuFFT work");
-  if (cache.work_bytes() > 0u &&
+    work_bytes, "massive t-SNE cuFFT work");
+  if (work_bytes > 0u &&
       (work == nullptr || check_cufft(
         cufftSetWorkArea(ctx->forward, work),
         "cufftSetWorkArea(massive t-SNE forward)") ||
@@ -6804,9 +7220,12 @@ extern "C" void* fastembedr_massive_tsne_cuda_create(
   ctx->gradient = ctx->workspace.alloc<float>(2u * n, "t-SNE gradient");
   ctx->gains = ctx->workspace.alloc<float>(2u * n, "t-SNE gains");
   ctx->update = ctx->workspace.alloc<float>(2u * n, "t-SNE update");
-  ctx->grid_position = ctx->workspace.alloc<float2>(n, "t-SNE grid");
-  ctx->slab = ctx->workspace.alloc<cufftComplex>(9u * grid,
-    "t-SNE FFT slab");
+  if (fft_enabled) {
+    ctx->grid_position = ctx->workspace.alloc<float2>(n,
+      "t-SNE grid");
+    ctx->slab = ctx->workspace.alloc<cufftComplex>(9u * grid,
+      "t-SNE FFT slab");
+  }
   ctx->partial = ctx->workspace.alloc<double>(partial,
     "t-SNE reduction");
   ctx->stats = ctx->workspace.alloc<double>(4u, "t-SNE statistics");
@@ -6816,10 +7235,17 @@ extern "C" void* fastembedr_massive_tsne_cuda_create(
     "t-SNE weights");
   if (ctx->current == nullptr || ctx->gradient == nullptr ||
       ctx->gains == nullptr || ctx->update == nullptr ||
-      ctx->grid_position == nullptr || ctx->slab == nullptr ||
+      (fft_enabled && (ctx->grid_position == nullptr ||
+        ctx->slab == nullptr)) ||
       ctx->partial == nullptr || ctx->stats == nullptr ||
       ctx->heads == nullptr || ctx->tails == nullptr ||
       ctx->weights == nullptr ||
+      check_cuda(cudaMemsetAsync(ctx->current, 0,
+        2u * n * sizeof(float), ctx->stream),
+        "cudaMemsetAsync(massive t-SNE layout)") ||
+      check_cuda(cudaMemsetAsync(ctx->gradient, 0,
+        2u * n * sizeof(float), ctx->stream),
+        "cudaMemsetAsync(massive t-SNE gradient)") ||
       check_cuda(cudaMemsetAsync(ctx->update, 0,
         2u * n * sizeof(float), ctx->stream),
         "cudaMemsetAsync(massive t-SNE update)")) {
@@ -6836,6 +7262,12 @@ extern "C" void* fastembedr_massive_tsne_cuda_create(
     return nullptr;
   }
   return ctx;
+}
+
+extern "C" void* fastembedr_massive_tsne_cuda_create(
+    int vertices, int edge_capacity) {
+  return massive_tsne_cuda_create_impl(vertices, edge_capacity,
+    true, false, vertices);
 }
 
 extern "C" int fastembedr_massive_tsne_cuda_upload(
@@ -6869,7 +7301,26 @@ extern "C" int fastembedr_massive_tsne_cuda_begin(void* raw) {
     ctx->stream, ctx->n, ctx->grid_size, ctx->fft_size,
     ctx->layout_blocks, ctx->point_blocks, ctx->fft_blocks, 256
   };
-  return repulsion.repulsion(true);
+  if (check_cuda(cudaEventRecord(ctx->repulsion_start, ctx->stream),
+        "cudaEventRecord(t-SNE repulsion start)")) return 1;
+  const int status = repulsion.repulsion(true);
+  if (status != 0) return status;
+  return check_cuda(cudaEventRecord(ctx->repulsion_end, ctx->stream),
+    "cudaEventRecord(t-SNE repulsion end)");
+}
+
+extern "C" int fastembedr_massive_tsne_cuda_repulsion_ms(
+    void* raw, float* elapsed_ms) {
+  auto* ctx = static_cast<MassiveTsneCudaContext*>(raw);
+  if (ctx == nullptr || elapsed_ms == nullptr ||
+      ctx->repulsion_start == nullptr ||
+      ctx->repulsion_end == nullptr) {
+    set_embedding_error("invalid massive CUDA t-SNE FFT timer");
+    return 1;
+  }
+  return check_cuda(cudaEventElapsedTime(elapsed_ms,
+    ctx->repulsion_start, ctx->repulsion_end),
+    "cudaEventElapsedTime(t-SNE repulsion)");
 }
 
 extern "C" int fastembedr_massive_tsne_cuda_attract(
@@ -6949,6 +7400,345 @@ extern "C" int fastembedr_massive_tsne_cuda_download(
     check_cuda(cudaStreamSynchronize(ctx->stream),
       "cudaStreamSynchronize(massive t-SNE download)");
 }
+
+#ifdef FASTEMBEDR_HAS_NCCL
+struct MassiveTsneMultiCudaContext {
+  int n = 0;
+  int block_rows = 0;
+  int previous_device = 0;
+  std::vector<int> devices;
+  std::vector<MassiveTsneCudaContext*> workers;
+  std::vector<ncclComm_t> comms;
+};
+
+extern "C" void fastembedr_massive_tsne_multigpu_destroy(void* raw) {
+  auto* ctx = static_cast<MassiveTsneMultiCudaContext*>(raw);
+  if (ctx == nullptr) return;
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    cudaSetDevice(ctx->devices[rank]);
+    if (ctx->comms[rank] != nullptr)
+      ncclCommDestroy(ctx->comms[rank]);
+    fastembedr_massive_tsne_cuda_destroy(ctx->workers[rank]);
+  }
+  cudaSetDevice(ctx->previous_device);
+  delete ctx;
+}
+
+extern "C" void* fastembedr_massive_tsne_multigpu_create(
+    int n, int edge_capacity, const int* devices, int device_count) {
+  embedding_last_error.clear();
+  if (n < 2 || n > INT_MAX / 2 || edge_capacity < 1 ||
+      devices == nullptr || device_count < 2 || device_count > 4) {
+    set_embedding_error("invalid multi-GPU t-SNE request");
+    return nullptr;
+  }
+  int available = 0;
+  int previous = 0;
+  if (check_cuda(cudaGetDeviceCount(&available),
+        "cudaGetDeviceCount(t-SNE)") ||
+      check_cuda(cudaGetDevice(&previous),
+        "cudaGetDevice(t-SNE)")) return nullptr;
+  for (int rank = 0; rank < device_count; ++rank) {
+    if (devices[rank] < 0 || devices[rank] >= available) {
+      set_embedding_error("multi-GPU t-SNE device is unavailable");
+      return nullptr;
+    }
+    for (int other = 0; other < rank; ++other) {
+      if (devices[rank] == devices[other]) {
+        set_embedding_error("multi-GPU t-SNE devices must be distinct");
+        return nullptr;
+      }
+    }
+  }
+  const int block = (n - 1) / device_count + 1;
+  const auto padded = static_cast<std::int64_t>(block) * device_count;
+  if (n <= (device_count - 1) * block || padded > INT_MAX / 2) {
+    set_embedding_error("multi-GPU t-SNE needs rows on every device");
+    return nullptr;
+  }
+  auto* ctx = new MassiveTsneMultiCudaContext();
+  ctx->n = n;
+  ctx->block_rows = block;
+  ctx->previous_device = previous;
+  ctx->devices.assign(devices, devices + device_count);
+  ctx->workers.resize(device_count, nullptr);
+  ctx->comms.resize(device_count, nullptr);
+  for (int rank = 0; rank < device_count; ++rank) {
+    if (check_cuda(cudaSetDevice(devices[rank]),
+          "cudaSetDevice(t-SNE create)")) {
+      fastembedr_massive_tsne_multigpu_destroy(ctx);
+      return nullptr;
+    }
+    ctx->workers[rank] = massive_tsne_cuda_create_impl(
+      static_cast<int>(padded), edge_capacity, rank == 0,
+      true, n);
+    if (ctx->workers[rank] == nullptr) {
+      fastembedr_massive_tsne_multigpu_destroy(ctx);
+      return nullptr;
+    }
+  }
+  if (massive_umap_nccl_check(ncclCommInitAll(
+        ctx->comms.data(), device_count, devices),
+        "ncclCommInitAll(t-SNE)")) {
+    fastembedr_massive_tsne_multigpu_destroy(ctx);
+    return nullptr;
+  }
+  cudaSetDevice(previous);
+  return ctx;
+}
+
+extern "C" int fastembedr_massive_tsne_multigpu_upload(
+    void* raw, int field, int first, int rows, const float* values) {
+  auto* ctx = static_cast<MassiveTsneMultiCudaContext*>(raw);
+  if (ctx == nullptr || values == nullptr) {
+    set_embedding_error("invalid multi-GPU t-SNE upload");
+    return 1;
+  }
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(t-SNE upload)") ||
+        fastembedr_massive_tsne_cuda_upload(ctx->workers[rank],
+          field, first, rows, values)) return 1;
+  }
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(t-SNE restore)");
+}
+
+extern "C" int fastembedr_massive_tsne_multigpu_begin(void* raw) {
+  auto* ctx = static_cast<MassiveTsneMultiCudaContext*>(raw);
+  if (ctx == nullptr) {
+    set_embedding_error("invalid multi-GPU t-SNE context");
+    return 1;
+  }
+  if (check_cuda(cudaSetDevice(ctx->devices[0]),
+        "cudaSetDevice(t-SNE FFT)") ||
+      fastembedr_massive_tsne_cuda_begin(ctx->workers[0])) return 1;
+  const auto padded = static_cast<int>(ctx->devices.size()) *
+    ctx->block_rows;
+  if (ctx->n != padded &&
+      check_cuda(cudaMemsetAsync(ctx->workers[0]->gradient +
+        2u * ctx->n, 0,
+        static_cast<std::size_t>(padded - ctx->n) *
+          2u * sizeof(float),
+        ctx->workers[0]->stream),
+        "cudaMemsetAsync(t-SNE padded gradient)")) return 1;
+  for (std::size_t rank = 1; rank < ctx->devices.size(); ++rank) {
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(t-SNE gradient)") ||
+        check_cuda(cudaMemsetAsync(ctx->workers[rank]->gradient, 0,
+          static_cast<std::size_t>(padded) * 2u *
+            sizeof(float), ctx->workers[rank]->stream),
+          "cudaMemsetAsync(t-SNE gradient)")) return 1;
+  }
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(t-SNE restore)");
+}
+
+extern "C" int fastembedr_massive_tsne_multigpu_repulsion_ms(
+    void* raw, float* elapsed_ms) {
+  auto* ctx = static_cast<MassiveTsneMultiCudaContext*>(raw);
+  if (ctx == nullptr || elapsed_ms == nullptr) {
+    set_embedding_error("invalid multi-GPU t-SNE FFT timer");
+    return 1;
+  }
+  if (check_cuda(cudaSetDevice(ctx->devices[0]),
+        "cudaSetDevice(t-SNE FFT timer)")) return 1;
+  const int status = fastembedr_massive_tsne_cuda_repulsion_ms(
+    ctx->workers[0], elapsed_ms);
+  const int restored = check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(t-SNE FFT timer restore)");
+  return status || restored;
+}
+
+extern "C" int fastembedr_massive_tsne_multigpu_attract(
+    void* raw, int rank, const int* heads, const int* tails,
+    const float* weights, int edges, float exaggeration) {
+  auto* ctx = static_cast<MassiveTsneMultiCudaContext*>(raw);
+  if (ctx == nullptr || rank < 0 ||
+      rank >= static_cast<int>(ctx->devices.size()) ||
+      heads == nullptr || tails == nullptr || edges < 1) {
+    set_embedding_error("invalid multi-GPU t-SNE edge batch");
+    return 1;
+  }
+  for (int i = 0; i < edges; ++i) {
+    if (heads[i] < rank * ctx->block_rows ||
+        heads[i] >= std::min(ctx->n,
+          (rank + 1) * ctx->block_rows) ||
+        tails[i] < 0 || tails[i] >= ctx->n) {
+      set_embedding_error("multi-GPU t-SNE edge owner is inconsistent");
+      return 1;
+    }
+  }
+  if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+        "cudaSetDevice(t-SNE attraction)") ||
+      fastembedr_massive_tsne_cuda_attract(ctx->workers[rank],
+        heads, tails, weights, edges, exaggeration)) return 1;
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(t-SNE restore)");
+}
+
+extern "C" int fastembedr_massive_tsne_multigpu_finish(
+    void* raw, float learning_rate, float momentum,
+    float min_gain, float max_step_norm) {
+  auto* ctx = static_cast<MassiveTsneMultiCudaContext*>(raw);
+  if (ctx == nullptr || !std::isfinite(learning_rate) ||
+      learning_rate <= 0.0f || !std::isfinite(momentum) ||
+      momentum < 0.0f || !std::isfinite(min_gain) ||
+      min_gain <= 0.0f || max_step_norm <= 0.0f) {
+    set_embedding_error("invalid multi-GPU t-SNE update");
+    return 1;
+  }
+  const auto count = static_cast<std::size_t>(ctx->block_rows) * 2u;
+  if (massive_umap_nccl_check(ncclGroupStart(),
+        "ncclGroupStart(t-SNE reduce)")) return 1;
+  int failed = 0;
+  for (int rank = 0; rank < static_cast<int>(ctx->devices.size());
+       ++rank) {
+    failed |= check_cuda(cudaSetDevice(ctx->devices[rank]),
+      "cudaSetDevice(t-SNE reduce)");
+    if (!failed) failed |= massive_umap_nccl_check(
+      ncclReduceScatter(ctx->workers[rank]->gradient,
+        ctx->workers[rank]->gradient + rank * count,
+        count, ncclFloat32, ncclSum, ctx->comms[rank],
+        ctx->workers[rank]->stream),
+      "ncclReduceScatter(t-SNE gradient)");
+  }
+  failed |= massive_umap_nccl_check(ncclGroupEnd(),
+    "ncclGroupEnd(t-SNE reduce)");
+  if (failed) return 1;
+  for (int rank = 0; rank < static_cast<int>(ctx->devices.size());
+       ++rank) {
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(t-SNE owner update)")) return 1;
+    auto* worker = ctx->workers[rank];
+    const int rows = std::min(ctx->block_rows,
+      ctx->n - rank * ctx->block_rows);
+    const int blocks = (rows - 1) / 256 + 1;
+    const auto offset = rank * count;
+    opentsne_update_reduce_kernel<<<blocks, 256,
+      2u * 256u * sizeof(double), worker->stream>>>(
+      worker->current + offset, worker->gradient + offset,
+      worker->gains + offset, worker->update + offset,
+      worker->partial, rows, learning_rate, momentum,
+      min_gain, max_step_norm);
+    if (check_cuda(cudaGetLastError(),
+          "opentsne_update_reduce_kernel(t-SNE owner)")) return 1;
+    tsne_finalize_mean_kernel<<<1, 256,
+      2u * 256u * sizeof(double), worker->stream>>>(
+      worker->partial, worker->stats, blocks, ctx->n);
+    if (check_cuda(cudaGetLastError(),
+          "tsne_finalize_mean_kernel(t-SNE owner)")) return 1;
+  }
+  if (massive_umap_nccl_check(ncclGroupStart(),
+        "ncclGroupStart(t-SNE mean)")) return 1;
+  failed = 0;
+  for (int rank = 0; rank < static_cast<int>(ctx->devices.size());
+       ++rank) {
+    failed |= check_cuda(cudaSetDevice(ctx->devices[rank]),
+      "cudaSetDevice(t-SNE mean)");
+    if (!failed) failed |= massive_umap_nccl_check(
+      ncclAllReduce(ctx->workers[rank]->stats,
+        ctx->workers[rank]->stats, 2, ncclFloat64, ncclSum,
+        ctx->comms[rank], ctx->workers[rank]->stream),
+      "ncclAllReduce(t-SNE mean)");
+  }
+  failed |= massive_umap_nccl_check(ncclGroupEnd(),
+    "ncclGroupEnd(t-SNE mean)");
+  if (failed) return 1;
+  for (int rank = 0; rank < static_cast<int>(ctx->devices.size());
+       ++rank) {
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(t-SNE center)")) return 1;
+    auto* worker = ctx->workers[rank];
+    const int rows = std::min(ctx->block_rows,
+      ctx->n - rank * ctx->block_rows);
+    tsne_center_kernel<<<(rows - 1) / 256 + 1, 256, 0,
+      worker->stream>>>(worker->current + rank * count,
+      worker->stats, rows);
+    if (check_cuda(cudaGetLastError(),
+          "tsne_center_kernel(t-SNE owner)")) return 1;
+  }
+  if (massive_umap_nccl_check(ncclGroupStart(),
+        "ncclGroupStart(t-SNE gather)")) return 1;
+  failed = 0;
+  for (int rank = 0; rank < static_cast<int>(ctx->devices.size());
+       ++rank) {
+    failed |= check_cuda(cudaSetDevice(ctx->devices[rank]),
+      "cudaSetDevice(t-SNE gather)");
+    if (!failed) failed |= massive_umap_nccl_check(
+      ncclAllGather(ctx->workers[rank]->current + rank * count,
+        ctx->workers[rank]->current, count, ncclFloat32,
+        ctx->comms[rank], ctx->workers[rank]->stream),
+      "ncclAllGather(t-SNE layout)");
+  }
+  failed |= massive_umap_nccl_check(ncclGroupEnd(),
+    "ncclGroupEnd(t-SNE gather)");
+  if (failed) return 1;
+  for (int rank = 0; rank < static_cast<int>(ctx->devices.size());
+       ++rank) {
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(t-SNE barrier)") ||
+        check_cuda(cudaStreamSynchronize(ctx->workers[rank]->stream),
+          "cudaStreamSynchronize(t-SNE barrier)")) return 1;
+  }
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(t-SNE restore)");
+}
+
+extern "C" int fastembedr_massive_tsne_multigpu_gather_state(
+    void* raw) {
+  auto* ctx = static_cast<MassiveTsneMultiCudaContext*>(raw);
+  if (ctx == nullptr) {
+    set_embedding_error("invalid multi-GPU t-SNE checkpoint");
+    return 1;
+  }
+  const auto count = static_cast<std::size_t>(ctx->block_rows) * 2u;
+  for (int field = 1; field <= 2; ++field) {
+    if (massive_umap_nccl_check(ncclGroupStart(),
+          "ncclGroupStart(t-SNE state)")) return 1;
+    int failed = 0;
+    for (int rank = 0; rank < static_cast<int>(ctx->devices.size());
+         ++rank) {
+      failed |= check_cuda(cudaSetDevice(ctx->devices[rank]),
+        "cudaSetDevice(t-SNE state)");
+      float* values = field == 1 ? ctx->workers[rank]->update :
+        ctx->workers[rank]->gains;
+      if (!failed) failed |= massive_umap_nccl_check(
+        ncclAllGather(values + rank * count, values, count,
+          ncclFloat32, ctx->comms[rank],
+          ctx->workers[rank]->stream),
+        "ncclAllGather(t-SNE state)");
+    }
+    failed |= massive_umap_nccl_check(ncclGroupEnd(),
+      "ncclGroupEnd(t-SNE state)");
+    if (failed) return 1;
+  }
+  for (int rank = 0; rank < static_cast<int>(ctx->devices.size());
+       ++rank) {
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(t-SNE state barrier)") ||
+        check_cuda(cudaStreamSynchronize(ctx->workers[rank]->stream),
+          "cudaStreamSynchronize(t-SNE state)")) return 1;
+  }
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(t-SNE restore)");
+}
+
+extern "C" int fastembedr_massive_tsne_multigpu_download(
+    void* raw, int field, int first, int rows, float* values) {
+  auto* ctx = static_cast<MassiveTsneMultiCudaContext*>(raw);
+  if (ctx == nullptr || values == nullptr) {
+    set_embedding_error("invalid multi-GPU t-SNE download");
+    return 1;
+  }
+  if (check_cuda(cudaSetDevice(ctx->devices[0]),
+        "cudaSetDevice(t-SNE download)") ||
+      fastembedr_massive_tsne_cuda_download(ctx->workers[0],
+        field, first, rows, values)) return 1;
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(t-SNE restore)");
+}
+#endif
 
 template <typename DistanceT>
 int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,

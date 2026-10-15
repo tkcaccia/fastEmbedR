@@ -30,5 +30,6 @@ Compares evenly spaced query rows with an independent streamed exact
 CPU search. Sampled queries share bounded reference scans; the number
 of passes is reported in \code{audit_reference_passes}. This audit can
 still be expensive and does not certify unsampled rows or change the
-saved neighbor files.
+saved neighbor files. \code{observed_recall} is strict ID overlap;
+\code{distance_equivalent_recall} also accepts ties at the exact kth distance.
 }

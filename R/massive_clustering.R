@@ -49,6 +49,10 @@ massive_cluster_resources <- function(graph, reference_graph, workers,
         result <- c(result, massive_cluster_cuda_resources(
             reference_graph))
     }
+    if (backend == "metal") result <- c(result, list(
+        peak_vram_bytes = NA_real_,
+        metal_memory_model = "unified_shared",
+        metal_buffer_bytes_estimate = graph_bytes))
     result
 }
 
@@ -290,12 +294,12 @@ massive_cluster_stream <- function(graph, labels, paths, resources,
 
 massive_cluster_backend <- function(method, backend) {
     if (!is.character(backend) || length(backend) != 1L ||
-        is.na(backend) || !backend %in% c("cpu", "cuda")) {
-        stop("EXPERIMENTAL clustering requires CPU or CUDA.",
+        is.na(backend) || !backend %in% c("cpu", "cuda", "metal")) {
+        stop("EXPERIMENTAL clustering requires CPU, CUDA, or Metal.",
             call. = FALSE)
     }
-    if (backend == "cuda" && method == "walktrap") {
-        stop("Walktrap is CPU-only; no CUDA fallback was used.",
+    if (backend != "cpu" && method == "walktrap") {
+        stop("Walktrap is CPU-only; no GPU fallback was used.",
             call. = FALSE)
     }
     if (backend == "cuda" &&
@@ -304,26 +308,30 @@ massive_cluster_backend <- function(method, backend) {
         stop("CUDA graph clustering is unavailable; ",
             "no CPU fallback was used.", call. = FALSE)
     }
+    if (backend == "metal" &&
+        !isTRUE(graph_clustering_metal_available_cpp())) stop(
+        "Metal graph clustering is unavailable; ",
+        "no CPU fallback was used.", call. = FALSE)
     backend
 }
 
 #' EXPERIMENTAL file-backed landmark graph clustering
 #'
 #' Runs the existing native Leiden, Louvain, or Walktrap implementation on
-#' a resident landmark graph. Saved CPU- or CUDA-built KNN rows are streamed
-#' through inverse-distance weighted community voting. A supplied landmark
-#' selection preserves reference labels at their original source rows.
+#' a resident landmark graph. Saved CPU-, CUDA-, or Metal-built KNN rows
+#' are streamed through inverse-distance weighted community voting. A supplied
+#' landmark selection preserves reference labels at their source rows.
 #'
 #' @param reference_graph A `knn_graph()` result for the landmark rows.
-#' @param knn Saved CPU- or CUDA-built query-to-landmark graph from
+#' @param knn Saved CPU-, CUDA-, or Metal-built query-to-landmark graph from
 #'   `massive_landmark_knn()`.
 #' @param output New prefix for label and confidence output files.
 #' @param method `"leiden"`, `"louvain"`, or `"walktrap"`.
 #' @param selection Optional result of `massive_select_landmarks()` from the
 #'   query source; selected rows retain their fitted community labels.
-#' @param backend `"cpu"` for all methods, or `"cuda"` for landmark-graph
-#'   Louvain and Leiden. Streamed community voting remains on CPU. A CUDA
-#'   request fails explicitly if the backend is unavailable.
+#' @param backend `"cpu"` for all methods, or `"cuda"` or `"metal"` for
+#'   landmark-graph Louvain and Leiden. Streamed community voting remains
+#'   on CPU. GPU requests fail explicitly if unavailable.
 #' @param n.cores CPU workers used for weighted community voting.
 #' @param chunk_rows Maximum query rows per batch.
 #' @param memory_limit Conservative RAM budget for voting buffers.
@@ -354,15 +362,13 @@ massive_cluster_landmarks <- function(
             call. = FALSE)
     }
     if (!inherits(knn, "fastEmbedR_massive_knn") ||
-        !knn$backend %in% c("cpu", "cuda")) {
-        stop("EXPERIMENTAL clustering requires a saved CPU or CUDA KNN.",
-            call. = FALSE)
-    }
+        !knn$backend %in% c("cpu", "cuda", "metal")) stop(
+        "Clustering requires a saved CPU, CUDA, or Metal KNN.",
+        call. = FALSE)
     reference_graph <- validate_fastembedr_graph(reference_graph)
-    if (reference_graph$n_vertices != knn$n_reference) {
+    if (reference_graph$n_vertices != knn$n_reference)
         stop("Landmark graph and KNN reference sizes differ.",
             call. = FALSE)
-    }
     method <- match.arg(method)
     backend <- massive_cluster_backend(method, backend)
     workers <- normalize_nn_threads(n.cores)

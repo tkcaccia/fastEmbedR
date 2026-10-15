@@ -167,6 +167,8 @@ use_cuda=$(normalize_switch "${FASTEMBEDR_USE_CUDA:-auto}" \
   FASTEMBEDR_USE_CUDA)
 use_cuvs=$(normalize_switch "${FASTEMBEDR_USE_CUVS:-auto}" \
   FASTEMBEDR_USE_CUVS)
+use_nccl=$(normalize_switch "${FASTEMBEDR_USE_NCCL:-auto}" \
+  FASTEMBEDR_USE_NCCL)
 require_cuda=${FASTEMBEDR_REQUIRE_CUDA:-${PACKAGE_REQUIRE_CUDA:-0}}
 diagnostic_only=${FASTEMBEDR_DIAGNOSTIC_ONLY:-0}
 
@@ -193,6 +195,7 @@ fi
 if is_true "$diagnostic_only"; then
   use_cuda=0
   use_cuvs=0
+  use_nccl=0
 fi
 
 cuda_home=${CUDA_HOME:-${CUDA_PATH:-${CUDAToolkit_ROOT:-}}}
@@ -249,6 +252,7 @@ metal_enabled=0
 cuda_enabled=0
 enable_cuvs=0
 enable_raft=0
+enable_nccl=0
 build_mode=cpu_only
 gemm_enabled=0
 
@@ -433,6 +437,9 @@ fi
 if [ "$use_cuda" = "1" ] && [ "$cuda_probe_ok" != "1" ]; then
   fatal "CUDA was required, but the toolkit compile/link probe failed."
 fi
+if [ "$use_nccl" = "1" ] && [ "$cuda_probe_ok" != "1" ]; then
+  fatal "NCCL was required, but CUDA is unavailable."
+fi
 
 if [ "$cuda_probe_ok" = "1" ]; then
   cuda_enabled=1
@@ -467,6 +474,42 @@ if [ "$cuda_probe_ok" = "1" ]; then
   cppflags="$cppflags $cuda_cpp_flags $cuda_include_flags"
   libs="$libs $cuda_lib_flags $cuda_rpath_flags"
   libs="$libs -lcudart -lcufft -lcublas -lcusolver -lcurand"
+
+  if [ "$use_nccl" != "0" ]; then
+    nccl_home=${NCCL_HOME:-$cuda_home}
+    collect_prefix_dirs "$nccl_home"
+    nccl_include=$(find_header_dir "$prefix_include_dirs" nccl.h \
+      2>/dev/null || true)
+    nccl_library=$(find_library_dir "$prefix_library_dirs" nccl \
+      2>/dev/null || true)
+    if [ -n "$nccl_include" ] && [ -n "$nccl_library" ]; then
+      cat > "$configure_tmp/nccl-link.cu" <<'EOF_NCCL'
+#include <nccl.h>
+int main() {
+  int version = 0;
+  return ncclGetVersion(&version) != ncclSuccess;
+}
+EOF_NCCL
+      if "$nvcc" -std=c++17 $cuda_host_flags \
+         $cuda_cpp_flags $cuda_extra_flags \
+         -I"$nccl_include" "$configure_tmp/nccl-link.cu" \
+         -L"$nccl_library" -lnccl -lcudart \
+         -o "$configure_tmp/nccl-link" \
+         > "$configure_tmp/nccl-link.log" 2>&1; then
+        enable_nccl=1
+        cppflags="$cppflags -DFASTEMBEDR_HAS_NCCL -I$nccl_include"
+        cuda_include_flags="$cuda_include_flags -DFASTEMBEDR_HAS_NCCL"
+        cuda_include_flags="$cuda_include_flags -I$nccl_include"
+        libs="$libs -L$nccl_library -Wl,-rpath,$nccl_library -lnccl"
+      else
+        print_probe_failure "NCCL compile/link" \
+          "$configure_tmp/nccl-link.log"
+      fi
+    fi
+    if [ "$use_nccl" = "1" ] && [ "$enable_nccl" != "1" ]; then
+      fatal "FASTEMBEDR_USE_NCCL=1 requested unusable NCCL libraries."
+    fi
+  fi
 
   cuvs_home=${CUVS_HOME:-${RAPIDS_HOME:-${CONDA_PREFIX:-}}}
   if [ "$use_cuvs" = "1" ] || \
@@ -717,6 +760,7 @@ if [ "$cuda_enabled" = "1" ]; then
   echo "  CUDA architectures:     ${FASTEMBEDR_CUDA_ARCH:-nvcc default}"
   echo "  cuVS linked:            $enable_cuvs"
   echo "  RAFT linked:            $enable_raft"
+  echo "  NCCL linked:            $enable_nccl"
 elif [ "$use_cuda" = "auto" ]; then
   notice "CUDA was not enabled; the CPU-only build remains available."
 fi

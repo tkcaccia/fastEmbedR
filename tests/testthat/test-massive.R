@@ -11,6 +11,34 @@ make_massive_fixture <- function(x, format = "f32") {
     path
 }
 
+test_that("large landmark output budgets avoid integer overflow", {
+    data <- list(nrow = 100000000L, ncol = 96L, format = "view")
+    output <- tempfile(fileext = ".f32")
+    with_mocked_bindings(
+        massive_disk_available_cpp = function(...) 100e9,
+        {
+            paths <- fastEmbedR:::massive_embedding_paths(data,
+                10000L, 30L, 2L, output, "4GB", NULL)
+            expect_equal(paths$output_bytes, 800e6)
+            expect_equal(paths$graph_bytes, 24e9)
+        },
+        .package = "fastEmbedR"
+    )
+    resources <- fastEmbedR:::massive_knn_resources(data,
+        list(nrow = 10000L, ncol = 96L, format = "f32"),
+        30L, "exact", 10000L, "4GB")
+    expect_equal(resources$output_bytes, 24e9)
+    large <- list(nrow = 100000000L, ncol = 96L,
+        format = "view")
+    budget <- fastEmbedR:::massive_knn_resources(data,
+        large, 30L, "exact", 1000L, "256GB")
+    expect_gt(budget$peak_ram_bytes, 100e9)
+    cuda <- fastEmbedR:::massive_knn_cuda_resources(budget,
+        large, 30L, "exact",
+        list(free_bytes = 300e9, device = 0L))
+    expect_gt(cuda$peak_vram_bytes, 70e9)
+})
+
 test_that("public 3D CUDA landmark t-SNE writes all query rows", {
     skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
     set.seed(514)
@@ -89,7 +117,8 @@ test_that("public UMAP and t-SNE landmark modes stay file-backed", {
         standardize = TRUE), "without preprocessing")
     expect_error(umap(source, massive = "landmark", landmarks = 20L,
         output = file.path(directory, "metal.f32"),
-        backend = "metal"), "no backend fallback")
+        refinement_epochs = 10L, backend = "metal"),
+        "no CPU fallback")
     expect_error(umap(source, massive = "landmark", landmarks = 20L,
         output = file.path(directory, "cuda.f32"),
         refinement_epochs = 10L, backend = "cuda"),
@@ -482,7 +511,7 @@ test_that("full KNN checkpoints a file-backed row view", {
         reference_chunk_rows = 7L, memory_limit = "256MB",
         method = "hnsw_sharded", audit_rows = 2L,
         checkpoint = TRUE)
-    expect_equal(graph$nrow, 14)
+    expect_equal(graph$n_vertices, 14)
     expect_true(graph$checkpoint)
     expect_length(graph$audit_row_recall, 2L)
     expect_false(file.exists(file.path(directory,
@@ -517,6 +546,8 @@ test_that("streamed PCA agrees with an independent dense SVD", {
     expect_equal(fit$backend, "cpu")
     expect_equal(fit$n_threads, 2L)
     expect_true(fit$experimental)
+    expect_identical(fit$implementation_identity,
+        fastEmbedR:::massive_checkpoint_implementation_identity())
     expect_error(pca(source, ncomp = 2L, backend = "cpu",
         massive = "out_of_core", output = output), "already exists")
 })
@@ -629,6 +660,23 @@ test_that("wide streamed CUDA PCA uses GPU sketch and projection", {
     for (component in 1:3) {
         expect_equal(abs(cor(scores[, component],
             dense$x[, component])), 1, tolerance = 0.02)
+    }
+    if (fastEmbedR:::massive_cuda_device_count_cpp() >= 2L) {
+        multi_path <- tempfile(fileext = ".f32")
+        on.exit(unlink(c(multi_path,
+            paste0(multi_path, ".part"))), add = TRUE)
+        multi <- pca(source, ncomp = 3L, backend = "cuda",
+            n.cores = 2L, seed = 15L, massive = "out_of_core",
+            devices = c(0L, 1L), output = multi_path,
+            chunk_rows = 13L, memory_limit = "512MB")
+        expect_identical(multi$fit_devices, c(0L, 1L))
+        expect_identical(multi$fit_sketch_backend,
+            "distributed_cuda_action")
+        expect_identical(multi$moments_backend, "cpu")
+        expect_equal(multi$singular_values,
+            fit$singular_values, tolerance = 0.02)
+        expect_equal(as.matrix(multi$scores), scores,
+            tolerance = 0.02)
     }
 })
 
@@ -1293,13 +1341,19 @@ test_that("multi-GPU PCA resumes partial shards and checks the model", {
         recovered[[2L]], view, fit, resources, TRUE),
         "checkpoint does not match")
     resources$gpu_devices <- c(0L, 1L)
-    left <- fastEmbedR:::massive_pca_checkpoint_signature(
-        source, output, 2L, TRUE, FALSE, "cuda", 1L, 4L,
-        resources)
+    left <- with_mocked_bindings(
+        fastEmbedR:::massive_pca_checkpoint_signature(source,
+            output, 2L, TRUE, FALSE, "cuda", 1L, 4L, resources),
+        massive_cuda_device_uuids = function(devices)
+            paste0("GPU-", devices),
+        .package = "fastEmbedR")
     resources$gpu_devices <- c(0L, 2L)
-    right <- fastEmbedR:::massive_pca_checkpoint_signature(
-        source, output, 2L, TRUE, FALSE, "cuda", 1L, 4L,
-        resources)
+    right <- with_mocked_bindings(
+        fastEmbedR:::massive_pca_checkpoint_signature(source,
+            output, 2L, TRUE, FALSE, "cuda", 1L, 4L, resources),
+        massive_cuda_device_uuids = function(devices)
+            paste0("GPU-", devices),
+        .package = "fastEmbedR")
     expect_false(identical(left, right))
 })
 
@@ -1325,7 +1379,8 @@ test_that("streamed PCA uses every requested CUDA device", {
         list(source = source, fit = single, rank = 2L,
             chunk_rows = 9L, memory_limit = 1e9,
             checkpoint = TRUE),
-        normalizePath(find.package("fastEmbedR")))
+        normalizePath(find.package("fastEmbedR")),
+        fastEmbedR:::massive_checkpoint_implementation_identity())
     expect_identical(worker$gpu_device, 0L)
     expect_equal(as.matrix(massive_matrix(shard$output, 41L, 2L)),
         as.matrix(single$scores), tolerance = 1e-5)
@@ -1337,6 +1392,13 @@ test_that("streamed PCA uses every requested CUDA device", {
         output = file.path(directory, "multi.f32"),
         chunk_rows = 9L, memory_limit = "1GB")
     expect_identical(multi$gpu_devices, c(0L, 1L))
+    expect_identical(multi$fit_devices, c(0L, 1L))
+    expect_identical(multi$fit_statistics_backend,
+        "distributed_cuda_covariance")
+    expect_identical(vapply(multi$fit_per_device, `[[`, 0L,
+        "device"), c(0L, 1L))
+    expect_equal(sum(vapply(multi$fit_per_device, `[[`, 0,
+        "rows")), nrow(x))
     expect_identical(vapply(multi$resources$per_device,
         `[[`, 0L, "gpu_device"), c(0L, 1L))
     expect_equal(as.matrix(multi$scores),
@@ -1349,6 +1411,17 @@ test_that("streamed PCA uses every requested CUDA device", {
         as.matrix(single$scores), tolerance = 1e-5)
     expect_false(file.exists(file.path(directory,
         "checkpointed.f32.checkpoint.rds")))
+    if (fastEmbedR:::massive_cuda_device_count_cpp() >= 4L) {
+        four <- pca(source, ncomp = 2L, backend = "cuda",
+            massive = "out_of_core", devices = 0:3,
+            output = file.path(directory, "four.f32"),
+            chunk_rows = 9L, memory_limit = "1GB")
+        expect_identical(four$gpu_devices, 0:3)
+        expect_identical(vapply(four$resources$per_device,
+            `[[`, 0L, "gpu_device"), 0:3)
+        expect_equal(as.matrix(four$scores),
+            as.matrix(single$scores), tolerance = 1e-5)
+    }
 })
 
 test_that("scaled PCA agrees across workers and file access modes", {
@@ -1535,6 +1608,9 @@ test_that("shard merge keeps same-numbered separate query neighbors", {
 })
 
 test_that("row-sharded KNN merges into exact source order", {
+    testthat::local_mocked_bindings(
+        massive_cuda_device_uuids = function(devices)
+            paste0("GPU-", devices), .package = "fastEmbedR")
     set.seed(741)
     query <- matrix(rnorm(29L * 4L), ncol = 4L)
     reference <- matrix(rnorm(13L * 4L), ncol = 4L)
@@ -1562,22 +1638,24 @@ test_that("row-sharded KNN merges into exact source order", {
     })
     paths <- fastEmbedR:::massive_knn_paths(prefix, 29 * 3 * 8)
     fastEmbedR:::massive_knn_merge_shards(results, paths, tasks)
-    setup <- list(paths = paths,
+    setup <- list(paths = paths, reference = landmarks,
         resources = list(output_bytes = 29 * 3 * 8))
     joined <- fastEmbedR:::massive_knn_devices_result(results,
-        setup, source, c(0L, 1L), 0)
+        setup, source, c(0L, 1L), 0, tasks)
     expect_equal(read_massive_knn(joined), read_massive_knn(baseline))
     expect_identical(joined$gpu_devices, c(0L, 1L))
     expect_equal(joined$nrow, 29)
     expect_length(joined$per_device, 2L)
+    expect_equal(lapply(joined$per_device, `[[`, "query_row_range"),
+        lapply(tasks, `[[`, "row_range"))
     mixed <- results
     mixed[[2L]]$reference_identity <- list(changed = TRUE)
     expect_error(fastEmbedR:::massive_knn_devices_result(
-        mixed, setup, source, c(0L, 1L), 0),
+        mixed, setup, source, c(0L, 1L), 0, tasks),
         "different references")
     results[[2L]]$nprobe <- 3L
     heterogeneous <- fastEmbedR:::massive_knn_devices_result(
-        results, setup, source, c(0L, 1L), 0)
+        results, setup, source, c(0L, 1L), 0, tasks)
     expect_true(is.na(heterogeneous$nprobe))
     expect_identical(heterogeneous$per_device[[2L]]$nprobe, 3L)
     expect_equal(file.info(paths)$size, rep(29 * 3 * 4, 2L))
@@ -1586,6 +1664,9 @@ test_that("row-sharded KNN merges into exact source order", {
 })
 
 test_that("fresh multi-GPU KNN shards reject fallback and wrong method", {
+    testthat::local_mocked_bindings(
+        massive_cuda_device_uuids = function(devices)
+            paste0("GPU-", devices), .package = "fastEmbedR")
     set.seed(753)
     query <- matrix(rnorm(9L * 3L), ncol = 3L)
     reference <- matrix(rnorm(6L * 3L), ncol = 3L)
@@ -1607,6 +1688,9 @@ test_that("fresh multi-GPU KNN shards reject fallback and wrong method", {
             result$backend <- reported_backend
             result$method <- reported_method
             result$resources$gpu_device <- task$device
+            result$completed_output_identity <-
+                fastEmbedR:::massive_checkpoint_input_files_identity(
+                    c(result$indices_path, result$distances_path))
             result
         })
     }
@@ -1636,9 +1720,21 @@ test_that("fresh multi-GPU KNN shards reject fallback and wrong method", {
         file.path(directory, "baseline"), memory_limit = "256MB")
     expect_equal(read_massive_knn(observed$result),
         read_massive_knn(baseline))
+    with_mocked_bindings(
+        massive_knn_merge_shards = function(...) {
+            con <- file(raw, "ab")
+            writeBin(0, con, size = 4L)
+            close(con)
+        },
+        expect_error(run("changed"),
+            "input changed during result merge"),
+        .package = "fastEmbedR")
 })
 
 test_that("multi-GPU KNN resumes verified shards and interrupted merges", {
+    testthat::local_mocked_bindings(
+        massive_cuda_device_uuids = function(devices)
+            paste0("GPU-", devices), .package = "fastEmbedR")
     set.seed(751)
     query <- matrix(rnorm(19L * 4L), ncol = 4L)
     reference <- matrix(rnorm(11L * 4L), ncol = 4L)
@@ -1659,6 +1755,9 @@ test_that("multi-GPU KNN resumes verified shards and interrupted merges", {
             task$output, chunk_rows = 4L, memory_limit = "256MB")
         result$backend <- "cuda"
         result$resources$gpu_device <- task$device
+        result$completed_output_identity <-
+            fastEmbedR:::massive_checkpoint_input_files_identity(
+                c(result$indices_path, result$distances_path))
         fastEmbedR:::massive_checkpoint_write(result,
             paste0(task$output, ".result.rds"))
         result
@@ -1671,6 +1770,13 @@ test_that("multi-GPU KNN resumes verified shards and interrupted merges", {
     expect_equal(vapply(status, `[[`, 0, "remaining"), c(0, 0))
     changed <- results[[1L]]
     changed$backend <- "cpu"
+    fastEmbedR:::massive_checkpoint_write(changed,
+        paste0(tasks[[1L]]$output, ".result.rds"))
+    expect_error(fastEmbedR:::massive_knn_device_status(
+        tasks[[1L]], source, landmarks, 3L, "exact", TRUE),
+        "inconsistent")
+    changed <- results[[1L]]
+    changed$implementation_identity <- list(native = "changed")
     fastEmbedR:::massive_checkpoint_write(changed,
         paste0(tasks[[1L]]$output, ".result.rds"))
     expect_error(fastEmbedR:::massive_knn_device_status(
@@ -1705,6 +1811,13 @@ test_that("multi-GPU KNN resumes verified shards and interrupted merges", {
     expect_identical(sidecar,
         fastEmbedR:::massive_knn_devices_checkpoint(source,
             plan, tasks, c(0L, 1L), controls, TRUE))
+    with_mocked_bindings(
+        expect_error(fastEmbedR:::massive_knn_devices_checkpoint(
+            source, plan, tasks, c(0L, 1L), controls, TRUE),
+            "does not match"),
+        massive_checkpoint_implementation_identity = function()
+            list(native = "changed"),
+        .package = "fastEmbedR")
     controls$method <- "ivf"
     expect_error(fastEmbedR:::massive_knn_devices_checkpoint(
         source, plan, tasks, c(0L, 1L), controls, TRUE),
@@ -1737,6 +1850,20 @@ test_that("multi-GPU KNN resumes verified shards and interrupted merges", {
         do.call(rbind, lapply(results, function(result) {
             read_massive_knn(result)$indices
         })))
+    recovered <- fastEmbedR:::massive_knn_devices_execute(
+        source, merged_setup, c(0L, 1L), controls, TRUE, TRUE)
+    expect_equal(read_massive_knn(recovered), read_massive_knn(joined))
+    expect_false(file.exists(merged_sidecar))
+    controls$chunk_rows <- 5L
+    expect_error(fastEmbedR:::massive_knn_devices_execute(
+        source, merged_setup, c(0L, 1L), controls, TRUE, TRUE),
+        "does not match")
+    controls$chunk_rows <- 4L
+    unlink(paste0(parent, ".multigpu.result.rds"))
+    expect_no_warning(expect_error(
+        fastEmbedR:::massive_knn_devices_execute(source,
+            merged_setup, c(0L, 1L), controls, TRUE, TRUE),
+        "does not match"))
     expect_equal(file.info(paths)$size, rep(19 * 3 * 4, 2L))
     expect_error(fastEmbedR:::massive_knn_merge_shards(
         results, paths, tasks), "staging files|inconsistent")
@@ -1747,6 +1874,19 @@ test_that("multi-GPU KNN resumes verified shards and interrupted merges", {
         vapply(results, `[[`, "", "indices_path"),
         paths[["indices"]], vapply(tasks, `[[`, 0, "bytes"), TRUE),
         "differs from its shards")
+    shard <- results[[1L]]$indices_path
+    modified <- file.info(shard)$mtime
+    Sys.sleep(1.1)
+    connection <- file(shard, "r+b")
+    writeBin(0L, connection, size = 4L, endian = "little")
+    close(connection)
+    expect_true(Sys.setFileTime(shard, modified))
+    expect_identical(results[[1L]]$output_identity,
+        fastEmbedR:::massive_checkpoint_file_identity(
+            c(shard, results[[1L]]$distances_path)))
+    expect_error(fastEmbedR:::massive_knn_device_status(
+        tasks[[1L]], source, landmarks, 3L, "exact", TRUE),
+        "inconsistent")
 })
 
 test_that("CUDA KNN coordinator resumes a verified device shard", {
@@ -1780,16 +1920,13 @@ test_that("CUDA KNN coordinator resumes a verified device shard", {
     expect_identical(first$per_device[[1L]]$resources$gpu_device, 0L)
     expect_equal(read_massive_knn(first)$indices, expected)
     before <- tools::md5sum(unname(setup$paths))
-    tasks <- fastEmbedR:::massive_knn_device_tasks(source, 3L,
-        output, 0L)
-    sidecar <- fastEmbedR:::massive_knn_devices_checkpoint(
-        source, setup, tasks, 0L, arguments, FALSE)
     second <- fastEmbedR:::massive_knn_devices_execute(source, setup,
         0L, arguments, TRUE, TRUE)
     expect_identical(second$gpu_devices, 0L)
     expect_identical(unname(tools::md5sum(unname(setup$paths))),
         unname(before))
-    expect_false(file.exists(sidecar))
+    expect_false(file.exists(paste0(output,
+        ".multigpu.checkpoint.rds")))
 })
 
 test_that("multi-GPU KNN uses both requested devices without fallback", {
@@ -2074,13 +2211,15 @@ test_that("HNSW landmark KNN resumes with a rebuilt index", {
         each = 2L), c(".indices.u32", ".distances.f32"))))
     baseline <- massive_landmark_knn(source, landmarks, 6L,
         baseline_prefix, method = "hnsw", n.cores = 2L,
-        chunk_rows = 9L, memory_limit = "256MB")
+        chunk_rows = 9L, memory_limit = "256MB", checkpoint = TRUE)
     prepare_massive_knn_resume(source, landmarks, baseline,
         resume_prefix, 18L, 9L, n.cores = 2L)
     resumed <- massive_landmark_knn(source, landmarks, 6L,
         resume_prefix, method = "hnsw", n.cores = 2L,
         chunk_rows = 9L, memory_limit = "256MB",
         checkpoint = TRUE, resume = TRUE)
+    expect_identical(baseline$hnsw_settings$build_threads, 1L)
+    expect_identical(resumed$hnsw_settings$build_threads, 1L)
     expect_equal(read_massive_knn(resumed), read_massive_knn(baseline))
 })
 
@@ -2474,15 +2613,27 @@ test_that("persistent HNSW agrees across bounded query batches", {
         paste0(prefix, c(".indices.u32", ".distances.f32")))))
     source <- massive_matrix(source_path, nrow = 53, ncol = 5)
     landmarks <- massive_matrix(reference_path, nrow = 140, ncol = 5)
-    graph <- massive_landmark_knn(source, landmarks, 7L, prefix,
-        method = "hnsw", chunk_rows = 9L, n.cores = 2L,
-        memory_limit = "256MB")
+    graph <- with_mocked_bindings(
+        massive_landmark_knn(source, landmarks, 7L, prefix,
+            method = "hnsw", chunk_rows = 9L, n.cores = 2L,
+            memory_limit = "256MB"),
+        native_hnsw_index_build_cpp = function(...) stop("native fallback"),
+        .package = "fastEmbedR")
     observed <- read_massive_knn(graph)
-    expected <- fastEmbedR:::native_hnsw_query_cpp(
-        reference, query, 7L, 2L, "euclidean", 0.99)
+    index <- fastEmbedR:::faissr_hnsw_index_build_cpp(
+        float::fl(reference), 140L, 5L, 7L, 2L)
+    expected <- fastEmbedR:::faissr_hnsw_index_search_cpp(
+        index$pointer, float::fl(query), 7L,
+        index$efSearch, 2L)
     expect_true(graph$index_reused)
-    expect_identical(graph$reference_storage, "native_float32")
-    expect_identical(graph$query_storage, "native_float32")
+    expect_identical(graph$reference_storage, "R_float32")
+    expect_identical(graph$query_storage, "R_float32")
+    expect_identical(graph$hnsw_settings$tuning_rule,
+        index$tuning_rule)
+    expect_identical(graph$hnsw_settings$efSearch,
+        index$efSearch)
+    expect_identical(graph$hnsw_settings$build_threads, 2L)
+    expect_false(graph$spanning_links)
     expect_false(graph$recall_audited)
     expect_equal(observed$indices, expected$indices)
     expect_equal(observed$distances, expected$distances,
@@ -2491,7 +2642,7 @@ test_that("persistent HNSW agrees across bounded query batches", {
         new.env(), query, 7L), "live persistent")
 })
 
-test_that("file-backed HNSW builds from one native float32 buffer", {
+test_that("file-backed HNSW uses faissR float32 storage", {
     set.seed(210)
     reference <- matrix(rnorm(180L * 6L), ncol = 6L)
     query <- matrix(rnorm(24L * 6L), ncol = 6L)
@@ -2503,13 +2654,13 @@ test_that("file-backed HNSW builds from one native float32 buffer", {
         file, 5L, "hnsw", 1L, "cpu")
     memory <- fastEmbedR:::massive_knn_reference(
         resident, 5L, "hnsw", 1L, "cpu")
-    search <- fastEmbedR:::native_hnsw_index_search_cpp
-    observed <- search(native$index$pointer, query, 5L, 1L)
-    expected <- search(memory$index$pointer, query, 5L, 1L)
-    expect_identical(native$reference_storage, "native_float32")
-    expect_identical(memory$reference_storage, "R_double")
-    expect_true(native$spanning_links)
-    expect_true(memory$spanning_links)
+    search <- fastEmbedR:::faissr_hnsw_index_search_cpp
+    observed <- search(native$index$pointer, float::fl(query),
+        5L, native$index$efSearch, 1L)
+    expected <- search(memory$index$pointer, float::fl(query),
+        5L, memory$index$efSearch, 1L)
+    expect_identical(native$reference_storage, "R_float32")
+    expect_identical(memory$reference_storage, "R_float32")
     expect_equal(observed$indices, expected$indices)
     expect_equal(observed$distances, expected$distances,
         tolerance = 1e-5)
@@ -3310,6 +3461,12 @@ test_that("massive clustering rejects unsafe requests before writing", {
     expect_error(massive_cluster(source, massive = "auto",
         output = prefix, k = 4L, devices = 0L),
         "requires landmark clustering")
+    with_mocked_bindings(
+        expect_error(fastEmbedR:::massive_cluster_auto_plan(source,
+            15L, 4L, "cuda", 1L, "2GB", "landmark", prefix,
+            c(0L, 1L)), "Multi-GPU clustering is not implemented"),
+        massive_cuda_device_count_cpp = function() 2L,
+        .package = "fastEmbedR")
     expect_length(list.files(directory), 0L)
 })
 

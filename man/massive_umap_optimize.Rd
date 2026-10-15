@@ -21,7 +21,8 @@ massive_umap_optimize(
   checkpoint = FALSE,
   resume = FALSE,
   checkpoint_every = 10L,
-  layout_storage = "memory"
+  layout_storage = "memory",
+  devices = NULL
 )
 }
 \arguments{
@@ -51,7 +52,9 @@ CPU RAM mode; OS page cache for a mapped layout is not capped by this
 value. CUDA preflights device allocations against free device memory;
 managed CUDA coordinates count against the host budget.}
 
-\item{backend}{\code{"cpu"} or \code{"cuda"}; CUDA has no CPU fallback.}
+\item{backend}{\code{"cpu"}, \code{"metal"}, or \code{"cuda"}; GPU requests have no
+CPU fallback. Metal streams edges but keeps one 2D layout in shared
+unified memory.}
 
 \item{n.cores}{Only one worker is currently supported.}
 
@@ -61,9 +64,18 @@ managed CUDA coordinates count against the host budget.}
 
 \item{checkpoint_every}{Number of epochs between snapshots.}
 
-\item{layout_storage}{\code{"memory"} (default), \code{"mmap"} for CPU writable
+\item{layout_storage}{\code{"memory"} (default), \code{"mmap"} for a writable
 mapping, or \code{"managed"} for explicit CUDA unified memory. Managed
-storage may page between host and GPU and requires a supporting GPU.}
+storage may page between host and GPU and requires a supporting GPU.
+Metal \code{"mmap"} maps the host staging/output file, but still requires
+one complete 2D layout in Metal shared memory.}
+
+\item{devices}{Optional one to four CUDA device IDs. Explicit devices
+use NCCL to reduce edge updates to coordinate owners at each epoch;
+fixed-point accumulation makes the reduction order-independent.
+Omitting this argument retains the in-place single-GPU optimizer.
+Each coordinated device stores a full read-only layout, so this
+route does not pool VRAM for inputs larger than one device.}
 }
 \value{
 An experimental file-backed \code{fastEmbedR_massive_matrix}.
@@ -75,6 +87,6 @@ CUDA streams bounded edge batches. Its default layout must fit VRAM;
 explicit managed storage allows CUDA paging from host RAM.
 Sampling times are derived from edge weights instead of storing a
 per-edge schedule. CPU supports file-backed 2D or 3D initialization;
-Completed CPU or CUDA epochs can be checkpointed and resumed without
+Completed CPU, Metal, or CUDA epochs can be checkpointed and resumed without
 rescanning earlier epochs.
 }

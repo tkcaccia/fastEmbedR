@@ -13,7 +13,9 @@ massive_tsne_affinities(
   n.cores = 1L,
   checkpoint = FALSE,
   resume = FALSE,
-  checkpoint_every = 100L
+  checkpoint_every = 100L,
+  sort_method = c("global", "bucketed"),
+  consume_knn = FALSE
 )
 }
 \arguments{
@@ -34,6 +36,11 @@ massive_tsne_affinities(
 \item{resume}{Continue a matching interrupted graph sort.}
 
 \item{checkpoint_every}{Save progress after this many input blocks.}
+
+\item{sort_method}{Global restartable sort or lower-SSD bucketed sort.}
+
+\item{consume_knn}{Explicitly delete package-built KNN files after
+bucket staging. Rebuilding KNN is required if construction fails.}
 }
 \value{
 An experimental symmetric \code{fastEmbedR_massive_graph} descriptor.

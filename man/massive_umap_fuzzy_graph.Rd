@@ -2,7 +2,7 @@
 % Please edit documentation in R/massive_graph.R
 \name{massive_umap_fuzzy_graph}
 \alias{massive_umap_fuzzy_graph}
-\title{Symmetrize an experimental disk-backed UMAP membership graph}
+\title{Symmetrize an experimental disk-backed UMAP graph}
 \usage{
 massive_umap_fuzzy_graph(
   x,
@@ -11,11 +11,15 @@ massive_umap_fuzzy_graph(
   backend = "cpu",
   checkpoint = FALSE,
   resume = FALSE,
-  checkpoint_every = 100L
+  checkpoint_every = 100L,
+  sort_method = c("global", "bucketed"),
+  consume_knn = FALSE
 )
 }
 \arguments{
-\item{x}{A result of \code{\link[=massive_umap_memberships]{massive_umap_memberships()}}.}
+\item{x}{Directed memberships from \code{\link[=massive_umap_memberships]{massive_umap_memberships()}} for the
+global sort, or KNN distances from \code{\link[=massive_knn_graph]{massive_knn_graph()}} for the
+bucketed sort.}
 
 \item{output}{New prefix for \code{.offsets.u64}, \code{.indices.u32}, and
 \code{.weights.f32} output files.}
@@ -29,6 +33,12 @@ massive_umap_fuzzy_graph(
 \item{resume}{Continue a matching interrupted graph sort.}
 
 \item{checkpoint_every}{Save progress after this many input blocks.}
+
+\item{sort_method}{Global restartable sort or lower-SSD bucketed sort.}
+
+\item{consume_knn}{Explicitly delete package-built KNN files after
+bucket staging. The KNN graph cannot then be reused or resumed;
+rebuilding it is required if later graph construction fails.}
 }
 \value{
 An experimental symmetric \code{fastEmbedR_massive_graph} descriptor.
@@ -36,6 +46,9 @@ An experimental symmetric \code{fastEmbedR_massive_graph} descriptor.
 \description{
 Externally sorts directed membership pairs in bounded native buffers,
 applies fuzzy union, and writes a symmetric weighted CSR graph and a
-content-hashed manifest. The sort needs substantial temporary disk space
-and is currently CPU-only. Use \code{\link[=massive_fuzzy_graph]{massive_fuzzy_graph()}} after a restart.
+content-hashed manifest. With \code{sort_method = "bucketed"}, distances
+from a KNN graph are converted to memberships while routing pairs into
+bounded vertex buckets; no directed weight file is written. The bucketed
+path does not yet support checkpoints. Both sorts are CPU-only.
+Use \code{\link[=massive_fuzzy_graph]{massive_fuzzy_graph()}} after a restart.
 }

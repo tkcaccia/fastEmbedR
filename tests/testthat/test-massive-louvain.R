@@ -160,7 +160,7 @@ test_that("file-backed Louvain moves agree with resident communities", {
         "do not apply")
     expect_error(massive_cluster(graph, method = "louvain",
         massive = "out_of_core_graph", output = tempfile(),
-        n.cores = 2L), "one CPU worker")
+        n.cores = 2L), "one coordinator")
     expect_false(file.exists(paste0(output, ".counts.part")))
     expect_false(file.exists(paste0(output, ".volumes.part")))
     expect_error(massive_louvain_level(graph, output),

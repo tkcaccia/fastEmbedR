@@ -133,9 +133,12 @@ in the build and hardware-validation manifest.
   Apache-2.0/LLVM-exception, BSD, and Boost terms.
 * NVIDIA CUDA Toolkit: external cudart, cuFFT, cuBLAS, cuSOLVER, cuSPARSE,
   cuRAND, and nvJitLink libraries under the NVIDIA CUDA Toolkit license.
+* RAPIDS cuGraph (Apache-2.0): optional external Python/Dask runtime for
+  full-graph multi-GPU Leiden and Louvain. No cuGraph source or binary is
+  redistributed or linked into the package.
 
-No cuML or cuGraph library, Python module, or runtime symbol is linked or
-called by the installed package.
+No cuML library or Python module is called by the installed package.
+Ordinary clustering uses package-owned native kernels, not cuGraph.
 
 Apple system frameworks
 -----------------------
@@ -155,9 +158,6 @@ architecture references. They are not copied, linked, vendored, or called.
   MIT. The ParallelLeiden phase organization was reviewed while implementing
   package-owned graph storage and community detection. The full upstream
   notice is retained as LICENSES/NETWORKIT-LICENSE.
-* RAPIDS cuGraph, commit 528ddde979df2243bf51c116d89a0ecdf85a39ee,
-  Apache-2.0. Public CSR/parallel-processing documentation informed the
-  independent CUDA/Metal clustering design; cuGraph is not a dependency.
 * openTSNE, commit 12b8b7bec3d96ee0bc8930c3c45449a5209ed3e0,
   BSD-3-Clause. Mathematical and workflow reference for native sparse
   affinities, two-stage optimization, and fixed-reference transformation.

@@ -201,19 +201,17 @@ massive_pca_resources <- function(source, rank, n.cores,
     limit <- massive_memory_bytes(memory_limit)
     source_bytes <- if (source$format == "memory") source$nrow * p * 8 else 0
     fixed <- massive_pca_fixed_bytes(source, rank, n.cores, backend)
-    per_row <- 4 * (p + rank)
+    per_row <- if (backend == "metal") 48 * p + 16 * rank else
+        4 * (p + rank)
     maximum <- floor((0.7 * limit - fixed) / per_row)
-    if (!is.finite(maximum) || maximum < 1) {
+    if (!is.finite(maximum) || maximum < 1)
         stop("PCA buffers exceed `memory_limit`; reduce `n.cores` ",
             "or use a larger limit.", call. = FALSE)
-    }
     requested <- chunk_rows %||% 250000L
     if (length(requested) != 1L || !is.finite(requested) ||
         requested < 1 || requested != floor(requested) ||
-        requested > .Machine$integer.max) {
-        stop("`chunk_rows` must be one positive integer.",
-            call. = FALSE)
-    }
+        requested > .Machine$integer.max)
+        stop("`chunk_rows` must be one positive integer.", call. = FALSE)
     rows <- as.integer(min(requested, maximum, source$nrow))
     gpu <- NULL
     if (backend == "cuda") {
@@ -224,23 +222,26 @@ massive_pca_resources <- function(source, rank, n.cores,
         gpu_per_row <- 4 * (p + width)
         gpu_max <- floor((0.65 * gpu$free_bytes - gpu_fixed) /
             gpu_per_row)
-        if (!is.finite(gpu_max) || gpu_max < 1) {
+        if (!is.finite(gpu_max) || gpu_max < 1)
             stop("CUDA PCA buffers exceed the free-VRAM budget.",
                 call. = FALSE)
-        }
         rows <- as.integer(min(rows, gpu_max))
     }
-    result <- list(
-        chunk_rows = rows, peak_ram_bytes = fixed + per_row * rows,
+    result <- list(chunk_rows = rows,
+        peak_ram_bytes = fixed + per_row * rows,
         output_bytes = source$nrow * rank * 4,
         input_buffer_bytes = rows * p * 4,
         input_resident_bytes = source_bytes,
-        memory_limit_bytes = limit
-    )
+        memory_limit_bytes = limit)
     if (!is.null(gpu)) {
         result$peak_vram_bytes <- gpu_fixed + gpu_per_row * rows
         result$free_vram_bytes <- gpu$free_bytes
         result$gpu_device <- gpu$device
+    }
+    if (backend == "metal") {
+        result$peak_vram_bytes <- NA_real_
+        result$metal_memory_model <- "unified_shared"
+        result$metal_buffer_bytes_estimate <- 8 * rows * (p + rank)
     }
     result
 }
@@ -282,6 +283,35 @@ massive_pca_output <- function(output, score_bytes, columns, rank,
     path
 }
 
+massive_pca_covariance_metal <- function(source, chunk_rows, center) {
+    p <- source$ncol
+    cross <- matrix(0, p, p)
+    sums <- numeric(p)
+    started <- proc.time()[[3L]]
+    if (center) {
+        for (first in seq.int(1, source$nrow, by = chunk_rows)) {
+            rows <- as.integer(min(chunk_rows, source$nrow - first + 1))
+            block <- massive_read_rows_cpp(source, first, rows,
+                8 * rows * p)
+            sums <- sums + colSums(block)
+        }
+    }
+    means <- if (center) sums / source$nrow else numeric(p)
+    for (first in seq.int(1, source$nrow, by = chunk_rows)) {
+        rows <- as.integer(min(chunk_rows, source$nrow - first + 1))
+        block <- massive_read_rows_cpp(source, first, rows,
+            8 * rows * p)
+        if (center) block <- sweep(block, 2L, means)
+        cross <- cross + rsvd_multiply_metal_cpp(block, block, TRUE)
+    }
+    covariance <- cross / (source$nrow - 1)
+    if (any(!is.finite(covariance))) stop(
+        "Metal PCA covariance contains nonfinite values.",
+        call. = FALSE)
+    list(center = means, covariance = (covariance + t(covariance)) / 2,
+        fit_statistics_seconds = unname(proc.time()[[3L]] - started))
+}
+
 massive_pca_decomposition <- function(source, rank, center, scale,
         resources, n.cores, backend, seed, saved_stats = NULL) {
     if (!massive_pca_covariance_route(source$ncol, backend)) {
@@ -291,8 +321,14 @@ massive_pca_decomposition <- function(source, rank, center, scale,
     covariance_fn <- if (backend == "cuda") {
         massive_pca_covariance_cuda_cpp
     } else massive_pca_covariance_cpp
-    stats <- if (is.list(saved_stats)) saved_stats else covariance_fn(
-        source, resources$chunk_rows, n.cores, center, saved_stats)
+    stats <- if (is.list(saved_stats)) saved_stats else if (
+            length(resources$gpu_devices %||% integer()) > 1L) {
+        massive_pca_covariance_devices(source, rank, center, resources)
+    } else if (backend == "metal") {
+        massive_pca_covariance_metal(source, resources$chunk_rows,
+            center)
+    } else covariance_fn(source, resources$chunk_rows, n.cores,
+        center, saved_stats)
     deviations <- if (scale) sqrt(diag(stats$covariance)) else {
         rep(1, source$ncol)
     }
@@ -302,12 +338,24 @@ massive_pca_decomposition <- function(source, rank, center, scale,
     }
     covariance <- stats$covariance / outer(deviations, deviations)
     eig <- eigen(covariance, symmetric = TRUE)
-    list(
+    fit <- list(
         center = stats$center, scale = deviations,
+        decomposition_backend = "cpu_eigen",
         loadings = eig$vectors[, seq_len(rank), drop = FALSE],
         singular_values = sqrt(pmax(eig$values[seq_len(rank)], 0) *
             (source$nrow - 1))
     )
+    if (!is.null(stats$fit_devices)) {
+        fit$fit_devices <- stats$fit_devices
+        fit$fit_per_device <- stats$fit_per_device
+        fit$fit_statistics_backend <- "distributed_cuda_covariance"
+        fit$fit_statistics_seconds <- stats$fit_statistics_seconds
+    }
+    if (backend == "metal") {
+        fit$fit_statistics_backend <- "metal_streamed_crossprod"
+        fit$fit_statistics_seconds <- stats$fit_statistics_seconds
+    }
+    fit
 }
 
 massive_pca_wide_decomposition <- function(source, rank, center,
@@ -321,27 +369,47 @@ massive_pca_wide_decomposition <- function(source, rank, center,
     on.exit(restore())
     omega <- matrix(stats::rnorm(source$ncol * width),
         nrow = source$ncol)
-    action_fn <- if (backend == "cuda") {
-        massive_pca_wide_action_cuda_cpp
-    } else massive_pca_wide_action_cpp
-    args <- list(source, moments$center, moments$scale,
-        omega, resources$chunk_rows)
-    if (backend == "cpu") args <- c(args, list(n.cores))
-    action <- do.call(action_fn, args)
-    factor <- qr(action)
+    first <- massive_pca_wide_action_run(source, moments, omega,
+        resources, rank, n.cores, backend)
+    factor <- qr(first$value)
     if (factor$rank < rank) {
         stop("Wide PCA sketch is rank deficient.", call. = FALSE)
     }
     basis <- qr.Q(factor)
-    args[[4L]] <- basis
-    projected <- do.call(action_fn, args)
-    small <- crossprod(basis, projected) / (source$nrow - 1)
+    second <- massive_pca_wide_action_run(source, moments, basis,
+        resources, rank, n.cores, backend)
+    small <- crossprod(basis, second$value) / (source$nrow - 1)
     eig <- eigen((small + t(small)) / 2, symmetric = TRUE)
-    list(center = moments$center, scale = moments$scale,
+    fit <- list(center = moments$center, scale = moments$scale,
+        decomposition_backend = "cpu_qr_eigen",
         loadings = basis %*% eig$vectors[, seq_len(rank), drop = FALSE],
         singular_values = sqrt(pmax(eig$values[seq_len(rank)], 0) *
             (source$nrow - 1)), sketch_size = width,
         moments_backend = "cpu", sketch_backend = backend)
+    if (!is.null(first$per_device)) {
+        fit$fit_devices <- resources$gpu_devices
+        fit$fit_sketch_backend <- "distributed_cuda_action"
+        fit$fit_sketch_seconds <- first$seconds + second$seconds
+        fit$fit_per_device <- Map(function(a, b) {
+            a$second_action_seconds <- b$seconds
+            a
+        }, first$per_device, second$per_device)
+    }
+    fit
+}
+
+massive_pca_wide_action_run <- function(source, moments, basis,
+        resources, rank, n.cores, backend) {
+    if (length(resources$gpu_devices %||% integer()) > 1L) return(
+        massive_pca_wide_action_devices(source, rank,
+            moments$center, moments$scale, basis, resources))
+    action_fn <- if (backend == "cuda") {
+        massive_pca_wide_action_cuda_cpp
+    } else massive_pca_wide_action_cpp
+    args <- list(source, moments$center, moments$scale,
+        basis, resources$chunk_rows)
+    if (backend == "cpu") args <- c(args, list(n.cores))
+    list(value = do.call(action_fn, args), per_device = NULL)
 }
 
 validate_massive_pca <- function(x, ncomp, xtest, center, scale,
@@ -351,10 +419,11 @@ validate_massive_pca <- function(x, ncomp, xtest, center, scale,
             call. = FALSE)
     }
     backend <- resolve_embedding_backend(backend)
-    if (backend == "metal") {
-        stop("EXPERIMENTAL out-of-core PCA has no Metal route; ",
-            "no CPU fallback was used.", call. = FALSE)
-    }
+    if (backend == "metal" &&
+        (!isTRUE(embedding_metal_available_cpp()) ||
+            x$ncol > 1024L)) stop(
+        "Metal streamed PCA needs native Metal and <=1024 columns; ",
+        "no CPU fallback was used.", call. = FALSE)
     if (backend == "cuda" && !isTRUE(
             embedding_cuda_available_cpp())) {
         stop("EXPERIMENTAL out-of-core CUDA PCA requires native CUDA; ",
@@ -395,10 +464,28 @@ finish_massive_pca <- function(fit, path, x, rank, workers, seed,
     fit$n_threads <- workers
     fit$seed <- seed
     fit$resources <- resources
+    if (!is.null(fit$fit_per_device)) {
+        worker_ram <- sum(vapply(fit$fit_per_device,
+            `[[`, 0, "estimated_ram_bytes"))
+        parent <- resources$parent_peak_ram_bytes %||%
+            resources$peak_ram_bytes
+        fit$resources$parent_peak_ram_bytes <- parent
+        fit$resources$fit_peak_ram_bytes <- parent + worker_ram
+        fit$resources$peak_ram_bytes <- if (
+                is.na(resources$peak_ram_bytes)) NA_real_ else
+            max(resources$peak_ram_bytes,
+                fit$resources$fit_peak_ram_bytes)
+        fit$resources$peak_ram_scope <- "process_tree_estimate"
+    }
     if (!is.null(resources$gpu_devices)) {
         fit$gpu_devices <- resources$gpu_devices
+        if (length(resources$gpu_devices) > 1L)
+            fit$gpu_identity <- massive_cuda_device_uuids(
+                resources$gpu_devices)
     }
     fit$experimental <- TRUE
+    fit$implementation_identity <-
+        massive_checkpoint_implementation_identity()
     fit$elapsed_sec <- unname(proc.time()[[3L]] - started)
     fit$score_identity <- massive_checkpoint_file_identity(path)
     fit$manifest_path <- paste0(path, ".manifest.rds")
@@ -439,7 +526,7 @@ massive_open_pca <- function(output) {
         identical(fit$scores$format, "f32") &&
         massive_checkpoint_same_paths(fit$manifest_path, manifest) &&
         isTRUE(fit$experimental) &&
-        isTRUE(fit$backend %in% c("cpu", "cuda")) &&
+        isTRUE(fit$backend %in% c("cpu", "cuda", "metal")) &&
         is.numeric(fit$ncomp) && length(fit$ncomp) == 1L &&
         is.finite(fit$ncomp) && fit$ncomp >= 1 &&
         identical(as.numeric(fit$scores$ncol),
@@ -464,13 +551,18 @@ massive_open_pca <- function(output) {
 
 massive_pca_checkpoint_signature <- function(x, path, rank, center,
         scale, backend, workers, seed, resources) {
-    massive_checkpoint_signature(list(version = 5L,
+    version <- if (length(resources$gpu_devices %||% integer()) > 1L)
+        7L else 5L
+    massive_checkpoint_signature(list(version = version,
+        implementation = massive_checkpoint_implementation_identity(),
         source = massive_checkpoint_source_identity(x),
         output = path, rank = rank, center = center, scale = scale,
         backend = backend, workers = workers, seed = seed,
         covariance = massive_pca_covariance_route(x$ncol, backend),
         chunk_rows = resources$chunk_rows,
-        gpu_devices = resources$gpu_devices %||% NULL))
+        gpu_devices = resources$gpu_devices %||% NULL,
+        gpu_identity = if (version == 7L) massive_cuda_device_uuids(
+            resources$gpu_devices) else NULL))
 }
 
 massive_pca_checkpoint_stats_valid <- function(state, x, resources,
@@ -560,6 +652,11 @@ massive_pca_checkpoint_load <- function(sidecar, signature, x,
         massive_checkpoint_signature(state$fit))) stop(
         "PCA checkpoint does not match the current inputs.",
         call. = FALSE)
+    if (length(resources$gpu_devices %||% integer()) > 1L &&
+        !massive_pca_fit_devices_valid(state$fit, x,
+            resources$gpu_devices)) stop(
+        "PCA checkpoint fit has invalid GPU row ownership.",
+        call. = FALSE)
     size <- if (file.exists(part)) file.info(part)$size else 0
     if ((rows != x$nrow && rows %% resources$chunk_rows != 0) ||
         is.na(size) || size < rows * rank * 4 ||
@@ -568,6 +665,20 @@ massive_pca_checkpoint_load <- function(sidecar, signature, x,
             call. = FALSE)
     }
     state
+}
+
+massive_pca_fit_devices_valid <- function(fit, x, devices) {
+    if (!is.list(fit) || !identical(fit$fit_devices, devices) ||
+        !is.list(fit$fit_per_device) ||
+        length(fit$fit_per_device) != length(devices)) return(FALSE)
+    tasks <- massive_pca_fit_tasks(x, devices)
+    all(vapply(seq_along(tasks), function(i) {
+        part <- fit$fit_per_device[[i]]
+        is.list(part) && identical(part$device,
+            tasks[[i]]$device) && identical(part$row_range,
+            tasks[[i]]$row_range) && identical(part$rows,
+                as.double(diff(tasks[[i]]$row_range) + 1))
+    }, logical(1L)))
 }
 
 massive_pca_checkpoint_means <- function(x, center, workers,
@@ -645,6 +756,17 @@ massive_pca_checkpoint_covariance <- function(x, center, backend,
 massive_pca_checkpoint_fit <- function(x, rank, center, scale,
         backend, workers, seed, resources, state, sidecar) {
     if (state$stage == "fit") return(state)
+    if (backend == "metal") {
+        state$fit <- massive_pca_decomposition(x, rank, center,
+            scale, resources, workers, backend, seed)
+        state$fit_hash <- massive_checkpoint_signature(state$fit)
+        state$stage <- "fit"
+        massive_checkpoint_write(state, sidecar)
+        return(state)
+    }
+    if (length(resources$gpu_devices %||% integer()) > 1L) return(
+        massive_pca_checkpoint_fit_devices(x, rank, center, scale,
+            backend, workers, seed, resources, state, sidecar))
     if (state$stage %in% c("pending", "mean_partial") &&
         massive_pca_covariance_route(x$ncol, backend)) {
         state <- massive_pca_checkpoint_means(
@@ -681,11 +803,31 @@ massive_pca_checkpoint_fit <- function(x, rank, center, scale,
     state
 }
 
+massive_pca_checkpoint_fit_devices <- function(x, rank, center,
+        scale, backend, workers, seed, resources, state, sidecar) {
+    fit <- massive_pca_decomposition(x, rank, center, scale,
+        resources, workers, backend, seed)
+    if (!massive_pca_fit_devices_valid(fit, x,
+        resources$gpu_devices)) stop(
+        "Multi-GPU PCA fit has invalid GPU row ownership.",
+        call. = FALSE)
+    state$fit <- fit
+    state$fit_hash <- massive_checkpoint_signature(fit)
+    state$stage <- "fit"
+    massive_checkpoint_write(state, sidecar)
+    state
+}
+
 massive_pca_prepare <- function(x, path, rank, center, scale,
         backend, workers, seed, resources, checkpoint, resume) {
     if (!checkpoint) {
         fit <- massive_pca_decomposition(x, rank, center, scale,
             resources, workers, backend, seed)
+        if (length(resources$gpu_devices %||% integer()) > 1L &&
+            !massive_pca_fit_devices_valid(fit, x,
+                resources$gpu_devices)) stop(
+            "Multi-GPU PCA fit has invalid GPU row ownership.",
+            call. = FALSE)
         return(list(fit = fit, rows = 0, progress = NULL,
             resume_part = FALSE, sidecar = NULL))
     }
@@ -731,6 +873,9 @@ massive_pca_project <- function(x, path, fit, resources, workers,
         massive_pca_project_cuda_cpp(x, path, fit$loadings,
             fit$center, fit$scale, resources$chunk_rows,
             prepared$rows, prepared$progress, prepared$resume_part)
+    } else if (backend == "metal") {
+        massive_pca_project_metal(x, path, fit, resources,
+            prepared, checkpoint)
     } else {
         massive_pca_project_cpp(x, path, fit$loadings,
             fit$center, fit$scale, resources$chunk_rows, workers,
@@ -739,14 +884,49 @@ massive_pca_project <- function(x, path, fit, resources, workers,
     resources
 }
 
+massive_pca_project_metal <- function(x, path, fit, resources,
+        prepared, checkpoint) {
+    part <- paste0(path, ".part")
+    completed <- prepared$rows
+    con <- file(part, if (prepared$resume_part) "r+b" else "wb")
+    closed <- FALSE
+    on.exit({
+        if (!closed) try(close(con), silent = TRUE)
+        if (!checkpoint && !closed) unlink(part)
+    })
+    if (completed > 0) seek(con, where =
+        completed * ncol(fit$loadings) * 4,
+        origin = "start", rw = "write")
+    first <- completed + 1
+    while (first <= x$nrow) {
+        rows <- as.integer(min(resources$chunk_rows, x$nrow - first + 1))
+        block <- massive_read_rows_cpp(x, first, rows,
+            8 * rows * x$ncol)
+        block <- scale(block, center = fit$center, scale = fit$scale)
+        scores <- rsvd_multiply_metal_cpp(block, fit$loadings, FALSE)
+        writeBin(as.numeric(t(scores)), con, size = 4L,
+            endian = "little")
+        flush(con)
+        if (!is.null(prepared$progress))
+            prepared$progress(first + rows - 1)
+        first <- first + rows
+    }
+    truncate(con)
+    close(con)
+    closed <- TRUE
+    if (file.info(part)$size != resources$output_bytes ||
+        !file.rename(part, path)) stop(
+        "Metal PCA scores did not finalize; .part retained.",
+        call. = FALSE)
+}
+
 run_massive_pca <- function(x, ncomp, xtest, center, scale, backend,
                             n.cores, seed, tsne_init, output,
                             chunk_rows, memory_limit, checkpoint, resume,
                             devices) {
     massive_checkpoint_validate_controls(checkpoint, resume)
-    validated <- validate_massive_pca(
-        x, ncomp, xtest, center, scale, backend, tsne_init
-    )
+    validated <- validate_massive_pca(x, ncomp, xtest, center,
+        scale, backend, tsne_init)
     rank <- validated$rank
     backend <- validated$backend
     devices <- massive_validate_devices(devices, backend, x$nrow)
@@ -756,19 +936,20 @@ run_massive_pca <- function(x, ncomp, xtest, center, scale, backend,
         massive_cuda_select_cpp(devices[[1L]])
     }
     workers <- normalize_pca_threads(n.cores)
-    resources <- massive_pca_resources(
-        x, rank, workers, chunk_rows, memory_limit, backend
-    )
+    if (backend == "metal" && workers != 1L) stop(
+        "Metal streamed PCA requires `n.cores = 1`.",
+        call. = FALSE)
+    resources <- massive_pca_resources(x, rank, workers,
+        chunk_rows, memory_limit, backend)
     if (length(devices) > 1L) resources$gpu_devices <- devices
     path <- massive_pca_output(output, resources$output_bytes,
         x$ncol, rank, resume)
     if (length(devices) > 1L) massive_pca_shards_check(x, path,
         rank, resources$output_bytes, devices, resume)
+    method <- if (massive_pca_covariance_route(x$ncol, backend))
+        "streamed_covariance" else "streamed_randomized"
     message("EXPERIMENTAL out-of-core PCA: ", x$nrow, " x ", x$ncol,
-        "; method=", if (massive_pca_covariance_route(
-            x$ncol, backend)) "streamed_covariance" else {
-            "streamed_randomized"
-        },
+        "; method=", method,
         "; backend=", backend, "; CPU workers=", workers,
         "; chunk rows=", resources$chunk_rows,
         "; estimated algorithm RAM=",

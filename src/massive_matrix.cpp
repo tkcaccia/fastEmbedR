@@ -10,6 +10,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <future>
 #include <iomanip>
 #include <limits>
 #include <locale>
@@ -18,6 +20,7 @@
 #include <queue>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -28,6 +31,7 @@
 #include "massive_pca_cuda.h"
 #include "massive_graph_attraction.h"
 #include "massive_umap_cuda.h"
+#include "massive_umap_metal.h"
 #include "massive_tsne_cuda.h"
 #include "louvain_objective.h"
 #include "native_knn_common.h"
@@ -50,6 +54,10 @@
 using Rcpp::List;
 using Rcpp::NumericMatrix;
 using Rcpp::NumericVector;
+
+int massive_cuda_device_count_cpp();
+int massive_cuda_select_cpp(int device);
+List massive_cuda_memory_cpp();
 
 namespace {
 
@@ -497,7 +505,7 @@ class GraphFile {
       if (fd < 0) Rcpp::stop("Cannot open massive graph for mmap.");
       void* address = mmap(nullptr, static_cast<std::size_t>(expected),
                            PROT_READ, MAP_PRIVATE, fd, 0);
-      close(fd);
+      ::close(fd);
       if (address == MAP_FAILED) Rcpp::stop("Cannot mmap massive graph.");
       mapped_ = static_cast<const unsigned char*>(address);
 #elif defined(_WIN32)
@@ -528,12 +536,18 @@ class GraphFile {
   }
 
   ~GraphFile() {
+    close();
+  }
+
+  void close() {
 #if defined(__unix__) || defined(__APPLE__)
     if (mapped_) munmap(const_cast<unsigned char*>(mapped_),
                        static_cast<std::size_t>(size_));
 #elif defined(_WIN32)
     if (mapped_) UnmapViewOfFile(mapped_);
 #endif
+    mapped_ = nullptr;
+    if (stream_.is_open()) stream_.close();
   }
 
   const unsigned char* read(std::uint64_t offset,
@@ -594,6 +608,7 @@ class KnnGraphSource {
   std::uint64_t vertices() const { return vertices_; }
   std::uint64_t edges() const { return checked_product(vertices_, k_); }
   int k() const { return k_; }
+  void close() { indices_.close(); distances_.close(); }
 
   template <typename Function>
   void visit(std::uint64_t first, std::uint64_t count,
@@ -706,7 +721,7 @@ class CsrGraphSource {
 
   template <typename Function>
   std::uint64_t visit(std::uint64_t first, std::uint64_t count,
-                      Function consume) {
+                      Function consume, bool interrupt = true) {
     if (first < 1 || first > vertices_ || count < 1 ||
         count > vertices_ - first + 1) {
       Rcpp::stop("Invalid CSR graph row range.");
@@ -765,7 +780,7 @@ class CsrGraphSource {
         consume(first + row, target, weight, edge - begin);
       }
       block += items;
-      if (block < end) Rcpp::checkUserInterrupt();
+      if (block < end && interrupt) Rcpp::checkUserInterrupt();
     }
     return max_degree;
   }
@@ -1367,7 +1382,8 @@ List massive_graph_modularity_cpp(std::string offsets_path,
                                   int n_communities,
                                   double resolution,
                                   int chunk_rows,
-                                  double edge_budget) {
+                                  double edge_budget,
+                                  bool connectivity) {
   if (n_communities < 1 || !std::isfinite(resolution) ||
       resolution <= 0.0 || chunk_rows < 1) {
     Rcpp::stop("Invalid massive modularity controls.");
@@ -1376,8 +1392,25 @@ List massive_graph_modularity_cpp(std::string offsets_path,
   if (maximum < 1) Rcpp::stop("Modularity edge budget is empty.");
   CsrGraphSource graph(offsets_path, indices_path, weights_path,
                        n_vertices, "stream");
+  if (connectivity && graph.vertices() > INT_MAX) {
+    Rcpp::stop("Connectivity audit exceeds the vertex-ID limit.");
+  }
   GraphFile labels(membership_path,
                    checked_product(graph.vertices(), 4), "mmap");
+  std::vector<std::uint32_t> parent;
+  std::vector<std::uint32_t> size;
+  if (connectivity) {
+    parent.resize(graph.vertices());
+    std::iota(parent.begin(), parent.end(), 0u);
+    size.assign(graph.vertices(), 1u);
+  }
+  auto root_of = [&](std::uint32_t row) {
+    while (parent[row] != row) {
+      parent[row] = parent[parent[row]];
+      row = parent[row];
+    }
+    return row;
+  };
   auto label_at = [&](std::uint64_t row) {
     const auto label = read_u32(labels.read(
       checked_product(row - 1, 4), 4));
@@ -1406,6 +1439,15 @@ List massive_graph_modularity_cpp(std::string offsets_path,
       volume[left] += weight;
       volume[right] += weight;
       if (left == right) internal[left] += weight;
+      if (connectivity && left == right) {
+        auto a = root_of(static_cast<std::uint32_t>(source - 1));
+        auto b = root_of(target - 1);
+        if (a != b) {
+          if (size[a] < size[b]) std::swap(a, b);
+          parent[b] = a;
+          size[a] += size[b];
+        }
+      }
       total += weight;
       ++pairs;
     });
@@ -1425,12 +1467,33 @@ List massive_graph_modularity_cpp(std::string offsets_path,
       score += internal[index] / total - resolution * fraction * fraction;
     }
   }
+  int disconnected = NA_INTEGER;
+  double component_count = NA_REAL;
+  if (connectivity) {
+    std::vector<int> per_label(n_communities, 0);
+    component_count = 0;
+    for (std::uint64_t row = 0; row < graph.vertices(); ++row) {
+      const auto root = root_of(static_cast<std::uint32_t>(row));
+      if (size[root] != 0) {
+        ++per_label[label_at(row + 1)];
+        ++component_count;
+        size[root] = 0;
+      }
+      if (row % 65536 == 0) Rcpp::checkUserInterrupt();
+    }
+    disconnected = static_cast<int>(std::count_if(
+      per_label.begin(), per_label.end(),
+      [](int count) { return count > 1; }));
+  }
   return List::create(
     Rcpp::Named("modularity") = score,
     Rcpp::Named("internal_weight") = inside,
     Rcpp::Named("total_edge_weight") = total,
     Rcpp::Named("n_edge_pairs") = static_cast<double>(pairs),
     Rcpp::Named("n_communities") = n_communities,
+    Rcpp::Named("connectivity_audited") = connectivity,
+    Rcpp::Named("disconnected_communities") = disconnected,
+    Rcpp::Named("n_components") = component_count,
     Rcpp::Named("backend") = "cpu"
   );
 }
@@ -1992,11 +2055,10 @@ struct PairRecord {
   std::uint32_t low;
   std::uint32_t high;
   float weight;
-  std::uint32_t direction;
 };
 
-static_assert(sizeof(PairRecord) == 16,
-              "Graph pair records must occupy 16 bytes.");
+static_assert(sizeof(PairRecord) == 12,
+              "Graph pair records must occupy 12 bytes.");
 
 struct RowRecord {
   std::uint32_t source;
@@ -2032,7 +2094,7 @@ struct PairLess {
                   const PairRecord& right) const {
     if (left.low != right.low) return left.low < right.low;
     if (left.high != right.high) return left.high < right.high;
-    return left.direction < right.direction;
+    return std::signbit(left.weight) < std::signbit(right.weight);
   }
 };
 
@@ -2052,12 +2114,68 @@ struct CoarseRowLess {
   }
 };
 
+class GraphDiskPeak {
+ public:
+  void add(const std::string& path) {
+    const auto bytes = std::filesystem::file_size(path);
+    if (!files_.emplace(path, bytes).second) {
+      Rcpp::stop("Graph payload was counted twice.");
+    }
+    current_ += bytes;
+    peak_ = std::max(peak_, current_);
+    peak_with_external_ = std::max(peak_with_external_,
+                                   current_ + external_);
+  }
+
+  void written(const std::string& path, std::uintmax_t bytes) {
+    const auto found = files_.find(path);
+    if (found == files_.end()) {
+      Rcpp::stop("Graph payload was not tracked.");
+    }
+    found->second += bytes;
+    current_ += bytes;
+    peak_ = std::max(peak_, current_);
+    peak_with_external_ = std::max(peak_with_external_,
+                                   current_ + external_);
+  }
+
+  void remove(const std::string& path) {
+    if (!std::filesystem::remove(path)) return;
+    const auto found = files_.find(path);
+    if (found == files_.end()) {
+      Rcpp::stop("Graph payload was not tracked.");
+    }
+    current_ -= found->second;
+    files_.erase(found);
+  }
+
+  double peak() const { return static_cast<double>(peak_); }
+  double current() const { return static_cast<double>(current_); }
+  double peak_with_external() const {
+    return static_cast<double>(peak_with_external_);
+  }
+  void external(std::uintmax_t bytes) {
+    external_ = bytes;
+    peak_with_external_ = std::max(peak_with_external_,
+                                   current_ + external_);
+  }
+
+ private:
+  std::unordered_map<std::string, std::uintmax_t> files_;
+  std::uintmax_t current_ = 0;
+  std::uintmax_t peak_ = 0;
+  std::uintmax_t external_ = 0;
+  std::uintmax_t peak_with_external_ = 0;
+};
+
 template <typename Record>
 class RunSink {
  public:
-  explicit RunSink(const std::string& path)
-      : stream_(path, std::ios::binary) {
+  explicit RunSink(const std::string& path,
+                   GraphDiskPeak* disk = nullptr)
+      : path_(path), disk_(disk), stream_(path, std::ios::binary) {
     if (!stream_) Rcpp::stop("Cannot create massive graph run.");
+    if (disk_) disk_->add(path_);
     buffer_.reserve(16384);
   }
 
@@ -2075,12 +2193,15 @@ class RunSink {
  private:
   void flush() {
     if (buffer_.empty()) return;
-    stream_.write(reinterpret_cast<const char*>(buffer_.data()),
-                  buffer_.size() * sizeof(Record));
+    const auto bytes = buffer_.size() * sizeof(Record);
+    stream_.write(reinterpret_cast<const char*>(buffer_.data()), bytes);
     if (!stream_) Rcpp::stop("Massive graph run write failed.");
+    if (disk_) disk_->written(path_, bytes);
     buffer_.clear();
   }
 
+  std::string path_;
+  GraphDiskPeak* disk_;
   std::ofstream stream_;
   std::vector<Record> buffer_;
 };
@@ -2154,9 +2275,11 @@ class GraphRunSorter {
  public:
   GraphRunSorter(std::string directory, std::string label,
                  std::size_t capacity, Less less,
-                 std::vector<std::string> runs = {})
+                 std::vector<std::string> runs = {},
+                 GraphDiskPeak* disk = nullptr)
       : directory_(std::move(directory)), label_(std::move(label)),
-        capacity_(capacity), less_(less), runs_(std::move(runs)) {
+        capacity_(capacity), less_(less), runs_(std::move(runs)),
+        disk_(disk) {
     if (capacity_ < 1) Rcpp::stop("Graph sort budget is too small.");
     buffer_.reserve(capacity_);
   }
@@ -2183,7 +2306,7 @@ class GraphRunSorter {
     std::sort(buffer_.begin(), buffer_.end(), less_);
     const auto path = directory_ + "/" + label_ + "_run_" +
       std::to_string(runs_.size()) + ".bin";
-    RunSink<Record> sink(path);
+    RunSink<Record> sink(path, disk_);
     for (const auto& value : buffer_) sink.push(value);
     sink.finish();
     runs_.push_back(path);
@@ -2196,35 +2319,489 @@ class GraphRunSorter {
   Less less_;
   std::vector<Record> buffer_;
   std::vector<std::string> runs_;
+  GraphDiskPeak* disk_;
 };
 
 template <typename Record, typename Less>
 std::vector<std::string> reduce_graph_runs(
     std::vector<std::string> runs, const std::string& directory,
     const std::string& label, Less less,
-    bool preserve_first = false) {
+    GraphDiskPeak* disk = nullptr,
+    std::function<void(const std::vector<std::string>&)> checkpoint = {}) {
   int round = 0;
-  while (runs.size() > 32) {
-    std::vector<std::string> reduced;
-    for (std::size_t begin = 0; begin < runs.size(); begin += 32) {
-      const auto end = std::min(runs.size(), begin + 32);
-      const std::vector<std::string> group(runs.begin() + begin,
-                                            runs.begin() + end);
-      const auto path = directory + "/" + label + "_merge_" +
-        std::to_string(round) + "_" + std::to_string(begin) + ".bin";
-      RunSink<Record> sink(path);
-      merge_graph_runs<Record>(group, less,
-        [&](const Record& value) { sink.push(value); });
-      sink.finish();
-      if (!preserve_first || round > 0) {
-        for (const auto& old : group) std::filesystem::remove(old);
+  const auto prefix = label + "_merge_";
+  for (const auto& path : runs) {
+    const auto name = std::filesystem::path(path).filename().string();
+    if (name.rfind(prefix, 0) == 0) {
+      const auto separator = name.find('_', prefix.size());
+      if (separator == std::string::npos) {
+        Rcpp::stop("Graph merge run name is invalid.");
       }
-      reduced.push_back(path);
+      round = std::max(round, std::stoi(name.substr(prefix.size(),
+        separator - prefix.size())) + 1);
+    }
+  }
+  while (runs.size() > 32) {
+    std::unordered_map<std::string, std::uintmax_t> sizes;
+    for (const auto& path : runs) {
+      sizes.emplace(path, std::filesystem::file_size(path));
+    }
+    std::sort(runs.begin(), runs.end(),
+      [&](const std::string& left, const std::string& right) {
+        if (sizes.at(left) != sizes.at(right)) {
+          return sizes.at(left) < sizes.at(right);
+        }
+        return left < right;
+      });
+    const auto group_size = std::min<std::size_t>(
+      32, runs.size() - 31);
+    const std::vector<std::string> group(runs.begin(),
+                                          runs.begin() + group_size);
+    const auto path = directory + "/" + prefix +
+      std::to_string(round++) + "_0.bin";
+    RunSink<Record> sink(path, disk);
+    merge_graph_runs<Record>(group, less,
+      [&](const Record& value) { sink.push(value); });
+    sink.finish();
+    std::vector<std::string> reduced(
+      runs.begin() + group_size, runs.end());
+    reduced.push_back(path);
+    if (checkpoint) checkpoint(reduced);
+    for (const auto& old : group) {
+      if (disk) disk->remove(old);
+      else std::filesystem::remove(old);
     }
     runs = std::move(reduced);
-    ++round;
   }
   return runs;
+}
+
+double graph_sort_budget(std::uint64_t directed,
+                         std::uint64_t pairs,
+                         std::uint64_t vertices) {
+  const double input = static_cast<double>(directed);
+  const double unique = static_cast<double>(pairs);
+  const double offsets = 8.0 * (vertices + 1);
+  // At most 32 of 63 runs merge at once: the smallest group is <= 32/63
+  // of its phase's payload. CSR writing overlaps row runs by 16 bytes/pair.
+  return std::max({19.0 * input, 12.0 * input + 24.0 * unique,
+                   40.0 * unique}) + offsets;
+}
+
+void check_graph_sort_space(const std::string& directory,
+                            const GraphDiskPeak& disk,
+                            double budget, bool discard_work) {
+  std::error_code error;
+  const auto available = std::filesystem::space(directory, error);
+  if (error) Rcpp::stop("Cannot inspect graph sort disk capacity.");
+  if (std::max(0.0, budget - disk.current()) >
+      0.8 * static_cast<double>(available.available)) {
+    if (discard_work) {
+      std::filesystem::remove_all(directory, error);
+    }
+    Rcpp::stop("Graph remaining phases exceed the free-disk budget.");
+  }
+}
+
+template <typename Record>
+class GraphBucketWriter {
+ public:
+  GraphBucketWriter(const std::string& directory,
+                    const std::string& label, std::size_t count,
+                    GraphDiskPeak* disk)
+      : disk_(disk), paths_(count), buffers_(count), created_(count),
+        drained_(count), streams_(count) {
+    for (std::size_t i = 0; i < count; ++i) {
+      paths_[i] = directory + "/" + label + "_bucket_" +
+        std::to_string(i) + ".bin";
+    }
+  }
+
+  void push(std::size_t bucket, const Record& value) {
+    if (drained_.at(bucket)) {
+      Rcpp::stop("Graph bucket was already drained.");
+    }
+    auto& buffer = buffers_.at(bucket);
+    buffer.push_back(value);
+    if (buffer.size() == 1024) flush(bucket);
+  }
+
+  void flush_all() {
+    for (std::size_t i = 0; i < paths_.size(); ++i) {
+      flush(i);
+      if (streams_[i]) {
+        streams_[i]->close();
+        if (!*streams_[i]) Rcpp::stop("Graph bucket close failed.");
+        streams_[i].reset();
+      }
+    }
+  }
+
+  const std::string& path(std::size_t bucket) const {
+    return paths_.at(bucket);
+  }
+
+  bool exists(std::size_t bucket) const { return created_.at(bucket); }
+
+  template <typename Consume>
+  void drain(std::size_t bucket, Consume consume) {
+    flush(bucket);
+    if (streams_[bucket]) {
+      streams_[bucket]->close();
+      if (!*streams_[bucket]) Rcpp::stop("Graph bucket close failed.");
+      streams_[bucket].reset();
+    }
+    drained_[bucket] = true;
+    if (!created_[bucket]) return;
+    RunReader<Record> reader(paths_[bucket]);
+    Record record{};
+    while (reader.next(record)) consume(record);
+    disk_->remove(paths_[bucket]);
+  }
+
+ private:
+  void flush(std::size_t bucket) {
+    auto& buffer = buffers_[bucket];
+    if (buffer.empty()) return;
+    const auto& path = paths_[bucket];
+    if (!created_[bucket]) {
+      streams_[bucket].reset(new std::ofstream(path, std::ios::binary));
+      if (!*streams_[bucket]) Rcpp::stop("Cannot create graph bucket.");
+      disk_->add(path);
+      created_[bucket] = true;
+    }
+    const auto bytes = buffer.size() * sizeof(Record);
+    streams_[bucket]->write(reinterpret_cast<const char*>(buffer.data()),
+                            bytes);
+    if (!*streams_[bucket]) Rcpp::stop("Graph bucket write failed.");
+    disk_->written(path, bytes);
+    buffer.clear();
+  }
+
+  GraphDiskPeak* disk_;
+  std::vector<std::string> paths_;
+  std::vector<std::vector<Record>> buffers_;
+  std::vector<bool> created_;
+  std::vector<bool> drained_;
+  std::vector<std::unique_ptr<std::ofstream>> streams_;
+};
+
+class GraphBucketWork {
+ public:
+  explicit GraphBucketWork(const std::string& prefix)
+      : prefix_(prefix), directory_(prefix + ".work") {
+    if (!std::filesystem::create_directory(directory_)) {
+      Rcpp::stop("Fuzzy graph work directory already exists.");
+    }
+  }
+
+  ~GraphBucketWork() {
+    if (finished_) return;
+    std::error_code error;
+    std::filesystem::remove_all(directory_, error);
+    for (const auto& suffix : {".offsets.u64.part",
+                               ".indices.u32.part",
+                               ".weights.f32.part",
+                               ".offsets.u64", ".indices.u32",
+                               ".weights.f32"}) {
+      std::filesystem::remove(prefix_ + suffix, error);
+    }
+  }
+
+  const std::string& directory() const { return directory_; }
+  void finish() { finished_ = true; }
+
+ private:
+  std::string prefix_;
+  std::string directory_;
+  bool finished_ = false;
+};
+
+void normalize_bucketed_affinity(const std::string& path,
+                                 std::uint64_t edges,
+                                 double mass) {
+  std::fstream stream(path, std::ios::in | std::ios::out |
+                           std::ios::binary);
+  if (!stream) Rcpp::stop("Cannot normalize t-SNE affinities.");
+  std::vector<float> values(65536);
+  for (std::uint64_t first = 0; first < edges;) {
+    const auto count = std::min<std::uint64_t>(
+      values.size(), edges - first);
+    const auto position = static_cast<std::streamoff>(first * 4);
+    stream.seekg(position);
+    stream.read(reinterpret_cast<char*>(values.data()), count * 4);
+    if (!stream) Rcpp::stop("Cannot read t-SNE affinities.");
+    for (std::uint64_t i = 0; i < count; ++i) {
+      values[i] = static_cast<float>(values[i] * (0.5 / mass));
+    }
+    stream.seekp(position);
+    stream.write(reinterpret_cast<const char*>(values.data()), count * 4);
+    if (!stream) Rcpp::stop("Cannot write t-SNE affinities.");
+    first += count;
+    Rcpp::checkUserInterrupt();
+  }
+  stream.close();
+  if (!stream) Rcpp::stop("Cannot close t-SNE affinities.");
+}
+
+List bucketed_symmetrize_graph(KnnGraphSource& graph,
+                               const std::string& output_prefix,
+                               const std::string& indices_path,
+                               const std::string& values_path,
+                               std::size_t capacity, bool tsne,
+                               double perplexity, int n_threads,
+                               SEXP release_input) {
+  GraphBucketWork work(output_prefix);
+  const auto& directory = work.directory();
+  const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(
+    std::min<std::uint64_t>(64, graph.vertices()),
+    std::max<std::uint64_t>(2,
+      (graph.edges() + capacity - 1) / capacity)));
+  const auto width = (graph.vertices() + count - 1) / count;
+  const auto bucket = [&](std::uint64_t row) {
+    return std::min<std::size_t>((row - 1) / width, count - 1);
+  };
+  GraphDiskPeak disk;
+  const auto input_bytes = checked_product(graph.edges(), 8);
+  disk.external(input_bytes);
+  std::vector<std::unique_ptr<GraphRunSorter<PairRecord, PairLess>>>
+    pair_sorters;
+  pair_sorters.reserve(count);
+  const auto pair_capacity = std::max<std::size_t>(1, capacity / count);
+  for (std::size_t i = 0; i < count; ++i) {
+    pair_sorters.emplace_back(new GraphRunSorter<PairRecord, PairLess>(
+      directory, "pairs_sort_" + std::to_string(i), pair_capacity,
+      PairLess{}, {}, &disk));
+  }
+  std::vector<std::uint64_t> reverse_edges(count, 0);
+  const auto mean = tsne ? 0.0 : umap_mean_scan(indices_path,
+    values_path, graph.vertices(), graph.k(), 0, "0", R_NilValue, 1);
+  const auto block_rows = std::max(1, 65536 / graph.k());
+  std::vector<float> distances(65536 + graph.k());
+  std::vector<std::uint32_t> targets(65536 + graph.k());
+  std::vector<float> probabilities(tsne ? distances.size() : 0);
+  const bool consume = Rf_isFunction(release_input);
+  std::uint64_t remaining = graph.vertices();
+  for (std::uint64_t first = 1; first <= graph.vertices();) {
+    if (consume) first = remaining - std::min<std::uint64_t>(
+      block_rows, remaining) + 1;
+    const auto rows = std::min<std::uint64_t>(
+      block_rows, consume ? remaining : graph.vertices() - first + 1);
+    graph.visit(first, rows,
+      [&](std::uint64_t, std::uint32_t target, float distance,
+          std::uint64_t row, int col) {
+        const auto pos = row * graph.k() + col;
+        distances[pos] = distance;
+        targets[pos] = target;
+      });
+    if (tsne) {
+      parallel_rows(rows, n_threads,
+        [&](std::uint64_t begin, std::uint64_t end, int) {
+          for (auto row = begin; row < end; ++row) {
+            const auto pos = row * graph.k();
+            tsne_row_probabilities_float(distances.data() + pos,
+              graph.k(), perplexity, probabilities.data() + pos);
+          }
+        });
+    }
+    for (std::uint64_t row = 0; row < rows; ++row) {
+      const auto source = first + row;
+      const auto pos = row * graph.k();
+      UmapMembershipScale scale{};
+      if (!tsne) scale = umap_membership_scale(
+        distances.data() + pos, graph.k(), mean);
+      for (int col = 0; col < graph.k(); ++col) {
+        const auto target = targets[pos + col];
+        const auto distance = distances[pos + col];
+        const float weight = tsne ? probabilities[pos + col] :
+          (distance <= scale.rho ? 1.0f :
+            std::exp(-(distance - scale.rho) / scale.sigma));
+        const auto low = static_cast<std::uint32_t>(
+          std::min<std::uint64_t>(source, target));
+        const auto high = static_cast<std::uint32_t>(
+          std::max<std::uint64_t>(source, target));
+        if (bucket(high) != bucket(low)) ++reverse_edges[bucket(high)];
+        pair_sorters[bucket(low)]->push({low, high, std::copysign(weight,
+          source == low ? 1.0f : -1.0f)});
+      }
+    }
+    if (consume) {
+      const auto bytes = checked_product(
+        checked_product(first - 1, graph.k()), 4);
+      std::filesystem::resize_file(indices_path, bytes);
+      std::filesystem::resize_file(values_path, bytes);
+      disk.external(2 * bytes);
+      remaining = first - 1;
+      if (!remaining) break;
+    } else {
+      first += rows;
+    }
+    Rcpp::checkUserInterrupt();
+  }
+  std::vector<std::vector<std::string>> pair_runs(count);
+  for (std::size_t i = 0; i < count; ++i) {
+    pair_runs[i] = pair_sorters[i]->finish();
+  }
+  pair_sorters.clear();
+  double released_input_bytes = 0;
+  if (consume) {
+    graph.close();
+    Rcpp::Function release(release_input);
+    released_input_bytes = Rcpp::as<double>(release());
+    if (released_input_bytes != input_bytes) {
+      Rcpp::stop("Consumed KNN byte count is invalid.");
+    }
+  }
+  double max_pair_bytes = 0;
+  double max_reverse_bytes = 0;
+  std::vector<double> pair_bucket_bytes(count, 0);
+  for (std::size_t i = 0; i < count; ++i) {
+    for (const auto& path : pair_runs[i]) {
+      pair_bucket_bytes[i] += static_cast<double>(
+        std::filesystem::file_size(path));
+    }
+    max_pair_bytes = std::max(max_pair_bytes, pair_bucket_bytes[i]);
+    max_reverse_bytes = std::max(max_reverse_bytes,
+      12.0 * static_cast<double>(reverse_edges[i]));
+  }
+  const double vertices_bytes = 8.0 * (graph.vertices() + 1);
+  const double disk_budget = std::min(
+    36.0 * graph.edges() + vertices_bytes,
+    20.0 * graph.edges() +
+      6.0 * (max_pair_bytes + max_reverse_bytes) + vertices_bytes);
+  check_graph_sort_space(directory, disk, disk_budget, false);
+  GraphBucketWriter<RowRecord> row_buckets(directory, "rows", count,
+                                            &disk);
+  const auto offsets_path = output_prefix + ".offsets.u64";
+  const auto output_indices = output_prefix + ".indices.u32";
+  const auto weights_path = output_prefix + ".weights.f32";
+  RunSink<std::uint64_t> offsets(offsets_path + ".part", &disk);
+  RunSink<std::uint32_t> indices(output_indices + ".part", &disk);
+  RunSink<float> weights(weights_path + ".part", &disk);
+  offsets.push(0);
+  std::uint64_t source = 1;
+  std::uint64_t edges = 0;
+  std::uint64_t degree = 0;
+  std::uint64_t max_degree = 0;
+  std::uint32_t last_target = 0;
+  double total_mass = 0;
+  for (std::size_t i = 0; i < count; ++i) {
+    GraphRunSorter<RowRecord, RowLess> rows(directory,
+      "rows_sort_" + std::to_string(i), capacity, RowLess{}, {}, &disk);
+    if (!pair_runs[i].empty()) {
+      check_graph_sort_space(directory, disk,
+        disk.current() + pair_bucket_bytes[i],
+        false);
+      auto runs = reduce_graph_runs<PairRecord>(pair_runs[i], directory,
+        "pairs_sort_" + std::to_string(i), PairLess{}, &disk);
+      PairRecord current{};
+      float forward = 0.0f;
+      float backward = 0.0f;
+      std::uint32_t seen = 0;
+      auto emit = [&]() {
+        if (!seen) return;
+        const float weight = tsne ? forward + backward :
+          std::min(1.0f, forward + backward - forward * backward);
+        if (weight <= 0.0f) return;
+        rows.push({current.low, current.high, weight});
+        if (bucket(current.high) == i) {
+          rows.push({current.high, current.low, weight});
+        } else {
+          row_buckets.push(bucket(current.high),
+            {current.high, current.low, weight});
+        }
+        if (tsne) total_mass += weight;
+      };
+      merge_graph_runs<PairRecord>(runs, PairLess{},
+        [&](const PairRecord& edge) {
+          if (seen && (edge.low != current.low ||
+                       edge.high != current.high)) {
+            emit();
+            seen = 0;
+            forward = backward = 0.0f;
+          }
+          current = edge;
+          const bool reverse = std::signbit(edge.weight);
+          const auto bit = reverse ? 2u : 1u;
+          if (seen & bit) {
+            Rcpp::stop("Graph has duplicate directed pair edges.");
+          }
+          seen |= bit;
+          if (reverse) backward = std::fabs(edge.weight);
+          else forward = edge.weight;
+        });
+      emit();
+      for (const auto& path : runs) disk.remove(path);
+    }
+    row_buckets.drain(i, [&](const RowRecord& edge) {
+      rows.push(edge);
+    });
+    auto row_runs = rows.finish();
+    row_runs = reduce_graph_runs<RowRecord>(row_runs, directory,
+      "rows_sort_" + std::to_string(i), RowLess{}, &disk);
+    merge_graph_runs<RowRecord>(row_runs, RowLess{},
+      [&](const RowRecord& edge) {
+        if (edge.source < source || edge.source > graph.vertices() ||
+            edge.target < 1 || edge.target > graph.vertices() ||
+            edge.source == edge.target) {
+          Rcpp::stop("Fuzzy graph row sort produced invalid edges.");
+        }
+        while (source < edge.source) {
+          offsets.push(edges);
+          max_degree = std::max(max_degree, degree);
+          ++source;
+          degree = 0;
+          last_target = 0;
+        }
+        if (edge.target <= last_target) {
+          Rcpp::stop("Fuzzy graph row has duplicate edges.");
+        }
+        indices.push(edge.target);
+        weights.push(edge.weight);
+        ++edges;
+        ++degree;
+        last_target = edge.target;
+      });
+    for (const auto& path : row_runs) disk.remove(path);
+    const auto end_row = std::min<std::uint64_t>(
+      graph.vertices(), (i + 1) * width);
+    while (source <= end_row) {
+      offsets.push(edges);
+      max_degree = std::max(max_degree, degree);
+      ++source;
+      degree = 0;
+      last_target = 0;
+    }
+    Rcpp::checkUserInterrupt();
+  }
+  if (tsne && (!std::isfinite(total_mass) || total_mass <= 0.0)) {
+    Rcpp::stop("t-SNE affinity normalization failed.");
+  }
+  row_buckets.flush_all();
+  offsets.finish();
+  indices.finish();
+  weights.finish();
+  if (tsne) normalize_bucketed_affinity(weights_path + ".part",
+                                        edges, total_mass);
+  if (!std::filesystem::is_empty(directory)) {
+    Rcpp::stop("Bucketed graph sort left work files.");
+  }
+  if (disk.peak() > disk_budget) {
+    Rcpp::stop("Bucketed graph sort exceeded its disk budget.");
+  }
+  for (const auto& path : {offsets_path, output_indices, weights_path}) {
+    std::filesystem::rename(path + ".part", path);
+  }
+  std::filesystem::remove(directory);
+  work.finish();
+  return List::create(
+    Rcpp::Named("n_vertices") = static_cast<double>(graph.vertices()),
+    Rcpp::Named("n_edges") = static_cast<double>(edges),
+    Rcpp::Named("max_degree") = static_cast<double>(max_degree),
+    Rcpp::Named("disk_budget_bytes") = disk_budget,
+    Rcpp::Named("peak_sort_payload_bytes") = disk.peak(),
+    Rcpp::Named("peak_with_knn_bytes") = disk.peak_with_external(),
+    Rcpp::Named("released_input_bytes") = released_input_bytes);
 }
 
 }  // namespace
@@ -2241,12 +2818,20 @@ List massive_symmetrize_graph_cpp(std::string indices_path,
                                  bool resume,
                                  double completed_rows,
                                  Rcpp::CharacterVector resume_runs,
+                                 std::string resume_phase,
+                                 double resume_mass,
                                  int checkpoint_every,
-                                 SEXP progress) {
+                                 SEXP progress,
+                                 SEXP release_input = R_NilValue) {
   require_little_endian();
-  const bool tsne = method == "tsne";
-  if (!tsne && method != "umap") {
-    Rcpp::stop("Graph method must be 'tsne' or 'umap'.");
+  if (!Rf_isNull(release_input) && !Rf_isFunction(release_input)) {
+    Rcpp::stop("KNN release callback must be a function or NULL.");
+  }
+  const bool tsne = method == "tsne" || method == "tsne_bucketed";
+  const bool bucketed = method == "umap_bucketed" ||
+    method == "tsne_bucketed";
+  if (!tsne && method != "umap" && !bucketed) {
+    Rcpp::stop("Unsupported graph sort method.");
   }
   if (tsne && (!std::isfinite(perplexity) || perplexity <= 0.0 ||
                perplexity > k)) {
@@ -2257,7 +2842,8 @@ List massive_symmetrize_graph_cpp(std::string indices_path,
     Rcpp::stop("Invalid graph-sorting worker count.");
   }
   KnnGraphSource graph(indices_path, values_path, n_vertices,
-                       k, "stream", tsne ? "distance" : "weight");
+                       k, "stream", tsne || bucketed ?
+                       "distance" : "weight");
   if (!std::isfinite(memory_limit_bytes) ||
       memory_limit_bytes < 64.0 * 1024 * 1024) {
     Rcpp::stop("Fuzzy graph sorting needs at least 64 MB RAM budget.");
@@ -2265,6 +2851,26 @@ List massive_symmetrize_graph_cpp(std::string indices_path,
   const auto capacity = static_cast<std::size_t>(
     std::min(memory_limit_bytes * 0.25, 512.0 * 1024 * 1024) /
     sizeof(PairRecord));
+  if (bucketed) {
+    if (resume || completed_rows != 0 || resume_runs.size() ||
+        resume_phase != "pairs_input" || resume_mass != 0 ||
+        Rf_isFunction(progress)) {
+      Rcpp::stop("Bucketed graph sort does not support checkpointing.");
+    }
+    for (const auto& suffix : {".offsets.u64", ".indices.u32",
+                               ".weights.f32"}) {
+      if (std::filesystem::exists(output_prefix + suffix) ||
+          std::filesystem::exists(output_prefix + suffix + ".part")) {
+        Rcpp::stop("Fuzzy graph output or partial file already exists.");
+      }
+    }
+    return bucketed_symmetrize_graph(graph, output_prefix,
+      indices_path, values_path, capacity, tsne, perplexity, n_threads,
+      release_input);
+  }
+  if (Rf_isFunction(release_input)) {
+    Rcpp::stop("KNN consumption requires bucketed graph sorting.");
+  }
   const auto directory = output_prefix + ".work";
   const auto offsets_path = output_prefix + ".offsets.u64";
   const auto indices_out = output_prefix + ".indices.u32";
@@ -2276,11 +2882,22 @@ List massive_symmetrize_graph_cpp(std::string indices_path,
     }
   }
   const auto rows_per_block = std::max(1, 65536 / k);
+  const bool resume_reduced = resume_phase == "pairs_reduced";
+  const bool resume_reduced_rows = resume_phase == "rows_reduced";
+  const bool resume_rows = resume_phase == "rows_generated" ||
+    resume_reduced_rows;
   if (!std::isfinite(completed_rows) || completed_rows < 0 ||
       completed_rows > graph.vertices() ||
       completed_rows != std::floor(completed_rows) ||
       (completed_rows != graph.vertices() &&
        static_cast<std::uint64_t>(completed_rows) % rows_per_block != 0) ||
+      (resume_phase != "pairs_input" && !resume_reduced &&
+       !resume_rows) ||
+      ((resume_reduced || resume_rows) && (!resume ||
+       completed_rows != graph.vertices() || resume_runs.size() == 0)) ||
+      !std::isfinite(resume_mass) || resume_mass < 0 ||
+      (!resume_rows && resume_mass != 0) ||
+      (resume_rows && tsne && resume_mass <= 0) ||
       (resume && !Rf_isFunction(progress)) ||
       (Rf_isFunction(progress) && checkpoint_every < 1) ||
       (!Rf_isFunction(progress) && checkpoint_every != 0)) {
@@ -2288,10 +2905,29 @@ List massive_symmetrize_graph_cpp(std::string indices_path,
   }
   std::vector<std::string> saved_runs;
   for (R_xlen_t i = 0; i < resume_runs.size(); ++i) {
-    const auto expected = directory + "/pairs_run_" +
-      std::to_string(i) + ".bin";
-    std::error_code path_error;
     const auto saved = Rcpp::as<std::string>(resume_runs[i]);
+    const auto name = std::filesystem::path(saved).filename().string();
+    const auto expected = (resume_reduced || resume_rows) ?
+      directory + "/" + name :
+      directory + "/pairs_run_" + std::to_string(i) + ".bin";
+    if (resume_reduced &&
+        ((name.rfind("pairs_merge_", 0) != 0 &&
+          name.rfind("pairs_run_", 0) != 0) ||
+         name.size() < 5 || name.substr(name.size() - 4) != ".bin")) {
+      Rcpp::stop("Reduced graph run path is invalid.");
+    }
+    if (resume_phase == "rows_generated" &&
+        (name.rfind("rows_run_", 0) != 0 ||
+         name.size() < 5 || name.substr(name.size() - 4) != ".bin")) {
+      Rcpp::stop("Row graph run path is invalid.");
+    }
+    if (resume_reduced_rows &&
+        ((name.rfind("rows_merge_", 0) != 0 &&
+          name.rfind("rows_run_", 0) != 0) ||
+         name.size() < 5 || name.substr(name.size() - 4) != ".bin")) {
+      Rcpp::stop("Reduced row run path is invalid.");
+    }
+    std::error_code path_error;
     if (!std::filesystem::equivalent(saved, expected, path_error) ||
         path_error) {
       Rcpp::stop("Graph sort checkpoint run path is invalid.");
@@ -2328,8 +2964,18 @@ List massive_symmetrize_graph_cpp(std::string indices_path,
   } else if (!std::filesystem::create_directory(directory)) {
     Rcpp::stop("Fuzzy graph work directory already exists.");
   }
+  GraphDiskPeak disk;
+  for (const auto& entry :
+       std::filesystem::directory_iterator(directory)) {
+    disk.add(entry.path().generic_string());
+  }
+  std::vector<std::string> row_runs = resume_rows ? saved_runs :
+    std::vector<std::string>{};
+  double total_mass = resume_mass;
+  double disk_budget = 0;
+  if (!resume_rows) {
   GraphRunSorter<PairRecord, PairLess> pairs(
-    directory, "pairs", capacity, PairLess{}, saved_runs);
+    directory, "pairs", capacity, PairLess{}, saved_runs, &disk);
   const auto block_items = static_cast<std::size_t>(rows_per_block) * k;
   std::vector<float> distances(tsne ? block_items : 0);
   std::vector<float> probabilities(tsne ? block_items : 0);
@@ -2353,8 +2999,8 @@ List massive_symmetrize_graph_cpp(std::string indices_path,
         std::min<std::uint64_t>(source, target));
       const auto high = static_cast<std::uint32_t>(
         std::max<std::uint64_t>(source, target));
-      pairs.push({low, high, weight,
-                  static_cast<std::uint32_t>(source != low)});
+      pairs.push({low, high, std::copysign(weight,
+        source == low ? 1.0f : -1.0f)});
     });
     if (tsne) {
       parallel_rows(count, n_threads,
@@ -2373,8 +3019,9 @@ List massive_symmetrize_graph_cpp(std::string indices_path,
             std::min<std::uint64_t>(source, targets[pos + j]));
           const auto high = static_cast<std::uint32_t>(
             std::max<std::uint64_t>(source, targets[pos + j]));
-          pairs.push({low, high, probabilities[pos + j],
-                      static_cast<std::uint32_t>(source != low)});
+          pairs.push({low, high, std::copysign(
+            probabilities[pos + j],
+            source == low ? 1.0f : -1.0f)});
         }
       }
     }
@@ -2392,17 +3039,72 @@ List massive_symmetrize_graph_cpp(std::string indices_path,
     Rcpp::Function callback(progress);
     callback(completed_rows, Rcpp::wrap(original_runs));
   }
+  std::function<void(const std::vector<std::string>&)> pair_checkpoint;
+  if (Rf_isFunction(progress)) {
+    pair_checkpoint = [&](const std::vector<std::string>& runs) {
+      Rcpp::Function callback(progress);
+      callback(static_cast<double>(graph.vertices()),
+               Rcpp::wrap(runs), "pairs_reduced");
+    };
+  }
   auto pair_runs = reduce_graph_runs<PairRecord>(
-    original_runs, directory, "pairs", PairLess{},
-    Rf_isFunction(progress));
+    original_runs, directory, "pairs", PairLess{}, &disk,
+    pair_checkpoint);
+  std::uint64_t unique_pairs = 0;
+  PairRecord previous_pair{};
+  bool have_pair = false;
+  float first_weight = 0.0f;
+  float second_weight = 0.0f;
+  std::uint32_t directions = 0;
+  std::uint64_t counted_edges = 0;
+  std::uint64_t next_count_check = 65536;
+  int next_count_report = 10;
+  auto count_pair = [&]() {
+    if (have_pair && first_weight + second_weight > 0.0f) {
+      ++unique_pairs;
+    }
+  };
+  merge_graph_runs<PairRecord>(pair_runs, PairLess{},
+    [&](const PairRecord& edge) {
+      if (!have_pair || edge.low != previous_pair.low ||
+          edge.high != previous_pair.high) {
+        count_pair();
+        first_weight = second_weight = 0.0f;
+        directions = 0;
+      }
+      const bool backward_edge = std::signbit(edge.weight);
+      const auto bit = backward_edge ? 2u : 1u;
+      if ((directions & bit) != 0) {
+        Rcpp::stop("Graph has duplicate directed pair edges.");
+      }
+      directions |= bit;
+      if (backward_edge) second_weight = std::fabs(edge.weight);
+      else first_weight = edge.weight;
+      previous_pair = edge;
+      have_pair = true;
+      ++counted_edges;
+      if (counted_edges == next_count_check) {
+        report_graph_progress("Distinct pair count", counted_edges,
+                              graph.edges(), next_count_report);
+        next_count_check += 65536;
+      }
+    });
+  count_pair();
+  report_graph_progress("Distinct pair count", counted_edges,
+                        graph.edges(), next_count_report);
+  disk_budget = graph_sort_budget(graph.edges(), unique_pairs,
+                                  graph.vertices());
+  check_graph_sort_space(directory, disk, std::max({
+    12.0 * graph.edges() + 24.0 * unique_pairs,
+    40.0 * unique_pairs}) + 8.0 * (graph.vertices() + 1),
+    !Rf_isFunction(progress));
   Rcpp::Rcout << "  Graph pair sorting: 100%\n";
   GraphRunSorter<RowRecord, RowLess> rows(
-    directory, "rows", capacity, RowLess{});
+    directory, "rows", capacity, RowLess{}, {}, &disk);
   PairRecord current{};
   float forward = 0.0f;
   float backward = 0.0f;
   std::uint32_t seen = 0;
-  double total_mass = 0.0;
   auto emit_pair = [&]() {
     if (seen == 0) return;
     const float weight = tsne ? forward + backward :
@@ -2422,28 +3124,60 @@ List massive_symmetrize_graph_cpp(std::string indices_path,
         forward = backward = 0.0f;
       }
       current = edge;
-      const auto bit = 1u << edge.direction;
-      if (edge.direction > 1 || (seen & bit) != 0) {
+      const bool backward_edge = std::signbit(edge.weight);
+      const auto bit = backward_edge ? 2u : 1u;
+      if ((seen & bit) != 0) {
         Rcpp::stop("Graph has duplicate directed pair edges.");
       }
       seen |= bit;
-      if (edge.direction == 0) forward = edge.weight;
-      else backward = edge.weight;
+      if (backward_edge) backward = std::fabs(edge.weight);
+      else forward = edge.weight;
     });
   emit_pair();
   if (tsne && (!std::isfinite(total_mass) || total_mass <= 0.0)) {
     Rcpp::stop("t-SNE affinity normalization failed.");
   }
-  if (!Rf_isFunction(progress)) {
-    for (const auto& path : pair_runs) std::filesystem::remove(path);
-  }
-  auto row_runs = reduce_graph_runs<RowRecord>(
-    rows.finish(), directory, "rows", RowLess{});
+  row_runs = rows.finish();
   if (row_runs.empty()) Rcpp::stop("Graph has no positive edges.");
+  if (Rf_isFunction(progress)) {
+    Rcpp::Function callback(progress);
+    callback(static_cast<double>(graph.vertices()),
+             Rcpp::wrap(row_runs), "rows_generated", total_mass);
+  }
+  for (const auto& path : pair_runs) disk.remove(path);
+  for (const auto& path : original_runs) disk.remove(path);
+  }
+  if (row_runs.empty()) Rcpp::stop("Graph has no positive edges.");
+  if (resume_rows) {
+    std::uint64_t row_bytes = 0;
+    for (const auto& path : row_runs) {
+      row_bytes += std::filesystem::file_size(path);
+    }
+    if (row_bytes % (2 * sizeof(RowRecord)) != 0) {
+      Rcpp::stop("Graph row runs have invalid pair count.");
+    }
+    disk_budget = graph_sort_budget(graph.edges(),
+      row_bytes / (2 * sizeof(RowRecord)), graph.vertices());
+    const double unique = static_cast<double>(
+      row_bytes / (2 * sizeof(RowRecord)));
+    check_graph_sort_space(directory, disk,
+      40.0 * unique + 8.0 * (graph.vertices() + 1), false);
+  }
+  std::function<void(const std::vector<std::string>&)> row_checkpoint;
+  if (Rf_isFunction(progress)) {
+    row_checkpoint = [&](const std::vector<std::string>& runs) {
+      Rcpp::Function callback(progress);
+      callback(static_cast<double>(graph.vertices()),
+               Rcpp::wrap(runs), "rows_reduced", total_mass);
+    };
+  }
+  row_runs = reduce_graph_runs<RowRecord>(
+    row_runs, directory, "rows", RowLess{}, &disk,
+    row_checkpoint);
   Rcpp::Rcout << "  Graph symmetrization and row sorting: 100%\n";
-  RunSink<std::uint64_t> offsets(offsets_path + ".part");
-  RunSink<std::uint32_t> indices(indices_out + ".part");
-  RunSink<float> weights(weights_out + ".part");
+  RunSink<std::uint64_t> offsets(offsets_path + ".part", &disk);
+  RunSink<std::uint32_t> indices(indices_out + ".part", &disk);
+  RunSink<float> weights(weights_out + ".part", &disk);
   offsets.push(0);
   std::uint64_t source_row = 1;
   std::uint64_t edge_count = 0;
@@ -2484,18 +3218,23 @@ List massive_symmetrize_graph_cpp(std::string indices_path,
   offsets.finish();
   indices.finish();
   weights.finish();
-  for (const auto& path : row_runs) std::filesystem::remove(path);
-  for (const auto& path : pair_runs) std::filesystem::remove(path);
-  for (const auto& path : original_runs) std::filesystem::remove(path);
+  for (const auto& path : row_runs) disk.remove(path);
   for (const auto& path : {offsets_path, indices_out, weights_out}) {
     std::filesystem::rename(path + ".part", path);
+  }
+  for (const auto& entry :
+       std::filesystem::directory_iterator(directory)) {
+    Rcpp::stop("Graph sort left a work file: " +
+               entry.path().filename().string());
   }
   std::filesystem::remove(directory);
   Rcpp::Rcout << "  Graph CSR output: 100%\n";
   return List::create(
     Rcpp::Named("n_vertices") = static_cast<double>(graph.vertices()),
     Rcpp::Named("n_edges") = static_cast<double>(edge_count),
-    Rcpp::Named("max_degree") = static_cast<double>(max_degree));
+    Rcpp::Named("max_degree") = static_cast<double>(max_degree),
+    Rcpp::Named("disk_budget_bytes") = disk_budget,
+    Rcpp::Named("peak_sort_payload_bytes") = disk.peak());
 }
 
 // [[Rcpp::export]]
@@ -3171,6 +3910,150 @@ List massive_umap_optimize_cpp(std::string offsets_path,
       static_cast<double>(negative_updates));
 }
 
+// [[Rcpp::export]]
+List massive_umap_optimize_metal_cpp(std::string offsets_path,
+    std::string indices_path, std::string weights_path,
+    double n_vertices, std::string init_path,
+    std::string init_format, std::string output,
+    int n_epochs, int negative_sample_rate,
+    double learning_rate, double min_dist,
+    double repulsion_strength, int seed, int chunk_rows,
+    int edge_capacity, double memory_limit_bytes,
+    int start_epoch = 0, double positive_done = 0,
+    double negative_done = 0, int checkpoint_every = 0,
+    SEXP checkpoint_callback = R_NilValue,
+    std::string layout_storage = "memory") {
+  require_little_endian();
+  if (n_epochs < 2 || negative_sample_rate < 0 ||
+      negative_sample_rate > 1000 || chunk_rows < 1 ||
+      edge_capacity < 1 || start_epoch < 0 ||
+      start_epoch > n_epochs || checkpoint_every < 0 ||
+      (start_epoch > 0 && checkpoint_every == 0) ||
+      (checkpoint_every > 0 && checkpoint_callback == R_NilValue) ||
+      (layout_storage != "memory" && layout_storage != "mmap")) {
+    Rcpp::stop("Invalid full-graph Metal UMAP controls.");
+  }
+  const auto initial_positive = whole_number(positive_done,
+                                              "positive updates");
+  const auto initial_negative = whole_number(negative_done,
+                                              "negative updates");
+  CsrGraphSource graph(offsets_path, indices_path, weights_path,
+                       n_vertices, "stream");
+  FileMatrixSource init(init_path, init_format, "stream",
+                        n_vertices, 2);
+  const auto elements = checked_product(graph.vertices(), 2);
+  const auto bytes = checked_product(elements, 4);
+  const auto staging_bytes = layout_storage == "memory" ? bytes :
+    static_cast<std::uint64_t>(std::min(chunk_rows, 8192)) * 8;
+  const double required = 128.0 * 1024 * 1024 +
+    bytes * 1.5 + staging_bytes + edge_capacity * 32.0;
+  if (graph.vertices() > INT_MAX ||
+      elements > std::numeric_limits<std::size_t>::max() ||
+      !std::isfinite(memory_limit_bytes) ||
+      required > memory_limit_bytes) {
+    Rcpp::stop("Metal UMAP layout exceeds the shared-memory budget.");
+  }
+  std::unique_ptr<MappedUmapLayout> mapped;
+  std::vector<float> resident;
+  if (layout_storage == "mmap") {
+    if (init_path == output + ".part") {
+      Rcpp::stop("Metal UMAP mapped input cannot be its output .part file.");
+    }
+    mapped.reset(new MappedUmapLayout(output, init, graph.vertices(),
+                                     2, chunk_rows, bytes,
+                                     start_epoch > 0));
+  } else {
+    resident.resize(static_cast<std::size_t>(elements));
+    for (std::uint64_t row = 0; row < graph.vertices();) {
+      const auto count = std::min<std::uint64_t>(chunk_rows,
+        graph.vertices() - row);
+      init.read_rows(row, count, resident.data() + row * 2);
+      row += count;
+    }
+  }
+  float* layout = mapped ? mapped->data() : resident.data();
+  float max_weight = 0.0f;
+  massive_umap_scan(graph, chunk_rows, edge_capacity,
+    [&](std::uint64_t, std::uint64_t, float weight,
+        std::uint64_t) {
+      max_weight = std::max(max_weight, weight);
+    });
+  if (!(max_weight > 0.0f)) {
+    Rcpp::stop("The full-graph Metal UMAP graph has no positive edges.");
+  }
+  const auto curve = fastembedr_umap_curve(min_dist);
+  using MetalContext = std::unique_ptr<void, decltype(
+    &fastembedr_massive_umap_metal_destroy)>;
+  MetalContext context(fastembedr_massive_umap_metal_create(
+    layout, static_cast<int>(graph.vertices()), 2,
+    n_epochs, negative_sample_rate, learning_rate,
+    curve.first, curve.second, repulsion_strength, seed),
+    fastembedr_massive_umap_metal_destroy);
+  std::vector<int> heads(edge_capacity), tails(edge_capacity);
+  std::vector<int> negatives(edge_capacity);
+  auto positive = initial_positive;
+  auto negative = initial_negative;
+  const double min_weight = max_weight / n_epochs;
+  int next_percent = (start_epoch * 100 / n_epochs / 10 + 1) * 10;
+  for (int epoch = start_epoch; epoch < n_epochs; ++epoch) {
+    int active = 0;
+    auto flush = [&]() {
+      negative += fastembedr_massive_umap_metal_step(
+        context.get(), heads.data(), tails.data(),
+        negatives.data(), active, epoch);
+      active = 0;
+    };
+    massive_umap_scan(graph, chunk_rows, edge_capacity,
+      [&](std::uint64_t head, std::uint64_t tail,
+          float weight, std::uint64_t) {
+      if (weight < min_weight) return;
+      const double period = max_weight /
+        std::max(static_cast<double>(weight), 1e-6);
+      if (!massive_umap_due(epoch, period)) return;
+      heads[active] = static_cast<int>(head);
+      tails[active] = static_cast<int>(tail);
+      negatives[active] = massive_umap_negative_count(
+        epoch, period, negative_sample_rate);
+      ++positive;
+      if (++active == edge_capacity) flush();
+    });
+    flush();
+    report_graph_progress("Metal UMAP epochs", epoch + 1,
+                          n_epochs, next_percent);
+    if (checkpoint_every > 0 &&
+        ((epoch + 1) % checkpoint_every == 0 ||
+          epoch + 1 == n_epochs)) {
+      fastembedr_massive_umap_metal_download(
+        context.get(), layout);
+      const auto snapshot = output + ".epoch_" +
+        std::to_string(epoch + 1) + ".f32";
+      massive_umap_write_layout(layout, snapshot,
+        graph.vertices(), 2, chunk_rows, bytes);
+      Rcpp::Function callback(checkpoint_callback);
+      callback(epoch + 1, snapshot,
+        static_cast<double>(positive),
+        static_cast<double>(negative));
+    }
+  }
+  fastembedr_massive_umap_metal_download(context.get(), layout);
+  for (std::size_t i = 0; i < elements; ++i) {
+    if (!std::isfinite(layout[i])) {
+      Rcpp::stop("Full-graph Metal UMAP produced nonfinite coordinates.");
+    }
+  }
+  if (mapped) mapped->finish(output);
+  else massive_umap_write_layout(layout, output,
+                                graph.vertices(), 2, chunk_rows, bytes);
+  return List::create(
+    Rcpp::Named("n_vertices") =
+      static_cast<double>(graph.vertices()),
+    Rcpp::Named("n_edges") = static_cast<double>(graph.edges()),
+    Rcpp::Named("positive_updates") =
+      static_cast<double>(positive),
+    Rcpp::Named("negative_updates") =
+      static_cast<double>(negative));
+}
+
 #ifdef FASTEMBEDR_HAS_CUDA
 namespace {
 
@@ -3181,9 +4064,64 @@ void massive_umap_cuda_check(int status) {
   }
 }
 
+#ifdef FASTEMBEDR_HAS_NCCL
+struct UmapRankProgress {
+  double graph_seconds = 0;
+  double step_seconds = 0;
+  double visits = 0;
+  double rows = 0;
+};
+
+UmapRankProgress massive_umap_rank_epoch(CsrGraphSource& graph,
+    void* context, int rank, std::uint64_t owner_rows,
+    int chunk_rows, int edge_capacity, float min_weight,
+    float max_weight, int epoch) {
+  UmapRankProgress progress;
+  std::vector<int> heads(edge_capacity), tails(edge_capacity);
+  std::vector<float> weights(edge_capacity), periods(edge_capacity);
+  const auto first_row = static_cast<std::uint64_t>(rank) *
+    owner_rows + 1;
+  const auto last_row = std::min(graph.vertices(),
+    first_row + owner_rows - 1);
+  for (auto first = first_row; first <= last_row;) {
+    const auto rows = std::min(graph.bounded_rows(first,
+      chunk_rows, edge_capacity), last_row - first + 1);
+    int active = 0;
+    const auto visit_started = std::chrono::steady_clock::now();
+    graph.visit(first, rows,
+      [&](std::uint64_t source, std::uint32_t target,
+          float weight, std::uint64_t) {
+        if (weight < min_weight) return;
+        heads[active] = static_cast<int>(source - 1);
+        tails[active] = static_cast<int>(target - 1);
+        weights[active] = weight;
+        periods[active] = max_weight /
+          std::max(weight, 1.0e-6f);
+        ++active;
+      }, false);
+    progress.rows += rows;
+    progress.graph_seconds += std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - visit_started).count();
+    if (active > 0) {
+      const auto step_started = std::chrono::steady_clock::now();
+      const int status = fastembedr_massive_umap_multigpu_step(
+        context, rank, heads.data(), tails.data(), weights.data(),
+        periods.data(), active, epoch);
+      if (status != 0) throw std::runtime_error(
+        fastembedr_cuda_embedding_last_error());
+      progress.step_seconds += std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - step_started).count();
+      progress.visits += active;
+    }
+    first += rows;
+  }
+  return progress;
+}
+#endif
+
 void massive_umap_cuda_write(void* context, const std::string& output,
                              std::uint64_t vertices, int chunk_rows,
-                             int dimensions) {
+                             int dimensions, bool multi_device) {
   const auto rows = std::min(chunk_rows, 8192);
   std::vector<float> buffer(
     static_cast<std::size_t>(rows) * dimensions);
@@ -3191,8 +4129,16 @@ void massive_umap_cuda_write(void* context, const std::string& output,
   for (std::uint64_t first = 0; first < vertices;) {
     const auto count = static_cast<int>(std::min<std::uint64_t>(
       rows, vertices - first));
-    massive_umap_cuda_check(fastembedr_massive_umap_cuda_download(
-      context, static_cast<int>(first), count, buffer.data()));
+    int status = 1;
+#ifdef FASTEMBEDR_HAS_NCCL
+    if (multi_device) status =
+      fastembedr_massive_umap_multigpu_download(context,
+        static_cast<int>(first), count, buffer.data());
+    else
+#endif
+      status = fastembedr_massive_umap_cuda_download(context,
+        static_cast<int>(first), count, buffer.data());
+    massive_umap_cuda_check(status);
     for (int i = 0; i < count * dimensions; ++i) {
       if (!std::isfinite(buffer[i])) {
         Rcpp::stop("Massive CUDA UMAP produced non-finite coordinates.");
@@ -3210,6 +4156,15 @@ void massive_umap_cuda_write(void* context, const std::string& output,
 #endif
 
 // [[Rcpp::export]]
+bool massive_nccl_available_cpp() {
+#ifdef FASTEMBEDR_HAS_NCCL
+  return true;
+#else
+  return false;
+#endif
+}
+
+// [[Rcpp::export]]
 List massive_umap_optimize_cuda_cpp(std::string offsets_path,
     std::string indices_path, std::string weights_path,
     double n_vertices, std::string init_path,
@@ -3221,11 +4176,22 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
     int start_epoch = 0, int checkpoint_every = 0,
     SEXP checkpoint_callback = R_NilValue,
     double visits_done = 0, int dimensions = 2,
-    std::string layout_storage = "memory") {
+    std::string layout_storage = "memory",
+    SEXP devices = R_NilValue) {
 #ifndef FASTEMBEDR_HAS_CUDA
   Rcpp::stop("Native massive CUDA UMAP is unavailable; no CPU fallback.");
 #else
   require_little_endian();
+  Rcpp::IntegerVector device_ids =
+    Rf_isNull(devices) ? Rcpp::IntegerVector() :
+    Rcpp::as<Rcpp::IntegerVector>(devices);
+  const bool multi_device = device_ids.size() > 0;
+#ifndef FASTEMBEDR_HAS_NCCL
+  if (multi_device) Rcpp::stop(
+    "Coordinated CUDA UMAP needs a build linked with NCCL.");
+#endif
+  if (multi_device && layout_storage != "memory") Rcpp::stop(
+    "Coordinated CUDA UMAP needs device storage.");
   if (n_epochs < 2 || negative_sample_rate < 0 ||
       negative_sample_rate > 1000 || chunk_rows < 1 ||
       edge_capacity < 1 || start_epoch < 0 ||
@@ -3242,13 +4208,27 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
       repulsion_strength <= 0) {
     Rcpp::stop("Invalid massive CUDA UMAP controls.");
   }
+  int previous_device = -1;
+  if (device_ids.size() == 1) {
+    previous_device = Rcpp::as<int>(
+      massive_cuda_memory_cpp()["device"]);
+    massive_cuda_select_cpp(device_ids[0]);
+  }
+  struct DeviceRestore {
+    int previous;
+    ~DeviceRestore() {
+      if (previous >= 0)
+        fastembedr_massive_cuda_select_device(previous);
+    }
+  } restore{previous_device};
   const auto initial_visits = whole_number(visits_done, "edge visits");
   CsrGraphSource graph(offsets_path, indices_path, weights_path,
                        n_vertices, "stream");
   FileMatrixSource init(init_path, init_format, "stream",
                         n_vertices, dimensions);
   const auto host_bytes = 128.0 * 1024 * 1024 +
-    static_cast<double>(edge_capacity) * 16 +
+    static_cast<double>(edge_capacity) * 16 *
+      (multi_device ? device_ids.size() : 1) +
     static_cast<double>(std::min(chunk_rows, 8192)) *
       dimensions * 4 +
     (layout_storage == "managed" ?
@@ -3265,18 +4245,46 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
   if (!(max_weight > 0.0f)) {
     Rcpp::stop("Massive CUDA UMAP graph has no positive edges.");
   }
+  double delta_scale = NA_REAL;
+  if (multi_device) {
+    const double contributions = static_cast<double>(graph.edges()) *
+      (1.0 + static_cast<double>(n_epochs) * negative_sample_rate);
+    const double scale_limit =
+      (std::ldexp(1.0, 62) / contributions - 0.5) /
+      (4.0 * learning_rate);
+    if (!std::isfinite(scale_limit) || scale_limit < 256.0) {
+      Rcpp::stop("Coordinated CUDA UMAP fixed-point delta exceeds "
+        "the precision or overflow budget.");
+    }
+    delta_scale = std::exp2(std::floor(std::log2(
+      std::min(scale_limit, std::ldexp(1.0, 24)))));
+  }
   const auto curve = fastembedr_umap_curve(min_dist);
-  void* raw = fastembedr_massive_umap_cuda_create(
-    static_cast<int>(graph.vertices()), dimensions,
-    edge_capacity, n_epochs,
-    negative_sample_rate, static_cast<float>(learning_rate),
-    static_cast<float>(curve.first), static_cast<float>(curve.second),
-    static_cast<float>(repulsion_strength), max_weight,
-    static_cast<unsigned int>(seed),
-    layout_storage == "managed" ? 1 : 0);
+  void* raw = nullptr;
+  auto destroy = &fastembedr_massive_umap_cuda_destroy;
+#ifdef FASTEMBEDR_HAS_NCCL
+  if (multi_device) {
+    raw = fastembedr_massive_umap_multigpu_create(
+      static_cast<int>(graph.vertices()), dimensions,
+      edge_capacity, n_epochs, negative_sample_rate,
+      static_cast<float>(learning_rate),
+      static_cast<float>(curve.first), static_cast<float>(curve.second),
+      static_cast<float>(repulsion_strength), max_weight,
+      static_cast<unsigned int>(seed), INTEGER(device_ids),
+      device_ids.size(), delta_scale);
+    destroy = &fastembedr_massive_umap_multigpu_destroy;
+  } else
+#endif
+    raw = fastembedr_massive_umap_cuda_create(
+      static_cast<int>(graph.vertices()), dimensions, edge_capacity,
+      n_epochs, negative_sample_rate,
+      static_cast<float>(learning_rate),
+      static_cast<float>(curve.first), static_cast<float>(curve.second),
+      static_cast<float>(repulsion_strength), max_weight,
+      static_cast<unsigned int>(seed),
+      layout_storage == "managed" ? 1 : 0);
   if (raw == nullptr) massive_umap_cuda_check(1);
-  std::unique_ptr<void, decltype(&fastembedr_massive_umap_cuda_destroy)>
-    context(raw, fastembedr_massive_umap_cuda_destroy);
+  std::unique_ptr<void, decltype(destroy)> context(raw, destroy);
   const auto init_rows = std::min(chunk_rows, 8192);
   std::vector<float> init_buffer(
     static_cast<std::size_t>(init_rows) * dimensions);
@@ -3289,21 +4297,88 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
         Rcpp::stop("Massive CUDA UMAP initialization is non-finite.");
       }
     }
-    massive_umap_cuda_check(fastembedr_massive_umap_cuda_upload(
-      context.get(), static_cast<int>(first), count,
-      init_buffer.data()));
+    int upload_status = 1;
+#ifdef FASTEMBEDR_HAS_NCCL
+    if (multi_device) upload_status =
+      fastembedr_massive_umap_multigpu_upload(context.get(),
+        static_cast<int>(first), count, init_buffer.data());
+    else
+#endif
+      upload_status = fastembedr_massive_umap_cuda_upload(
+        context.get(), static_cast<int>(first), count,
+        init_buffer.data());
+    massive_umap_cuda_check(upload_status);
     first += count;
   }
-  std::vector<int> heads(edge_capacity), tails(edge_capacity);
-  std::vector<float> weights(edge_capacity), periods(edge_capacity);
+  std::vector<int> heads(multi_device ? 0 : edge_capacity);
+  std::vector<int> tails(multi_device ? 0 : edge_capacity);
+  std::vector<float> weights(multi_device ? 0 : edge_capacity);
+  std::vector<float> periods(multi_device ? 0 : edge_capacity);
   const float min_weight = max_weight / n_epochs;
   double edge_visits = static_cast<double>(initial_visits);
+  Rcpp::NumericVector per_device_visits(device_ids.size());
+  Rcpp::NumericVector per_device_rows(device_ids.size());
+  double finalization_block_seconds = 0;
+  double graph_visit_seconds = 0;
+  double device_step_seconds = 0;
+  double owner_wall_seconds = 0;
+  const auto owner_rows = multi_device ?
+    (graph.vertices() + device_ids.size() - 1) /
+      device_ids.size() :
+    graph.vertices();
+#ifdef FASTEMBEDR_HAS_NCCL
+  std::vector<std::unique_ptr<CsrGraphSource>> rank_graphs;
+  if (multi_device) {
+    for (int rank = 0; rank < device_ids.size(); ++rank) {
+      rank_graphs.emplace_back(std::make_unique<CsrGraphSource>(
+        offsets_path, indices_path, weights_path, n_vertices,
+        "stream"));
+    }
+  }
+#endif
   int next_percent = (start_epoch * 100 / n_epochs / 10 + 1) * 10;
   for (int epoch = start_epoch; epoch < n_epochs; ++epoch) {
+#ifdef FASTEMBEDR_HAS_NCCL
+    if (multi_device) massive_umap_cuda_check(
+      fastembedr_massive_umap_multigpu_start_epoch(context.get()));
+    if (multi_device) {
+      const auto owner_started = std::chrono::steady_clock::now();
+      std::vector<std::future<UmapRankProgress>> pending;
+      for (int rank = 0; rank < device_ids.size(); ++rank) {
+        pending.emplace_back(std::async(std::launch::async,
+          [&, rank]() {
+            return massive_umap_rank_epoch(*rank_graphs[rank],
+              context.get(), rank, owner_rows, chunk_rows,
+              edge_capacity, min_weight, max_weight, epoch);
+          }));
+      }
+      double graph_peak = 0;
+      double step_peak = 0;
+      for (int rank = 0; rank < device_ids.size(); ++rank) {
+        const auto progress = pending[rank].get();
+        graph_peak = std::max(graph_peak,
+          progress.graph_seconds);
+        step_peak = std::max(step_peak,
+          progress.step_seconds);
+        edge_visits += progress.visits;
+        per_device_visits[rank] += progress.visits;
+        per_device_rows[rank] += progress.rows;
+      }
+      graph_visit_seconds += graph_peak;
+      device_step_seconds += step_peak;
+      owner_wall_seconds += std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - owner_started).count();
+      Rcpp::checkUserInterrupt();
+    } else
+#endif
     for (std::uint64_t first = 1; first <= graph.vertices();) {
-      const auto rows = graph.bounded_rows(first, chunk_rows,
-                                           edge_capacity);
+      auto rows = graph.bounded_rows(first, chunk_rows,
+                                    edge_capacity);
+      const auto rank = static_cast<int>((first - 1) / owner_rows);
+      if (multi_device) rows = std::min<std::uint64_t>(rows,
+        (static_cast<std::uint64_t>(rank) + 1) * owner_rows - first + 1);
       int active = 0;
+      const auto visit_started = std::chrono::steady_clock::now();
       graph.visit(first, rows,
         [&](std::uint64_t source, std::uint32_t target,
             float weight, std::uint64_t) {
@@ -3315,17 +4390,44 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
             std::max(weight, 1.0e-6f);
           ++active;
         });
+      graph_visit_seconds += std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - visit_started).count();
       if (active > 0) {
-        massive_umap_cuda_check(fastembedr_massive_umap_cuda_step(
-          context.get(), heads.data(), tails.data(), weights.data(),
-          periods.data(), active, epoch));
+        int step_status = 1;
+        const auto step_started = std::chrono::steady_clock::now();
+#ifdef FASTEMBEDR_HAS_NCCL
+        if (multi_device) step_status =
+          fastembedr_massive_umap_multigpu_step(context.get(), rank,
+            heads.data(), tails.data(), weights.data(),
+            periods.data(), active, epoch);
+        else
+#endif
+          step_status = fastembedr_massive_umap_cuda_step(
+            context.get(), heads.data(), tails.data(),
+            weights.data(), periods.data(), active, epoch);
+        massive_umap_cuda_check(step_status);
+        device_step_seconds += std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - step_started).count();
         edge_visits += active;
+        if (device_ids.size() > 0)
+          per_device_visits[rank] += active;
       }
       first += rows;
       Rcpp::checkUserInterrupt();
     }
-    massive_umap_cuda_check(
-      fastembedr_massive_umap_cuda_finish_epoch(context.get()));
+    int epoch_status = 1;
+#ifdef FASTEMBEDR_HAS_NCCL
+    if (multi_device) {
+      const auto began = std::chrono::steady_clock::now();
+      epoch_status = fastembedr_massive_umap_multigpu_finish_epoch(
+        context.get());
+      finalization_block_seconds += std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - began).count();
+    } else
+#endif
+      epoch_status = fastembedr_massive_umap_cuda_finish_epoch(
+        context.get());
+    massive_umap_cuda_check(epoch_status);
     report_graph_progress("CUDA UMAP epochs", epoch + 1,
                           n_epochs, next_percent);
     if (checkpoint_every > 0 &&
@@ -3335,17 +4437,38 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
         std::to_string(epoch + 1) + ".f32";
       massive_umap_cuda_write(context.get(), snapshot,
                               graph.vertices(), chunk_rows,
-                              dimensions);
+                              dimensions, multi_device);
       Rcpp::Function callback(checkpoint_callback);
       callback(epoch + 1, snapshot, 0.0, 0.0, edge_visits);
     }
   }
   massive_umap_cuda_write(context.get(), output, graph.vertices(),
-                          chunk_rows, dimensions);
+                          chunk_rows, dimensions, multi_device);
+  double synchronization_seconds = 0;
+#ifdef FASTEMBEDR_HAS_NCCL
+  if (multi_device) synchronization_seconds =
+    fastembedr_massive_umap_multigpu_collective_seconds(
+      context.get());
+#endif
   return List::create(
+    Rcpp::Named("backend_used") = multi_device ?
+      "native_cuda_umap_coordinated_nccl" :
+      "native_cuda_umap_stream",
+    Rcpp::Named("devices") = device_ids,
     Rcpp::Named("n_vertices") = static_cast<double>(graph.vertices()),
     Rcpp::Named("n_edges") = static_cast<double>(graph.edges()),
     Rcpp::Named("edge_visits") = edge_visits,
+    Rcpp::Named("max_weight") = static_cast<double>(max_weight),
+    Rcpp::Named("per_device_edge_visits") = per_device_visits,
+    Rcpp::Named("per_device_row_visits") = per_device_rows,
+    Rcpp::Named("delta_scale") = delta_scale,
+    Rcpp::Named("graph_visit_seconds") = graph_visit_seconds,
+    Rcpp::Named("device_step_seconds") = device_step_seconds,
+    Rcpp::Named("owner_wall_seconds") = owner_wall_seconds,
+    Rcpp::Named("synchronization_seconds") =
+      synchronization_seconds,
+    Rcpp::Named("finalization_block_seconds") =
+      finalization_block_seconds,
     Rcpp::Named("positive_updates") = NA_REAL,
     Rcpp::Named("negative_updates") = NA_REAL);
 #endif
@@ -3360,17 +4483,37 @@ void massive_tsne_cuda_check(int status) {
     fastembedr_cuda_embedding_last_error());
 }
 
+int massive_tsne_cuda_upload(void* context, bool multi, int field,
+                             int first, int rows, const float* values) {
+#ifdef FASTEMBEDR_HAS_NCCL
+  if (multi) return fastembedr_massive_tsne_multigpu_upload(
+    context, field, first, rows, values);
+#endif
+  return fastembedr_massive_tsne_cuda_upload(
+    context, field, first, rows, values);
+}
+
+int massive_tsne_cuda_download(void* context, bool multi, int field,
+                               int first, int rows, float* values) {
+#ifdef FASTEMBEDR_HAS_NCCL
+  if (multi) return fastembedr_massive_tsne_multigpu_download(
+    context, field, first, rows, values);
+#endif
+  return fastembedr_massive_tsne_cuda_download(
+    context, field, first, rows, values);
+}
+
 void massive_tsne_cuda_write(void* context,
                              const std::string& path,
-                             int n, int fields) {
+                             int n, int fields, bool multi) {
   constexpr int block_rows = 8192;
   std::vector<float> buffer(block_rows * 2);
   Float32Sink sink(path);
   for (int field = 0; field < fields; ++field) {
     for (int first = 0; first < n; first += block_rows) {
       const int rows = std::min(block_rows, n - first);
-      massive_tsne_cuda_check(fastembedr_massive_tsne_cuda_download(
-        context, field, first, rows, buffer.data()));
+      massive_tsne_cuda_check(massive_tsne_cuda_download(context,
+        multi, field, first, rows, buffer.data()));
       for (int i = 0; i < rows * 2; ++i) {
         if (!std::isfinite(buffer[i]) ||
             (field == 2 && buffer[i] <= 0.0f)) {
@@ -3386,7 +4529,8 @@ void massive_tsne_cuda_write(void* context,
 
 void massive_tsne_cuda_load(void* context, FileMatrixSource& init,
                             int n, int start_iter,
-                            const std::string& state_path) {
+                            const std::string& state_path,
+                            bool multi) {
   constexpr int block_rows = 8192;
   std::vector<float> buffer(block_rows * 2);
   const auto layout_bytes = checked_product(n, 8);
@@ -3410,8 +4554,8 @@ void massive_tsne_cuda_load(void* context, FileMatrixSource& init,
             Rcpp::stop("Massive CUDA t-SNE checkpoint is invalid.");
           }
         }
-        massive_tsne_cuda_check(fastembedr_massive_tsne_cuda_upload(
-          context, field, first, rows, buffer.data()));
+        massive_tsne_cuda_check(massive_tsne_cuda_upload(context,
+          multi, field, first, rows, buffer.data()));
       }
     }
     return;
@@ -3440,10 +4584,60 @@ void massive_tsne_cuda_load(void* context, FileMatrixSource& init,
       buffer[2 * i] -= means[0];
       buffer[2 * i + 1] -= means[1];
     }
-    massive_tsne_cuda_check(fastembedr_massive_tsne_cuda_upload(
-      context, 0, first, rows, buffer.data()));
+    massive_tsne_cuda_check(massive_tsne_cuda_upload(context,
+      multi, 0, first, rows, buffer.data()));
   }
 }
+
+#ifdef FASTEMBEDR_HAS_NCCL
+struct TsneRankProgress {
+  double graph_seconds = 0;
+  double attraction_seconds = 0;
+  double edges = 0;
+};
+
+TsneRankProgress massive_tsne_rank_attraction(
+    CsrGraphSource& graph, void* context, int rank,
+    std::uint64_t owner_rows, int edge_capacity,
+    float exaggeration) {
+  TsneRankProgress progress;
+  std::vector<int> heads(edge_capacity), tails(edge_capacity);
+  std::vector<float> weights(edge_capacity);
+  const auto first_row = static_cast<std::uint64_t>(rank) *
+    owner_rows + 1;
+  const auto last_row = std::min(graph.vertices(),
+    first_row + owner_rows - 1);
+  for (auto first = first_row; first <= last_row;) {
+    const auto rows = std::min(graph.bounded_rows(first, 8192,
+      edge_capacity), last_row - first + 1);
+    int active = 0;
+    const auto read_started = std::chrono::steady_clock::now();
+    graph.visit(first, rows,
+      [&](std::uint64_t source, std::uint32_t target,
+          float weight, std::uint64_t) {
+        heads[active] = static_cast<int>(source - 1);
+        tails[active] = static_cast<int>(target - 1);
+        weights[active] = weight;
+        ++active;
+      }, false);
+    progress.graph_seconds += std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - read_started).count();
+    if (active > 0) {
+      const auto attraction_started = std::chrono::steady_clock::now();
+      const int status = fastembedr_massive_tsne_multigpu_attract(
+        context, rank, heads.data(), tails.data(), weights.data(),
+        active, exaggeration);
+      if (status != 0) throw std::runtime_error(
+        fastembedr_cuda_embedding_last_error());
+      progress.attraction_seconds += std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - attraction_started).count();
+      progress.edges += active;
+    }
+    first += rows;
+  }
+  return progress;
+}
+#endif
 
 }  // namespace
 #endif
@@ -3459,7 +4653,8 @@ List massive_tsne_optimize_cuda_cpp(
     double initial_momentum, double final_momentum,
     double min_gain, double max_step_norm, int start_iter,
     std::string state_path, int checkpoint_every,
-    SEXP checkpoint_callback, int edge_capacity) {
+    SEXP checkpoint_callback, int edge_capacity,
+    Rcpp::IntegerVector devices) {
 #ifndef FASTEMBEDR_HAS_CUDA
   Rcpp::stop("Native massive CUDA t-SNE is unavailable; no CPU fallback.");
 #else
@@ -3486,6 +4681,27 @@ List massive_tsne_optimize_cuda_cpp(
       (checkpoint_every == 0 && checkpoint_callback != R_NilValue)) {
     Rcpp::stop("Invalid massive CUDA t-SNE controls.");
   }
+  if (devices.size() < 1 || devices.size() > 4 ||
+      devices.size() > n) {
+    Rcpp::stop("CUDA t-SNE requires one to four distinct devices.");
+  }
+  for (int rank = 0; rank < devices.size(); ++rank) {
+    const int device = devices[rank];
+    if (device == NA_INTEGER || device < 0 ||
+        device >= massive_cuda_device_count_cpp()) {
+      Rcpp::stop("CUDA t-SNE device is unavailable.");
+    }
+    for (int other = 0; other < rank; ++other) {
+      if (device == devices[other]) {
+        Rcpp::stop("CUDA t-SNE devices must be distinct.");
+      }
+    }
+  }
+  const bool multi = devices.size() > 1;
+#ifndef FASTEMBEDR_HAS_NCCL
+  if (multi) Rcpp::stop(
+    "Multi-GPU t-SNE requires NCCL; no fallback was used.");
+#endif
   CsrGraphSource graph(offsets_path, indices_path, weights_path,
                        n, access);
   FileMatrixSource init(init_path, "f32", "stream", n, dims);
@@ -3493,21 +4709,57 @@ List massive_tsne_optimize_cuda_cpp(
       std::filesystem::exists(output_path + ".part")) {
     Rcpp::stop("Massive CUDA t-SNE output already exists.");
   }
-  void* raw = fastembedr_massive_tsne_cuda_create(n, edge_capacity);
+  struct DeviceRestore {
+    int previous;
+    ~DeviceRestore() {
+      fastembedr_massive_cuda_select_device(previous);
+    }
+  } restore{Rcpp::as<int>(massive_cuda_memory_cpp()["device"])};
+  massive_cuda_select_cpp(devices[0]);
+  void* raw = nullptr;
+#ifdef FASTEMBEDR_HAS_NCCL
+  if (multi) raw = fastembedr_massive_tsne_multigpu_create(
+    n, edge_capacity, devices.begin(), devices.size());
+#endif
+  if (!multi) raw = fastembedr_massive_tsne_cuda_create(
+    n, edge_capacity);
   if (raw == nullptr) massive_tsne_cuda_check(1);
-  std::unique_ptr<void, decltype(&fastembedr_massive_tsne_cuda_destroy)>
-    context(raw, fastembedr_massive_tsne_cuda_destroy);
+  auto destroy = [multi](void* pointer) {
+#ifdef FASTEMBEDR_HAS_NCCL
+    if (multi) {
+      fastembedr_massive_tsne_multigpu_destroy(pointer);
+      return;
+    }
+#endif
+    fastembedr_massive_tsne_cuda_destroy(pointer);
+  };
+  std::unique_ptr<void, decltype(destroy)> context(raw, destroy);
   massive_tsne_cuda_load(context.get(), init, n, start_iter,
-                         state_path);
-  std::vector<int> heads(edge_capacity), tails(edge_capacity);
-  std::vector<float> weights(edge_capacity);
+                         state_path, multi);
+  std::vector<int> heads(multi ? 0 : edge_capacity);
+  std::vector<int> tails(multi ? 0 : edge_capacity);
+  std::vector<float> weights(multi ? 0 : edge_capacity);
   const int total = early_iter + normal_iter;
   int next_percent = 10;
   // The first attraction sync may include the queued FFT repulsion.
   double repulsion_enqueue_seconds = 0.0;
+  double repulsion_gpu_seconds = 0.0;
   double graph_visit_seconds = 0.0;
   double attraction_sync_seconds = 0.0;
   double update_sync_seconds = 0.0;
+  double owner_wall_seconds = 0.0;
+  std::vector<double> attraction_edges(devices.size(), 0.0);
+  const auto owner_rows = static_cast<std::uint64_t>(
+    (n - 1) / devices.size() + 1);
+#ifdef FASTEMBEDR_HAS_NCCL
+  std::vector<std::unique_ptr<CsrGraphSource>> rank_graphs;
+  if (multi) {
+    for (int rank = 0; rank < devices.size(); ++rank) {
+      rank_graphs.emplace_back(std::make_unique<CsrGraphSource>(
+        offsets_path, indices_path, weights_path, n, access));
+    }
+  }
+#endif
   const auto started = std::chrono::steady_clock::now();
   for (int iter = start_iter; iter < total; ++iter) {
     const bool early = iter < early_iter;
@@ -3518,14 +4770,48 @@ List massive_tsne_optimize_cuda_cpp(
     const float momentum = static_cast<float>(early ?
       initial_momentum : final_momentum);
     const auto repulsion_started = std::chrono::steady_clock::now();
-    massive_tsne_cuda_check(fastembedr_massive_tsne_cuda_begin(
-      context.get()));
+    int begin_status = 0;
+#ifdef FASTEMBEDR_HAS_NCCL
+    if (multi) begin_status = fastembedr_massive_tsne_multigpu_begin(
+      context.get());
+#endif
+    if (!multi) begin_status = fastembedr_massive_tsne_cuda_begin(
+      context.get());
+    massive_tsne_cuda_check(begin_status);
     repulsion_enqueue_seconds += std::chrono::duration<double>(
       std::chrono::steady_clock::now() - repulsion_started).count();
+#ifdef FASTEMBEDR_HAS_NCCL
+    if (multi) {
+      const auto owner_started = std::chrono::steady_clock::now();
+      std::vector<std::future<TsneRankProgress>> pending;
+      for (int rank = 0; rank < devices.size(); ++rank) {
+        pending.emplace_back(std::async(std::launch::async,
+          [&, rank]() {
+            return massive_tsne_rank_attraction(*rank_graphs[rank],
+              context.get(), rank, owner_rows, edge_capacity,
+              phase_exag);
+          }));
+      }
+      double graph_peak = 0;
+      double attraction_peak = 0;
+      for (int rank = 0; rank < devices.size(); ++rank) {
+        const auto progress = pending[rank].get();
+        graph_peak = std::max(graph_peak, progress.graph_seconds);
+        attraction_peak = std::max(attraction_peak,
+          progress.attraction_seconds);
+        attraction_edges[rank] += progress.edges;
+      }
+      graph_visit_seconds += graph_peak;
+      attraction_sync_seconds += attraction_peak;
+      owner_wall_seconds += std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - owner_started).count();
+      Rcpp::checkUserInterrupt();
+    } else
+#endif
     for (std::uint64_t first = 1; first <= graph.vertices();) {
       const auto read_started = std::chrono::steady_clock::now();
       const auto rows = graph.bounded_rows(first, 8192,
-                                           edge_capacity);
+        edge_capacity);
       int active = 0;
       graph.visit(first, rows,
         [&](std::uint64_t source, std::uint32_t target,
@@ -3539,9 +4825,11 @@ List massive_tsne_optimize_cuda_cpp(
         std::chrono::steady_clock::now() - read_started).count();
       if (active > 0) {
         const auto attract_started = std::chrono::steady_clock::now();
-        massive_tsne_cuda_check(fastembedr_massive_tsne_cuda_attract(
+        const int status = fastembedr_massive_tsne_cuda_attract(
           context.get(), heads.data(), tails.data(),
-          weights.data(), active, phase_exag));
+          weights.data(), active, phase_exag);
+        massive_tsne_cuda_check(status);
+        attraction_edges[0] += active;
         attraction_sync_seconds += std::chrono::duration<double>(
           std::chrono::steady_clock::now() - attract_started).count();
       }
@@ -3549,17 +4837,44 @@ List massive_tsne_optimize_cuda_cpp(
       Rcpp::checkUserInterrupt();
     }
     const auto update_started = std::chrono::steady_clock::now();
-    massive_tsne_cuda_check(fastembedr_massive_tsne_cuda_finish(
+    int finish_status = 0;
+#ifdef FASTEMBEDR_HAS_NCCL
+    if (multi) finish_status = fastembedr_massive_tsne_multigpu_finish(
       context.get(), phase_lr, momentum,
       static_cast<float>(min_gain),
-      static_cast<float>(max_step_norm)));
+      static_cast<float>(max_step_norm));
+#endif
+    if (!multi) finish_status = fastembedr_massive_tsne_cuda_finish(
+      context.get(), phase_lr, momentum,
+      static_cast<float>(min_gain),
+      static_cast<float>(max_step_norm));
+    massive_tsne_cuda_check(finish_status);
+    float repulsion_ms = 0.0f;
+    int timing_status = 0;
+#ifdef FASTEMBEDR_HAS_NCCL
+    if (multi) timing_status =
+      fastembedr_massive_tsne_multigpu_repulsion_ms(
+        context.get(), &repulsion_ms);
+#endif
+    if (!multi) timing_status = fastembedr_massive_tsne_cuda_repulsion_ms(
+      context.get(), &repulsion_ms);
+    massive_tsne_cuda_check(timing_status);
+    if (!std::isfinite(repulsion_ms) || repulsion_ms < 0.0f) {
+      Rcpp::stop("CUDA t-SNE FFT timing is invalid.");
+    }
+    repulsion_gpu_seconds += repulsion_ms / 1000.0;
     update_sync_seconds += std::chrono::duration<double>(
       std::chrono::steady_clock::now() - update_started).count();
     if (checkpoint_every > 0 &&
         ((iter + 1) % checkpoint_every == 0 || iter + 1 == total)) {
       const auto snapshot = output_path + ".iter_" +
         std::to_string(iter + 1) + ".state.f32";
-      massive_tsne_cuda_write(context.get(), snapshot, n, 3);
+#ifdef FASTEMBEDR_HAS_NCCL
+      if (multi) massive_tsne_cuda_check(
+        fastembedr_massive_tsne_multigpu_gather_state(context.get()));
+#endif
+      massive_tsne_cuda_write(context.get(), snapshot, n, 3,
+                              multi);
       Rcpp::Function callback(checkpoint_callback);
       const auto elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - started).count();
@@ -3568,20 +4883,38 @@ List massive_tsne_optimize_cuda_cpp(
     report_graph_progress("CUDA t-SNE iterations", iter + 1,
                           total, next_percent);
   }
+  std::vector<double> expected_edges(devices.size(), 0.0);
+  if (multi) for (int rank = 0; rank < devices.size(); ++rank) {
+    const auto first = static_cast<std::uint64_t>(rank) * owner_rows;
+    const auto last = std::min<std::uint64_t>(n, first + owner_rows);
+    expected_edges[rank] = static_cast<double>(
+      graph.offset(last) - graph.offset(first)) *
+      (total - start_iter);
+    if (attraction_edges[rank] != expected_edges[rank]) Rcpp::stop(
+      "Coordinated CUDA t-SNE missed owner attraction edges.");
+  }
   const auto output_started = std::chrono::steady_clock::now();
-  massive_tsne_cuda_write(context.get(), output_path, n, 1);
+  massive_tsne_cuda_write(context.get(), output_path, n, 1,
+                          multi);
   const auto output_seconds = std::chrono::duration<double>(
     std::chrono::steady_clock::now() - output_started).count();
   const auto elapsed = std::chrono::duration<double>(
     std::chrono::steady_clock::now() - started).count();
   return List::create(
-    Rcpp::Named("backend_used") = "native_cuda_fft_graph_stream",
+    Rcpp::Named("backend_used") = multi ?
+      "native_cuda_fft_graph_coordinated_nccl" :
+      "native_cuda_fft_graph_stream",
     Rcpp::Named("repulsion") = "fft_grid_cuda_cufft",
     Rcpp::Named("fft_grid_size") =
       fastembedr_cuda_opentsne_fft_grid_size(n),
     Rcpp::Named("iterations") = total,
     Rcpp::Named("resumed_from_iteration") = start_iter,
     Rcpp::Named("n_threads") = 1,
+    Rcpp::Named("devices") = devices,
+    Rcpp::Named("per_device_attraction_edges") = attraction_edges,
+    Rcpp::Named("per_device_expected_edges") = expected_edges,
+    Rcpp::Named("owner_wall_seconds") = owner_wall_seconds,
+    Rcpp::Named("repulsion_gpu_seconds") = repulsion_gpu_seconds,
     Rcpp::Named("stage_seconds") = List::create(
       Rcpp::Named("repulsion_enqueue") = repulsion_enqueue_seconds,
       Rcpp::Named("graph_visit") = graph_visit_seconds,

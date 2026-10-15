@@ -38,9 +38,9 @@ massive_project_landmarks(
 \item{selection}{Optional result of \code{massive_select_landmarks()} from
 the same query source. Its rows retain the fitted reference coordinates.}
 
-\item{backend}{\code{"cpu"} or \code{"cuda"}. CUDA supports zero-epoch UMAP
-projection and 2D or 3D t-SNE fixed-reference transformation.
-Unsupported CUDA routes fail without CPU fallback.}
+\item{backend}{\code{"cpu"}, \code{"cuda"}, or \code{"metal"}. Metal supports
+zero-epoch 2D UMAP projection and 2D t-SNE transformation with
+k <= 128. Unsupported routes fail without backend fallback.}
 
 \item{n.cores}{Number of CPU workers.}
 

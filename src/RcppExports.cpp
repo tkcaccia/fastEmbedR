@@ -1125,6 +1125,38 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// faissr_hnsw_index_build_cpp
+Rcpp::List faissr_hnsw_index_build_cpp(SEXP data, int n, int p, int k, int n_threads, int m, int ef_construction);
+RcppExport SEXP _fastEmbedR_faissr_hnsw_index_build_cpp(SEXP dataSEXP, SEXP nSEXP, SEXP pSEXP, SEXP kSEXP, SEXP n_threadsSEXP, SEXP mSEXP, SEXP ef_constructionSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< int >::type p(pSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< int >::type m(mSEXP);
+    Rcpp::traits::input_parameter< int >::type ef_construction(ef_constructionSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_hnsw_index_build_cpp(data, n, p, k, n_threads, m, ef_construction));
+    return rcpp_result_gen;
+END_RCPP
+}
+// faissr_hnsw_index_search_cpp
+Rcpp::List faissr_hnsw_index_search_cpp(SEXP index, SEXP query, int k, int ef_search, int n_threads);
+RcppExport SEXP _fastEmbedR_faissr_hnsw_index_search_cpp(SEXP indexSEXP, SEXP querySEXP, SEXP kSEXP, SEXP ef_searchSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type index(indexSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type query(querySEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type ef_search(ef_searchSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_hnsw_index_search_cpp(index, query, k, ef_search, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
 // knn_connectivity_range_cpp
 Rcpp::List knn_connectivity_range_cpp(IntegerMatrix indices, int col_start, int n_cols);
 RcppExport SEXP _fastEmbedR_knn_connectivity_range_cpp(SEXP indicesSEXP, SEXP col_startSEXP, SEXP n_colsSEXP) {
@@ -1676,8 +1708,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // massive_graph_modularity_cpp
-List massive_graph_modularity_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, std::string membership_path, double n_vertices, int n_communities, double resolution, int chunk_rows, double edge_budget);
-RcppExport SEXP _fastEmbedR_massive_graph_modularity_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP membership_pathSEXP, SEXP n_verticesSEXP, SEXP n_communitiesSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP) {
+List massive_graph_modularity_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, std::string membership_path, double n_vertices, int n_communities, double resolution, int chunk_rows, double edge_budget, bool connectivity);
+RcppExport SEXP _fastEmbedR_massive_graph_modularity_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP membership_pathSEXP, SEXP n_verticesSEXP, SEXP n_communitiesSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP, SEXP connectivitySEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1690,7 +1722,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type resolution(resolutionSEXP);
     Rcpp::traits::input_parameter< int >::type chunk_rows(chunk_rowsSEXP);
     Rcpp::traits::input_parameter< double >::type edge_budget(edge_budgetSEXP);
-    rcpp_result_gen = Rcpp::wrap(massive_graph_modularity_cpp(offsets_path, indices_path, weights_path, membership_path, n_vertices, n_communities, resolution, chunk_rows, edge_budget));
+    Rcpp::traits::input_parameter< bool >::type connectivity(connectivitySEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_graph_modularity_cpp(offsets_path, indices_path, weights_path, membership_path, n_vertices, n_communities, resolution, chunk_rows, edge_budget, connectivity));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1864,8 +1897,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // massive_symmetrize_graph_cpp
-List massive_symmetrize_graph_cpp(std::string indices_path, std::string values_path, double n_vertices, int k, std::string output_prefix, double memory_limit_bytes, std::string method, double perplexity, int n_threads, bool resume, double completed_rows, Rcpp::CharacterVector resume_runs, int checkpoint_every, SEXP progress);
-RcppExport SEXP _fastEmbedR_massive_symmetrize_graph_cpp(SEXP indices_pathSEXP, SEXP values_pathSEXP, SEXP n_verticesSEXP, SEXP kSEXP, SEXP output_prefixSEXP, SEXP memory_limit_bytesSEXP, SEXP methodSEXP, SEXP perplexitySEXP, SEXP n_threadsSEXP, SEXP resumeSEXP, SEXP completed_rowsSEXP, SEXP resume_runsSEXP, SEXP checkpoint_everySEXP, SEXP progressSEXP) {
+List massive_symmetrize_graph_cpp(std::string indices_path, std::string values_path, double n_vertices, int k, std::string output_prefix, double memory_limit_bytes, std::string method, double perplexity, int n_threads, bool resume, double completed_rows, Rcpp::CharacterVector resume_runs, std::string resume_phase, double resume_mass, int checkpoint_every, SEXP progress, SEXP release_input);
+RcppExport SEXP _fastEmbedR_massive_symmetrize_graph_cpp(SEXP indices_pathSEXP, SEXP values_pathSEXP, SEXP n_verticesSEXP, SEXP kSEXP, SEXP output_prefixSEXP, SEXP memory_limit_bytesSEXP, SEXP methodSEXP, SEXP perplexitySEXP, SEXP n_threadsSEXP, SEXP resumeSEXP, SEXP completed_rowsSEXP, SEXP resume_runsSEXP, SEXP resume_phaseSEXP, SEXP resume_massSEXP, SEXP checkpoint_everySEXP, SEXP progressSEXP, SEXP release_inputSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1881,9 +1914,12 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type resume(resumeSEXP);
     Rcpp::traits::input_parameter< double >::type completed_rows(completed_rowsSEXP);
     Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type resume_runs(resume_runsSEXP);
+    Rcpp::traits::input_parameter< std::string >::type resume_phase(resume_phaseSEXP);
+    Rcpp::traits::input_parameter< double >::type resume_mass(resume_massSEXP);
     Rcpp::traits::input_parameter< int >::type checkpoint_every(checkpoint_everySEXP);
     Rcpp::traits::input_parameter< SEXP >::type progress(progressSEXP);
-    rcpp_result_gen = Rcpp::wrap(massive_symmetrize_graph_cpp(indices_path, values_path, n_vertices, k, output_prefix, memory_limit_bytes, method, perplexity, n_threads, resume, completed_rows, resume_runs, checkpoint_every, progress));
+    Rcpp::traits::input_parameter< SEXP >::type release_input(release_inputSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_symmetrize_graph_cpp(indices_path, values_path, n_vertices, k, output_prefix, memory_limit_bytes, method, perplexity, n_threads, resume, completed_rows, resume_runs, resume_phase, resume_mass, checkpoint_every, progress, release_input));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1981,9 +2017,51 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// massive_umap_optimize_metal_cpp
+List massive_umap_optimize_metal_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string init_path, std::string init_format, std::string output, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, int chunk_rows, int edge_capacity, double memory_limit_bytes, int start_epoch, double positive_done, double negative_done, int checkpoint_every, SEXP checkpoint_callback, std::string layout_storage);
+RcppExport SEXP _fastEmbedR_massive_umap_optimize_metal_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP init_pathSEXP, SEXP init_formatSEXP, SEXP outputSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP chunk_rowsSEXP, SEXP edge_capacitySEXP, SEXP memory_limit_bytesSEXP, SEXP start_epochSEXP, SEXP positive_doneSEXP, SEXP negative_doneSEXP, SEXP checkpoint_everySEXP, SEXP checkpoint_callbackSEXP, SEXP layout_storageSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type offsets_path(offsets_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type indices_path(indices_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type weights_path(weights_pathSEXP);
+    Rcpp::traits::input_parameter< double >::type n_vertices(n_verticesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type init_path(init_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type init_format(init_formatSEXP);
+    Rcpp::traits::input_parameter< std::string >::type output(outputSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< int >::type chunk_rows(chunk_rowsSEXP);
+    Rcpp::traits::input_parameter< int >::type edge_capacity(edge_capacitySEXP);
+    Rcpp::traits::input_parameter< double >::type memory_limit_bytes(memory_limit_bytesSEXP);
+    Rcpp::traits::input_parameter< int >::type start_epoch(start_epochSEXP);
+    Rcpp::traits::input_parameter< double >::type positive_done(positive_doneSEXP);
+    Rcpp::traits::input_parameter< double >::type negative_done(negative_doneSEXP);
+    Rcpp::traits::input_parameter< int >::type checkpoint_every(checkpoint_everySEXP);
+    Rcpp::traits::input_parameter< SEXP >::type checkpoint_callback(checkpoint_callbackSEXP);
+    Rcpp::traits::input_parameter< std::string >::type layout_storage(layout_storageSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_umap_optimize_metal_cpp(offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, edge_capacity, memory_limit_bytes, start_epoch, positive_done, negative_done, checkpoint_every, checkpoint_callback, layout_storage));
+    return rcpp_result_gen;
+END_RCPP
+}
+// massive_nccl_available_cpp
+bool massive_nccl_available_cpp();
+RcppExport SEXP _fastEmbedR_massive_nccl_available_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(massive_nccl_available_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
 // massive_umap_optimize_cuda_cpp
-List massive_umap_optimize_cuda_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string init_path, std::string init_format, std::string output, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, int chunk_rows, int edge_capacity, double memory_limit_bytes, int start_epoch, int checkpoint_every, SEXP checkpoint_callback, double visits_done, int dimensions, std::string layout_storage);
-RcppExport SEXP _fastEmbedR_massive_umap_optimize_cuda_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP init_pathSEXP, SEXP init_formatSEXP, SEXP outputSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP chunk_rowsSEXP, SEXP edge_capacitySEXP, SEXP memory_limit_bytesSEXP, SEXP start_epochSEXP, SEXP checkpoint_everySEXP, SEXP checkpoint_callbackSEXP, SEXP visits_doneSEXP, SEXP dimensionsSEXP, SEXP layout_storageSEXP) {
+List massive_umap_optimize_cuda_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string init_path, std::string init_format, std::string output, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, int chunk_rows, int edge_capacity, double memory_limit_bytes, int start_epoch, int checkpoint_every, SEXP checkpoint_callback, double visits_done, int dimensions, std::string layout_storage, SEXP devices);
+RcppExport SEXP _fastEmbedR_massive_umap_optimize_cuda_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP init_pathSEXP, SEXP init_formatSEXP, SEXP outputSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP chunk_rowsSEXP, SEXP edge_capacitySEXP, SEXP memory_limit_bytesSEXP, SEXP start_epochSEXP, SEXP checkpoint_everySEXP, SEXP checkpoint_callbackSEXP, SEXP visits_doneSEXP, SEXP dimensionsSEXP, SEXP layout_storageSEXP, SEXP devicesSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2009,13 +2087,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type visits_done(visits_doneSEXP);
     Rcpp::traits::input_parameter< int >::type dimensions(dimensionsSEXP);
     Rcpp::traits::input_parameter< std::string >::type layout_storage(layout_storageSEXP);
-    rcpp_result_gen = Rcpp::wrap(massive_umap_optimize_cuda_cpp(offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, edge_capacity, memory_limit_bytes, start_epoch, checkpoint_every, checkpoint_callback, visits_done, dimensions, layout_storage));
+    Rcpp::traits::input_parameter< SEXP >::type devices(devicesSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_umap_optimize_cuda_cpp(offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, edge_capacity, memory_limit_bytes, start_epoch, checkpoint_every, checkpoint_callback, visits_done, dimensions, layout_storage, devices));
     return rcpp_result_gen;
 END_RCPP
 }
 // massive_tsne_optimize_cuda_cpp
-List massive_tsne_optimize_cuda_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, std::string access, std::string init_path, std::string output_path, int n, int dims, int early_iter, int normal_iter, double early_exaggeration, double exaggeration, double learning_rate, bool learning_rate_auto, double initial_momentum, double final_momentum, double min_gain, double max_step_norm, int start_iter, std::string state_path, int checkpoint_every, SEXP checkpoint_callback, int edge_capacity);
-RcppExport SEXP _fastEmbedR_massive_tsne_optimize_cuda_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP accessSEXP, SEXP init_pathSEXP, SEXP output_pathSEXP, SEXP nSEXP, SEXP dimsSEXP, SEXP early_iterSEXP, SEXP normal_iterSEXP, SEXP early_exaggerationSEXP, SEXP exaggerationSEXP, SEXP learning_rateSEXP, SEXP learning_rate_autoSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP min_gainSEXP, SEXP max_step_normSEXP, SEXP start_iterSEXP, SEXP state_pathSEXP, SEXP checkpoint_everySEXP, SEXP checkpoint_callbackSEXP, SEXP edge_capacitySEXP) {
+List massive_tsne_optimize_cuda_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, std::string access, std::string init_path, std::string output_path, int n, int dims, int early_iter, int normal_iter, double early_exaggeration, double exaggeration, double learning_rate, bool learning_rate_auto, double initial_momentum, double final_momentum, double min_gain, double max_step_norm, int start_iter, std::string state_path, int checkpoint_every, SEXP checkpoint_callback, int edge_capacity, Rcpp::IntegerVector devices);
+RcppExport SEXP _fastEmbedR_massive_tsne_optimize_cuda_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP accessSEXP, SEXP init_pathSEXP, SEXP output_pathSEXP, SEXP nSEXP, SEXP dimsSEXP, SEXP early_iterSEXP, SEXP normal_iterSEXP, SEXP early_exaggerationSEXP, SEXP exaggerationSEXP, SEXP learning_rateSEXP, SEXP learning_rate_autoSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP min_gainSEXP, SEXP max_step_normSEXP, SEXP start_iterSEXP, SEXP state_pathSEXP, SEXP checkpoint_everySEXP, SEXP checkpoint_callbackSEXP, SEXP edge_capacitySEXP, SEXP devicesSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2042,7 +2121,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type checkpoint_every(checkpoint_everySEXP);
     Rcpp::traits::input_parameter< SEXP >::type checkpoint_callback(checkpoint_callbackSEXP);
     Rcpp::traits::input_parameter< int >::type edge_capacity(edge_capacitySEXP);
-    rcpp_result_gen = Rcpp::wrap(massive_tsne_optimize_cuda_cpp(offsets_path, indices_path, weights_path, access, init_path, output_path, n, dims, early_iter, normal_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, start_iter, state_path, checkpoint_every, checkpoint_callback, edge_capacity));
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type devices(devicesSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_tsne_optimize_cuda_cpp(offsets_path, indices_path, weights_path, access, init_path, output_path, n, dims, early_iter, normal_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, start_iter, state_path, checkpoint_every, checkpoint_callback, edge_capacity, devices));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -2942,6 +3022,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_project_embedding_affine_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_cpp, 8},
     {"_fastEmbedR_project_embedding_affine_parallel_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_parallel_cpp, 9},
     {"_fastEmbedR_faissr_hnsw_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_search_cpp, 8},
+    {"_fastEmbedR_faissr_hnsw_index_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_build_cpp, 7},
+    {"_fastEmbedR_faissr_hnsw_index_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_search_cpp, 5},
     {"_fastEmbedR_knn_connectivity_range_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_range_cpp, 3},
     {"_fastEmbedR_knn_connectivity_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_cpp, 1},
     {"_fastEmbedR_umap_graph_csr_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_cpp, 6},
@@ -2973,7 +3055,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_reorder_posting_graph_cpp", (DL_FUNC) &_fastEmbedR_massive_reorder_posting_graph_cpp, 10},
     {"_fastEmbedR_massive_file_info_cpp", (DL_FUNC) &_fastEmbedR_massive_file_info_cpp, 4},
     {"_fastEmbedR_massive_disk_available_cpp", (DL_FUNC) &_fastEmbedR_massive_disk_available_cpp, 1},
-    {"_fastEmbedR_massive_graph_modularity_cpp", (DL_FUNC) &_fastEmbedR_massive_graph_modularity_cpp, 9},
+    {"_fastEmbedR_massive_graph_modularity_cpp", (DL_FUNC) &_fastEmbedR_massive_graph_modularity_cpp, 10},
     {"_fastEmbedR_massive_louvain_level_cpp", (DL_FUNC) &_fastEmbedR_massive_louvain_level_cpp, 13},
     {"_fastEmbedR_massive_leiden_refine_cpp", (DL_FUNC) &_fastEmbedR_massive_leiden_refine_cpp, 12},
     {"_fastEmbedR_massive_reference_buffer_cpp", (DL_FUNC) &_fastEmbedR_massive_reference_buffer_cpp, 1},
@@ -2984,14 +3066,16 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_umap_global_mean_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_global_mean_cpp, 4},
     {"_fastEmbedR_massive_umap_global_mean_resume_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_global_mean_resume_cpp, 8},
     {"_fastEmbedR_massive_umap_memberships_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_memberships_cpp, 11},
-    {"_fastEmbedR_massive_symmetrize_graph_cpp", (DL_FUNC) &_fastEmbedR_massive_symmetrize_graph_cpp, 14},
+    {"_fastEmbedR_massive_symmetrize_graph_cpp", (DL_FUNC) &_fastEmbedR_massive_symmetrize_graph_cpp, 17},
     {"_fastEmbedR_massive_contract_louvain_cpp", (DL_FUNC) &_fastEmbedR_massive_contract_louvain_cpp, 11},
     {"_fastEmbedR_massive_coarse_csr_cpp", (DL_FUNC) &_fastEmbedR_massive_coarse_csr_cpp, 5},
     {"_fastEmbedR_massive_remap_louvain_cpp", (DL_FUNC) &_fastEmbedR_massive_remap_louvain_cpp, 4},
     {"_fastEmbedR_massive_read_contracted_cpp", (DL_FUNC) &_fastEmbedR_massive_read_contracted_cpp, 3},
     {"_fastEmbedR_massive_umap_optimize_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_optimize_cpp, 22},
-    {"_fastEmbedR_massive_umap_optimize_cuda_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_optimize_cuda_cpp, 22},
-    {"_fastEmbedR_massive_tsne_optimize_cuda_cpp", (DL_FUNC) &_fastEmbedR_massive_tsne_optimize_cuda_cpp, 23},
+    {"_fastEmbedR_massive_umap_optimize_metal_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_optimize_metal_cpp, 22},
+    {"_fastEmbedR_massive_nccl_available_cpp", (DL_FUNC) &_fastEmbedR_massive_nccl_available_cpp, 0},
+    {"_fastEmbedR_massive_umap_optimize_cuda_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_optimize_cuda_cpp, 23},
+    {"_fastEmbedR_massive_tsne_optimize_cuda_cpp", (DL_FUNC) &_fastEmbedR_massive_tsne_optimize_cuda_cpp, 24},
     {"_fastEmbedR_massive_read_graph_edges_cpp", (DL_FUNC) &_fastEmbedR_massive_read_graph_edges_cpp, 9},
     {"_fastEmbedR_massive_validate_csr_graph_cpp", (DL_FUNC) &_fastEmbedR_massive_validate_csr_graph_cpp, 4},
     {"_fastEmbedR_massive_read_csr_graph_edges_cpp", (DL_FUNC) &_fastEmbedR_massive_read_csr_graph_edges_cpp, 8},

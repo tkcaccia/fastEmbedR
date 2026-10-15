@@ -22,7 +22,8 @@ massive_tsne_optimize(
   n.cores = 1L,
   checkpoint = FALSE,
   resume = FALSE,
-  checkpoint_every = 100L
+  checkpoint_every = 100L,
+  devices = NULL
 )
 }
 \arguments{
@@ -44,8 +45,8 @@ massive_tsne_optimize(
 
 \item{max_step_norm}{Maximum update norm; \code{Inf} disables clipping.}
 
-\item{memory_limit}{RAM budget, including coordinates, optimizer state,
-and a conservative FFT workspace allowance.}
+\item{memory_limit}{Host RAM budget. Coordinated CUDA fits reserve one
+bounded attraction-edge buffer per requested device.}
 
 \item{backend}{\code{"cpu"} or \code{"cuda"}; CUDA currently requires 2D output.}
 
@@ -56,6 +57,8 @@ and a conservative FFT workspace allowance.}
 \item{resume}{Continue a matching interrupted fit.}
 
 \item{checkpoint_every}{Iterations between state snapshots.}
+
+\item{devices}{CUDA device IDs. Two to four IDs run one coordinated 2D fit.}
 }
 \value{
 An experimental file-backed \code{fastEmbedR_massive_matrix}.

@@ -783,7 +783,13 @@ Rcpp::List native_hnsw_index_build_impl(SEXP data_sexp,
     Rcpp::Named("target_recall") = target_recall,
     Rcpp::Named("recall_audited") = false,
     Rcpp::Named("spanning_links") = true,
+    Rcpp::Named("tuning_policy") = "shape_metric_k_recall99",
     Rcpp::Named("tuning_rule") = tuning.rule,
+    Rcpp::Named("tuning_shape_group") = tuning.shape,
+    Rcpp::Named("tuning_k_bucket") = tuning.k_bucket,
+    Rcpp::Named("M") = tuning.m,
+    Rcpp::Named("efConstruction") = tuning.ef_construction,
+    Rcpp::Named("efSearch") = tuning.ef_search,
     Rcpp::Named("graph_bytes") = graph_bytes,
     Rcpp::Named("build_seconds") = elapsed
   );

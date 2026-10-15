@@ -45,12 +45,13 @@ graph in full-graph mode, or a resident matrix in auto mode.}
 \item{output}{New prefix for landmark files, or a new \code{.clusters.u32}
 label-file path in full-graph mode.}
 
-\item{backend}{\code{"cpu"} or \code{"cuda"}; full-graph clustering is CPU-only.}
+\item{backend}{\code{"cpu"}, \code{"cuda"}, or \code{"metal"} for landmarks;
+full-graph CUDA uses cuGraph and full-graph Metal is unsupported.}
 
 \item{n.cores}{CPU worker count.}
 
-\item{devices}{Optional CUDA device indices for landmark clustering.
-The first builds the reference graph; all search disjoint query shards.}
+\item{devices}{Optional single CUDA device for landmark clustering,
+or two to four initial CUDA-visible devices in full-graph mode.}
 
 \item{landmark_method}{\code{"reservoir"} or \code{"random"} landmark selection.}
 
@@ -63,8 +64,8 @@ The first builds the reference graph; all search disjoint query shards.}
 \item{resolution, n_iterations, n_runs, steps, seed}{Graph clustering controls.}
 
 \item{checkpoint, resume}{Save or reuse completed landmark workflow stages,
-label batches, or completed full-graph Louvain/Leiden stages. Full-graph
-Walktrap does not yet support checkpoints.}
+label batches, or completed CPU full-graph Louvain/Leiden stages.
+Full-graph CUDA and Walktrap do not support checkpoints.}
 
 \item{checkpoint_every}{Landmark label batches between checkpoints.}
 
@@ -82,15 +83,22 @@ Walktrap, Louvain, or Leiden result in full-graph mode, or an in-memory
 \description{
 Selects bounded resident landmarks from a file-backed matrix, builds their
 graph with \code{knn_graph()}, and runs the existing native Walktrap, Louvain,
-or Leiden implementation. Query-to-landmark neighbors and weighted-vote
-labels remain file-backed. This is a landmark approximation, not clustering
-of the complete graph. With a symmetric file-backed fuzzy graph and
-\code{massive = "out_of_core_graph"}, the function runs CPU multilevel
-Louvain or Leiden on the file-backed graph. Full-graph Leiden runs one
-hierarchy with \code{n_iterations} local-move passes per level. Full-graph
+or Leiden implementation. Metal supports landmark Leiden/Louvain with
+exact KNN; full-graph Metal clustering is not implemented. Query-to-landmark
+neighbors and weighted-vote labels remain file-backed. This is a landmark
+approximation, not clustering of the complete graph. With a symmetric
+file-backed fuzzy graph and \code{massive = "out_of_core_graph"}, the function
+runs CPU multilevel Louvain or Leiden. Full-graph Leiden runs one
+hierarchy with \code{n_iterations} local-move passes per level on CPU.
+In cuGraph, \code{n_iterations} instead caps levels; cuGraph Louvain has no
+seed control and only accepts the default \code{seed = 1} request. Full-graph
 Walktrap runs exact walks within bounded blocks and contracts communities;
 it is an explicit approximation when more than one block is needed.
-\code{massive = "auto"} uses
+Multi-GPU CUDA full-graph clustering uses optional Python RAPIDS cuGraph,
+Dask-CUDA, gpuinfo >= 0.2.0, and jsonlite. It needs the complete graph
+to fit across the selected GPUs, fails explicitly if memory is
+insufficient, and has no checkpoint or initial-label support. It is
+not a billion-row out-of-core clustering algorithm. \code{massive = "auto"} uses
 ordinary in-memory graph clustering when resource estimates permit it.
 Exact Walktrap is CPU-only and limited to 4,000 landmark vertices;
 automatic planning includes its quadratic transition-matrix memory.

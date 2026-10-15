@@ -35,7 +35,7 @@ Encoding: UTF-8
 Depends:
     R (>= 4.6.0)
 Imports:
-    faissR (>= 0.99.49),
+    faissR (>= 0.99.51),
     methods,
     parallel,
     Rcpp,
@@ -43,7 +43,7 @@ Imports:
     withr
 Suggests:
     float,
-    gpuinfo,
+    gpuinfo (>= 0.2.0),
     igraph,
     jsonlite,
     knitr,
@@ -51,14 +51,15 @@ Suggests:
     rmarkdown,
     testthat
 LinkingTo:
-    faissR (>= 0.99.49),
+    faissR (>= 0.99.51),
     Rcpp (>= 1.0.13)
 SystemRequirements: C++17; FAISS CPU library for the imported faissR package.
     Optional acceleration uses either the Apple SDK
     Metal frameworks on Apple Silicon (macOS 14 or later and Xcode 15 or
     later), or an NVIDIA CUDA Toolkit. RAPIDS cuVS is needed only for CUDA
     nearest-neighbor search from matrix inputs. RAPIDS RAFT/RMM is an optional
-    extension, not a core installation requirement.
+    extension, not a core installation requirement. Full-graph multi-GPU
+    Leiden/Louvain additionally require Python RAPIDS cuGraph and Dask-CUDA.
 VignetteBuilder: knitr
 Roxygen: list(markdown = TRUE)
 Config/roxygen2/version: 8.1.0

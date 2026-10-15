@@ -648,8 +648,8 @@ template <typename T>
 struct FftPlanT {
   int size = 0;
   std::vector<int> bit_reverse;
-  std::vector<std::complex<T>> forward_roots;
-  std::vector<std::complex<T>> inverse_roots;
+  std::vector<std::complex<T>> forward_twiddles;
+  std::vector<std::complex<T>> inverse_twiddles;
   std::vector<std::complex<T>> transpose_scratch;
 
   void ensure(const int requested_size) {
@@ -668,15 +668,16 @@ struct FftPlanT {
       bit_reverse[static_cast<std::size_t>(i)] = static_cast<int>(reversed);
     }
 
-    forward_roots.clear();
-    inverse_roots.clear();
-    forward_roots.reserve(static_cast<std::size_t>(bits));
-    inverse_roots.reserve(static_cast<std::size_t>(bits));
-    for (int len = 2; len <= size; len <<= 1) {
-      const T angle = static_cast<T>(6.283185307179586476925286766559) /
-        static_cast<T>(len);
-      forward_roots.emplace_back(std::cos(angle), std::sin(angle));
-      inverse_roots.emplace_back(std::cos(-angle), std::sin(-angle));
+    const int half = size >> 1;
+    forward_twiddles.resize(static_cast<std::size_t>(half));
+    inverse_twiddles.resize(static_cast<std::size_t>(half));
+    for (int j = 0; j < half; ++j) {
+      const T angle = static_cast<T>(6.283185307179586476925286766559) *
+        static_cast<T>(j) / static_cast<T>(size);
+      forward_twiddles[static_cast<std::size_t>(j)] =
+        std::complex<T>(std::cos(angle), std::sin(angle));
+      inverse_twiddles[static_cast<std::size_t>(j)] =
+        std::complex<T>(std::cos(angle), -std::sin(angle));
     }
     transpose_scratch.resize(static_cast<std::size_t>(size) * size);
   }
@@ -692,20 +693,18 @@ void fft_1d_t(std::complex<T>* a,
     if (i < j) std::swap(a[i], a[j]);
   }
 
-  const std::vector<std::complex<T>>& roots = inverse ?
-    plan.inverse_roots : plan.forward_roots;
-  int stage = 0;
-  for (int len = 2; len <= n; len <<= 1, ++stage) {
-    const std::complex<T> root = roots[static_cast<std::size_t>(stage)];
+  const auto& twiddles = inverse ?
+    plan.inverse_twiddles : plan.forward_twiddles;
+  for (int len = 2; len <= n; len <<= 1) {
+    const int stride = n / len;
     for (int i = 0; i < n; i += len) {
-      std::complex<T> w(static_cast<T>(1.0), static_cast<T>(0.0));
       const int half = len >> 1;
       for (int j = 0; j < half; ++j) {
         const std::complex<T> u = a[i + j];
-        const std::complex<T> v = a[i + j + half] * w;
+        const std::complex<T> v = a[i + j + half] *
+          twiddles[static_cast<std::size_t>(j * stride)];
         a[i + j] = u + v;
         a[i + j + half] = u - v;
-        w *= root;
       }
     }
   }

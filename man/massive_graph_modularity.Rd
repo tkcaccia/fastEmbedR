@@ -11,7 +11,8 @@ massive_graph_modularity(
   resolution = 1,
   chunk_rows = 8192L,
   memory_limit = "1GB",
-  backend = "cpu"
+  backend = "cpu",
+  connectivity = FALSE
 )
 }
 \arguments{
@@ -31,10 +32,14 @@ cluster descriptor.}
 label pages are tracked separately and are not a strict RSS cap.}
 
 \item{backend}{Only \code{"cpu"} is supported; other requests fail explicitly.}
+
+\item{connectivity}{Also audit connected components within each label.
+This uses about eight additional RAM bytes per vertex and fails when
+that allocation exceeds \code{memory_limit}.}
 }
 \value{
 Modularity, internal and total edge weights, edge-pair count,
-backend, and a buffer/mapping resource estimate.
+optional connectivity counts, backend, and resource estimates.
 }
 \description{
 Scans each undirected edge of a symmetric CSR fuzzy graph once, using
