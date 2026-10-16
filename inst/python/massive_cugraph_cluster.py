@@ -87,18 +87,21 @@ def gpu_identity(expected):
         capture_output=True, text=True)
     physical = {}
     seen_uuids = set()
+    seen_indices = set()
     for row in csv.reader(result.stdout.splitlines()):
         if len(row) != 5:
             raise RuntimeError("Invalid GPU identity from nvidia-smi")
         bus = normalized_pci_bus_id(row[2])
         uuid = row[1].strip()
         free, total = int(row[3]), int(row[4])
-        if (bus in physical or uuid.lower() in seen_uuids or
+        index = int(row[0])
+        if (index < 0 or index in seen_indices or bus in physical or
+                uuid.lower() in seen_uuids or
                 not uuid or free < 0 or total <= 0 or free > total):
             raise RuntimeError("Invalid GPU identity from nvidia-smi")
+        seen_indices.add(index)
         seen_uuids.add(uuid.lower())
-        physical[bus] = (
-            int(row[0]), uuid, free, total)
+        physical[bus] = (index, uuid, free, total)
     mapping = []
     for logical, uuid in enumerate(expected):
         key = normalized_pci_bus_id(
@@ -166,7 +169,7 @@ def process_tree_rss(worker_identities=()):
 
 
 def worker_device_list(identities):
-    return ",".join(item["uuid"] for item in identities)
+    return ",".join(str(item["physical_id"]) for item in identities)
 
 
 def worker_cuda_identity():
@@ -360,6 +363,7 @@ def run(args):
     if any(item["free_bytes"] * 0.7 < args.vram_estimate
            for item in identities):
         raise MemoryError("cuGraph graph exceeds free GPU memory")
+    os.environ["CUDA_VISIBLE_DEVICES"] = worker_device_list(identities)
     sampler = GpuMemorySampler(identities)
     sampler.start()
     cluster = None

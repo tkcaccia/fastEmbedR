@@ -180,9 +180,15 @@ class CuGraphWorkerTests(unittest.TestCase):
                              [1024**3, 512 * 1024**2])
             with patch.dict(worker.os.environ, {}, clear=True):
                 self.assertEqual(worker.worker_device_list(identities),
-                                 "GPU-A,GPU-B")
+                                 "3,7")
                 self.assertNotIn("CUDA_VISIBLE_DEVICES",
                                  worker.os.environ)
+            duplicate_index = output.replace("7, GPU-B", "3, GPU-B")
+            with patch.object(worker.subprocess, "run", return_value=
+                              types.SimpleNamespace(stdout=duplicate_index)):
+                with self.assertRaisesRegex(RuntimeError,
+                                            "Invalid GPU identity"):
+                    worker.gpu_identity(["GPU-A", "GPU-B"])
             with self.assertRaisesRegex(RuntimeError, "identity differ"):
                 worker.gpu_identity(["GPU-B", "GPU-A"])
             duplicate = output.replace("GPU-B", "GPU-A")
