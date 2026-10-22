@@ -635,6 +635,26 @@ test_that(paste(
     expect_true(all(is.finite(observed$distances)))
 })
 
+test_that("persistent exact CUDA KNN uses the selected second GPU", {
+    skip_if_not(isTRUE(native_cuda_knn_available_cpp()))
+    skip_if_not(massive_cuda_device_count_cpp() >= 2L)
+    previous <- native_cuda_memory_info_cpp()$device
+    on.exit(massive_cuda_select_cpp(previous), add = TRUE)
+    massive_cuda_select_cpp(1L)
+
+    set.seed(51L)
+    reference <- matrix(rnorm(400L * 8L), nrow = 400L)
+    query <- matrix(rnorm(24L * 8L), nrow = 24L)
+    truth <- test_exact_knn(reference, query, k = 8L)
+    index <- native_cuda_index_build_cpp(reference, 8L, "exact")
+    observed <- native_cuda_index_search_cpp(index, query, 8L)
+
+    expect_identical(native_cuda_memory_info_cpp()$device, 1L)
+    expect_identical(dim(observed$indices), c(24L, 8L))
+    expect_equal(knn_recall_test(observed, truth), 1)
+    expect_true(all(is.finite(observed$distances)))
+})
+
 test_that("native CUDA exact KNN preserves float32 matrix layout", {
     skip_if_not_installed("float")
     skip_if_not(

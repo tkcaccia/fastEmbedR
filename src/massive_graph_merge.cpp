@@ -31,8 +31,8 @@ void check_file_size(const std::string& path, std::uint64_t expected,
   }
 }
 
-std::vector<Neighbor> merge_row(const std::vector<std::uint32_t>& old_ids,
-                                const std::vector<float>& old_distances,
+std::vector<Neighbor> merge_row(const std::uint32_t* old_ids,
+                                const float* old_distances,
                                 const Rcpp::IntegerMatrix& indices,
                                 const Rcpp::NumericMatrix& distances,
                                 int row, std::uint64_t query,
@@ -128,45 +128,54 @@ void massive_merge_knn_shard_cpp(std::string indices_path,
   std::fstream ids(indices_path, flags);
   std::fstream values(distances_path, flags);
   if (!ids || !values) Rcpp::stop("Cannot open sharded KNN partial files.");
-  std::vector<std::uint32_t> old_ids(k, 0);
-  std::vector<float> old_distances(
-    k, std::numeric_limits<float>::infinity());
-  for (int row = 0; row < indices.nrow(); ++row) {
+  const int block_rows = std::min(indices.nrow(),
+    std::max(1, std::min(10000, 1000000 / k)));
+  std::vector<std::uint32_t> old_ids(
+    static_cast<std::size_t>(block_rows) * k);
+  std::vector<float> old_distances(old_ids.size());
+  for (int block = 0; block < indices.nrow(); block += block_rows) {
+    const int rows = std::min(block_rows, indices.nrow() - block);
+    const auto bytes = static_cast<std::streamsize>(rows) * k * 4;
     const auto offset = static_cast<std::streamoff>(
-      (start + static_cast<std::uint64_t>(row)) * k * 4);
+      (start + static_cast<std::uint64_t>(block)) * k * 4);
     if (first_shard) {
-      std::fill(old_ids.begin(), old_ids.end(), 0);
-      std::fill(old_distances.begin(), old_distances.end(),
+      std::fill_n(old_ids.begin(), static_cast<std::size_t>(rows) * k, 0);
+      std::fill_n(old_distances.begin(),
+                static_cast<std::size_t>(rows) * k,
                 std::numeric_limits<float>::infinity());
     } else {
       ids.seekg(offset);
       values.seekg(offset);
-      ids.read(reinterpret_cast<char*>(old_ids.data()), k * 4);
-      values.read(reinterpret_cast<char*>(old_distances.data()), k * 4);
+      ids.read(reinterpret_cast<char*>(old_ids.data()), bytes);
+      values.read(reinterpret_cast<char*>(old_distances.data()), bytes);
       if (!ids || !values) Rcpp::stop("Sharded KNN partial read failed.");
     }
-    const auto selected = merge_row(old_ids, old_distances,
-      indices, distances, row, start + row + 1,
-      static_cast<std::uint64_t>(shard_first),
-      static_cast<std::uint64_t>(shard_rows),
-      static_cast<int>(n_vertices), k, exclude_self);
-    if (exclude_self &&
-        shard_first + shard_rows - 1 == n_vertices &&
-        n_queries == n_vertices &&
-        static_cast<int>(selected.size()) != k) {
-      Rcpp::stop("Full KNN row has too few distinct non-self neighbors.");
-    }
-    std::fill(old_ids.begin(), old_ids.end(), 0);
-    std::fill(old_distances.begin(), old_distances.end(),
-              std::numeric_limits<float>::infinity());
-    for (std::size_t rank = 0; rank < selected.size(); ++rank) {
-      old_ids[rank] = selected[rank].second;
-      old_distances[rank] = selected[rank].first;
+    for (int local_row = 0; local_row < rows; ++local_row) {
+      const int row = block + local_row;
+      const auto position = static_cast<std::size_t>(local_row) * k;
+      const auto selected = merge_row(old_ids.data() + position,
+        old_distances.data() + position, indices, distances, row,
+        start + row + 1, static_cast<std::uint64_t>(shard_first),
+        static_cast<std::uint64_t>(shard_rows),
+        static_cast<int>(n_vertices), k, exclude_self);
+      if (exclude_self &&
+          shard_first + shard_rows - 1 == n_vertices &&
+          n_queries == n_vertices &&
+          static_cast<int>(selected.size()) != k) {
+        Rcpp::stop("Full KNN row has too few distinct non-self neighbors.");
+      }
+      std::fill_n(old_ids.begin() + position, k, 0);
+      std::fill_n(old_distances.begin() + position, k,
+                  std::numeric_limits<float>::infinity());
+      for (std::size_t rank = 0; rank < selected.size(); ++rank) {
+        old_ids[position + rank] = selected[rank].second;
+        old_distances[position + rank] = selected[rank].first;
+      }
     }
     ids.seekp(offset);
     values.seekp(offset);
-    ids.write(reinterpret_cast<const char*>(old_ids.data()), k * 4);
-    values.write(reinterpret_cast<const char*>(old_distances.data()), k * 4);
+    ids.write(reinterpret_cast<const char*>(old_ids.data()), bytes);
+    values.write(reinterpret_cast<const char*>(old_distances.data()), bytes);
     if (!ids || !values) Rcpp::stop("Sharded KNN partial write failed.");
   }
   ids.flush();

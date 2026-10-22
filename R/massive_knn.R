@@ -1406,6 +1406,11 @@ massive_sharded_query <- function(x, first, rows, method,
     massive_reference_buffer_cpp(view)
 }
 
+massive_saved_ivf_setting <- function(saved, shard) {
+    if (length(saved$state$ivf_settings) <= shard) return(NULL)
+    saved$state$ivf_settings[[shard + 1L]]
+}
+
 massive_sharded_batch <- function(x, setup, parts, state, shard,
         first, count, query_first, method, backend, saved) {
     rows <- as.integer(min(setup$resources$chunk_rows,
@@ -1433,7 +1438,7 @@ massive_sharded_batch <- function(x, setup, parts, state, shard,
         massive_sharded_ivf_setting(found, shard, first, count)
     } else NULL
     if (!is.null(saved) && !is.null(ivf_setting)) {
-        previous <- saved$state$ivf_settings[[shard + 1L]]
+        previous <- massive_saved_ivf_setting(saved, shard)
         if (!is.null(previous) && !identical(previous, ivf_setting))
             stop("Checkpointed IVF settings changed.", call. = FALSE)
         saved$state$ivf_settings[[shard + 1L]] <- ivf_setting
@@ -1510,7 +1515,7 @@ massive_index_shard <- function(x, setup, parts, shard,
         "Expected CPU HNSW index was not built.", call. = FALSE)
     hnsw_settings <- massive_sharded_hnsw_setting(state, setup,
         shard, first, count, backend)
-    ivf_setting <- saved$state$ivf_settings[[shard + 1L]] %||% NULL
+    ivf_setting <- massive_saved_ivf_setting(saved, shard)
     massive_sharded_probe(x, state, setup, saved, method,
         backend, count)
     if (shard == 0L && !is.null(saved))

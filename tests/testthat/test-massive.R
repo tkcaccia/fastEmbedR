@@ -1607,6 +1607,34 @@ test_that("shard merge keeps same-numbered separate query neighbors", {
     expect_equal(file.info(paths)$size, rep(24, 2L))
 })
 
+test_that("shard merge preserves rows across block and append boundaries", {
+    paths <- paste0(tempfile(), c(".indices.u32", ".distances.f32"))
+    on.exit(unlink(paths))
+    rows <- 10017L
+    first_ids <- matrix(rep(c(1L, 2L), rows), ncol = 2L,
+        byrow = TRUE)
+    first_dist <- matrix(rep(c(5, 6), rows), ncol = 2L,
+        byrow = TRUE)
+    second_dist <- matrix(rep(c(1, 2), rows), ncol = 2L,
+        byrow = TRUE)
+    merge <- fastEmbedR:::massive_merge_knn_shard_cpp
+    merge(paths[[1L]], paths[[2L]], first_ids[1:10000, ],
+        first_dist[1:10000, ], 1, 1, 2, 4, 2L, TRUE,
+        rows, FALSE)
+    merge(paths[[1L]], paths[[2L]], first_ids[10001:rows, ],
+        first_dist[10001:rows, ], 10001, 1, 2, 4, 2L, TRUE,
+        rows, FALSE)
+    merge(paths[[1L]], paths[[2L]], first_ids, second_dist,
+        1, 3, 2, 4, 2L, FALSE, rows, FALSE)
+    ids <- readBin(paths[[1L]], integer(), n = rows * 2L,
+        size = 4L, endian = "little")
+    distances <- readBin(paths[[2L]], numeric(), n = rows * 2L,
+        size = 4L, endian = "little")
+    expect_equal(ids, rep(c(3L, 4L), rows))
+    expect_equal(distances, rep(c(1, 2), rows))
+    expect_equal(file.info(paths)$size, rep(rows * 8, 2L))
+})
+
 test_that("row-sharded KNN merges into exact source order", {
     testthat::local_mocked_bindings(
         massive_cuda_device_uuids = function(devices)

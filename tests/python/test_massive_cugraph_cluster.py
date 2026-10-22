@@ -326,6 +326,7 @@ class CuGraphWorkerTests(unittest.TestCase):
                           result["devices"]], [150, 240])
         self.assertEqual(result["host_process_tree"]["peak_rss_bytes"],
                          1300)
+        self.assertEqual(result["interval_seconds"], 1.0)
         with patch.object(worker.subprocess, "run", return_value=
                           types.SimpleNamespace(stdout="GPU-A, 7\n")):
             with self.assertRaisesRegex(RuntimeError, "omitted"):
@@ -354,6 +355,13 @@ class CuGraphWorkerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,
                                         "psutil unavailable"):
                 worker.GpuMemorySampler(identities).start()
+
+    def test_memory_sampler_polls_at_one_hertz(self):
+        sampler = worker.GpuMemorySampler([])
+        with patch.object(sampler.stop_event, "wait",
+                          return_value=True) as wait:
+            sampler._poll()
+        wait.assert_called_once_with(1.0)
 
     def test_memory_sampler_rejects_incomplete_worker_pid_map(self):
         identities = [{"uuid": "GPU-A", "total_bytes": 1000,

@@ -3472,6 +3472,7 @@ __global__ void preprocess_pca_columns_kernel(float* values,
   }
   __syncthreads();
   const float center = scratch[0];
+  __syncthreads();
   float sum_squares = 0.0f;
   for (int row = tid; row < n; row += blockDim.x) {
     const float centered = values[offset + row] - center;

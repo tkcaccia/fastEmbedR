@@ -321,8 +321,16 @@ finish_graph_cluster <- function(result, graph, settings, started) {
 #'   result is returned.
 #' @param steps Random-walk length for Walktrap.
 #' @param seed Reproducible random seed for Louvain and Leiden.
+#' @param layout_merge Optional list with a two-column `layout` (matrix or
+#'   `fastEmbedR_embedding`), `min_connectivity` (default 0.2),
+#'   `max_stretch` (default 2), and `min_cross_edges` (default 2). Merging
+#'   requires both original-graph connectivity and layout-edge continuity.
+#'   Float32 layouts are converted to double for edge scoring. This is an
+#'   exploratory PAGA-inspired postprocessing rule, not PAGA.
 #' @return A `fastEmbedR_graph_cluster` containing one-based `membership`,
-#'   modularity, method, implementation, and run metadata.
+#'   modularity, method, implementation, and run metadata. With
+#'   `layout_merge`, `membership_original`, `modularity_original`, and
+#'   `layout_merge_pairs` preserve the unmerged result and decisions.
 #' @references
 #' Blondel VD, Guillaume JL, Lambiotte R, Lefebvre E. Fast unfolding of
 #' communities in large networks. J Stat Mech. 2008;2008:P10008.
@@ -332,6 +340,10 @@ finish_graph_cluster <- function(result, graph, settings, started) {
 #'
 #' Pons P, Latapy M. Computing communities in large networks using random
 #' walks. J Graph Algorithms Appl. 2006;10:191-218.
+#'
+#' Wolf FA et al. PAGA: graph abstraction reconciles clustering with
+#' trajectory inference through a topology preserving map of single cells.
+#' Genome Biol. 2019;20:59. doi:10.1186/s13059-019-1663-x.
 #' @examples
 #' x <- scale(as.matrix(iris[, 1:4]))
 #' graph <- knn_graph(x, k = 15)
@@ -345,14 +357,19 @@ graph_cluster <- function(graph,
                             n_iterations = 10L,
                             n_runs = 1L,
                             steps = 4L,
-                            seed = 1L) {
+                            seed = 1L,
+                            layout_merge = NULL) {
     graph <- validate_fastembedr_graph(graph)
     settings <- graph_cluster_settings(
         method, backend, resolution, n_iterations, n_runs, steps, seed
     )
     started <- proc.time()[[3L]]
     result <- run_graph_cluster_backend(graph, settings)
-    finish_graph_cluster(result, graph, settings, started)
+    result <- finish_graph_cluster(result, graph, settings, started)
+    if (!is.null(layout_merge)) {
+        result <- graph_cluster_layout_merge(result, graph, layout_merge)
+    }
+    result
 }
 
 validate_fastembedr_graph <- function(graph) {

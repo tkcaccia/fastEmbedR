@@ -229,7 +229,7 @@ class GpuMemorySampler:
             self.errors.append(str(error))
 
     def _poll(self):
-        while not self.stop_event.wait(0.25):
+        while not self.stop_event.wait(1.0):
             self._sample()
 
     def start(self):
@@ -282,7 +282,7 @@ class GpuMemorySampler:
                                             self.baseline[uuid])}
                    for uuid in self.uuids]
         return {"scope": "whole_physical_gpu", "samples": self.samples,
-                "interval_seconds": 0.25, "devices": devices,
+                "interval_seconds": 1.0, "devices": devices,
                 "workers": self.worker_devices,
                 "host_process_tree": {
                     "scope": "launcher_and_workers",

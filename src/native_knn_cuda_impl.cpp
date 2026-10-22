@@ -88,7 +88,11 @@ DLManagedTensor make_tensor(void* data,
   DLManagedTensor tensor{};
   tensor.dl_tensor.data = data;
   tensor.dl_tensor.device.device_type = device_type;
-  tensor.dl_tensor.device.device_id = 0;
+  int device = 0;
+  if (device_type == kDLCUDA) {
+    cuda_check(cudaGetDevice(&device), "cudaGetDevice(DLPack tensor)");
+  }
+  tensor.dl_tensor.device.device_id = device;
   tensor.dl_tensor.ndim = ndim;
   tensor.dl_tensor.dtype.code = code;
   tensor.dl_tensor.dtype.bits = bits;

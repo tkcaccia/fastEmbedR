@@ -35,7 +35,7 @@ Encoding: UTF-8
 Depends:
     R (>= 4.6.0)
 Imports:
-    faissR (>= 0.99.51),
+    faissR (>= 0.1),
     methods,
     parallel,
     Rcpp,
@@ -51,7 +51,7 @@ Suggests:
     rmarkdown,
     testthat
 LinkingTo:
-    faissR (>= 0.99.51),
+    faissR (>= 0.1),
     Rcpp (>= 1.0.13)
 SystemRequirements: C++17; FAISS CPU library for the imported faissR package.
     Optional acceleration uses either the Apple SDK

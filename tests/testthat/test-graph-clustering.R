@@ -73,6 +73,49 @@ test_that("native graph methods recover canonical communities", {
     }
 })
 
+test_that("layout merging needs graph support and local continuity", {
+    graph <- three_clique_graph()
+    layout <- cbind(c(seq(0, 0.25, length.out = 6L),
+        seq(0.3, 0.55, length.out = 6L),
+        seq(5, 5.25, length.out = 6L)), rep(0, 18L))
+    base <- graph_cluster(graph, method = "leiden", seed = 3L)
+    merged <- graph_cluster(graph, method = "leiden", seed = 3L,
+        layout_merge = list(layout = layout, min_connectivity = 0.05,
+            min_cross_edges = 1L))
+    expect_identical(merged$membership_original, base$membership)
+    expect_identical(merged$n_communities, 2L)
+    expect_identical(length(unique(merged$membership[1:12])), 1L)
+    expect_false(merged$membership[1L] == merged$membership[13L])
+    expect_true(is.finite(merged$modularity))
+    expect_identical(sum(merged$layout_merge_pairs$selected), 1L)
+    expect_identical(base$parameters$layout_merge, NULL)
+    strict <- graph_cluster(graph, method = "leiden", seed = 3L,
+        layout_merge = list(layout = layout, min_cross_edges = 2L))
+    expect_identical(strict$n_communities, base$n_communities)
+    for (method in c("louvain", "walktrap")) {
+        other <- graph_cluster(graph, method = method, seed = 3L,
+            layout_merge = list(layout = layout,
+                min_connectivity = 0.05, min_cross_edges = 1L))
+        expect_identical(other$n_communities, 2L)
+        expect_equal(other$modularity_original,
+            graph_cluster(graph, method = method, seed = 3L)$modularity)
+    }
+    if (requireNamespace("float", quietly = TRUE)) {
+        float_layout <- float::fl(layout)
+        from_float <- graph_cluster(graph, method = "leiden", seed = 3L,
+            layout_merge = list(layout = float_layout,
+                min_connectivity = 0.05, min_cross_edges = 1L))
+        expect_identical(from_float$n_communities, 2L)
+    }
+    near <- layout
+    near[13:18, 1L] <- near[13:18, 1L] - 5
+    guarded <- graph_cluster(graph, method = "leiden", seed = 3L,
+        layout_merge = list(layout = near, min_cross_edges = 1L))
+    expect_false(guarded$membership[1L] == guarded$membership[13L])
+    expect_error(graph_cluster(graph, layout_merge = list(
+        layout = layout[-1L, , drop = FALSE])), "n-by-2")
+})
+
 test_that("accelerator clustering never falls back silently", {
     graph <- three_clique_graph()
     expect_error(

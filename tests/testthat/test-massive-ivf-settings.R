@@ -35,6 +35,7 @@ test_that("sharded IVF rejects changed settings on resume", {
     saved <- list(state = list(completed_rows = 0L,
         pilot_signature = "already-recorded"),
         path = file.path(root, "checkpoint.rds"))
+    expect_null(fastEmbedR:::massive_saved_ivf_setting(saved, 0L))
     run <- function(state) fastEmbedR:::massive_sharded_batch(
         list(nrow = 4L), setup, NULL, state, 0L, 1L, 4L,
         1L, "ivf", "cuda", saved)
@@ -48,6 +49,8 @@ test_that("sharded IVF rejects changed settings on resume", {
             expect_identical(readRDS(saved$path)$ivf_settings[[1L]],
                 batch$ivf_setting)
             saved$state$ivf_settings <- list(batch$ivf_setting)
+            expect_identical(fastEmbedR:::massive_saved_ivf_setting(
+                saved, 0L), batch$ivf_setting)
             found$nprobe <- 32L
             expect_error(run(NULL), "Checkpointed IVF settings changed")
         }, .package = "fastEmbedR")
@@ -73,4 +76,43 @@ test_that("single-GPU IVF graph exposes per-shard settings", {
             expect_identical(graph$method,
                 "native_cuda_cuvs_ivf_sharded")
         }, .package = "fastEmbedR")
+})
+
+test_that("single-GPU IVF resumes a completed reference shard", {
+    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+    root <- tempfile("ivf_shard_resume_")
+    dir.create(root)
+    on.exit(unlink(root, recursive = TRUE))
+    input <- file.path(root, "input.f32")
+    set.seed(19L)
+    writeBin(as.vector(t(matrix(rnorm(240L), 40L, 6L))),
+        input, size = 4L)
+    source <- massive_matrix(input, 40L, 6L)
+    expected <- massive_full_knn_graph(source, 3L,
+        file.path(root, "expected"), backend = "cuda",
+        method = "ivf_sharded", chunk_rows = 7L,
+        reference_chunk_rows = 15L, memory_limit = "512MB")
+    resources <- fastEmbedR:::massive_cuda_sharded_resources(
+        source, 3L, 7L, 15L, "512MB", method = "ivf_sharded")
+    prefix <- file.path(root, "resumed")
+    paths <- fastEmbedR:::massive_knn_paths(prefix,
+        resources$output_bytes)
+    parts <- stats::setNames(paste0(paths, ".part"), names(paths))
+    setup <- list(k = 3L, workers = 1L, build_workers = 1L,
+        resources = resources, method = "ivf_sharded",
+        ef_search = 0L, hnsw_build = NULL, checkpoint_every = 2L)
+    saved <- fastEmbedR:::massive_sharded_checkpoint(source,
+        setup, paths, "cuda", FALSE)
+    fastEmbedR:::massive_index_shard(source, setup, parts, 0L,
+        fastEmbedR:::massive_checkpoint_source_identity(source),
+        "cuda", saved)
+    expect_identical(readRDS(saved$path)$shard, 1L)
+    observed <- massive_full_knn_graph(source, 3L, prefix,
+        backend = "cuda", method = "ivf_sharded",
+        chunk_rows = 7L, reference_chunk_rows = 15L,
+        memory_limit = "512MB", checkpoint = TRUE,
+        resume = TRUE, checkpoint_every = 2L)
+    expect_true(observed$resumed)
+    expect_equal(massive_read_graph_edges(observed, 1L, 40L),
+        massive_read_graph_edges(expected, 1L, 40L))
 })

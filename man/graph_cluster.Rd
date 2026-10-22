@@ -12,7 +12,8 @@ graph_cluster(
   n_iterations = 10L,
   n_runs = 1L,
   steps = 4L,
-  seed = 1L
+  seed = 1L,
+  layout_merge = NULL
 )
 }
 \arguments{
@@ -37,10 +38,19 @@ result is returned.}
 \item{steps}{Random-walk length for Walktrap.}
 
 \item{seed}{Reproducible random seed for Louvain and Leiden.}
+
+\item{layout_merge}{Optional list with a two-column \code{layout} (matrix or
+\code{fastEmbedR_embedding}), \code{min_connectivity} (default 0.2),
+\code{max_stretch} (default 2), and \code{min_cross_edges} (default 2). Merging
+requires both original-graph connectivity and layout-edge continuity.
+Float32 layouts are converted to double for edge scoring. This is an
+exploratory PAGA-inspired postprocessing rule, not PAGA.}
 }
 \value{
 A \code{fastEmbedR_graph_cluster} containing one-based \code{membership},
-modularity, method, implementation, and run metadata.
+modularity, method, implementation, and run metadata. With
+\code{layout_merge}, \code{membership_original}, \code{modularity_original}, and
+\code{layout_merge_pairs} preserve the unmerged result and decisions.
 }
 \description{
 \code{graph_cluster()} clusters a compact \code{fastEmbedR_graph} with a native
@@ -64,4 +74,8 @@ well-connected communities. Sci Rep. 2019;9:5233.
 
 Pons P, Latapy M. Computing communities in large networks using random
 walks. J Graph Algorithms Appl. 2006;10:191-218.
+
+Wolf FA et al. PAGA: graph abstraction reconciles clustering with
+trajectory inference through a topology preserving map of single cells.
+Genome Biol. 2019;20:59. doi:10.1186/s13059-019-1663-x.
 }
