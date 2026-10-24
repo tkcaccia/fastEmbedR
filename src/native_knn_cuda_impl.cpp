@@ -326,21 +326,27 @@ double pilot_recall(const std::vector<int64_t>& reference,
 double query_pilot_recall(const std::vector<int64_t>& reference,
                           const std::vector<int64_t>& observed,
                           int rows,
-                          int k) {
+                          int k,
+                          double* minimum = nullptr) {
   double matches = 0.0;
+  double smallest = 1.0;
   for (int row = 0; row < rows; ++row) {
+    double row_matches = 0.0;
     const std::size_t offset = static_cast<std::size_t>(row) * k;
     for (int candidate = 0; candidate < k; ++candidate) {
       const int64_t index = observed[offset + candidate];
       if (index < 0) continue;
       for (int expected = 0; expected < k; ++expected) {
         if (index == reference[offset + expected]) {
-          matches += 1.0;
+          row_matches += 1.0;
           break;
         }
       }
     }
+    matches += row_matches;
+    smallest = std::min(smallest, row_matches / k);
   }
+  if (minimum != nullptr) *minimum = smallest;
   const double total = static_cast<double>(rows) * k;
   return total > 0.0 ? matches / total : 0.0;
 }
@@ -1212,6 +1218,7 @@ struct PersistentCudaIndex {
   double target_recall = 0.99;
   double pilot_recall = 0.0;
   double pilot_id_recall = 0.0;
+  double pilot_min_row_recall = 0.0;
   bool approximate = false;
   bool calibrated = false;
 
@@ -1272,17 +1279,22 @@ void calibrate_persistent_ivf(PersistentCudaIndex* state,
       pilot_items * sizeof(float), cudaMemcpyDeviceToHost),
       "cudaMemcpy(persistent IVF pilot distances D2H)");
     state->pilot_id_recall = query_pilot_recall(
-      oracle, observed, pilot_n, state->k
+      oracle, observed, pilot_n, state->k,
+      &state->pilot_min_row_recall
     );
     state->pilot_recall = fastembedr::query_pilot_distance_recall(
       oracle_distances, observed_distances, pilot_n, state->k
     );
     state->nprobe = probe;
-    if (state->pilot_recall >= target || probe >= state->nlist) break;
+    if ((state->pilot_recall >= target &&
+         state->pilot_min_row_recall >= state->target_recall) ||
+        probe >= state->nlist) break;
     probe = std::min(state->nlist, std::max(probe + 1, probe * 2));
   }
-  if (state->pilot_recall < state->target_recall) {
-    Rcpp::stop("IVF pilot recall %.4f is below target %.4f.",
+  if (state->pilot_recall < state->target_recall ||
+      state->pilot_min_row_recall < state->target_recall) {
+    Rcpp::stop("IVF pilot minimum ID recall %.4f or distance recall "
+      "%.4f is below target %.4f.", state->pilot_min_row_recall,
       state->pilot_recall, state->target_recall);
   }
   state->pilot_rows = pilot_n;
@@ -1464,6 +1476,8 @@ Rcpp::List native_cuda_index_search_impl(SEXP pointer, SEXP query, int k) {
       state->pilot_recall : 1.0,
     Rcpp::Named("pilot_id_recall") = state->approximate ?
       state->pilot_id_recall : 1.0,
+    Rcpp::Named("pilot_min_row_recall") = state->approximate ?
+      state->pilot_min_row_recall : 1.0,
     Rcpp::Named("pilot_recall_metric") = "distance_at_k",
     Rcpp::Named("pilot_rows") = state->pilot_rows,
     Rcpp::Named("nlist") = state->nlist,

@@ -2,7 +2,8 @@ test_that("sharded IVF records effective settings", {
     found <- list(backend = "native_cuda_cuvs_ivf_flat",
         method = "ivf", nlist = 64L, nprobe = 16L,
         pilot_rows = 32L, tuning_attempts = 2L,
-        pilot_recall = 0.99, pilot_id_recall = 0.98,
+        pilot_recall = 1, pilot_id_recall = 1,
+        pilot_min_row_recall = 1,
         pilot_recall_metric = "distance_at_k")
     setting <- fastEmbedR:::massive_sharded_ivf_setting(
         found, 1L, 101L, 500L)
@@ -12,6 +13,14 @@ test_that("sharded IVF records effective settings", {
     expect_identical(setting$nlist, 64L)
     expect_identical(setting$nprobe, 16L)
     expect_identical(setting$tuning_attempts, 2L)
+    expect_identical(setting$pilot_min_row_recall, 1)
+    found$pilot_min_row_recall <- NULL
+    expect_error(fastEmbedR:::massive_sharded_ivf_setting(
+        found, 1L, 101L, 500L), "effective tuning settings")
+    found$pilot_min_row_recall <- 0.97
+    expect_error(fastEmbedR:::massive_sharded_ivf_setting(
+        found, 1L, 101L, 500L), "effective tuning settings")
+    found$pilot_min_row_recall <- 1
     found$nprobe <- 65L
     expect_error(fastEmbedR:::massive_sharded_ivf_setting(
         found, 1L, 101L, 500L), "effective tuning settings")
@@ -27,7 +36,8 @@ test_that("sharded IVF rejects changed settings on resume", {
     found <- list(backend = "native_cuda_cuvs_ivf_flat",
         method = "ivf", nlist = 64L, nprobe = 16L,
         pilot_rows = 32L, tuning_attempts = 2L,
-        pilot_recall = 0.99, pilot_id_recall = 0.98,
+        pilot_recall = 1, pilot_id_recall = 1,
+        pilot_min_row_recall = 1,
         pilot_recall_metric = "distance_at_k")
     setup <- list(k = 2L, workers = 1L,
         resources = list(chunk_rows = 2L),

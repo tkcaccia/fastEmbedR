@@ -67,7 +67,7 @@ samples only untouched rows.
 Defaults to zero. Reported recall covers only sampled rows, not
 the full graph. Strict ID \code{sample_target_met} requires every sampled
 row to meet 0.99. \code{distance_equivalent_recall} also accepts exact
-kth-distance ties, matching the CUDA IVF pilot metric.}
+kth-distance ties; the CUDA IVF pilot additionally gates strict IDs.}
 
 \item{checkpoint_every}{Commit every this many query blocks. A shard
 boundary is always committed. Defaults to 100.}
@@ -112,9 +112,9 @@ It also scans the full query source per shard, so this exact route is a
 correctness baseline rather than a billion-row ANN solution. A CUDA
 \code{method = "ivf_sharded"} uses the existing native cuVS IVF-Flat index
 within each shard. It remains approximate across shards; request
-\code{audit_rows} to measure sampled full-graph ID recall. The per-shard
-pilot accepts distance-equivalent ties with different IDs. CUDA
-requests never fall back to CPU.
+\code{audit_rows} to measure sampled full-graph ID recall. Each per-shard
+pilot gates both distance recall and minimum row ID recall; it does
+not guarantee untouched rows. CUDA requests never fall back to CPU.
 Metal exact search reads bounded float32 reference and query batches,
 executes the existing native Metal query kernel, and merges global IDs
 into the same file-backed graph. It re-uploads each reference shard for

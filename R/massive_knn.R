@@ -328,6 +328,8 @@ massive_knn_open_parts <- function(parts, completed, k) {
 massive_knn_metadata <- function(neighbors) {
     list(pilot_recall = neighbors$pilot_recall %||% NA_real_,
         pilot_id_recall = neighbors$pilot_id_recall %||% NA_real_,
+        pilot_min_row_recall =
+            neighbors$pilot_min_row_recall %||% NA_real_,
         pilot_recall_metric = neighbors$pilot_recall_metric %||% "id",
         pilot_rows = neighbors$pilot_rows %||% 0L,
         nlist = neighbors$nlist %||% 0L,
@@ -481,8 +483,7 @@ massive_knn_result <- function(x, setup, state, elapsed,
     paths <- setup$paths
     out <- list(indices_path = paths[["indices"]],
         distances_path = paths[["distances"]],
-        nrow = x$nrow, ncol = setup$k,
-        n_reference = setup$reference$nrow,
+        nrow = x$nrow, ncol = setup$k, n_reference = setup$reference$nrow,
         source_identity = if (x$format != "memory") {
             massive_checkpoint_source_identity(x)
         } else NULL,
@@ -504,6 +505,7 @@ massive_knn_result <- function(x, setup, state, elapsed,
             "exact", "stream_exact", "sharded_exact"),
         pilot_recall = elapsed$pilot_recall,
         pilot_id_recall = elapsed$pilot_id_recall,
+        pilot_min_row_recall = elapsed$pilot_min_row_recall,
         pilot_recall_metric = elapsed$pilot_recall_metric,
         pilot_rows = elapsed$pilot_rows, nlist = elapsed$nlist,
         nprobe = elapsed$nprobe, resources = setup$resources,
@@ -539,7 +541,9 @@ massive_knn_result <- function(x, setup, state, elapsed,
 #' CUDA needs cuVS support. IVF-Flat calibrates on the first query batch;
 #' pilot recall is not guaranteed for later rows. For CUDA IVF,
 #' `pilot_recall` counts distance-equivalent ties at the exact kth distance;
-#' `pilot_id_recall` reports strict neighbor-ID overlap.
+#' `pilot_id_recall` reports mean neighbor-ID overlap. Persistent sharded
+#' IVF also requires `pilot_min_row_recall` to meet its target; stricter
+#' probing can increase query time substantially.
 #' CPU uses exact search by default below 5,000 landmarks.
 #' Output files contain row-major, one-based `uint32` landmark indices and
 #' float32 distances. HNSW's 0.99 recall is a target, not a measured result.
@@ -1465,18 +1469,22 @@ massive_sharded_batch <- function(x, setup, parts, state, shard,
 massive_sharded_ivf_setting <- function(found, shard, first, count) {
     values <- found[c("nlist", "nprobe", "pilot_rows",
         "tuning_attempts")]
+    minimum <- found$pilot_min_row_recall
     if (length(values) != 4L || any(vapply(values, function(value)
         length(value) != 1L || !is.numeric(value) ||
             !is.finite(value) || value < 0 ||
             value != floor(value), logical(1L))) ||
         values$nlist < 1L || values$nprobe < 1L ||
-        values$nprobe > values$nlist) stop(
+        values$nprobe > values$nlist ||
+        length(minimum) != 1L || !is.numeric(minimum) ||
+        !is.finite(minimum) || minimum < 0.99 || minimum > 1) stop(
         "Sharded IVF query omitted effective tuning settings.",
         call. = FALSE)
     c(list(shard = shard + 1L, first_row = first,
         reference_rows = count), values,
         list(pilot_recall = found$pilot_recall,
             pilot_id_recall = found$pilot_id_recall,
+            pilot_min_row_recall = minimum,
             pilot_recall_metric = found$pilot_recall_metric))
 }
 
@@ -1807,9 +1815,9 @@ massive_full_knn_controls <- function(x, k, backend, method,
 #' correctness baseline rather than a billion-row ANN solution. A CUDA
 #' `method = "ivf_sharded"` uses the existing native cuVS IVF-Flat index
 #' within each shard. It remains approximate across shards; request
-#' `audit_rows` to measure sampled full-graph ID recall. The per-shard
-#' pilot accepts distance-equivalent ties with different IDs. CUDA
-#' requests never fall back to CPU.
+#' `audit_rows` to measure sampled full-graph ID recall. Each per-shard
+#' pilot gates both distance recall and minimum row ID recall; it does
+#' not guarantee untouched rows. CUDA requests never fall back to CPU.
 #' Metal exact search reads bounded float32 reference and query batches,
 #' executes the existing native Metal query kernel, and merges global IDs
 #' into the same file-backed graph. It re-uploads each reference shard for
@@ -1851,7 +1859,7 @@ massive_full_knn_controls <- function(x, k, backend, method,
 #'   Defaults to zero. Reported recall covers only sampled rows, not
 #'   the full graph. Strict ID `sample_target_met` requires every sampled
 #'   row to meet 0.99. `distance_equivalent_recall` also accepts exact
-#'   kth-distance ties, matching the CUDA IVF pilot metric.
+#'   kth-distance ties; the CUDA IVF pilot additionally gates strict IDs.
 #' @param ef_search CPU HNSW search effort per shard. Zero uses the tuned
 #'   shape-based default. A positive value must be at least `k + 1` and
 #'   cannot exceed the smallest reference shard. Other methods reject it.

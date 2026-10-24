@@ -81,7 +81,9 @@ search retains a host float32 reference but reuploads it each batch.
 CUDA needs cuVS support. IVF-Flat calibrates on the first query batch;
 pilot recall is not guaranteed for later rows. For CUDA IVF,
 \code{pilot_recall} counts distance-equivalent ties at the exact kth distance;
-\code{pilot_id_recall} reports strict neighbor-ID overlap.
+\code{pilot_id_recall} reports mean neighbor-ID overlap. Persistent sharded
+IVF also requires \code{pilot_min_row_recall} to meet its target; stricter
+probing can increase query time substantially.
 CPU uses exact search by default below 5,000 landmarks.
 Output files contain row-major, one-based \code{uint32} landmark indices and
 float32 distances. HNSW's 0.99 recall is a target, not a measured result.
