@@ -552,6 +552,29 @@ test_that("streamed PCA agrees with an independent dense SVD", {
         massive = "out_of_core", output = output), "already exists")
 })
 
+test_that("streamed PCA preserves scores with 32 CPU workers", {
+    set.seed(932)
+    x <- matrix(rnorm(512L * 6L), ncol = 6L)
+    raw <- make_massive_fixture(x)
+    paths <- c(tempfile(fileext = ".f32"),
+        tempfile(fileext = ".f32"))
+    on.exit(unlink(c(raw, paths,
+        paste0(paths, ".manifest.rds"))))
+    source <- massive_matrix(raw, nrow(x), ncol(x))
+    run <- function(workers, path) pca(source, ncomp = 3L,
+        backend = "cpu", n.cores = workers,
+        massive = "out_of_core", output = path,
+        chunk_rows = 256L, memory_limit = "256MB")
+    eight <- run(8L, paths[[1L]])
+    many <- run(32L, paths[[2L]])
+    expect_identical(many$n_threads, 32L)
+    expect_equal(many$singular_values, eight$singular_values,
+        tolerance = 1e-4)
+    expect_equal(as.matrix(many$scores), as.matrix(eight$scores),
+        tolerance = 1e-4)
+    expect_equal(file.info(paths)$size, rep(nrow(x) * 3L * 4L, 2L))
+})
+
 test_that("completed streamed PCA reopens for file-backed graph work", {
     rows <- seq_len(37)
     x <- cbind(rows / 11, sin(rows / 4), cos(rows / 6))

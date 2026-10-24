@@ -1986,8 +1986,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // massive_umap_optimize_cpp
-List massive_umap_optimize_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string init_path, std::string init_format, int dimensions, std::string output, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, int chunk_rows, double memory_limit_bytes, int start_epoch, double positive_done, double negative_done, int checkpoint_every, SEXP checkpoint_callback, std::string layout_storage);
-RcppExport SEXP _fastEmbedR_massive_umap_optimize_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP init_pathSEXP, SEXP init_formatSEXP, SEXP dimensionsSEXP, SEXP outputSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP chunk_rowsSEXP, SEXP memory_limit_bytesSEXP, SEXP start_epochSEXP, SEXP positive_doneSEXP, SEXP negative_doneSEXP, SEXP checkpoint_everySEXP, SEXP checkpoint_callbackSEXP, SEXP layout_storageSEXP) {
+List massive_umap_optimize_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string init_path, std::string init_format, int dimensions, std::string output, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, int chunk_rows, double memory_limit_bytes, int start_epoch, double positive_done, double negative_done, int checkpoint_every, SEXP checkpoint_callback, std::string layout_storage, int n_threads, std::string cpu_update);
+RcppExport SEXP _fastEmbedR_massive_umap_optimize_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP init_pathSEXP, SEXP init_formatSEXP, SEXP dimensionsSEXP, SEXP outputSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP chunk_rowsSEXP, SEXP memory_limit_bytesSEXP, SEXP start_epochSEXP, SEXP positive_doneSEXP, SEXP negative_doneSEXP, SEXP checkpoint_everySEXP, SEXP checkpoint_callbackSEXP, SEXP layout_storageSEXP, SEXP n_threadsSEXP, SEXP cpu_updateSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2013,7 +2013,9 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type checkpoint_every(checkpoint_everySEXP);
     Rcpp::traits::input_parameter< SEXP >::type checkpoint_callback(checkpoint_callbackSEXP);
     Rcpp::traits::input_parameter< std::string >::type layout_storage(layout_storageSEXP);
-    rcpp_result_gen = Rcpp::wrap(massive_umap_optimize_cpp(offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, dimensions, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, memory_limit_bytes, start_epoch, positive_done, negative_done, checkpoint_every, checkpoint_callback, layout_storage));
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< std::string >::type cpu_update(cpu_updateSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_umap_optimize_cpp(offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, dimensions, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, memory_limit_bytes, start_epoch, positive_done, negative_done, checkpoint_every, checkpoint_callback, layout_storage, n_threads, cpu_update));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3071,7 +3073,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_coarse_csr_cpp", (DL_FUNC) &_fastEmbedR_massive_coarse_csr_cpp, 5},
     {"_fastEmbedR_massive_remap_louvain_cpp", (DL_FUNC) &_fastEmbedR_massive_remap_louvain_cpp, 4},
     {"_fastEmbedR_massive_read_contracted_cpp", (DL_FUNC) &_fastEmbedR_massive_read_contracted_cpp, 3},
-    {"_fastEmbedR_massive_umap_optimize_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_optimize_cpp, 22},
+    {"_fastEmbedR_massive_umap_optimize_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_optimize_cpp, 24},
     {"_fastEmbedR_massive_umap_optimize_metal_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_optimize_metal_cpp, 22},
     {"_fastEmbedR_massive_nccl_available_cpp", (DL_FUNC) &_fastEmbedR_massive_nccl_available_cpp, 0},
     {"_fastEmbedR_massive_umap_optimize_cuda_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_optimize_cuda_cpp, 23},

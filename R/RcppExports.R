@@ -465,8 +465,8 @@ massive_read_contracted_cpp <- function(path, n_vertices, n_edges) {
     .Call(`_fastEmbedR_massive_read_contracted_cpp`, path, n_vertices, n_edges)
 }
 
-massive_umap_optimize_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, dimensions, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, memory_limit_bytes, start_epoch = 0L, positive_done = 0, negative_done = 0, checkpoint_every = 0L, checkpoint_callback = NULL, layout_storage = "memory") {
-    .Call(`_fastEmbedR_massive_umap_optimize_cpp`, offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, dimensions, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, memory_limit_bytes, start_epoch, positive_done, negative_done, checkpoint_every, checkpoint_callback, layout_storage)
+massive_umap_optimize_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, dimensions, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, memory_limit_bytes, start_epoch = 0L, positive_done = 0, negative_done = 0, checkpoint_every = 0L, checkpoint_callback = NULL, layout_storage = "memory", n_threads = 1L, cpu_update = "sgd") {
+    .Call(`_fastEmbedR_massive_umap_optimize_cpp`, offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, dimensions, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, memory_limit_bytes, start_epoch, positive_done, negative_done, checkpoint_every, checkpoint_callback, layout_storage, n_threads, cpu_update)
 }
 
 massive_umap_optimize_metal_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, edge_capacity, memory_limit_bytes, start_epoch = 0L, positive_done = 0, negative_done = 0, checkpoint_every = 0L, checkpoint_callback = NULL, layout_storage = "memory") {

@@ -2345,6 +2345,50 @@ test_that("coordinated t-SNE matches an independent first update", {
         tolerance = 1e-3)
 })
 
+test_that("file-backed t-SNE attraction scales without changing rows", {
+    n <- 2048L
+    source <- tempfile()
+    affinity <- tempfile()
+    init_path <- tempfile(fileext = ".f32")
+    outputs <- c(tempfile(fileext = ".f32"),
+        tempfile(fileext = ".f32"))
+    on.exit(unlink(c(Sys.glob(paste0(source, ".*")),
+        Sys.glob(paste0(affinity, ".*")), init_path, outputs),
+        recursive = TRUE))
+    ids <- outer(seq_len(n), 1:3,
+        function(i, j) (i + j - 1L) %% n + 1L)
+    distances <- matrix(rep(c(0.2, 0.5, 0.9), n),
+        nrow = n, byrow = TRUE)
+    write_massive_graph_fixture(source, ids, distances)
+    graph <- massive_tsne_affinities(
+        massive_knn_graph(source, n, 3L), 3, affinity,
+        memory_limit = "64MB")
+    initial <- cbind(sin(seq_len(n)), cos(seq_len(n))) * 0.02
+    writeBin(as.vector(t(initial)), init_path, size = 4L,
+        endian = "little")
+    init <- massive_matrix(init_path, n, 2L)
+    fit <- function(workers, output) massive_tsne_optimize(
+        graph, init, output, early_exaggeration_iter = 1L,
+        n_iter = 0L, learning_rate = 1, memory_limit = "1GB",
+        n.cores = workers)
+    single <- fit(1L, outputs[[1L]])
+    multi <- fit(4L, outputs[[2L]])
+    expect_identical(multi$resources$effective_cpu_workers, 4L)
+    expect_true(all(is.finite(unlist(multi$stage_seconds))))
+    expect_true(all(unlist(multi$stage_seconds) >= 0))
+    expect_equal(massive_read_rows(multi, 1L, n),
+        massive_read_rows(single, 1L, n), tolerance = 1e-5)
+    bad <- file(graph$indices_path, "r+b")
+    seek(bad, file.info(graph$indices_path)$size - 4L)
+    writeBin(0L, bad, size = 4L, endian = "little")
+    close(bad)
+    expect_error(fastEmbedR:::massive_tsne_optimize_cpp(
+        graph$offsets_path, graph$indices_path, graph$weights_path,
+        "stream", init_path, tempfile(fileext = ".f32"),
+        n, 2L, 0L, 1L, 12, 1, 1, FALSE, 0.8, 0.8,
+        0.01, Inf, 4L), "invalid targets")
+})
+
 test_that("four CUDA devices coordinate one t-SNE fit", {
     count <- tryCatch(fastEmbedR:::massive_cuda_device_count_cpp(),
         error = function(e) 0L)
@@ -3251,6 +3295,7 @@ test_that("saved PCA and fuzzy graph feed UMAP and Louvain", {
         file.path(root, "umap.f32"), n_epochs = 5L,
         chunk_rows = 15L, layout_storage = "mmap",
         memory_limit = "256MB")
+    expect_identical(layout$resources$effective_cpu_workers, 1L)
     clusters <- massive_cluster(graph, method = "louvain",
         massive = "out_of_core_graph",
         output = file.path(root, "labels.clusters.u32"),
@@ -3261,6 +3306,86 @@ test_that("saved PCA and fuzzy graph feed UMAP and Louvain", {
     expect_equal(clusters$n_communities, length(unique(labels)))
     expect_gte(clusters$modularity_final,
         clusters$first_level$modularity - 1e-7)
+})
+
+test_that("synchronized CPU UMAP is explicit and worker-invariant", {
+    root <- tempfile()
+    dir.create(root)
+    on.exit(unlink(root, recursive = TRUE))
+    set.seed(918)
+    x <- rbind(matrix(rnorm(128L, -2, 0.1), ncol = 2L),
+        matrix(rnorm(128L, 2, 0.1), ncol = 2L))
+    input <- file.path(root, "input.f32")
+    writeBin(as.vector(t(x)), input, size = 4L,
+        endian = "little")
+    source <- massive_matrix(input, nrow(x), 2L)
+    knn <- massive_full_knn_graph(source, k = 8L,
+        output = file.path(root, "knn"), method = "exact",
+        chunk_rows = 16L, reference_chunk_rows = 32L,
+        memory_limit = "256MB")
+    graph <- massive_umap_fuzzy_graph(
+        massive_umap_memberships(knn), file.path(root, "fuzzy"),
+        memory_limit = "64MB")
+    fit <- function(workers, label) massive_umap_optimize(
+        graph, source, file.path(root, label), n_epochs = 30L,
+        negative_sample_rate = 2L, learning_rate = 0.05,
+        memory_limit = "256MB", cpu_update = "synchronized",
+        n.cores = workers)
+    one <- fit(1L, "one.f32")
+    four <- fit(4L, "four.f32")
+    many <- fit(32L, "many.f32")
+    expected <- massive_read_rows(one, 1L, nrow(x))
+    expect_identical(massive_read_rows(four, 1L, nrow(x)), expected)
+    expect_identical(massive_read_rows(many, 1L, nrow(x)), expected)
+    expect_true(all(is.finite(expected)))
+    expect_identical(four$optimizer, "synchronized_cpu_fixed_point")
+    expect_identical(four$resources$effective_cpu_workers, 4L)
+    expect_equal(four$resources$delta_ram_bytes, nrow(x) * 16)
+    expect_equal(four$updates, one$updates)
+    expect_gt(abs(mean(expected[1:64, 1L]) -
+        mean(expected[65:128, 1L])), 1)
+    resumed_path <- file.path(root, "resumed.f32")
+    plan <- fastEmbedR:::massive_umap_optimize_plan(graph,
+        source, resumed_path, 30L, 2L, 0.05, 0.1, 1,
+        1L, 8192L, "256MB", "cpu", 4L,
+        cpu_update = "synchronized")
+    saved <- fastEmbedR:::massive_umap_checkpoint_prepare(
+        plan, TRUE, FALSE, 5L)
+    interrupt <- function(epoch, snapshot, positive, negative) {
+        saved$progress(epoch, snapshot, positive, negative)
+        stop("simulated synchronized interruption")
+    }
+    expect_error(fastEmbedR:::massive_umap_optimize_cpp(
+        graph$offsets_path, graph$indices_path,
+        graph$weights_path, graph$n_vertices,
+        input, "f32", 2L, resumed_path, 30L, 2L,
+        0.05, 0.1, 1, 1L, 8192L, plan$limit,
+        0L, 0, 0, 5L, interrupt, "memory", 4L,
+        "synchronized"), "simulated synchronized interruption")
+    resumed <- massive_umap_optimize(graph, source,
+        resumed_path, n_epochs = 30L, negative_sample_rate = 2L,
+        learning_rate = 0.05, memory_limit = "256MB",
+        cpu_update = "synchronized", n.cores = 4L,
+        checkpoint = TRUE, resume = TRUE, checkpoint_every = 5L)
+    expect_identical(massive_read_rows(resumed, 1L, nrow(x)),
+        massive_read_rows(four, 1L, nrow(x)))
+    expect_error(massive_umap_optimize(graph, source,
+        file.path(root, "invalid.f32"), n.cores = 4L),
+        "explicit")
+    expect_error(massive_umap_optimize(graph, source,
+        file.path(root, "small.f32"), cpu_update = "synchronized",
+        n.cores = 4L, memory_limit = "64MB"), "memory_limit")
+    bad <- file(graph$indices_path, "r+b")
+    seek(bad, file.info(graph$indices_path)$size - 4L)
+    writeBin(0L, bad, size = 4L, endian = "little")
+    close(bad)
+    expect_error(fastEmbedR:::massive_umap_optimize_cpp(
+        graph$offsets_path, graph$indices_path,
+        graph$weights_path, graph$n_vertices,
+        input, "f32", 2L, file.path(root, "bad.f32"),
+        2L, 2L, 0.05, 0.1, 1, 1L, 8192L,
+        256 * 1024^2, n_threads = 4L,
+        cpu_update = "synchronized"), "invalid targets")
 })
 
 test_that("full-graph UMAP resumes a complete epoch snapshot", {

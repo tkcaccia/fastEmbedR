@@ -50,7 +50,7 @@ bounded attraction-edge buffer per requested device.}
 
 \item{backend}{\code{"cpu"} or \code{"cuda"}; CUDA currently requires 2D output.}
 
-\item{n.cores}{CPU worker count for FFT and coordinate updates.}
+\item{n.cores}{CPU worker count for FFT, sparse attraction, and updates.}
 
 \item{checkpoint}{Save coordinates and optimizer state periodically.}
 

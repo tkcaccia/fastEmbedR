@@ -27,7 +27,11 @@
 #' @param backend `"cpu"`, `"metal"`, or `"cuda"`; GPU requests have no
 #'   CPU fallback. Metal streams edges but keeps one 2D layout in shared
 #'   unified memory.
-#' @param n.cores Only one worker is currently supported.
+#' @param n.cores CPU workers for `cpu_update = "synchronized"`.
+#'   The default in-place SGD route uses one worker.
+#' @param cpu_update `"sgd"` (default) retains ordered in-place updates;
+#'   `"synchronized"` accumulates deterministic epoch updates on CPU.
+#'   The two optimizers have different update trajectories.
 #' @param layout_storage `"memory"` (default), `"mmap"` for a writable
 #'   mapping, or `"managed"` for explicit CUDA unified memory. Managed
 #'   storage may page between host and GPU and requires a supporting GPU.
@@ -50,11 +54,12 @@ massive_umap_optimize <- function(graph, init, output,
         chunk_rows = 8192L, memory_limit = "16GB", backend = "cpu",
         n.cores = 1L, checkpoint = FALSE, resume = FALSE,
         checkpoint_every = 10L, layout_storage = "memory",
-        devices = NULL) {
+        devices = NULL, cpu_update = "sgd") {
     plan <- massive_umap_optimize_plan(graph, init, output,
         n_epochs, negative_sample_rate, learning_rate, min_dist,
         repulsion_strength, seed, chunk_rows, memory_limit,
-        backend, n.cores, layout_storage, resume, devices)
+        backend, n.cores, layout_storage, resume, devices,
+        cpu_update)
     message("EXPERIMENTAL full-graph UMAP: ", graph$n_vertices,
         " rows; ", graph$n_edges, " edges; backend=", backend,
         "; layout storage=", if (backend == "cuda" &&
@@ -147,8 +152,23 @@ massive_umap_native_fit <- function(graph, init, plan, saved,
         min_dist, repulsion_strength, plan$seed,
         plan$chunk_rows, plan$limit, saved$epoch,
         saved$positive, saved$negative, saved$every,
-        saved$progress, layout_storage)
+        saved$progress, layout_storage, plan$n.cores,
+        plan$cpu_update)
     built
+}
+
+massive_umap_layout_ram <- function(plan, init, layout_storage) {
+    if (plan$backend == "cuda" && layout_storage == "managed")
+        return(plan$layout_bytes + plan$edge_capacity * 16)
+    if (plan$backend == "cuda") return(
+        min(plan$chunk_rows, 8192L) * init$ncol * 4 +
+        plan$edge_capacity * 16 * max(1L, length(plan$devices)))
+    if (plan$backend == "metal") return(
+        (if (layout_storage == "memory") 2 * plan$layout_bytes
+        else plan$layout_bytes + min(plan$chunk_rows, 8192L) *
+            init$ncol * 4) + plan$edge_capacity * 32)
+    if (layout_storage == "memory") return(plan$layout_bytes)
+    min(plan$chunk_rows, 8192L) * init$ncol * 4
 }
 
 massive_umap_result <- function(plan, graph, init, built, saved,
@@ -159,7 +179,9 @@ massive_umap_result <- function(plan, graph, init, built, saved,
     result$implementation_identity <-
         massive_checkpoint_implementation_identity()
     result$backend <- plan$backend
-    result$optimizer <- if (plan$backend == "metal")
+    result$optimizer <- if (plan$backend == "cpu" &&
+        plan$cpu_update == "synchronized")
+        "synchronized_cpu_fixed_point" else if (plan$backend == "metal")
         "streamed_metal_atomic" else if (is.null(plan$devices))
         paste0("streamed_", plan$backend, "_sgd") else "synchronized_cuda_nccl"
     result$layout_storage <- if (plan$backend == "cuda" &&
@@ -167,24 +189,15 @@ massive_umap_result <- function(plan, graph, init, built, saved,
     result$parameters <- plan$parameters
     result$parameters$checkpoint_every <- saved$every
     result$parameters$resumed_from_epoch <- saved$epoch
-    layout_ram <- if (plan$backend == "cuda" &&
-        layout_storage == "managed") {
-        plan$layout_bytes + plan$edge_capacity * 16
-    } else if (plan$backend == "cuda") {
-        min(plan$chunk_rows, 8192L) * init$ncol * 4 +
-            plan$edge_capacity * 16 * max(1L, length(plan$devices))
-    } else if (plan$backend == "metal")
-        (if (layout_storage == "memory") 2 * plan$layout_bytes
-        else plan$layout_bytes + min(plan$chunk_rows, 8192L) *
-            init$ncol * 4) + plan$edge_capacity * 32
-    else if (layout_storage == "memory") plan$layout_bytes
-    else min(plan$chunk_rows, 8192L) * init$ncol * 4
+    layout_ram <- massive_umap_layout_ram(plan, init, layout_storage)
     result$resources <- list(layout_ram_bytes = layout_ram,
         layout_mmap_bytes = plan$layout_bytes * (layout_storage == "mmap"),
         graph_bytes = graph$n_edges * 8 + (graph$n_vertices + 1) * 8,
+        effective_cpu_workers = if (plan$backend == "cpu") plan$n.cores
+            else NULL,
+        delta_ram_bytes = plan$delta_bytes,
         checkpoint_disk_bytes = plan$layout_bytes *
-            (2 + as.integer(layout_storage == "mmap")) *
-            as.integer(checkpoint))
+            (2 + (layout_storage == "mmap")) * checkpoint)
     if (plan$backend == "cuda") result <-
         massive_umap_cuda_result(result, plan, built, layout_storage)
     if (plan$backend == "metal") result$resources <- c(result$resources,
@@ -194,8 +207,7 @@ massive_umap_result <- function(plan, graph, init, built, saved,
             edge_batch_capacity = plan$edge_capacity,
             peak_vram_bytes = NA_real_))
     result$updates <- built[c("positive_updates", "negative_updates")]
-    if (plan$backend == "cuda") result$updates$edge_visits <-
-        built$edge_visits
+    if (plan$backend == "cuda") result$updates$edge_visits <- built$edge_visits
     result$source_identity <- plan$source_identity
     if (!is.null(saved$sidecar)) massive_umap_checkpoint_cleanup(
         plan$output, saved$sidecar)
@@ -387,7 +399,7 @@ massive_umap_checkpoint_commit <- function(plan, sidecar, signature,
 }
 
 massive_umap_plan_layout <- function(graph, init, controls,
-        memory_limit, backend, layout_storage) {
+        memory_limit, backend, layout_storage, cpu_update) {
     bytes <- graph$n_vertices * init$ncol * 4
     limit <- massive_memory_bytes(memory_limit)
     capacity <- if (backend == "metal") as.integer(
@@ -399,19 +411,23 @@ massive_umap_plan_layout <- function(graph, init, controls,
     } else if (layout_storage == "managed" ||
         (layout_storage == "memory" && backend == "cpu"))
         bytes else staged
-    required <- 128 * 1024^2 + if (backend == "metal") resident
-        else resident * 1.25
+    delta <- if (backend == "cpu" && cpu_update == "synchronized")
+        bytes * 2 else 0
+    required <- 128 * 1024^2 + delta +
+        if (backend == "metal") resident else resident * 1.25
     if (!is.finite(bytes) || required > limit) stop(
         "UMAP layout exceeds `memory_limit`.", call. = FALSE)
-    list(bytes = bytes, limit = limit, metal_capacity = capacity)
+    list(bytes = bytes, limit = limit, metal_capacity = capacity,
+        delta_bytes = delta)
 }
 
 massive_umap_optimize_plan <- function(graph, init, output,
         n_epochs, negative_sample_rate, learning_rate, min_dist,
         repulsion_strength, seed, chunk_rows, memory_limit,
         backend, n.cores, layout_storage = "memory",
-        resume = FALSE, devices = NULL) {
-    massive_umap_validate_inputs(graph, init, backend, n.cores)
+        resume = FALSE, devices = NULL, cpu_update = "sgd") {
+    massive_umap_validate_inputs(graph, init, backend, n.cores,
+        cpu_update)
     devices <- massive_umap_plan_storage(devices, backend,
         graph, init, layout_storage)
     identity <- if (length(devices) > 1L)
@@ -419,7 +435,7 @@ massive_umap_optimize_plan <- function(graph, init, output,
     controls <- massive_umap_validate_controls(n_epochs, negative_sample_rate,
         learning_rate, min_dist, repulsion_strength, seed, chunk_rows)
     layout <- massive_umap_plan_layout(graph, init, controls,
-        memory_limit, backend, layout_storage)
+        memory_limit, backend, layout_storage, cpu_update)
     layout_bytes <- layout$bytes
     limit <- layout$limit
     path <- massive_float_output(output, layout_bytes,
@@ -434,8 +450,10 @@ massive_umap_optimize_plan <- function(graph, init, output,
             devices)
     } else layout$metal_capacity
     list(output = path, layout_bytes = layout_bytes, backend = backend,
+        delta_bytes = layout$delta_bytes,
         edge_capacity = edge_capacity, limit = limit,
         devices = devices, gpu_identity = identity,
+        n.cores = as.integer(n.cores), cpu_update = cpu_update,
         source_paths = paths, init_format = init$format,
         source_identity = massive_checkpoint_input_files_identity(paths),
         n_epochs = controls$n_epochs,
@@ -443,7 +461,9 @@ massive_umap_optimize_plan <- function(graph, init, output,
         seed = controls$seed, chunk_rows = controls$chunk_rows,
         parameters = c(controls, list(learning_rate = learning_rate,
             min_dist = min_dist, repulsion_strength = repulsion_strength,
-            n.cores = 1L, layout_storage = layout_storage),
+            n.cores = as.integer(n.cores),
+            cpu_update = cpu_update,
+            layout_storage = layout_storage),
             if (!is.null(devices)) list(devices = devices,
                 gpu_identity = identity)))
 }
@@ -514,12 +534,16 @@ massive_umap_cuda_capacity <- function(graph, layout_bytes,
 }
 
 massive_umap_validate_inputs <- function(graph, init, backend,
-                                        n.cores) {
+                                        n.cores, cpu_update = "sgd") {
+    cores <- integer_scalar(n.cores)
     if (!backend %in% c("cpu", "cuda", "metal") ||
-        !identical(integer_scalar(n.cores), 1L)) {
-        stop("EXPERIMENTAL full-graph UMAP needs one worker; ",
-            "no backend fallback was used.", call. = FALSE)
-    }
+        is.na(cores) || cores < 1L ||
+        !cpu_update %in% c("sgd", "synchronized") ||
+        (backend != "cpu" && cpu_update != "sgd") ||
+        (cpu_update == "sgd" && cores != 1L)) stop(
+        "CPU UMAP needs one worker for SGD or explicit ",
+        "cpu_update='synchronized'; no fallback was used.",
+        call. = FALSE)
     if (!inherits(graph, "fastEmbedR_massive_graph") ||
         !identical(graph$storage, "csr") ||
         !isTRUE(graph$symmetrized) ||

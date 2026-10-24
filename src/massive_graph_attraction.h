@@ -14,7 +14,7 @@ void massive_csr_attraction(const std::string& offsets_path,
                             const std::string& weights_path,
                             int n, const std::string& access,
                             const std::vector<float>& y, int dims,
-                            float exaggeration,
+                            float exaggeration, int n_threads,
                             std::vector<float>& grad);
 
 #endif

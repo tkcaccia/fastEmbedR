@@ -22,7 +22,8 @@ massive_umap_optimize(
   resume = FALSE,
   checkpoint_every = 10L,
   layout_storage = "memory",
-  devices = NULL
+  devices = NULL,
+  cpu_update = "sgd"
 )
 }
 \arguments{
@@ -56,7 +57,8 @@ managed CUDA coordinates count against the host budget.}
 CPU fallback. Metal streams edges but keeps one 2D layout in shared
 unified memory.}
 
-\item{n.cores}{Only one worker is currently supported.}
+\item{n.cores}{CPU workers for \code{cpu_update = "synchronized"}.
+The default in-place SGD route uses one worker.}
 
 \item{checkpoint}{Save a full coordinate snapshot at completed epochs.}
 
@@ -76,6 +78,10 @@ fixed-point accumulation makes the reduction order-independent.
 Omitting this argument retains the in-place single-GPU optimizer.
 Each coordinated device stores a full read-only layout, so this
 route does not pool VRAM for inputs larger than one device.}
+
+\item{cpu_update}{\code{"sgd"} (default) retains ordered in-place updates;
+\code{"synchronized"} accumulates deterministic epoch updates on CPU.
+The two optimizers have different update trajectories.}
 }
 \value{
 An experimental file-backed \code{fastEmbedR_massive_matrix}.

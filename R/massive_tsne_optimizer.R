@@ -21,7 +21,7 @@
 #' @param memory_limit Host RAM budget. Coordinated CUDA fits reserve one
 #'   bounded attraction-edge buffer per requested device.
 #' @param backend `"cpu"` or `"cuda"`; CUDA currently requires 2D output.
-#' @param n.cores CPU worker count for FFT and coordinate updates.
+#' @param n.cores CPU worker count for FFT, sparse attraction, and updates.
 #' @param devices CUDA device IDs. Two to four IDs run one coordinated 2D fit.
 #' @param checkpoint Save coordinates and optimizer state periodically.
 #' @param resume Continue a matching interrupted fit.
@@ -132,18 +132,18 @@ massive_tsne_result <- function(plan, graph, init, fit, saved) {
     result$parameters$resumed_from_iteration <- saved$iteration
     result$resources <- list(estimated_peak_ram_bytes = plan$peak_ram,
         estimated_peak_vram_bytes = plan$peak_vram,
-        graph_bytes = graph$n_edges * 8 +
-            (graph$n_vertices + 1) * 8,
+        graph_bytes = graph$n_edges * 8 + (graph$n_vertices + 1) * 8,
         checkpoint_disk_bytes = if (saved$every > 0L)
-            2 * plan$state_bytes else 0)
+            2 * plan$state_bytes else 0,
+        effective_cpu_workers = if (identical(plan$backend, "cpu"))
+            fit$n_threads else NULL)
     if (identical(plan$backend, "cuda")) {
         result$resources$graph_feeder <-
             if (length(plan$devices) > 1L) "concurrent_owner" else "serial"
         result$resources$edge_batch_capacity <- plan$edge_capacity
     }
     result$elapsed_seconds_current_call <- fit$elapsed_seconds
-    if (!is.null(fit$stage_seconds))
-        result$stage_seconds <- fit$stage_seconds
+    if (!is.null(fit$stage_seconds)) result$stage_seconds <- fit$stage_seconds
     if (!is.null(fit$repulsion_gpu_seconds))
         result$gpu_stage_seconds <- list(
             repulsion = fit$repulsion_gpu_seconds)

@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -1314,37 +1315,50 @@ void massive_csr_attraction(const std::string& offsets_path,
                             const std::string& weights_path,
                             int n, const std::string& access,
                             const std::vector<float>& y, int dims,
-                            float exaggeration,
+                            float exaggeration, int n_threads,
                             std::vector<float>& grad) {
   const auto size = static_cast<std::size_t>(n) * dims;
   if (n < 2 || (dims != 2 && dims != 3) ||
       y.size() != size || grad.size() != size ||
-      !std::isfinite(exaggeration) || exaggeration <= 0.0f) {
+      !std::isfinite(exaggeration) || exaggeration <= 0.0f ||
+      n_threads < 1) {
     Rcpp::stop("Invalid massive t-SNE attraction buffers.");
   }
-  CsrGraphSource graph(offsets_path, indices_path, weights_path,
-                       n, access);
-  for (std::uint64_t first = 1; first <= graph.vertices();) {
-    const auto count = graph.bounded_rows(first, 8192, 1000000);
-    graph.visit(first, count,
-      [&](std::uint64_t source, std::uint32_t target,
-          double weight, std::uint64_t) {
-        const auto from = static_cast<std::size_t>(source - 1) * dims;
-        const auto to = static_cast<std::size_t>(target - 1) * dims;
-        float difference[3] = {0.0f, 0.0f, 0.0f};
-        float squared = 0.0f;
-        for (int axis = 0; axis < dims; ++axis) {
-          difference[axis] = y[from + axis] - y[to + axis];
-          squared += difference[axis] * difference[axis];
+  const int threads = std::min(n, n_threads);
+  std::vector<std::exception_ptr> errors(threads);
+  parallel_rows(n, threads,
+    [&](std::uint64_t begin, std::uint64_t end, int worker) {
+      try {
+        CsrGraphSource graph(offsets_path, indices_path, weights_path,
+                             n, access);
+        for (std::uint64_t first = begin + 1; first <= end;) {
+          const auto count = std::min(graph.bounded_rows(
+            first, 8192, 1000000), end - first + 1);
+          graph.visit(first, count,
+            [&](std::uint64_t source, std::uint32_t target,
+                double weight, std::uint64_t) {
+              const auto from = static_cast<std::size_t>(source - 1) * dims;
+              const auto to = static_cast<std::size_t>(target - 1) * dims;
+              float difference[3] = {0.0f, 0.0f, 0.0f};
+              float squared = 0.0f;
+              for (int axis = 0; axis < dims; ++axis) {
+                difference[axis] = y[from + axis] - y[to + axis];
+                squared += difference[axis] * difference[axis];
+              }
+              const float factor = exaggeration *
+                static_cast<float>(weight) / (1.0f + squared);
+              for (int axis = 0; axis < dims; ++axis) {
+                grad[from + axis] += factor * difference[axis];
+              }
+            }, false);
+          first += count;
         }
-        const float factor = exaggeration *
-          static_cast<float>(weight) / (1.0f + squared);
-        for (int axis = 0; axis < dims; ++axis) {
-          grad[from + axis] += factor * difference[axis];
-        }
-      });
-    first += count;
-    Rcpp::checkUserInterrupt();
+      } catch (...) {
+        errors[worker] = std::current_exception();
+      }
+  });
+  for (const auto& error : errors) {
+    if (error) std::rethrow_exception(error);
   }
 }
 
@@ -3632,6 +3646,166 @@ void massive_umap_repulse(float* layout,
 
 template <typename Function>
 void massive_umap_scan(CsrGraphSource& graph, int chunk_rows,
+                       std::uint64_t max_edges, Function consume);
+
+void massive_umap_delta_add(std::atomic<std::int64_t>* delta,
+                            std::uint64_t index, double value,
+                            double scale) {
+  if (!std::isfinite(value) ||
+      std::abs(value) * scale >= std::ldexp(1.0, 62)) {
+    throw std::runtime_error(
+      "Synchronized UMAP gradient is non-finite or exceeds its budget.");
+  }
+  const auto fixed = static_cast<std::int64_t>(std::llround(value * scale));
+  delta[index].fetch_add(fixed, std::memory_order_relaxed);
+}
+
+int massive_umap_synchronized_edge(const float* layout,
+    std::atomic<std::int64_t>* delta, std::uint64_t head,
+    std::uint64_t tail, int dimensions, double a, double b,
+    double gamma, double alpha, double scale,
+    int negatives, std::uint64_t vertices, int seed, int epoch,
+    std::uint64_t sample_edge) {
+  double difference[3]{};
+  double distance = 0.0;
+  for (int axis = 0; axis < dimensions; ++axis) {
+    difference[axis] = layout[head * dimensions + axis] -
+      layout[tail * dimensions + axis];
+    distance += difference[axis] * difference[axis];
+  }
+  if (distance > 0.0) {
+    const double power = fastembedr_umap_pow(distance, b);
+    const double coefficient = -2.0 * a * b * power /
+      (distance * (a * power + 1.0));
+    for (int axis = 0; axis < dimensions; ++axis) {
+      const auto gradient = alpha * massive_umap_clip(
+        coefficient * difference[axis]);
+      massive_umap_delta_add(delta, head * dimensions + axis,
+                             gradient, scale);
+      massive_umap_delta_add(delta, tail * dimensions + axis,
+                             -gradient, scale);
+    }
+  }
+  int sampled = 0;
+  for (int sample = 0; sample < negatives; ++sample) {
+    const auto negative = fastembedr_umap_negative_vertex(
+      static_cast<int>(vertices), seed, epoch,
+      static_cast<std::size_t>(sample_edge), sample);
+    if (negative == static_cast<int>(head)) continue;
+    ++sampled;
+    double negative_distance = 0.0;
+    for (int axis = 0; axis < dimensions; ++axis) {
+      difference[axis] = layout[head * dimensions + axis] -
+        layout[negative * dimensions + axis];
+      negative_distance += difference[axis] * difference[axis];
+    }
+    if (negative_distance <= 0.0) continue;
+    const double coefficient = 2.0 * gamma * b /
+      ((0.001 + negative_distance) *
+       (a * fastembedr_umap_pow(negative_distance, b) + 1.0));
+    for (int axis = 0; axis < dimensions; ++axis) {
+      massive_umap_delta_add(delta, head * dimensions + axis,
+        alpha * massive_umap_clip(coefficient * difference[axis]),
+        scale);
+    }
+  }
+  return sampled;
+}
+
+std::vector<std::uint64_t> massive_umap_worker_offsets(
+    CsrGraphSource& graph, int workers, int chunk_rows,
+    std::uint64_t max_edges, double min_weight) {
+  std::vector<std::uint64_t> offsets(workers + 1, 0);
+  int worker = 0;
+  massive_umap_scan(graph, chunk_rows, max_edges,
+    [&](std::uint64_t head, std::uint64_t, float weight,
+        std::uint64_t) {
+      while (worker + 1 < workers &&
+             head >= graph.vertices() * (worker + 1) / workers) {
+        ++worker;
+      }
+      if (weight >= min_weight) ++offsets[worker + 1];
+    });
+  for (int i = 1; i <= workers; ++i) offsets[i] += offsets[i - 1];
+  return offsets;
+}
+
+std::pair<std::uint64_t, std::uint64_t>
+massive_umap_synchronized_epoch(CsrGraphSource& graph,
+    const std::string& offsets_path, const std::string& indices_path,
+    const std::string& weights_path, float* layout,
+    std::atomic<std::int64_t>* delta, std::uint64_t elements,
+    int dimensions, int chunk_rows, std::uint64_t max_edges,
+    int workers, int epoch, int n_epochs, int negative_rate,
+    double learning_rate, double a, double b, double gamma,
+    int seed, float max_weight, double scale,
+    const std::vector<std::uint64_t>& worker_offsets) {
+  parallel_rows(elements, workers,
+    [&](std::uint64_t begin, std::uint64_t end, int) {
+      for (auto i = begin; i < end; ++i) {
+        delta[i].store(0, std::memory_order_relaxed);
+      }
+    });
+  const double alpha = learning_rate * (1.0 -
+    static_cast<double>(epoch) / n_epochs);
+  const double threshold = static_cast<double>(max_weight) / n_epochs;
+  std::vector<std::pair<std::uint64_t, std::uint64_t>> counts(workers);
+  std::vector<std::exception_ptr> errors(workers);
+  parallel_rows(graph.vertices(), workers,
+    [&](std::uint64_t begin, std::uint64_t end, int worker) {
+      try {
+        CsrGraphSource source(offsets_path, indices_path,
+                              weights_path, graph.vertices(), "stream");
+        auto active_edge = worker_offsets[worker];
+        for (auto first = begin + 1; first <= end;) {
+          const auto rows = std::min(source.bounded_rows(first,
+            chunk_rows, max_edges), end - first + 1);
+          source.visit(first, rows,
+            [&](std::uint64_t head, std::uint32_t tail,
+                float weight, std::uint64_t) {
+              if (weight < threshold) return;
+              const auto sample_edge = active_edge++;
+              const double period = max_weight /
+                std::max(static_cast<double>(weight), 1e-6);
+              if (!massive_umap_due(epoch, period)) return;
+              const int negatives = massive_umap_negative_count(
+                epoch, period, negative_rate);
+              const int sampled = massive_umap_synchronized_edge(
+                layout, delta,
+                head - 1, tail - 1, dimensions, a, b, gamma,
+                alpha, scale, negatives, graph.vertices(), seed,
+                epoch, sample_edge);
+              ++counts[worker].first;
+              counts[worker].second += sampled;
+            }, false);
+          first += rows;
+        }
+      } catch (...) {
+        errors[worker] = std::current_exception();
+      }
+    });
+  for (const auto& error : errors) {
+    if (error) std::rethrow_exception(error);
+  }
+  parallel_rows(elements, workers,
+    [&](std::uint64_t begin, std::uint64_t end, int) {
+      for (auto i = begin; i < end; ++i) {
+        const double update = static_cast<double>(
+          delta[i].load(std::memory_order_relaxed)) / scale;
+        layout[i] += static_cast<float>(
+          std::max(-16.0, std::min(16.0, update)));
+      }
+    });
+  std::pair<std::uint64_t, std::uint64_t> total{};
+  for (const auto& count : counts) {
+    total.first += count.first;
+    total.second += count.second;
+  }
+  return total;
+}
+
+template <typename Function>
+void massive_umap_scan(CsrGraphSource& graph, int chunk_rows,
                        std::uint64_t max_edges, Function consume) {
   for (std::uint64_t first = 1; first <= graph.vertices();) {
     const auto count = graph.bounded_rows(first, chunk_rows, max_edges);
@@ -3780,7 +3954,9 @@ List massive_umap_optimize_cpp(std::string offsets_path,
                                double negative_done = 0,
                                int checkpoint_every = 0,
                                SEXP checkpoint_callback = R_NilValue,
-                               std::string layout_storage = "memory") {
+                               std::string layout_storage = "memory",
+                               int n_threads = 1,
+                               std::string cpu_update = "sgd") {
   require_little_endian();
   if (dimensions < 2 || dimensions > 3 || n_epochs < 2 ||
       negative_sample_rate < 0 || negative_sample_rate > 1000 ||
@@ -3792,7 +3968,10 @@ List massive_umap_optimize_cpp(std::string offsets_path,
       (start_epoch > 0 && checkpoint_every == 0) ||
       (checkpoint_every > 0 && checkpoint_callback == R_NilValue) ||
       (checkpoint_every == 0 && checkpoint_callback != R_NilValue) ||
-      (layout_storage != "memory" && layout_storage != "mmap")) {
+      (layout_storage != "memory" && layout_storage != "mmap") ||
+      n_threads < 1 || n_threads > 128 ||
+      (cpu_update != "sgd" && cpu_update != "synchronized") ||
+      (cpu_update == "sgd" && n_threads != 1)) {
     Rcpp::stop("Invalid experimental UMAP optimizer settings.");
   }
   const auto initial_positive = whole_number(positive_done,
@@ -3809,17 +3988,23 @@ List massive_umap_optimize_cpp(std::string offsets_path,
                         dimensions);
   const auto elements = checked_product(graph.vertices(), dimensions);
   const auto bytes = checked_product(elements, 4);
+  if (static_cast<std::uint64_t>(n_threads) > graph.vertices()) {
+    Rcpp::stop("UMAP CPU workers exceed graph vertices.");
+  }
   const auto resident_bytes = layout_storage == "memory" ? bytes :
     static_cast<std::uint64_t>(std::min(chunk_rows, 8192)) *
       dimensions * 4;
+  const auto delta_bytes = cpu_update == "synchronized" ?
+    checked_product(elements, 8) : 0;
   if (!std::isfinite(memory_limit_bytes) ||
       memory_limit_bytes < 128.0 * 1024 * 1024 +
-        resident_bytes * 1.25 ||
+        resident_bytes * 1.25 + delta_bytes ||
       elements > std::numeric_limits<std::size_t>::max()) {
     Rcpp::stop("UMAP layout exceeds the experimental RAM budget.");
   }
   const auto edge_capacity = std::min(4000000.0,
-    std::max(65536.0, (memory_limit_bytes - resident_bytes) / 64.0));
+    std::max(65536.0, (memory_limit_bytes - resident_bytes -
+      delta_bytes) / 64.0));
   const auto max_edges = static_cast<std::uint64_t>(edge_capacity);
   std::unique_ptr<MappedUmapLayout> mapped;
   std::vector<float> resident;
@@ -3849,14 +4034,49 @@ List massive_umap_optimize_cpp(std::string offsets_path,
   const double min_sample_weight =
     static_cast<double>(max_weight) / n_epochs;
   const auto curve = fastembedr_umap_curve(min_dist);
+  std::unique_ptr<std::atomic<std::int64_t>[]> delta;
+  std::vector<std::uint64_t> worker_offsets;
+  double delta_scale = 0.0;
+  if (cpu_update == "synchronized") {
+    for (std::uint64_t element = 0; element < elements; ++element) {
+      if (!std::isfinite(layout[element])) {
+        Rcpp::stop("Synchronized UMAP initialization is non-finite.");
+      }
+    }
+    const double contributions = static_cast<double>(graph.edges()) *
+      (1.0 + negative_sample_rate);
+    const double limit = std::ldexp(1.0, 61) /
+      (4.0 * learning_rate * contributions);
+    if (!std::isfinite(limit) || limit < 256.0) {
+      Rcpp::stop("Synchronized UMAP delta exceeds the fixed-point "
+                 "overflow budget.");
+    }
+    delta_scale = std::exp2(std::floor(std::log2(
+      std::min(limit, std::ldexp(1.0, 20)))));
+    delta.reset(new std::atomic<std::int64_t>[
+      static_cast<std::size_t>(elements)]);
+    worker_offsets = massive_umap_worker_offsets(graph, n_threads,
+      chunk_rows, max_edges, min_sample_weight);
+  }
   std::uint64_t positive_updates = initial_positive;
   std::uint64_t negative_updates = initial_negative;
   int next_percent = (start_epoch * 100 / n_epochs / 10 + 1) * 10;
   for (int epoch = start_epoch; epoch < n_epochs; ++epoch) {
     const double alpha = learning_rate *
       (1.0 - static_cast<double>(epoch) / n_epochs);
-    std::uint64_t active_edge = 0;
-    massive_umap_scan(graph, chunk_rows, max_edges,
+    if (cpu_update == "synchronized") {
+      const auto counts = massive_umap_synchronized_epoch(graph,
+        offsets_path, indices_path, weights_path, layout,
+        delta.get(), elements, dimensions, chunk_rows,
+        max_edges, n_threads, epoch, n_epochs,
+        negative_sample_rate, learning_rate, curve.first,
+        curve.second, repulsion_strength, seed, max_weight,
+        delta_scale, worker_offsets);
+      positive_updates += counts.first;
+      negative_updates += counts.second;
+    } else {
+      std::uint64_t active_edge = 0;
+      massive_umap_scan(graph, chunk_rows, max_edges,
       [&](std::uint64_t head, std::uint64_t tail,
           float weight, std::uint64_t) {
       if (weight < min_sample_weight) return;
@@ -3878,7 +4098,8 @@ List massive_umap_optimize_cpp(std::string offsets_path,
           curve.first, curve.second, repulsion_strength, alpha);
         ++negative_updates;
       }
-    });
+      });
+    }
     for (std::uint64_t element = 0; element < elements; ++element) {
       if (!std::isfinite(layout[element])) {
         Rcpp::stop("Experimental UMAP layout became non-finite.");

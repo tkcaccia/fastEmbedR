@@ -2261,6 +2261,9 @@ List massive_tsne_optimize_cpp(std::string offsets_path,
   const auto started = std::chrono::steady_clock::now();
   const int total = early_iter + normal_iter;
   int next_percent = 10;
+  double repulsion_seconds = 0.0;
+  double attraction_seconds = 0.0;
+  double update_seconds = 0.0;
   for (int iter = start_iter; iter < total; ++iter) {
     const bool early = iter < early_iter;
     const double phase_exag = early ? early_exaggeration : exaggeration;
@@ -2268,6 +2271,7 @@ List massive_tsne_optimize_cpp(std::string offsets_path,
       static_cast<double>(n) / phase_exag : learning_rate);
     const float momentum = static_cast<float>(early ?
       initial_momentum : final_momentum);
+    const auto phase_start = std::chrono::steady_clock::now();
     if (dims == 2) {
       compute_gradient_fft_grid_f(nullptr, y, n, dims, 1.0f,
         threads, &fft_workspace, grad, 0);
@@ -2275,13 +2279,23 @@ List massive_tsne_optimize_cpp(std::string offsets_path,
       compute_gradient_fft_3d_f(nullptr, y, n, 1.0f,
         threads, fft_3d_workspace, grad);
     }
+    const auto after_repulsion = std::chrono::steady_clock::now();
     massive_csr_attraction(offsets_path, indices_path,
       weights_path, n, access, y, dims,
-      static_cast<float>(phase_exag), grad);
+      static_cast<float>(phase_exag), threads, grad);
+    Rcpp::checkUserInterrupt();
+    const auto after_attraction = std::chrono::steady_clock::now();
     apply_open_tsne_update_f(y, update, gains, grad, n, dims,
       phase_lr, momentum, static_cast<float>(min_gain),
       static_cast<float>(max_step_norm), threads);
     zero_mean_f(y, n, dims);
+    const auto after_update = std::chrono::steady_clock::now();
+    repulsion_seconds += std::chrono::duration<double>(
+      after_repulsion - phase_start).count();
+    attraction_seconds += std::chrono::duration<double>(
+      after_attraction - after_repulsion).count();
+    update_seconds += std::chrono::duration<double>(
+      after_update - after_attraction).count();
     if (checkpoint_every > 0 &&
         ((iter + 1) % checkpoint_every == 0 || iter + 1 == total)) {
       const auto snapshot = output_path + ".iter_" +
@@ -2320,6 +2334,10 @@ List massive_tsne_optimize_cpp(std::string offsets_path,
     Rcpp::Named("iterations") = total,
     Rcpp::Named("resumed_from_iteration") = start_iter,
     Rcpp::Named("n_threads") = threads,
+    Rcpp::Named("stage_seconds") = List::create(
+      Rcpp::Named("repulsion_fft") = repulsion_seconds,
+      Rcpp::Named("attraction_graph") = attraction_seconds,
+      Rcpp::Named("coordinate_update") = update_seconds),
     Rcpp::Named("elapsed_seconds") = elapsed
   );
 }
