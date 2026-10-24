@@ -1538,7 +1538,8 @@ test_that("disk-backed fuzzy union agrees with native UMAP CSR", {
     expect_error(massive_fuzzy_graph(output, 8L),
         "content differs")
     unlink(paste0(output, ".fuzzy.rds"))
-    expect_error(massive_fuzzy_graph(output, 8L), "manifest")
+    expect_silent(expect_error(massive_fuzzy_graph(output, 8L),
+        "manifest"))
     expect_false(massive_csr_graph(output, 8L)$symmetrized)
 })
 
@@ -1949,7 +1950,8 @@ test_that("disk-backed t-SNE affinities match native float32 affinities", {
     saved <- readRDS(manifest)
     saved$perplexity <- 4
     saveRDS(saved, manifest)
-    expect_error(massive_affinity_graph(output, 8L), "manifest")
+    expect_silent(expect_error(massive_affinity_graph(output, 8L),
+        "manifest"))
     saved$perplexity <- 2.5
     saved$sort_resources$peak_payload_bytes <- Inf
     saveRDS(saved, manifest)

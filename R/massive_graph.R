@@ -440,7 +440,8 @@ massive_fuzzy_graph <- function(prefix, n_vertices,
     graph <- massive_csr_graph(prefix, n_vertices, access)
     path <- paste0(sub("\\.offsets\\.u64$", "",
         graph$offsets_path), ".fuzzy.rds")
-    manifest <- tryCatch(readRDS(path), error = function(e) NULL)
+    manifest <- if (file.exists(path)) tryCatch(readRDS(path),
+        error = function(e) NULL) else NULL
     if (!is.list(manifest) ||
         !identical(manifest$version, 1L) ||
         !identical(manifest$method, "umap_fuzzy_union") ||
@@ -824,7 +825,8 @@ massive_affinity_graph <- function(prefix, n_vertices,
     graph <- massive_csr_graph(prefix, n_vertices, access)
     path <- paste0(sub("\\.offsets\\.u64$", "",
         graph$offsets_path), ".affinity.rds")
-    manifest <- tryCatch(readRDS(path), error = function(e) NULL)
+    manifest <- if (file.exists(path)) tryCatch(readRDS(path),
+        error = function(e) NULL) else NULL
     if (!is.list(manifest) ||
         !identical(manifest$version, 1L) ||
         !identical(manifest$method, "tsne_compact_affinity") ||
@@ -832,8 +834,7 @@ massive_affinity_graph <- function(prefix, n_vertices,
         !identical(manifest$n_edges, graph$n_edges) ||
         !identical(manifest$max_degree, graph$max_degree) ||
         !is.numeric(manifest$source_k) || length(manifest$source_k) != 1L ||
-        !is.finite(manifest$source_k) ||
-        manifest$source_k < 1 ||
+        !is.finite(manifest$source_k) || manifest$source_k < 1 ||
         manifest$source_k != floor(manifest$source_k) ||
         !is.numeric(manifest$perplexity) ||
         length(manifest$perplexity) != 1L ||
