@@ -5443,28 +5443,44 @@ List massive_vote_landmarks_cpp(Rcpp::IntegerMatrix indices,
   NumericVector confidence(rows);
   parallel_rows(rows, n_threads, [&](std::uint64_t begin,
                                      std::uint64_t end, int) {
-    std::vector<double> votes(communities + 1, 0.0);
+    const bool sparse = communities > 65536;
+    std::vector<double> dense_votes;
+    std::unordered_map<int, double> votes;
+    if (sparse) {
+      votes.reserve(k);
+    } else {
+      dense_votes.resize(static_cast<std::size_t>(communities) + 1, 0.0);
+    }
     std::vector<int> touched;
     touched.reserve(k);
     for (std::uint64_t row = begin; row < end; ++row) {
+      if (sparse) votes.clear();
       touched.clear();
       double total = 0.0;
       for (int col = 0; col < k; ++col) {
         const int label = landmark_labels[indices(row, col) - 1];
         const double weight = 1.0 / (distances(row, col) + 1e-3);
-        if (votes[label] == 0.0) touched.push_back(label);
-        votes[label] += weight;
+        if (sparse) {
+          const auto entry = votes.emplace(label, 0.0);
+          if (entry.second) touched.push_back(label);
+          entry.first->second += weight;
+        } else {
+          if (dense_votes[label] == 0.0) touched.push_back(label);
+          dense_votes[label] += weight;
+        }
         total += weight;
       }
       int best = landmarks;
       double strongest = -1.0;
       for (const int label : touched) {
-        if (votes[label] > strongest ||
-            (votes[label] == strongest && label < best)) {
+        const double score = sparse ? votes.at(label) :
+          dense_votes[label];
+        if (score > strongest ||
+            (score == strongest && label < best)) {
           best = label;
-          strongest = votes[label];
+          strongest = score;
         }
-        votes[label] = 0.0;
+        if (!sparse) dense_votes[label] = 0.0;
       }
       membership[row] = best;
       confidence[row] = strongest / total;

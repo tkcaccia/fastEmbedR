@@ -22,8 +22,9 @@ massive_cluster_resources <- function(graph, reference_graph, workers,
     # Include R edges and native sorting, adjacency, and contraction buffers.
     graph_bytes <- 128 * length(reference_graph$weight) +
         256 * reference_graph$n_vertices
-    fixed <- 64 * 1024^2 + graph_bytes +
-        8 * graph$n_reference * workers
+    vote_worker_bytes <- max(8 * min(graph$n_reference, 65536),
+        64 * graph$ncol) * workers
+    fixed <- 64 * 1024^2 + graph_bytes + vote_worker_bytes
     if (method == "walktrap") {
         fixed <- fixed + 16 * reference_graph$n_vertices^2
     }
@@ -44,6 +45,7 @@ massive_cluster_resources <- function(graph, reference_graph, workers,
     result <- list(chunk_rows = rows,
         peak_ram_bytes = fixed + rows * per_row,
         reference_graph_estimate_bytes = graph_bytes,
+        vote_worker_bytes = vote_worker_bytes,
         memory_limit_bytes = limit, output_bytes = graph$nrow * 8)
     if (backend == "cuda") {
         result <- c(result, massive_cluster_cuda_resources(
@@ -168,6 +170,9 @@ massive_cluster_result <- function(knn, clustered, paths, controls,
         assignment_backend = "cpu",
         graph_backend = knn$backend,
         n.cores = controls$workers,
+        assignment_workers = controls$workers,
+        fitting_cpu_workers = if (controls$backend == "cpu") 1L else 0L,
+        input_storage = "file_backed_knn",
         reference_rows_preserved = !is.null(reference_rows),
         resources = resources, checkpoint = checkpoint,
         elapsed_sec = unname(proc.time()[[3L]] - started),

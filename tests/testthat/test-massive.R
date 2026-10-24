@@ -3344,10 +3344,15 @@ test_that("all native graph methods vote into file-backed labels", {
         chunk_rows = 6L, memory_limit = "256MB", seed = 3L)
     expect_identical(reused$backend, "cpu")
     expect_identical(reused$graph_backend, "cuda")
+    expect_identical(reused$assignment_workers, 2L)
+    expect_identical(reused$fitting_cpu_workers, 1L)
+    expect_identical(reused$input_storage, "file_backed_knn")
     expect_equal(massive_read_cluster_rows(reused, 1, 24L), baseline)
     resources <- fastEmbedR:::massive_cluster_resources(knn, graph,
         2L, 6L, "256MB")
     expect_gt(resources$reference_graph_estimate_bytes, 0)
+    expect_equal(resources$vote_worker_bytes,
+        max(8 * min(knn$n_reference, 65536), 64 * knn$ncol) * 2)
     expect_error(massive_cluster_landmarks(graph, knn,
         tempfile(), method = "walktrap", backend = "cuda"),
         "Walktrap is CPU-only")
