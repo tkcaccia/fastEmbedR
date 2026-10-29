@@ -17,7 +17,11 @@
 #' @param pca_dims Optional PCA dimension before KNN.
 #' @param metric KNN distance metric for one-call matrix input: `"euclidean"`,
 #'   `"cosine"`, or `"correlation"`.
-#' @param nn Optional precomputed KNN result for resident matrix input. In
+#' @param nn Optional precomputed KNN result for resident matrix input, with
+#'   one row per observation. By default all non-self neighbors are used.
+#'   Explicit `n_neighbors` selects the first requested host KNN columns and
+#'   must not exceed the available width. GPU-resident KNN requires an exact
+#'   width match. In
 #'   EXPERIMENTAL `massive = "landmark"` mode, a previous massive landmark
 #'   embedding reuses its saved selection and query-to-landmark KNN. Its
 #'   source, reference, neighbor count, and backend must match.
@@ -142,9 +146,18 @@ prepare_umap_matrix <- function(data, standardize, pca_dims, seed, backend,
     list(prepared = timed$value, time = timed$time)
 }
 
-validate_umap_supplied_knn <- function(nn, backend, n) {
+validate_umap_supplied_knn <- function(nn, backend, n, n_neighbors) {
     if (!fastembedr_is_gpu_knn(nn)) {
-        return(coerce_knn_input(nn))
+        knn <- coerce_knn_input(nn)
+        if (nrow(knn$indices) != n) {
+            stop("KNN matrix row count must match `nrow(data)`.", call. = FALSE)
+        }
+        if (n_neighbors > knn$n_neighbors) {
+            stop("`n_neighbors` is larger than the supplied KNN width.",
+                call. = FALSE)
+        }
+        return(materialize_knn_range(knn$indices, knn$distances,
+            knn$col_start, n_neighbors))
     }
     nn <- fastembedr_as_gpu_knn(nn)
     if (!identical(backend, "cuda")) {
@@ -157,6 +170,9 @@ validate_umap_supplied_knn <- function(nn, backend, n) {
         stop("Supplied GPU-resident KNN output is incompatible with UMAP.",
             call. = FALSE
         )
+    }
+    if (info$k != n_neighbors) {
+        stop("Supplied GPU KNN width must match `n_neighbors`.", call. = FALSE)
     }
     nn
 }
@@ -179,7 +195,7 @@ compute_umap_matrix_knn <- function(x, nn, n_neighbors, metric, state) {
                 target_recall = policy$target_recall, keep_gpu = keep_gpu
             )
         } else {
-            validate_umap_supplied_knn(nn, state$backend, nrow(x))
+            validate_umap_supplied_knn(nn, state$backend, nrow(x), n_neighbors)
         }
     })
     list(knn = result, engine = engine, time = timed)
@@ -318,8 +334,9 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
         seed, state$backend, state$n_threads)
     x <- prepared$prepared$data
     metric <- resolve_embedding_metric(metric, x)
-    if (is.null(n_neighbors)) n_neighbors <- auto_embedding_k(
-        nrow(x), "umap", include_self = FALSE)
+    if (is.null(n_neighbors)) n_neighbors <- if (!is.null(nn)) {
+        resolve_umap_layout_k(nn, list())
+    } else auto_embedding_k(nrow(x), "umap", include_self = FALSE)
     n_neighbors <- validate_umap_n_neighbors(n_neighbors, nrow(x))
     state$n_neighbors <- n_neighbors
     knn_state <- compute_umap_matrix_knn(x, nn, n_neighbors, metric, state)
