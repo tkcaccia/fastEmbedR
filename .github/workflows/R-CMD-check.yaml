@@ -65,6 +65,11 @@ jobs:
           r-version: ${{ matrix.config.r }}
           use-public-rspm: true
       - uses: r-lib/actions/setup-pandoc@v2
+      - name: Prepare macOS OpenMP for faissR
+        if: runner.os == 'macOS'
+        run: |
+          brew install libomp
+          echo "LIBOMP_HOME=$(brew --prefix libomp)" >> "$GITHUB_ENV"
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           extra-packages: |

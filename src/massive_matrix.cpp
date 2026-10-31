@@ -2467,9 +2467,11 @@ class GraphBucketWriter {
     }
     drained_[bucket] = true;
     if (!created_[bucket]) return;
-    RunReader<Record> reader(paths_[bucket]);
-    Record record{};
-    while (reader.next(record)) consume(record);
+    {
+      RunReader<Record> reader(paths_[bucket]);
+      Record record{};
+      while (reader.next(record)) consume(record);
+    }
     disk_->remove(paths_[bucket]);
   }
 

@@ -58,12 +58,17 @@ test_that("file-backed Metal KNN rejects unsupported routes", {
     expect_error(massive_full_knn_graph(source, 2L, tempfile(),
         backend = "metal", method = "exact", devices = 0L),
         "requires CUDA")
-    expect_error(massive_landmark_knn(source, source, 2L,
-        tempfile(), backend = "metal", method = "hnsw"),
-        "Metal landmark KNN supports exact search only")
-    expect_error(massive_landmark_knn(source, source, 2L,
-        tempfile(), backend = "metal", n.cores = 4L),
-        "n.cores = 1")
+    with_mocked_bindings(
+        native_metal_knn_available_cpp = function() TRUE,
+        {
+            expect_error(massive_landmark_knn(source, source, 2L,
+                tempfile(), backend = "metal", method = "hnsw"),
+                "Metal landmark KNN supports exact search only")
+            expect_error(massive_landmark_knn(source, source, 2L,
+                tempfile(), backend = "metal", n.cores = 4L),
+                "n.cores = 1")
+        },
+        .package = "fastEmbedR")
     expect_error(massive_full_knn_graph(source, 2L, tempfile(),
         backend = "metal", n.cores = 4L), "n.cores = 1")
 })
