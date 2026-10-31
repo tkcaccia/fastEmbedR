@@ -5,7 +5,7 @@ test_that("UMAP rejects supplied KNN with the wrong row count", {
         "row count must match", fixed = TRUE)
 })
 
-test_that("UMAP uses the requested host KNN width and reports it consistently", {
+test_that("UMAP honors and reports supplied host KNN width", {
     x <- as.matrix(iris[1:20, 1:4])
     nn <- precompute_knn(x, k = 5L, backend = "cpu")
     fit <- umap(x, nn = nn, n_neighbors = 3L, backend = "cpu",

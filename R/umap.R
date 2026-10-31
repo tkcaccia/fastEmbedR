@@ -343,8 +343,7 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
     embedding <- timed_do_call(fast_knn_umap, list(
         indices = knn_state$knn, n_components = state$n_components,
         seed = seed, verbose = verbose, backend = state$backend,
-        n_threads = state$n_threads, graph_mode = state$graph_mode
-    ))
+        n_threads = state$n_threads, graph_mode = state$graph_mode))
     assemble_umap_matrix_fit(data, prepared, knn_state, embedding,
         state, standardize, metric)
 }
