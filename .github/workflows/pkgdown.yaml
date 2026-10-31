@@ -24,7 +24,11 @@ jobs:
       - name: Prepare macOS OpenMP for faissR
         run: |
           brew install libomp
-          echo "LIBOMP_HOME=$(brew --prefix libomp)" >> "$GITHUB_ENV"
+          omp_prefix="$RUNNER_TEMP/faissr-libomp"
+          mkdir -p "$omp_prefix/lib"
+          ln -s "$(brew --prefix libomp)/include" "$omp_prefix/include"
+          ln -s "$(R RHOME)/lib/libomp.dylib" "$omp_prefix/lib/libomp.dylib"
+          echo "LIBOMP_HOME=$omp_prefix" >> "$GITHUB_ENV"
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           extra-packages: |
