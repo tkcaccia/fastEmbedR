@@ -24,6 +24,7 @@ jobs:
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           extra-packages: |
+            github::tkcaccia/faissR@7a22de471eb6d83dd9d1873ef0f89401ea8f11f5
             any::pkgdown
             local::.
           needs: website

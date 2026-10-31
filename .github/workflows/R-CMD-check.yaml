@@ -25,6 +25,7 @@ jobs:
       - uses: r-lib/actions/setup-pandoc@v2
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
+          extra-packages: github::tkcaccia/faissR@7a22de471eb6d83dd9d1873ef0f89401ea8f11f5
           needs: check
       - name: Enforce source style
         run: Rscript tools/check_source_style.R
@@ -67,6 +68,7 @@ jobs:
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           extra-packages: |
+            github::tkcaccia/faissR@7a22de471eb6d83dd9d1873ef0f89401ea8f11f5
             any::rcmdcheck
           needs: check
       - name: Download canonical source package
