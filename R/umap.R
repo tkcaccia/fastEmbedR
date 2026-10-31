@@ -104,7 +104,7 @@ resolve_umap_layout_k <- function(data, cfg) {
     if (fastembedr_is_gpu_knn(data)) {
         return(as.integer(fastembedr_gpu_knn_info(data)$k))
     }
-    as.integer(ncol(coerce_knn_input(data)$indices))
+    as.integer(coerce_knn_input(data)$n_neighbors)
 }
 
 umap_knn_input_fit <- function(data, nn, state, seed, verbose) {

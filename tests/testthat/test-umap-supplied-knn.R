@@ -22,6 +22,14 @@ test_that("UMAP honors and reports supplied host KNN width", {
     default <- umap(x, nn = nn, backend = "cpu", n.cores = 1L)
     expect_equal(default$metrics$n_neighbors, 5L)
     expect_equal(default$parameters$knn_n_neighbors, 5L)
+
+    supplied <- list(indices = cbind(seq_len(nrow(x)), nn$indices),
+        distances = cbind(0,
+            fastEmbedR:::embedding_dense_double_matrix(nn$distances)))
+    default_self <- umap(x, nn = supplied, backend = "cpu",
+        keep_knn = TRUE, n.cores = 1L)
+    expect_equal(ncol(default_self$knn$indices), 5L)
+    expect_equal(default_self$parameters$knn_n_neighbors, 5L)
 })
 
 test_that("UMAP trims non-self neighbors while preserving float32 distances", {
@@ -37,6 +45,11 @@ test_that("UMAP trims non-self neighbors while preserving float32 distances", {
     expect_s4_class(fit$knn$distances, "float32")
     expect_equal(fit$parameters$knn_n_neighbors, 3L)
     expect_true(all(is.finite(fit$layout)))
+
+    default <- umap(x, nn = supplied, backend = "cpu",
+        keep_knn = TRUE, n.cores = 1L)
+    expect_equal(ncol(default$knn$indices), 5L)
+    expect_equal(default$parameters$knn_n_neighbors, 5L)
 })
 
 test_that("UMAP rejects incompatible GPU KNN widths without materializing", {
