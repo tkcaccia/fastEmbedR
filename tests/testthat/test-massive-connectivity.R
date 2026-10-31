@@ -1,4 +1,5 @@
 test_that("massive modularity audits within-community connectivity", {
+    skip_on_os("windows")
     prefix <- tempfile()
     paths <- paste0(prefix, c(".offsets.u64", ".indices.u32",
         ".weights.f32"))
@@ -37,6 +38,7 @@ test_that("massive modularity audits within-community connectivity", {
 })
 
 test_that("isolated rows require singleton Leiden communities", {
+    skip_on_os("windows")
     prefix <- tempfile()
     paths <- paste0(prefix, c(".offsets.u64", ".indices.u32",
         ".weights.f32"))

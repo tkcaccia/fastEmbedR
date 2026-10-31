@@ -21,9 +21,18 @@ jobs:
       - uses: actions/checkout@v5
       - uses: r-lib/actions/setup-r@v2
       - uses: r-lib/actions/setup-pandoc@v2
+      - name: Prepare macOS OpenMP for faissR
+        run: |
+          brew install libomp
+          omp_prefix="$RUNNER_TEMP/faissr-libomp"
+          mkdir -p "$omp_prefix/lib"
+          ln -s "$(brew --prefix libomp)/include" "$omp_prefix/include"
+          ln -s "$(R RHOME)/lib/libomp.dylib" "$omp_prefix/lib/libomp.dylib"
+          echo "LIBOMP_HOME=$omp_prefix" >> "$GITHUB_ENV"
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           extra-packages: |
+            github::tkcaccia/faissR@7a22de471eb6d83dd9d1873ef0f89401ea8f11f5
             any::pkgdown
             local::.
           needs: website

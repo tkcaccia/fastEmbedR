@@ -55,7 +55,11 @@ from the supplied matrix.}
 \item{metric}{KNN distance metric for one-call matrix input: \code{"euclidean"},
 \code{"cosine"}, or \code{"correlation"}.}
 
-\item{nn}{Optional precomputed KNN result for resident matrix input. In
+\item{nn}{Optional precomputed KNN result for resident matrix input, with
+one row per observation. By default all non-self neighbors are used.
+Explicit \code{n_neighbors} selects the first requested host KNN columns and
+must not exceed the available width. GPU-resident KNN requires an exact
+width match. In
 EXPERIMENTAL \code{massive = "landmark"} mode, a previous massive landmark
 embedding reuses its saved selection and query-to-landmark KNN. Its
 source, reference, neighbor count, and backend must match.}

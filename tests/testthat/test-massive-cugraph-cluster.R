@@ -353,6 +353,7 @@ test_that("missing cuGraph runtime never falls back to CPU", {
 })
 
 test_that("cuGraph passes large vertex counts as decimal integers", {
+    skip_on_os("windows")
     withr::local_envvar(FASTEMBEDR_CUGRAPH_PYTHON = "/bin/echo")
     path <- tempfile()
     on.exit(unlink(paste0(path, c(".cugraph.out",

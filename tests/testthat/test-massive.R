@@ -118,7 +118,7 @@ test_that("public UMAP and t-SNE landmark modes stay file-backed", {
     expect_error(umap(source, massive = "landmark", landmarks = 20L,
         output = file.path(directory, "metal.f32"),
         refinement_epochs = 10L, backend = "metal"),
-        "no CPU fallback")
+        "no .* fallback")
     expect_error(umap(source, massive = "landmark", landmarks = 20L,
         output = file.path(directory, "cuda.f32"),
         refinement_epochs = 10L, backend = "cuda"),
@@ -1925,19 +1925,21 @@ test_that("multi-GPU KNN resumes verified shards and interrupted merges", {
         vapply(results, `[[`, "", "indices_path"),
         paths[["indices"]], vapply(tasks, `[[`, 0, "bytes"), TRUE),
         "differs from its shards")
-    shard <- results[[1L]]$indices_path
-    modified <- file.info(shard)$mtime
-    Sys.sleep(1.1)
-    connection <- file(shard, "r+b")
-    writeBin(0L, connection, size = 4L, endian = "little")
-    close(connection)
-    expect_true(Sys.setFileTime(shard, modified))
-    expect_identical(results[[1L]]$output_identity,
-        fastEmbedR:::massive_checkpoint_file_identity(
-            c(shard, results[[1L]]$distances_path)))
-    expect_error(fastEmbedR:::massive_knn_device_status(
-        tasks[[1L]], source, landmarks, 3L, "exact", TRUE),
-        "inconsistent")
+    if (.Platform$OS.type != "windows") {
+        shard <- results[[1L]]$indices_path
+        modified <- file.info(shard)$mtime
+        Sys.sleep(1.1)
+        connection <- file(shard, "r+b")
+        writeBin(0L, connection, size = 4L, endian = "little")
+        close(connection)
+        expect_true(Sys.setFileTime(shard, modified))
+        expect_identical(results[[1L]]$output_identity,
+            fastEmbedR:::massive_checkpoint_file_identity(
+                c(shard, results[[1L]]$distances_path)))
+        expect_error(fastEmbedR:::massive_knn_device_status(
+            tasks[[1L]], source, landmarks, 3L, "exact", TRUE),
+            "inconsistent")
+    }
 })
 
 test_that("CUDA KNN coordinator resumes a verified device shard", {

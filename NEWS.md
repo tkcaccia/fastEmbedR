@@ -1,5 +1,11 @@
 # fastEmbedR 0.1
 
+* Fix supplied KNN validation in `umap(data, nn = ...)`: reject row-count
+  mismatches, honor explicit host `n_neighbors`, and reject insufficient
+  neighbor support. With `n_neighbors = NULL`, use all supplied non-self
+  neighbors. Require an exact width match for GPU-resident supplied KNN.
+  Report the effective neighborhood size consistently.
+
 * Report landmark reference-stage memory ratios and query-to-reference KNN
   payload estimates separately from timing. These estimates distinguish
   optimizer memory reduction from total peak RSS.
