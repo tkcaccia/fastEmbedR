@@ -1,15 +1,15 @@
 # fastEmbedR
 
 **Home** |
-[Installation](docs/installation.md) |
-[Implementation](docs/implementation.md) |
-[Performance Engineering](docs/backend-performance-engineering.md) |
-[Examples](docs/examples.md) |
-[Benchmarks](docs/benchmarks.md) |
-[API](docs/usage-api.md) |
-[Reproducibility](docs/reproducibility.md) |
-[Development](docs/development.md) |
-[References](docs/references.md) |
+[Installation][installation] |
+[Implementation][implementation] |
+[Performance Engineering][performance-engineering] |
+[Examples][examples] |
+[Benchmarks][benchmarks] |
+[API][api] |
+[Reproducibility][reproducibility] |
+[Development][development] |
+[References][references] |
 [Benchmark repository](https://github.com/tkcaccia/fastEmbedR-extra)
 
 `fastEmbedR` is a native R/C++ package for fast dimensionality reduction from
@@ -44,7 +44,7 @@ architectural compatibility. Metal performance has been benchmarked only on
 one Apple M3 system; other Apple Silicon systems are compatibility targets and
 do not inherit the M3 performance results. CUDA architecture flags and a
 successful build likewise do not constitute runtime or performance evidence
-for an untested GPU. See the [hardware evidence contract](docs/backend-validation.md).
+for an untested GPU. See the [hardware evidence contract][validation].
 
 The intended workflow is:
 
@@ -201,7 +201,7 @@ FASTEMBEDR_USE_CUDA=0 \
 R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 ```
 
-See [Installation](docs/installation.md) for `fastEmbedR` CPU, Metal, and CUDA
+See [Installation][installation] for `fastEmbedR` CPU, Metal, and CUDA
 embedding builds, including RAPIDS cuVS linkage for CUDA KNN.
 The CPU build requires R 4.6 or later, Rcpp, faissR, and a C++17 compiler.
 Accelerator libraries are optional and detected during source installation.
@@ -215,7 +215,7 @@ adapted code and linked libraries retain the FAISS MIT, Faiss-mlx Apache-2.0,
 and RAPIDS cuVS
 Apache-2.0 notices under `inst/LICENSES/`.
 
-See [Source provenance and licensing](docs/provenance-and-licensing.md) for the
+See [Source provenance and licensing][provenance] for the
 audit structure. Source-level records are maintained in [`inst/NOTICE`](inst/NOTICE),
 [`inst/COPYRIGHTS`](inst/COPYRIGHTS), and the machine-readable
 [`inst/THIRD_PARTY_DEPENDENCIES.json`](inst/THIRD_PARTY_DEPENDENCIES.json).
@@ -223,3 +223,26 @@ These files distinguish adapted or vendored code from optional linked
 libraries, Apple system frameworks, design references, and benchmark-only
 software. Every adapted/vendored component is pinned to an upstream commit and
 mapped to both package and upstream source files.
+
+[installation]:
+  https://github.com/tkcaccia/fastEmbedR/blob/main/docs/installation.md
+[implementation]:
+  https://github.com/tkcaccia/fastEmbedR/blob/main/docs/implementation.md
+[performance-engineering]:
+  https://github.com/tkcaccia/fastEmbedR/blob/main/docs/backend-performance-engineering.md
+[examples]:
+  https://github.com/tkcaccia/fastEmbedR/blob/main/docs/examples.md
+[benchmarks]:
+  https://github.com/tkcaccia/fastEmbedR/blob/main/docs/benchmarks.md
+[api]:
+  https://github.com/tkcaccia/fastEmbedR/blob/main/docs/usage-api.md
+[reproducibility]:
+  https://github.com/tkcaccia/fastEmbedR/blob/main/docs/reproducibility.md
+[development]:
+  https://github.com/tkcaccia/fastEmbedR/blob/main/docs/development.md
+[references]:
+  https://github.com/tkcaccia/fastEmbedR/blob/main/docs/references.md
+[validation]:
+  https://github.com/tkcaccia/fastEmbedR/blob/main/docs/backend-validation.md
+[provenance]:
+  https://github.com/tkcaccia/fastEmbedR/blob/main/docs/provenance-and-licensing.md
