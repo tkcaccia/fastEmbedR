@@ -357,8 +357,8 @@ fastembedr_graph_from_knn_cpp <- function(indices, distances, weight_type = "snn
     .Call(`_fastEmbedR_fastembedr_graph_from_knn_cpp`, indices, distances, weight_type, mutual, prune, n_threads)
 }
 
-fastembedr_graph_cluster_cpp <- function(from, to, weight, n_vertices, method = "leiden", resolution = 1.0, n_iterations = 10L, n_runs = 1L, seed = 1) {
-    .Call(`_fastEmbedR_fastembedr_graph_cluster_cpp`, from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed)
+fastembedr_graph_cluster_cpp <- function(from, to, weight, n_vertices, method = "leiden", resolution = as.numeric( c(1.0)), n_iterations = 10L, n_runs = 1L, seed = as.numeric( c(1.0)), projection = NULL, small_groups = NULL) {
+    .Call(`_fastEmbedR_fastembedr_graph_cluster_cpp`, from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, projection, small_groups)
 }
 
 fastembedr_graph_modularity_cpp <- function(from, to, weight, n_vertices, membership, resolution = 1.0) {

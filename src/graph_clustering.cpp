@@ -14,10 +14,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <climits>
 #include <cstdint>
 #include <limits>
 #include <numeric>
 #include <random>
+#include <queue>
 #include <set>
 #include <thread>
 #include <unordered_map>
@@ -573,6 +575,8 @@ int shared_neighbor_count(const std::vector<int>& left,
   return shared;
 }
 
+#include "graph_clustering_options.h"
+
 }  // namespace
 
 // [[Rcpp::export]]
@@ -727,52 +731,101 @@ Rcpp::List fastembedr_graph_cluster_cpp(Rcpp::IntegerVector from,
                                         Rcpp::NumericVector weight,
                                         int n_vertices,
                                         std::string method = "leiden",
-                                        double resolution = 1.0,
+                                        Rcpp::NumericVector resolution =
+                                          Rcpp::NumericVector::create(1.0),
                                         int n_iterations = 10,
                                         int n_runs = 1,
-                                        double seed = 1) {
+                                        Rcpp::NumericVector seed =
+                                          Rcpp::NumericVector::create(1.0),
+                                        SEXP projection = R_NilValue,
+                                        SEXP small_groups = R_NilValue) {
   if (method != "louvain" && method != "leiden") {
     Rcpp::stop("Native modularity clustering supports `louvain` and `leiden`.");
   }
-  if (!(resolution > 0.0) || !std::isfinite(resolution)) {
-    Rcpp::stop("`resolution` must be positive.");
+  if (!resolution.size() || !seed.size()) {
+    Rcpp::stop("Resolution and seed must be nonempty.");
+  }
+  for (double value : resolution) {
+    if (!std::isfinite(value) || value <= 0) {
+      Rcpp::stop("Resolution must contain positive finite values.");
+    }
+  }
+  for (double value : seed) {
+    if (!std::isfinite(value) || value != std::floor(value) ||
+        std::abs(value) > INT_MAX) Rcpp::stop("Seeds must be finite integers.");
   }
   if (n_iterations < 1 || n_runs < 1) {
     Rcpp::stop("`n_iterations` and `n_runs` must be positive.");
   }
-  const Graph graph = graph_from_r(from, to, weight, n_vertices);
-  std::vector<int> best(static_cast<std::size_t>(n_vertices));
-  std::iota(best.begin(), best.end(), 0);
-  double best_modularity = modularity_score(graph, best, resolution);
-  const std::uint64_t base_seed = static_cast<std::uint64_t>(std::llround(seed));
-
-  for (int run = 0; run < n_runs; ++run) {
-    const std::uint64_t run_seed = base_seed +
-      static_cast<std::uint64_t>(run) * 0x9e3779b97f4a7c15ULL;
-    std::vector<int> membership = method == "louvain" ?
-      louvain_partition(graph, n_iterations, resolution, run_seed) :
-      leiden_partition(graph, n_iterations, n_iterations, resolution, run_seed);
-    const double quality = modularity_score(graph, membership, resolution);
-    if (run == 0 || quality > best_modularity + 1e-12) {
-      best = std::move(membership);
-      best_modularity = quality;
-    }
+  const bool consensus = resolution.size() > 1 || seed.size() > 1;
+  if (consensus && n_runs != 1) {
+    Rcpp::stop("With vector controls use n_runs = 1; seed defines repeats.");
   }
-
-  Rcpp::IntegerVector membership(best.size());
-  for (std::size_t i = 0; i < best.size(); ++i) {
-    membership[static_cast<R_xlen_t>(i)] = best[i] + 1;
+  const double final_resolution = resolution[0];
+  Graph graph = graph_from_r(from, to, weight, n_vertices);
+  Rcpp::List consensus_meta, projection_meta, small_meta;
+  Rcpp::CharacterVector order;
+  if (consensus) {
+    graph = consensus_graph(graph, resolution, seed, method, n_iterations,
+      consensus_meta);
+    order.push_back("consensus");
   }
-  return Rcpp::List::create(
-    Rcpp::Named("membership") = membership,
-    Rcpp::Named("modularity") = best_modularity,
+  if (projection != R_NilValue) {
+    graph = projection_graph(graph, projection, projection_meta);
+    order.push_back("projection");
+  }
+  if ((consensus || projection != R_NilValue) &&
+      graph.edges.empty()) Rcpp::stop("Reweighting removed all graph edges.");
+  const std::uint64_t base_seed =
+    static_cast<std::uint64_t>(std::llround(seed[0]));
+  std::vector<int> best = cluster_partition(graph, method, final_resolution,
+    n_iterations, n_runs, base_seed);
+  order.push_back("clustering");
+  const std::vector<int> original = best;
+  Rcpp::IntegerVector reassigned, unassigned;
+  if (small_groups != R_NilValue) {
+    best = resolve_graph_groups(best, small_groups, small_meta,
+      reassigned, unassigned);
+    order.push_back("small_groups");
+  }
+  Rcpp::List result = Rcpp::List::create(
+    Rcpp::Named("membership") = graph_membership_r(best),
+    Rcpp::Named("modularity") = unassigned.size() ? NA_REAL :
+      modularity_score(graph, best, final_resolution),
     Rcpp::Named("n_communities") = community_count(best),
     Rcpp::Named("method") = method,
     Rcpp::Named("backend") = "cpu",
-    Rcpp::Named("connected_communities") = communities_are_connected(graph, best),
+    Rcpp::Named("connected_communities") = Rcpp::LogicalVector::create(
+      unassigned.size() ? NA_LOGICAL : communities_are_connected(graph, best)),
     Rcpp::Named("implementation") = method == "louvain" ?
       "native_multilevel_louvain" : "native_leiden_local_move_refine_aggregate"
   );
+  if (consensus || projection != R_NilValue) {
+    result["reweighted_graph"] = graph_edges_r(graph);
+  }
+  if (small_groups != R_NilValue) {
+    result["membership_original"] = graph_membership_r(original);
+    result["modularity_original"] =
+      modularity_score(graph, original, final_resolution);
+    result["reassigned"] = reassigned;
+    result["unassigned"] = unassigned;
+  }
+  if (consensus || projection != R_NilValue ||
+      small_groups != R_NilValue) {
+    result["parameters"] = Rcpp::List::create(
+      Rcpp::Named("consensus") = !consensus ? R_NilValue :
+        static_cast<SEXP>(consensus_meta),
+      Rcpp::Named("projection") = projection == R_NilValue ? R_NilValue :
+        static_cast<SEXP>(projection_meta),
+      Rcpp::Named("small_groups") = small_groups == R_NilValue ? R_NilValue :
+        static_cast<SEXP>(small_meta),
+      Rcpp::Named("weighted_edges") =
+        static_cast<double>(graph.edges.size()),
+      Rcpp::Named("final_resolution") = final_resolution,
+      Rcpp::Named("final_seed") = seed[0],
+      Rcpp::Named("processing_order") = order);
+  }
+  return result;
 }
 
 // [[Rcpp::export]]

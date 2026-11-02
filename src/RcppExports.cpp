@@ -1540,8 +1540,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // fastembedr_graph_cluster_cpp
-Rcpp::List fastembedr_graph_cluster_cpp(Rcpp::IntegerVector from, Rcpp::IntegerVector to, Rcpp::NumericVector weight, int n_vertices, std::string method, double resolution, int n_iterations, int n_runs, double seed);
-RcppExport SEXP _fastEmbedR_fastembedr_graph_cluster_cpp(SEXP fromSEXP, SEXP toSEXP, SEXP weightSEXP, SEXP n_verticesSEXP, SEXP methodSEXP, SEXP resolutionSEXP, SEXP n_iterationsSEXP, SEXP n_runsSEXP, SEXP seedSEXP) {
+Rcpp::List fastembedr_graph_cluster_cpp(Rcpp::IntegerVector from, Rcpp::IntegerVector to, Rcpp::NumericVector weight, int n_vertices, std::string method, Rcpp::NumericVector resolution, int n_iterations, int n_runs, Rcpp::NumericVector seed, SEXP projection, SEXP small_groups);
+RcppExport SEXP _fastEmbedR_fastembedr_graph_cluster_cpp(SEXP fromSEXP, SEXP toSEXP, SEXP weightSEXP, SEXP n_verticesSEXP, SEXP methodSEXP, SEXP resolutionSEXP, SEXP n_iterationsSEXP, SEXP n_runsSEXP, SEXP seedSEXP, SEXP projectionSEXP, SEXP small_groupsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1550,11 +1550,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type weight(weightSEXP);
     Rcpp::traits::input_parameter< int >::type n_vertices(n_verticesSEXP);
     Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
-    Rcpp::traits::input_parameter< double >::type resolution(resolutionSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type resolution(resolutionSEXP);
     Rcpp::traits::input_parameter< int >::type n_iterations(n_iterationsSEXP);
     Rcpp::traits::input_parameter< int >::type n_runs(n_runsSEXP);
-    Rcpp::traits::input_parameter< double >::type seed(seedSEXP);
-    rcpp_result_gen = Rcpp::wrap(fastembedr_graph_cluster_cpp(from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed));
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type projection(projectionSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type small_groups(small_groupsSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastembedr_graph_cluster_cpp(from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, projection, small_groups));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3046,7 +3048,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_fast_knn_umap_csr_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_csr_cpp, 14},
     {"_fastEmbedR_umap_auto_parameters_cpp", (DL_FUNC) &_fastEmbedR_umap_auto_parameters_cpp, 3},
     {"_fastEmbedR_fastembedr_graph_from_knn_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_from_knn_cpp, 6},
-    {"_fastEmbedR_fastembedr_graph_cluster_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_cluster_cpp, 9},
+    {"_fastEmbedR_fastembedr_graph_cluster_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_cluster_cpp, 11},
     {"_fastEmbedR_fastembedr_graph_modularity_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_modularity_cpp, 6},
     {"_fastEmbedR_graph_clustering_cuda_available_cpp", (DL_FUNC) &_fastEmbedR_graph_clustering_cuda_available_cpp, 0},
     {"_fastEmbedR_fastembedr_graph_cluster_cuda_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_cluster_cuda_cpp, 9},

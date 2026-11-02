@@ -13,7 +13,9 @@ graph_cluster(
   n_runs = 1L,
   steps = 4L,
   seed = 1L,
-  layout_merge = NULL
+  layout_merge = NULL,
+  projection = NULL,
+  small_groups = NULL
 )
 }
 \arguments{
@@ -27,17 +29,22 @@ package's true random-walk community method.}
 Louvain and Leiden only and fail explicitly if the requested accelerator
 was not compiled or is unavailable. They never fall back to CPU.}
 
-\item{resolution}{Positive modularity resolution for Louvain and Leiden.
-Walktrap uses its reference resolution of 1.}
+\item{resolution}{Positive finite modularity resolution(s). A vector
+automatically enables consensus across all resolution-seed combinations.
+The first value controls final clustering on the reweighted graph.
+Walktrap requires the single value 1.}
 
 \item{n_iterations}{Maximum local-moving passes for Louvain and Leiden.}
 
 \item{n_runs}{Independent seeded Louvain/Leiden runs; the highest-modularity
-result is returned.}
+result is returned for scalar controls. Must be 1 with vector controls;
+use \code{seed} to specify consensus repeats.}
 
 \item{steps}{Random-walk length for Walktrap.}
 
-\item{seed}{Reproducible random seed for Louvain and Leiden.}
+\item{seed}{Finite integer seed(s). A vector automatically enables
+consensus; each seed is tested once per supplied resolution. The first
+seed controls the final clustering. Scalars preserve ordinary clustering.}
 
 \item{layout_merge}{Optional list with a two-column \code{layout} (matrix or
 \code{fastEmbedR_embedding}), \code{min_connectivity} (default 0.2),
@@ -45,12 +52,39 @@ result is returned.}
 requires both original-graph connectivity and layout-edge continuity.
 Float32 layouts are converted to double for edge scoring. This is an
 exploratory PAGA-inspired postprocessing rule, not PAGA.}
+
+\item{projection}{Optional list with an observation-aligned, finite
+n-by-2 \code{layout} (matrix or \code{fastEmbedR_embedding}), local-radius \code{k}
+(default 30), \code{stretch} (default 4), and \code{cutoff} (default 0.001).
+Native exact double-precision 2D search finds each point's kth non-self
+radius. Edge length is divided by the geometric mean of endpoint radii;
+weights are multiplied by \code{exp(-max(ratio / stretch - 1, 0)^2)}.
+Penalties below \code{cutoff} are removed. Float32 layouts are explicitly
+converted to double; distance calculations remain double precision.
+The default NULL skips projection weighting. When enabled, it runs
+after consensus and before final clustering.}
+
+\item{small_groups}{Optional list with precomputed \code{knn} indices and
+distances, \code{min_size} (default 20), and optional neighbor \code{k} (default
+graph construction k, otherwise 30). Small communities are assigned to
+their nearest supplied neighbor belonging to a large raw community.
+Distance ties use neighbor-column order. Groups are renumbered by size.
+Rows without a core neighbor receive label 0 and are reported separately;
+modularity and connectivity are then NA. \code{min_size = 1} preserves all
+communities. No original feature matrix is used by these options.}
 }
 \value{
 A \code{fastEmbedR_graph_cluster} containing one-based \code{membership},
 modularity, method, implementation, and run metadata. With
 \code{layout_merge}, \code{membership_original}, \code{modularity_original}, and
 \code{layout_merge_pairs} preserve the unmerged result and decisions.
+Graph reweighting adds \code{reweighted_graph} and records the native controls
+and weighted edge count in \code{parameters}. \code{small_groups} adds
+\code{membership_original}, \code{modularity_original}, \code{reassigned} and
+\code{unassigned} (one-based row IDs). Reported modularity uses the weighted
+graph when reweighting is enabled.
+Enhanced workflows record \code{final_resolution}, \code{final_seed} and
+\code{processing_order}; consensus metadata records the exact ensemble size.
 }
 \description{
 \code{graph_cluster()} clusters a compact \code{fastEmbedR_graph} with a native
@@ -59,6 +93,39 @@ implementation, or the Pons-Latapy Walktrap algorithm. Louvain and Leiden
 have CPU, CUDA, and Metal implementations. Walktrap is CPU-only. No Python,
 \code{igraph}, cuGraph, or external clustering function is called at run time.
 }
+\details{
+When either \code{resolution} or \code{seed} has length greater than one,
+native consensus runs \code{length(resolution) * length(seed)} partitions
+using the requested \code{method}. Existing edge weights are multiplied by
+squared coassignment frequencies. Optional projection weighting follows.
+Final clustering uses \code{resolution[1]} and \code{seed[1]}; no additional
+resolution or seed is inferred. \code{n_iterations} applies to every partition.
+\code{small_groups}, when supplied, is applied last.
+
+Vector controls, \code{projection}, and \code{small_groups} currently require CPU
+Louvain or Leiden and cannot be combined with \code{layout_merge}.
+Accelerator requests fail explicitly. These procedures do not request
+a fixed group count. Scalar controls with \code{projection = NULL} and no
+small-group postprocessing retain the ordinary clustering workflow.
+}
+\section{Methodological inspiration}{
+
+Vector-triggered consensus draws on coassignment-based clustering
+(Lancichinetti and Fortunato, 2012), multiresolution ensembles
+(Jeub et al., 2018), and sparse consensus construction (Tandon et al.,
+2019). This package retains only original graph edges and multiplies their
+weights by squared coassignment frequencies. It does not implement the
+iterative thresholding, hierarchical consensus/null model, or additional
+node-pair sampling of those published algorithms.
+
+\code{projection} is a custom layout-based edge penalty. Its local distance
+normalization is related to the local-scaling principle of Zelnik-Manor
+and Perona (2004); PARC (Stassen et al., 2020) motivates refining graph
+edges before community detection. The soft-margin penalty on supplied
+UMAP/t-SNE coordinates is package-specific. It does not implement
+self-tuning spectral clustering or PARC's pruning procedure.
+}
+
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))
 graph <- knn_graph(x, k = 15)
@@ -78,4 +145,21 @@ walks. J Graph Algorithms Appl. 2006;10:191-218.
 Wolf FA et al. PAGA: graph abstraction reconciles clustering with
 trajectory inference through a topology preserving map of single cells.
 Genome Biol. 2019;20:59. doi:10.1186/s13059-019-1663-x.
+
+Lancichinetti A, Fortunato S. Consensus clustering in complex networks.
+Sci Rep. 2012;2:336. \doi{10.1038/srep00336}.
+
+Jeub LGS, Sporns O, Fortunato S. Multiresolution consensus clustering
+in networks. Sci Rep. 2018;8:3259. \doi{10.1038/s41598-018-21352-7}.
+
+Tandon A, Albeshri A, Thayananthan V, Alhalabi W, Fortunato S. Fast
+consensus clustering in complex networks. Phys Rev E. 2019;99:042301.
+\doi{10.1103/PhysRevE.99.042301}.
+
+Zelnik-Manor L, Perona P. Self-tuning spectral clustering.
+Adv Neural Inf Process Syst. 2004;17:1601-1608.
+
+Stassen SV et al. PARC: ultrafast and accurate clustering of phenotypic
+data of millions of single cells. Bioinformatics. 2020;36:2778-2786.
+\doi{10.1093/bioinformatics/btaa042}.
 }

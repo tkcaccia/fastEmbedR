@@ -151,6 +151,39 @@ package-native CPU, CUDA, and Metal backends; Walktrap is CPU-only.
 | `knn_graph()` | Compact graph from data, an embedding, or supplied neighbors. |
 | `graph_cluster()` | Native Louvain, Leiden, or Pons-Latapy Walktrap communities. |
 
+CPU Louvain and Leiden also support native graph consensus and projection
+weighting. Both use the supplied graph; projection weighting additionally
+uses observation-aligned UMAP or t-SNE coordinates. No original variables
+are required. For example, with precomputed neighbors `nn` and coordinates
+`xy`:
+
+```r
+graph <- knn_graph(nn, k = 30, mutual = TRUE, weight = "snn",
+    backend = "cpu")
+consensus <- graph_cluster(graph, method = "leiden", backend = "cpu",
+    resolution = c(0.05, 0.1, 0.15, 0.2),
+    seed = c(1234, 2345, 3456, 4567, 5678))
+projected <- graph_cluster(graph, method = "leiden", backend = "cpu",
+    projection = list(layout = xy), resolution = 0.03, seed = 1234)
+combined <- graph_cluster(graph, method = "leiden", backend = "cpu",
+    resolution = c(0.05, 0.1, 0.15, 0.2),
+    seed = c(1234, 2345, 3456, 4567, 5678),
+    projection = list(layout = xy))
+```
+
+Vectors in either `resolution` or `seed` automatically trigger consensus over
+all combinations. The first resolution and seed control final clustering.
+Projection weighting, when supplied, follows consensus. Scalar controls and
+`projection = NULL` retain ordinary clustering. Vector controls use
+`n_runs = 1`; the seed vector determines consensus repeats.
+
+Use `method = "louvain"` for Louvain. To enable small-group
+postprocessing, add `small_groups = list(knn = nn, min_size = 20)` to any
+call. This reassigns small communities to their nearest supplied core
+neighbor and reports reassigned and unresolved rows. The procedures do not
+request a fixed group count. See `?graph_cluster` for controls and metadata;
+these options cannot be combined with `layout_merge` or accelerator backends.
+
 ## Installation
 
 For the development version:
