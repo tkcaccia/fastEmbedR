@@ -127,8 +127,11 @@ int resolve_threads(int n_threads, int n) {
   if (n_threads == 0) {
     const unsigned int hw = std::thread::hardware_concurrency();
     n_threads = hw == 0u ? 1 : static_cast<int>(hw);
+    return adaptive_thread_cap(std::max(1, n), n_threads);
   }
-  return adaptive_thread_cap(std::max(1, n), n_threads);
+  // Honor an explicit worker request.  The size-based cap is a policy for
+  // automatic selection, not a limit on the public n.cores argument.
+  return std::max(1, std::min(std::max(1, n), n_threads));
 }
 
 int resolve_pairwise_threads(const int n_threads, const int n) {

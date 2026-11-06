@@ -27,6 +27,24 @@ test_that("tsne_knn runs native t-SNE from supplied neighbours", {
     expect_equal(cfg$learning_rate_normal, nrow(x) / cfg$early_exaggeration)
 })
 
+test_that("explicit CPU t-SNE worker count is honored on small inputs", {
+    set.seed(19)
+    x <- matrix(rnorm(300L * 5L), 300L, 5L)
+    knn <- test_exact_knn(x, k = 18L, backend = "cpu")
+    layout <- tsne_knn(knn, perplexity = 5,
+        early_exaggeration_iter = 0L, n_iter = 2L,
+        backend = "cpu", n.cores = 8L, seed = 19L)
+    cfg <- attr(layout, "fastEmbedR_config")
+    expect_true(all(is.finite(layout)))
+    expect_identical(cfg$n.cores_requested, 8L)
+    expect_identical(cfg$n.cores_effective, 8L)
+    fit <- tsne(x, perplexity = 5, early_exaggeration_iter = 0L,
+        n_iter = 2L, auto_config = FALSE, backend = "cpu",
+        n.cores = 8L, seed = 19L, massive = "off")
+    expect_true(all(is.finite(fit$layout)))
+    expect_identical(fit$parameters$n.cores_effective, 8L)
+})
+
 test_that("small two-dimensional CPU t-SNE selects FFT automatically", {
     set.seed(321)
     x <- matrix(rnorm(40L * 4L), 40L, 4L)
