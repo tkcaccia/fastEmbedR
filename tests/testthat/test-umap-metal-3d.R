@@ -12,6 +12,7 @@ test_that("Metal UMAP optimizes all three output coordinates", {
         expect_gt(stats::sd(layout[, 3L]), 0)
         expect_identical(fit$parameters$optimizer_backend, "metal")
         expect_identical(fit$parameters$backend, "metal")
+        expect_gt(fit$parameters$metal_allocated_bytes_observed, 0)
         expect_match(fit$parameters$init_backend, "cpu")
     }
 })
@@ -44,6 +45,10 @@ test_that("Metal UMAP accepts precomputed neighbors in 3D", {
         expect_identical(
             attr(layout, "fastEmbedR_config")$backend, "metal"
         )
+        expect_gt(
+            attr(layout, "fastEmbedR_config")$metal_allocated_bytes_observed,
+            0
+        )
     }
 
     prepared <- prepare_umap_knn(knn, backend = "metal")
@@ -55,6 +60,10 @@ test_that("Metal UMAP accepts precomputed neighbors in 3D", {
     expect_identical(
         attr(reused, "fastEmbedR_config")$optimizer_backend,
         "metal"
+    )
+    expect_gt(
+        attr(reused, "fastEmbedR_config")$metal_allocated_bytes_observed,
+        0
     )
 })
 

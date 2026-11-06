@@ -287,6 +287,9 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #' @param local_neighbors Non-self neighbors in each local query window.
 #' @param overlap_rows Extra rows on each side of a local query window;
 #'   at least `local_neighbors`.
+#' @param ef_search CPU HNSW search effort for experimental massive landmark
+#'   UMAP. Zero uses the faissR preset. A positive value requires CPU HNSW
+#'   and does not guarantee recall; audit the resulting graph separately.
 #' @details Landmark mode fits the requested fuzzy or binary UMAP graph on the
 #' landmark rows, projects the remaining rows with query-to-reference KNN, and
 #' optionally refines only projected rows while landmark coordinates remain
@@ -308,24 +311,23 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
                     memory_limit = "8GB", refinement_epochs = 0L,
     local_refine = FALSE, local_neighbors = 15L, overlap_rows = 500L,
     devices = NULL, landmark_method = "reservoir", init = NULL,
-    layout_storage = "memory", checkpoint = FALSE, resume = FALSE) {
+    layout_storage = "memory", checkpoint = FALSE, resume = FALSE,
+    ef_search = 0L) {
     massive <- massive_embedding_mode(massive)
     if (!identical(massive, "off")) return(dispatch_massive_umap(data,
         landmarks, n_neighbors, n_components, standardize, pca_dims, metric, nn,
         seed, backend, n.cores, keep_knn, graph_mode, verbose, transform_k,
         massive, output, chunk_rows, memory_limit, refinement_epochs,
         local_refine, local_neighbors, overlap_rows, devices,
-        landmark_method, init, layout_storage, checkpoint, resume))
+        landmark_method, init, layout_storage, checkpoint, resume, ef_search))
     massive_embedding_off(output, chunk_rows, memory_limit,
         refinement_epochs, local_refine, local_neighbors, overlap_rows,
         devices, landmark_method, init, layout_storage,
-        checkpoint, resume)
-    if (landmark_embedding_requested(landmarks)) {
-        return(run_landmark_umap(
-            data, landmarks, n_neighbors, n_components, standardize,
-            pca_dims, metric, seed, backend, transform_k, n.cores,
-            keep_knn, graph_mode, verbose, nn))
-    }
+        checkpoint, resume, ef_search)
+    if (landmark_embedding_requested(landmarks)) return(run_landmark_umap(
+        data, landmarks, n_neighbors, n_components, standardize,
+        pca_dims, metric, seed, backend, transform_k, n.cores,
+        keep_knn, graph_mode, verbose, nn))
     state <- validate_umap_request(backend, graph_mode,
         n_components, n.cores, keep_knn)
     if (is_knn_input(data))

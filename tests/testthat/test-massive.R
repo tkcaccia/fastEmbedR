@@ -496,6 +496,28 @@ test_that("row views preserve source offsets without materialization", {
             fastEmbedR:::massive_matrix_rows(source, 5, 8))))
 })
 
+test_that("landmark UMAP reads a bounded .fbin row view", {
+    skip_if_not_installed("float")
+    set.seed(732)
+    x <- matrix(rnorm(80L * 4L), ncol = 4L)
+    input <- make_massive_fixture(x, format = "fbin")
+    directory <- tempfile()
+    dir.create(directory)
+    on.exit(unlink(c(input, directory), recursive = TRUE))
+    full <- massive_matrix(input, access = "stream")
+    view <- fastEmbedR:::massive_matrix_rows(full, 1, 48L)
+    fit <- umap(view, massive = "landmark", landmarks = 20L,
+        n_neighbors = 5L, transform_k = 5L,
+        output = file.path(directory, "layout.f32"),
+        chunk_rows = 8L, memory_limit = "256MB",
+        backend = "cpu", n.cores = 1L, seed = 4L)
+    expect_equal(fit$layout$nrow, 48L)
+    expect_equal(fit$graph$nrow, 48L)
+    expect_identical(fit$graph$source_identity,
+        fastEmbedR:::massive_checkpoint_source_identity(view))
+    expect_equal(file.info(input)$size, 8 + 80 * 4 * 4)
+})
+
 test_that("full KNN checkpoints a file-backed row view", {
     set.seed(759)
     x <- matrix(rnorm(18L * 4L), ncol = 4L)

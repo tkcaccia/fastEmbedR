@@ -186,6 +186,30 @@ test_that("KNN audits report distance-equivalent ties separately", {
     expect_equal(landmark$distance_equivalent_recall, 1)
 })
 
+test_that("full KNN audit bounds its exact read chunk independently", {
+    values <- matrix(rep(seq_len(5L), each = 96L), nrow = 5L,
+        byrow = TRUE)
+    source_path <- write_massive_matrix_fixture(values)
+    prefix <- tempfile()
+    paths <- paste0(prefix, c(".indices.u32", ".distances.f32"))
+    on.exit(unlink(c(source_path, paths)))
+    source <- massive_matrix(source_path, 5L, 96L)
+    ids <- rbind(c(2L, 3L), c(1L, 3L), c(2L, 4L),
+        c(3L, 5L), c(4L, 3L))
+    write_massive_graph_fixture(prefix, ids, matrix(0, 5L, 2L))
+    graph <- massive_knn_graph(prefix, 5L, 2L)
+    setup <- list(resources = list(chunk_rows = 5L,
+        reference_chunk_rows = 1000000L), workers = 1L)
+    large <- fastEmbedR:::massive_synthetic_matrix(1000000L, 96L)
+    expect_identical(fastEmbedR:::massive_exact_audit_reference_chunk(
+        large, setup), 666666L)
+    audited <- fastEmbedR:::massive_full_knn_audit(
+        graph, source, 5L, setup)
+    expect_true(audited$recall_audited)
+    expect_identical(audited$audit_rows, 5L)
+    expect_true(all(is.finite(audited$audit_row_recall)))
+})
+
 test_that("full multi-GPU KNN resumes after candidate completion", {
     x <- cbind(seq_len(8L), rep(0, 8L))
     source_path <- write_massive_matrix_fixture(x)

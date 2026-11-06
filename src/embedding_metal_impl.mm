@@ -123,6 +123,28 @@ std::pair<int, int> metal_matrix_dims(SEXP values, const char* name) {
   Rcpp::stop("%s must be a numeric matrix or float::float32 matrix", name);
 }
 
+std::pair<int, int> metal_row_major_float_dims(SEXP values,
+                                                const char* name) {
+  SEXP marker = Rf_getAttrib(values,
+    Rf_install("fastembed_row_major_float32"));
+  SEXP nrow = Rf_getAttrib(values, Rf_install("nrow"));
+  SEXP ncol = Rf_getAttrib(values, Rf_install("ncol"));
+  if (TYPEOF(values) != RAWSXP || TYPEOF(marker) != LGLSXP ||
+      Rf_length(marker) != 1 || LOGICAL(marker)[0] != TRUE ||
+      TYPEOF(nrow) != INTSXP || Rf_length(nrow) != 1 ||
+      TYPEOF(ncol) != INTSXP || Rf_length(ncol) != 1) {
+    Rcpp::stop("%s requires a row-major float32 block.", name);
+  }
+  const int rows = INTEGER(nrow)[0];
+  const int columns = INTEGER(ncol)[0];
+  if (rows < 1 || columns < 1 ||
+      static_cast<std::uint64_t>(rows) * columns * sizeof(float) !=
+        static_cast<std::uint64_t>(XLENGTH(values))) {
+    Rcpp::stop("%s has invalid row-major float32 dimensions.", name);
+  }
+  return std::make_pair(rows, columns);
+}
+
 std::vector<float> metal_copy_float_matrix_row_major(SEXP values,
                                                       const char* name) {
   const std::pair<int, int> dims = metal_matrix_dims(values, name);
@@ -182,6 +204,8 @@ struct MetalEmbeddingState {
   id<MTLComputePipelineState> structure_score_pipeline;
   id<MTLComputePipelineState> silhouette_pipeline;
   id<MTLComputePipelineState> matrix_multiply_pipeline;
+  id<MTLComputePipelineState> pca_project_block_pipeline;
+  id<MTLComputePipelineState> pca_center_block_pipeline;
   id<MTLComputePipelineState> pca_center_scale_pipeline;
   id<MTLComputePipelineState> spectral_random_pipeline;
   id<MTLComputePipelineState> spectral_diffuse_pipeline;
@@ -374,6 +398,8 @@ MetalEmbeddingState& metal_embedding_state() {
       state.refine_prepare_pipeline != nil &&
       state.refine_rows_pipeline != nil &&
       state.affine_project_pipeline != nil &&
+      state.pca_project_block_pipeline != nil &&
+      state.pca_center_block_pipeline != nil &&
       state.pca_center_scale_pipeline != nil &&
       state.opentsne_center_pipeline != nil &&
       state.opentsne_fft_clear_pipeline != nil &&
@@ -436,6 +462,12 @@ MetalEmbeddingState& metal_embedding_state() {
   state.structure_score_pipeline = make_pipeline(state, "structure_score_rows");
   state.silhouette_pipeline = make_pipeline(state, "silhouette_rows");
   state.matrix_multiply_pipeline = make_pipeline(state, "matrix_multiply");
+  state.pca_project_block_pipeline = make_pipeline(
+    state, "pca_project_block"
+  );
+  state.pca_center_block_pipeline = make_pipeline(
+    state, "pca_center_block"
+  );
   state.pca_center_scale_pipeline = make_pipeline(state, "pca_center_scale_columns");
   state.spectral_random_pipeline = make_pipeline(state, "spectral_random_init");
   state.spectral_diffuse_pipeline = make_pipeline(state, "spectral_diffuse");
@@ -1905,6 +1937,43 @@ kernel void matrix_multiply(
     }
   }
   out[row + col * out_rows] = total;
+}
+
+kernel void pca_project_block(
+  device const float* input [[buffer(0)]],
+  device const float* loadings [[buffer(1)]],
+  device const float* centers [[buffer(2)]],
+  device const float* scales [[buffer(3)]],
+  device float* output [[buffer(4)]],
+  constant uint& rows [[buffer(5)]],
+  constant uint& columns [[buffer(6)]],
+  constant uint& components [[buffer(7)]],
+  uint2 gid [[thread_position_in_grid]]
+) {
+  const uint row = gid.x;
+  const uint component = gid.y;
+  if (row >= rows || component >= components) return;
+  float total = 0.0f;
+  for (uint column = 0u; column < columns; ++column) {
+    const float value = input[row * columns + column];
+    total += ((value - centers[column]) / scales[column]) *
+      loadings[component * columns + column];
+  }
+  output[component * rows + row] = total;
+}
+
+kernel void pca_center_block(
+  device float* input [[buffer(0)]],
+  device const float* centers [[buffer(1)]],
+  constant uint& rows [[buffer(2)]],
+  constant uint& columns [[buffer(3)]],
+  constant uint& stride [[buffer(4)]],
+  uint2 gid [[thread_position_in_grid]]
+) {
+  const uint column = gid.x;
+  const uint row = gid.y;
+  if (row >= rows || column >= columns) return;
+  input[row * stride + column] -= centers[column];
 }
 
 kernel void pca_center_scale_columns(
@@ -4575,6 +4644,16 @@ List run_rsvd_pca_metal(SEXP data_sexp,
     const NSUInteger basis_stride = mps_float_stride(static_cast<NSUInteger>(block_rank));
     const NSUInteger score_stride = mps_float_stride(static_cast<NSUInteger>(n_components));
     const NSUInteger gram_stride = mps_float_stride(static_cast<NSUInteger>(block_rank));
+    const std::uint64_t max_mps_elements =
+      static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max());
+    if (static_cast<std::uint64_t>(p) * data_stride > max_mps_elements ||
+        static_cast<std::uint64_t>(n) * basis_stride > max_mps_elements ||
+        static_cast<std::uint64_t>(n) * score_stride > max_mps_elements ||
+        static_cast<std::uint64_t>(p) * basis_stride > max_mps_elements ||
+        static_cast<std::uint64_t>(block_rank) * gram_stride >
+          max_mps_elements) {
+      Rcpp::stop("Metal PCA matrix exceeds the safe MPS size limit.");
+    }
 
     id<MTLBuffer> data_buffer = [state.device
       newBufferWithLength:static_cast<std::size_t>(p) * data_stride * sizeof(float)
@@ -4743,6 +4822,8 @@ List run_rsvd_pca_metal(SEXP data_sexp,
     if (loading_buffer == nil || score_buffer == nil) {
       Rcpp::stop("Failed to allocate final Metal PCA buffers.");
     }
+    std::uint64_t metal_allocated_bytes_observed =
+      static_cast<std::uint64_t>(state.device.currentAllocatedSize);
     std::memset([loading_buffer contents], 0, static_cast<std::size_t>(p) * loading_stride * sizeof(float));
     std::memset([score_buffer contents], 0, static_cast<std::size_t>(n) * score_stride * sizeof(float));
     const float* final_basis = static_cast<const float*>([basis_buffer contents]);
@@ -4791,6 +4872,9 @@ List run_rsvd_pca_metal(SEXP data_sexp,
                                  rightMatrix:loading_matrix
                                 resultMatrix:score_matrix];
     wait_for_command(score_command, "Metal rSVD score projection");
+    metal_allocated_bytes_observed = std::max<std::uint64_t>(
+      metal_allocated_bytes_observed,
+      static_cast<std::uint64_t>(state.device.currentAllocatedSize));
     const auto scores_done = Clock::now();
 
     NumericVector singular_values(n_components);
@@ -4859,6 +4943,8 @@ List run_rsvd_pca_metal(SEXP data_sexp,
       Rcpp::Named("backend") = "metal_mps_rsvd",
       Rcpp::Named("method") = "rsvd",
       Rcpp::Named("precision") = "float32",
+      Rcpp::Named("metal_allocated_bytes_observed") =
+        static_cast<double>(metal_allocated_bytes_observed),
       Rcpp::Named("oversample") = block_rank - n_components,
       Rcpp::Named("power") = power_iterations,
       Rcpp::Named("seed") = seed,
@@ -5314,6 +5400,267 @@ NumericMatrix rsvd_multiply_metal_impl(NumericMatrix left,
                                        NumericMatrix right,
                                        bool transpose_left) {
   return run_rsvd_multiply_metal(left, right, transpose_left);
+}
+
+NumericMatrix pca_project_block_metal_impl(SEXP block,
+                                           NumericMatrix loadings,
+                                           NumericVector centers,
+                                           NumericVector scales) {
+  const auto dims = metal_row_major_float_dims(block, "block");
+  const int rows = dims.first;
+  const int columns = dims.second;
+  const int components = loadings.ncol();
+  const std::uint64_t input_items =
+    static_cast<std::uint64_t>(rows) * columns;
+  const std::uint64_t output_items =
+    static_cast<std::uint64_t>(rows) * components;
+  if (rows < 1 || columns < 1 || components < 1 ||
+      loadings.nrow() != columns || centers.size() != columns ||
+      scales.size() != columns ||
+      input_items > std::numeric_limits<std::int32_t>::max() ||
+      output_items > std::numeric_limits<std::int32_t>::max()) {
+    Rcpp::stop("Metal PCA block projection has invalid dimensions.");
+  }
+  std::vector<float> center_values(columns);
+  std::vector<float> scale_values(columns);
+  for (int column = 0; column < columns; ++column) {
+    if (!std::isfinite(centers[column]) ||
+        !std::isfinite(scales[column]) || scales[column] <= 0) {
+      Rcpp::stop("Metal PCA block projection has invalid scaling.");
+    }
+    center_values[column] = static_cast<float>(centers[column]);
+    scale_values[column] = static_cast<float>(scales[column]);
+  }
+  std::vector<float> loading_values = numeric_matrix_to_float(loadings);
+  Rcpp::RawVector payload(block);
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    id<MTLBuffer> input_buffer = [state.device
+      newBufferWithBytes:RAW(payload)
+                length:input_items * sizeof(float)
+               options:MTLResourceStorageModeShared];
+    id<MTLBuffer> loading_buffer = [state.device
+      newBufferWithBytes:loading_values.data()
+                length:loading_values.size() * sizeof(float)
+               options:MTLResourceStorageModeShared];
+    id<MTLBuffer> center_buffer = [state.device
+      newBufferWithBytes:center_values.data()
+                length:center_values.size() * sizeof(float)
+               options:MTLResourceStorageModeShared];
+    id<MTLBuffer> scale_buffer = [state.device
+      newBufferWithBytes:scale_values.data()
+                length:scale_values.size() * sizeof(float)
+               options:MTLResourceStorageModeShared];
+    id<MTLBuffer> output_buffer = [state.device
+      newBufferWithLength:output_items * sizeof(float)
+                 options:MTLResourceStorageModeShared];
+    if (input_buffer == nil || loading_buffer == nil ||
+        center_buffer == nil || scale_buffer == nil ||
+        output_buffer == nil) {
+      if (input_buffer != nil) [input_buffer release];
+      if (loading_buffer != nil) [loading_buffer release];
+      if (center_buffer != nil) [center_buffer release];
+      if (scale_buffer != nil) [scale_buffer release];
+      if (output_buffer != nil) [output_buffer release];
+      Rcpp::stop("Failed to allocate Metal PCA block buffers.");
+    }
+    const std::uint32_t rows_u = static_cast<std::uint32_t>(rows);
+    const std::uint32_t columns_u = static_cast<std::uint32_t>(columns);
+    const std::uint32_t components_u =
+      static_cast<std::uint32_t>(components);
+    id<MTLCommandBuffer> command = [state.queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+    [encoder setComputePipelineState:state.pca_project_block_pipeline];
+    [encoder setBuffer:input_buffer offset:0 atIndex:0];
+    [encoder setBuffer:loading_buffer offset:0 atIndex:1];
+    [encoder setBuffer:center_buffer offset:0 atIndex:2];
+    [encoder setBuffer:scale_buffer offset:0 atIndex:3];
+    [encoder setBuffer:output_buffer offset:0 atIndex:4];
+    [encoder setBytes:&rows_u length:sizeof(rows_u) atIndex:5];
+    [encoder setBytes:&columns_u length:sizeof(columns_u) atIndex:6];
+    [encoder setBytes:&components_u length:sizeof(components_u) atIndex:7];
+    const NSUInteger width = std::min<NSUInteger>(
+      256u, state.pca_project_block_pipeline.maxTotalThreadsPerThreadgroup
+    );
+    [encoder dispatchThreads:MTLSizeMake(rows_u, components_u, 1)
+       threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
+    [encoder endEncoding];
+    wait_for_command(command, "Metal PCA block projection");
+    NumericMatrix scores(rows, components);
+    const float* values = static_cast<const float*>([output_buffer contents]);
+    bool finite = true;
+    for (std::uint64_t index = 0; index < output_items; ++index) {
+      finite = finite && std::isfinite(values[index]);
+      scores[index] = static_cast<double>(values[index]);
+    }
+    scores.attr("metal_allocated_bytes_observed") =
+      static_cast<double>(state.device.currentAllocatedSize);
+    [output_buffer release];
+    [scale_buffer release];
+    [center_buffer release];
+    [loading_buffer release];
+    [input_buffer release];
+    if (!finite) Rcpp::stop("Metal PCA block scores are nonfinite.");
+    return scores;
+  }
+}
+
+List pca_crossprod_block_metal_impl(SEXP block, bool center) {
+  const auto dims = metal_row_major_float_dims(block, "block");
+  const int rows = dims.first;
+  const int columns = dims.second;
+  Rcpp::RawVector payload(block);
+  const Rbyte* bits = RAW(payload);
+  NumericVector means(columns);
+  std::vector<float> center_values(columns, 0.0f);
+  std::vector<double> center_residual(columns, 0.0);
+  std::vector<double> sums(columns, 0.0);
+  for (int row = 0; row < rows; ++row) {
+    for (int column = 0; column < columns; ++column) {
+      float value = 0.0f;
+      const std::size_t item =
+        static_cast<std::size_t>(row) * columns + column;
+      std::memcpy(&value, bits + item * sizeof(float), sizeof(float));
+      if (!std::isfinite(value)) {
+        Rcpp::stop("Metal PCA block covariance has nonfinite input.");
+      }
+      if (center) sums[column] += value;
+    }
+  }
+  for (int column = 0; column < columns; ++column) {
+    if (center) {
+      means[column] = sums[column] / rows;
+      center_values[column] = static_cast<float>(means[column]);
+      center_residual[column] =
+        means[column] - static_cast<double>(center_values[column]);
+    }
+  }
+
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    const NSUInteger data_stride = mps_float_stride(columns);
+    const NSUInteger cross_stride = mps_float_stride(columns);
+    const std::uint64_t max_elements =
+      static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max());
+    if (static_cast<std::uint64_t>(rows) * data_stride >
+          max_elements ||
+        static_cast<std::uint64_t>(columns) * cross_stride >
+          max_elements) {
+      Rcpp::stop("Metal PCA block covariance exceeds the MPS size limit.");
+    }
+    id<MTLBuffer> data_buffer = [state.device
+      newBufferWithLength:static_cast<std::size_t>(rows) *
+        data_stride * sizeof(float)
+                 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> cross_buffer = [state.device
+      newBufferWithLength:static_cast<std::size_t>(columns) *
+        cross_stride * sizeof(float)
+                 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> center_buffer = center ? [state.device
+      newBufferWithBytes:center_values.data()
+                length:center_values.size() * sizeof(float)
+               options:MTLResourceStorageModeShared] : nil;
+    if (data_buffer == nil || cross_buffer == nil ||
+        (center && center_buffer == nil)) {
+      if (data_buffer != nil) [data_buffer release];
+      if (cross_buffer != nil) [cross_buffer release];
+      if (center_buffer != nil) [center_buffer release];
+      Rcpp::stop("Failed to allocate Metal PCA covariance buffers.");
+    }
+    float* values = static_cast<float*>([data_buffer contents]);
+    if (data_stride == static_cast<NSUInteger>(columns)) {
+      std::memcpy(values, bits,
+        static_cast<std::size_t>(rows) * columns * sizeof(float));
+    } else {
+      for (int row = 0; row < rows; ++row) {
+        float* destination = values +
+          static_cast<std::size_t>(row) * data_stride;
+        std::memcpy(destination,
+          bits + static_cast<std::size_t>(row) * columns * sizeof(float),
+          static_cast<std::size_t>(columns) * sizeof(float));
+        std::fill(destination + columns,
+          destination + data_stride, 0.0f);
+      }
+    }
+    if (center) {
+      const std::uint32_t rows_u = static_cast<std::uint32_t>(rows);
+      const std::uint32_t columns_u =
+        static_cast<std::uint32_t>(columns);
+      const std::uint32_t stride_u =
+        static_cast<std::uint32_t>(data_stride);
+      id<MTLCommandBuffer> center_command = [state.queue commandBuffer];
+      id<MTLComputeCommandEncoder> encoder =
+        [center_command computeCommandEncoder];
+      [encoder setComputePipelineState:state.pca_center_block_pipeline];
+      [encoder setBuffer:data_buffer offset:0 atIndex:0];
+      [encoder setBuffer:center_buffer offset:0 atIndex:1];
+      [encoder setBytes:&rows_u length:sizeof(rows_u) atIndex:2];
+      [encoder setBytes:&columns_u length:sizeof(columns_u) atIndex:3];
+      [encoder setBytes:&stride_u length:sizeof(stride_u) atIndex:4];
+      const NSUInteger width = std::min<NSUInteger>(columns,
+        state.pca_center_block_pipeline.maxTotalThreadsPerThreadgroup);
+      [encoder dispatchThreads:MTLSizeMake(columns_u, rows_u, 1)
+         threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
+      [encoder endEncoding];
+      wait_for_command(center_command, "Metal PCA block centering");
+    }
+    MPSMatrix* data_matrix = make_mps_float_matrix(
+      data_buffer, rows, columns, data_stride);
+    MPSMatrix* cross_matrix = make_mps_float_matrix(
+      cross_buffer, columns, columns, cross_stride);
+    MPSMatrixMultiplication* product = [[MPSMatrixMultiplication alloc]
+      initWithDevice:state.device
+      transposeLeft:YES
+      transposeRight:NO
+      resultRows:columns
+      resultColumns:columns
+      interiorColumns:rows
+      alpha:1.0
+      beta:0.0];
+    if (data_matrix == nil || cross_matrix == nil || product == nil) {
+      if (product != nil) [product release];
+      if (cross_matrix != nil) [cross_matrix release];
+      if (data_matrix != nil) [data_matrix release];
+      [center_buffer release];
+      [cross_buffer release];
+      [data_buffer release];
+      Rcpp::stop("Failed to create Metal PCA covariance matrices.");
+    }
+    id<MTLCommandBuffer> command = [state.queue commandBuffer];
+    [product encodeToCommandBuffer:command
+                        leftMatrix:data_matrix
+                       rightMatrix:data_matrix
+                      resultMatrix:cross_matrix];
+    wait_for_command(command, "Metal PCA block covariance");
+    NumericMatrix cross(columns, columns);
+    const float* cross_values =
+      static_cast<const float*>([cross_buffer contents]);
+    bool finite = true;
+    for (int row = 0; row < columns; ++row) {
+      for (int column = 0; column < columns; ++column) {
+        const float value = cross_values[
+          static_cast<std::size_t>(row) * cross_stride + column];
+        finite = finite && std::isfinite(value);
+        cross(row, column) = static_cast<double>(value) -
+          rows * center_residual[row] * center_residual[column];
+      }
+    }
+    const double allocated_bytes =
+      static_cast<double>(state.device.currentAllocatedSize);
+    [product release];
+    [cross_matrix release];
+    [data_matrix release];
+    [center_buffer release];
+    [cross_buffer release];
+    [data_buffer release];
+    if (!finite) Rcpp::stop("Metal PCA block covariance is nonfinite.");
+    return List::create(
+      Rcpp::Named("center") = means,
+      Rcpp::Named("cross") = cross,
+      Rcpp::Named("metal_allocated_bytes_observed") = allocated_bytes
+    );
+  }
 }
 
 List pca_tsvd_metal_impl(SEXP data,
@@ -6719,6 +7066,8 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
         layout(i, 1) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u + 1u]);
       }
 
+      const double metal_allocated_bytes_observed =
+        static_cast<double>(state.device.currentAllocatedSize);
       [row_ptr_buffer release];
       [col_buffer release];
       [val_buffer release];
@@ -6778,6 +7127,8 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
         Rcpp::Named("costs") = NumericVector(0),
         Rcpp::Named("itercosts") = NumericVector(0),
         Rcpp::Named("metal_trace") = metal_trace,
+        Rcpp::Named("metal_allocated_bytes_observed") =
+          metal_allocated_bytes_observed,
         Rcpp::Named("optimizer") = "opentsne_fitsne_fft_grid_native_metal",
         Rcpp::Named("repulsion") = use_mpsgraph_convolution ?
           "fft_grid_mpsgraph_metal" : "fft_grid_metal",
@@ -7828,6 +8179,8 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
     out.attr("metal_graph_input") = "cpu_csr_fuzzy_graph";
     out.attr("metal_csr_width") = k;
     out.attr("metal_truncated_edges") = truncated_edges;
+    out.attr("metal_allocated_bytes_observed") =
+      static_cast<double>(state.device.currentAllocatedSize);
     [fixed_layout_buffer release];
     [neighbors_buffer release];
     [weights_buffer release];

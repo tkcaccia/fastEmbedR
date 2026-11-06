@@ -19,7 +19,8 @@ massive_landmark_knn(
   checkpoint = FALSE,
   resume = FALSE,
   devices = NULL,
-  checkpoint_every = 100L
+  checkpoint_every = 100L,
+  ef_search = 0L
 )
 }
 \arguments{
@@ -66,6 +67,10 @@ requires file-backed query and reference sources.}
 
 \item{checkpoint_every}{Commit every this many query blocks for sharded
 CUDA search. Other search methods use their existing checkpoint policy.}
+
+\item{ef_search}{CPU HNSW landmark search effort. Zero uses the faissR
+preset. A positive value must be at least \code{k + 1}; it changes search
+effort but does not guarantee recall, which needs a separate audit.}
 }
 \value{
 A lightweight \code{fastEmbedR_massive_knn} descriptor.

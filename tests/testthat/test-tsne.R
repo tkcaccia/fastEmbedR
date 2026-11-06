@@ -368,6 +368,7 @@ test_that("native Metal t-SNE runs FFT-grid without CPU fallback", {
     expect_equal(cfg$backend, "metal")
     expect_equal(cfg$optimizer, "opentsne_fitsne_fft_grid_native_metal")
     expect_equal(cfg$repulsion, "fft_grid_metal")
+    expect_gt(cfg$metal_allocated_bytes_observed, 0)
 })
 
 test_that(paste(

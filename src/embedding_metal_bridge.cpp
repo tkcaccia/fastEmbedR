@@ -82,6 +82,11 @@ NumericMatrix knn_umap_refine_rows_metal_impl(IntegerMatrix indices,
 NumericMatrix rsvd_multiply_metal_impl(NumericMatrix left,
                                        NumericMatrix right,
                                        bool transpose_left);
+NumericMatrix pca_project_block_metal_impl(SEXP block,
+                                           NumericMatrix loadings,
+                                           NumericVector centers,
+                                           NumericVector scales);
+List pca_crossprod_block_metal_impl(SEXP block, bool center);
 List pca_tsvd_metal_impl(SEXP data,
                          int n_components,
                          bool center,
@@ -310,6 +315,21 @@ NumericMatrix rsvd_multiply_metal_cpp(NumericMatrix left,
                                       NumericMatrix right,
                                       bool transpose_left) {
   return rsvd_multiply_metal_impl(left, right, transpose_left);
+}
+
+// [[Rcpp::export]]
+NumericMatrix pca_project_block_metal_cpp(SEXP block,
+                                          NumericMatrix loadings,
+                                          NumericVector centers,
+                                          NumericVector scales) {
+  return pca_project_block_metal_impl(
+    block, loadings, centers, scales
+  );
+}
+
+// [[Rcpp::export]]
+List pca_crossprod_block_metal_cpp(SEXP block, bool center) {
+  return pca_crossprod_block_metal_impl(block, center);
 }
 
 // [[Rcpp::export]]

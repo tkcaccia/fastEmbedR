@@ -286,30 +286,37 @@ massive_pca_output <- function(output, score_bytes, columns, rank,
 massive_pca_covariance_metal <- function(source, chunk_rows, center) {
     p <- source$ncol
     cross <- matrix(0, p, p)
-    sums <- numeric(p)
+    means <- numeric(p)
+    completed <- 0
+    allocated <- 0
     started <- proc.time()[[3L]]
-    if (center) {
-        for (first in seq.int(1, source$nrow, by = chunk_rows)) {
-            rows <- as.integer(min(chunk_rows, source$nrow - first + 1))
-            block <- massive_read_rows_cpp(source, first, rows,
-                8 * rows * p)
-            sums <- sums + colSums(block)
-        }
-    }
-    means <- if (center) sums / source$nrow else numeric(p)
     for (first in seq.int(1, source$nrow, by = chunk_rows)) {
         rows <- as.integer(min(chunk_rows, source$nrow - first + 1))
         block <- massive_read_rows_cpp(source, first, rows,
-            8 * rows * p)
-        if (center) block <- sweep(block, 2L, means)
-        cross <- cross + rsvd_multiply_metal_cpp(block, block, TRUE)
+            4 * rows * p, TRUE, TRUE)
+        moment <- pca_crossprod_block_metal_cpp(block, center)
+        observed <- moment$metal_allocated_bytes_observed
+        if (length(observed) != 1L || !is.finite(observed) ||
+            observed <= 0) stop("Metal allocation was not observed")
+        allocated <- max(allocated, observed)
+        block_mean <- moment$center
+        block_cross <- moment$cross
+        updated <- completed + rows
+        if (center) {
+            delta <- block_mean - means
+            cross <- cross + block_cross +
+                tcrossprod(delta) * (completed * rows / updated)
+            means <- means + delta * (rows / updated)
+        } else cross <- cross + block_cross
+        completed <- updated
     }
     covariance <- cross / (source$nrow - 1)
     if (any(!is.finite(covariance))) stop(
         "Metal PCA covariance contains nonfinite values.",
         call. = FALSE)
     list(center = means, covariance = (covariance + t(covariance)) / 2,
-        fit_statistics_seconds = unname(proc.time()[[3L]] - started))
+        fit_statistics_seconds = unname(proc.time()[[3L]] - started),
+        metal_allocated_bytes_observed = allocated)
 }
 
 massive_pca_decomposition <- function(source, rank, center, scale,
@@ -354,6 +361,8 @@ massive_pca_decomposition <- function(source, rank, center, scale,
     if (backend == "metal") {
         fit$fit_statistics_backend <- "metal_streamed_crossprod"
         fit$fit_statistics_seconds <- stats$fit_statistics_seconds
+        fit$metal_allocated_bytes_observed <-
+            stats$metal_allocated_bytes_observed
     }
     fit
 }
@@ -874,7 +883,8 @@ massive_pca_project <- function(x, path, fit, resources, workers,
             fit$center, fit$scale, resources$chunk_rows,
             prepared$rows, prepared$progress, prepared$resume_part)
     } else if (backend == "metal") {
-        massive_pca_project_metal(x, path, fit, resources,
+        resources$metal_projection_allocated_bytes_observed <-
+            massive_pca_project_metal(x, path, fit, resources,
             prepared, checkpoint)
     } else {
         massive_pca_project_cpp(x, path, fit$loadings,
@@ -888,6 +898,7 @@ massive_pca_project_metal <- function(x, path, fit, resources,
         prepared, checkpoint) {
     part <- paste0(path, ".part")
     completed <- prepared$rows
+    allocated <- 0
     con <- file(part, if (prepared$resume_part) "r+b" else "wb")
     closed <- FALSE
     on.exit({
@@ -901,9 +912,13 @@ massive_pca_project_metal <- function(x, path, fit, resources,
     while (first <= x$nrow) {
         rows <- as.integer(min(resources$chunk_rows, x$nrow - first + 1))
         block <- massive_read_rows_cpp(x, first, rows,
-            8 * rows * x$ncol)
-        block <- scale(block, center = fit$center, scale = fit$scale)
-        scores <- rsvd_multiply_metal_cpp(block, fit$loadings, FALSE)
+            4 * rows * x$ncol, TRUE, TRUE)
+        scores <- pca_project_block_metal_cpp(block, fit$loadings,
+            fit$center, fit$scale)
+        observed <- attr(scores, "metal_allocated_bytes_observed")
+        if (length(observed) != 1L || !is.finite(observed) ||
+            observed <= 0) stop("Metal allocation was not observed")
+        allocated <- max(allocated, observed)
         writeBin(as.numeric(t(scores)), con, size = 4L,
             endian = "little")
         flush(con)
@@ -918,6 +933,7 @@ massive_pca_project_metal <- function(x, path, fit, resources,
         !file.rename(part, path)) stop(
         "Metal PCA scores did not finalize; .part retained.",
         call. = FALSE)
+    allocated
 }
 
 run_massive_pca <- function(x, ncomp, xtest, center, scale, backend,

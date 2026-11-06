@@ -143,6 +143,17 @@ NumericMatrix rsvd_multiply_metal_impl(NumericMatrix,
   Rcpp::stop("Metal RSVD matrix multiply is only available on macOS with Metal support.");
 }
 
+NumericMatrix pca_project_block_metal_impl(SEXP,
+                                           NumericMatrix,
+                                           NumericVector,
+                                           NumericVector) {
+  Rcpp::stop("Metal PCA block projection requires macOS Metal support.");
+}
+
+List pca_crossprod_block_metal_impl(SEXP, bool) {
+  Rcpp::stop("Metal PCA block covariance requires macOS Metal support.");
+}
+
 List pca_tsvd_metal_impl(SEXP,
                          int,
                          bool,

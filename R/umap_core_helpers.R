@@ -292,6 +292,8 @@ optimize_umap_gpu_csr <- function(graph, init, cfg, backend, seed) {
         cfg$metal_graph_input <- attr(out, "metal_graph_input")
         cfg$metal_csr_width <- attr(out, "metal_csr_width")
         cfg$metal_truncated_edges <- attr(out, "metal_truncated_edges")
+        cfg$metal_allocated_bytes_observed <-
+            attr(out, "metal_allocated_bytes_observed")
         return(list(layout = out, cfg = cfg))
     }
 

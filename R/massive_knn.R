@@ -92,13 +92,15 @@ massive_knn_paths <- function(output, output_bytes, resume = FALSE,
 }
 
 massive_knn_reference <- function(reference, k, method,
-        n.cores, backend, resources = NULL, hnsw_build = NULL) {
+        n.cores, backend, resources = NULL, hnsw_build = NULL,
+        ef_search = 0L) {
     if (method == "stream_exact") return(list(reference = reference,
         reference_chunk_rows = resources$reference_chunk_rows,
         build_seconds = 0,
         reference_storage = "file_backed_float32"))
     if (method %in% c("faiss_hnsw", "hnsw")) return(
-        massive_faiss_hnsw_reference(reference, k, n.cores, hnsw_build))
+        massive_faiss_hnsw_reference(reference, k, n.cores,
+            hnsw_build, ef_search))
     if (backend == "metal") return(massive_metal_reference(reference))
     started <- proc.time()[[3L]]
     native_buffer <- reference$format != "memory" &&
@@ -142,7 +144,7 @@ massive_metal_reference <- function(reference) {
 }
 
 massive_faiss_hnsw_reference <- function(reference, k, n.cores,
-        hnsw_build = NULL) {
+        hnsw_build = NULL, ef_search = 0L) {
     if (!requireNamespace("float", quietly = TRUE)) stop(
         "Persistent FAISS HNSW requires `float`.", call. = FALSE)
     started <- proc.time()[[3L]]
@@ -153,6 +155,10 @@ massive_faiss_hnsw_reference <- function(reference, k, n.cores,
         as.integer(reference$nrow), as.integer(reference$ncol),
         k, n.cores, hnsw_build$m %||% 0L,
         hnsw_build$ef_construction %||% 0L)
+    if (ef_search > 0L) {
+        index$efSearch <- ef_search
+        index$tuning_rule <- "explicit_ef_search"
+    }
     list(index = index, build_seconds = unname(
         proc.time()[[3L]] - started),
         reference_storage = "R_float32", build_threads = n.cores)
@@ -222,6 +228,7 @@ massive_knn_checkpoint <- function(x, setup, resume) {
         backend = setup$backend, workers = setup$workers,
         build_threads = if (setup$method == "hnsw") 1L else NULL,
         chunk_rows = setup$resources$chunk_rows)
+    if ((setup$ef_search %||% 0L) > 0L) settings$ef_search <- setup$ef_search
     if (setup$method == "stream_exact") {
         settings$reference_chunk_rows <-
             setup$resources$reference_chunk_rows
@@ -427,11 +434,24 @@ massive_knn_method <- function(method, backend, reference_rows, k) {
     method
 }
 
+massive_landmark_ef_search <- function(value, method, backend,
+        k, reference_rows) {
+    value <- integer_scalar(value)
+    if (is.na(value) || value < 0L ||
+        (value > 0L && value < k + 1L) ||
+        value > reference_rows) stop(
+        "`ef_search` must be zero or between `k + 1` and ",
+        "the reference row count.", call. = FALSE)
+    if (value > 0L && (backend != "cpu" || method != "hnsw"))
+        stop("`ef_search` requires CPU HNSW landmark search; ",
+            "no algorithm fallback was used.", call. = FALSE)
+    value
+}
+
 massive_knn_setup <- function(x, reference, k, output, backend,
-                                n.cores, method, chunk_rows,
-                                memory_limit, resume, cuda_memory = TRUE,
-                                reference_chunk_rows = NULL,
-                                allow_final_resume = FALSE) {
+        n.cores, method, chunk_rows, memory_limit, resume,
+        cuda_memory = TRUE, reference_chunk_rows = NULL,
+        allow_final_resume = FALSE, ef_search = 0L) {
     if (!inherits(x, "fastEmbedR_massive_matrix"))
         stop("`x` must be a massive_matrix() descriptor.", call. = FALSE)
     if (is.list(reference) && inherits(reference$data,
@@ -451,6 +471,8 @@ massive_knn_setup <- function(x, reference, k, output, backend,
     if (is.na(k) || k < 1L || k > reference$nrow)
         stop("`k` must be a positive landmark count.", call. = FALSE)
     method <- massive_knn_method(method, backend, reference$nrow, k)
+    ef_search <- massive_landmark_ef_search(ef_search,
+        method, backend, k, reference$nrow)
     if (!is.null(reference_chunk_rows) && method != "stream_exact")
         stop("`reference_chunk_rows` requires `stream_exact`.", call. = FALSE)
     if (method == "stream_exact" &&
@@ -459,23 +481,22 @@ massive_knn_setup <- function(x, reference, k, output, backend,
     workers <- normalize_nn_threads(n.cores)
     if (backend == "metal" && workers != 1L)
         stop("Metal KNN needs `n.cores = 1`.", call. = FALSE)
-    resources <- if (method == "stream_exact")
-        massive_full_knn_resources(x, k, chunk_rows,
-            reference_chunk_rows, memory_limit, reference) else
-            massive_knn_resources(
-        x, reference, k, method, chunk_rows, memory_limit)
+    resources <- if (method == "stream_exact") massive_full_knn_resources(
+        x, k, chunk_rows, reference_chunk_rows, memory_limit, reference
+    ) else massive_knn_resources(x, reference, k, method,
+        chunk_rows, memory_limit)
     if (backend == "cuda" && cuda_memory)
         resources <- massive_knn_cuda_resources(resources, reference,
             k, method, native_cuda_memory_info_cpp())
     if (backend == "metal") resources <- c(resources, list(
         metal_memory_model = "unified_shared",
-        metal_buffer_bytes_estimate =
-            8 * reference$nrow * reference$ncol +
+        metal_buffer_bytes_estimate = 8 * reference$nrow * reference$ncol +
             8 * resources$chunk_rows * x$ncol))
     paths <- massive_knn_paths(output, resources$output_bytes,
         resume, allow_final_resume)
-    list(reference = reference, k = k, backend = backend, method = method,
-        workers = workers, resources = resources, paths = paths)
+    list(reference = reference, k = k, backend = backend,
+        method = method, workers = workers, resources = resources,
+        paths = paths, ef_search = ef_search)
 }
 
 massive_knn_result <- function(x, setup, state, elapsed,
@@ -584,6 +605,9 @@ massive_knn_result <- function(x, setup, state, elapsed,
 #'   requires file-backed query and reference sources.
 #' @param checkpoint_every Commit every this many query blocks for sharded
 #'   CUDA search. Other search methods use their existing checkpoint policy.
+#' @param ef_search CPU HNSW landmark search effort. Zero uses the faissR
+#'   preset. A positive value must be at least `k + 1`; it changes search
+#'   effort but does not guarantee recall, which needs a separate audit.
 #' @return A lightweight `fastEmbedR_massive_knn` descriptor.
 #' @export
 massive_landmark_knn <- function(x, reference, k, output,
@@ -591,14 +615,16 @@ massive_landmark_knn <- function(x, reference, k, output,
         method = c("auto", "exact", "stream_exact",
             "hnsw", "ivf", "sharded_exact", "sharded_ivf"),
         chunk_rows = NULL, reference_chunk_rows = NULL,
-        memory_limit = "8GB", checkpoint = FALSE,
-        resume = FALSE, devices = NULL,
-        checkpoint_every = 100L) {
+        memory_limit = "8GB", checkpoint = FALSE, resume = FALSE,
+        devices = NULL, checkpoint_every = 100L, ef_search = 0L) {
     massive_checkpoint_validate_controls(checkpoint, resume)
     method <- match.arg(method)
     checkpoint_every <- integer_scalar(checkpoint_every)
     if (is.na(checkpoint_every) || checkpoint_every < 1L) stop(
         "`checkpoint_every` must be a positive integer.", call. = FALSE)
+    if ((method %in% c("sharded_exact", "sharded_ivf") || !is.null(devices)) &&
+        !identical(integer_scalar(ef_search), 0L)) stop(
+        "`ef_search` needs single-device CPU HNSW.")
     if (method %in% c("sharded_exact", "sharded_ivf")) return(
         massive_landmark_knn_sharded(x, reference, k, output,
             backend, n.cores, chunk_rows, reference_chunk_rows,
@@ -619,17 +645,16 @@ massive_landmark_knn <- function(x, reference, k, output,
     }
     setup <- massive_knn_setup(x, reference, k, output, backend,
         n.cores, method, chunk_rows, memory_limit, resume,
-        reference_chunk_rows = reference_chunk_rows)
+        reference_chunk_rows = reference_chunk_rows, ef_search = ef_search)
     saved <- if (resume) massive_knn_checkpoint(x, setup, TRUE) else NULL
     message("EXPERIMENTAL landmark KNN: ", setup$method,
         "; backend=", setup$backend, "; CPU workers=", setup$workers,
         "; chunk rows=", setup$resources$chunk_rows)
-    build_workers <- if (checkpoint && setup$method == "hnsw")
-        1L else setup$workers
-    state <- massive_knn_reference(setup$reference, setup$k,
-        setup$method, build_workers, setup$backend, setup$resources)
-    if (checkpoint && !resume)
-        saved <- massive_knn_checkpoint(x, setup, FALSE)
+    state <- massive_knn_reference(setup$reference, setup$k, setup$method,
+        if (checkpoint && setup$method == "hnsw") 1L else setup$workers,
+        setup$backend, setup$resources,
+        ef_search = setup$ef_search)
+    if (checkpoint && !resume) saved <- massive_knn_checkpoint(x,setup,FALSE)
     elapsed <- massive_knn_stream(x, state, setup$k, setup$method,
         setup$workers, setup$backend, setup$resources,
         setup$paths, saved)
@@ -1649,6 +1674,11 @@ massive_sharded_graph <- function(x, k, output, n.cores,
         build_seconds, started, audit_rows, checkpoint, resume, hnsw, ivf)
 }
 
+massive_exact_audit_reference_chunk <- function(x, setup) {
+    as.integer(min(setup$resources$reference_chunk_rows,
+        x$nrow, floor(256e6 / (4 * x$ncol))))
+}
+
 massive_full_knn_audit <- function(graph, x, audit_rows, setup,
         rows = NULL) {
     if (audit_rows == 0L) return(graph)
@@ -1668,7 +1698,7 @@ massive_full_knn_audit <- function(graph, x, audit_rows, setup,
         length(groups), " reference passes")
     for (group in groups) {
         exact <- massive_exact_sample_batch_cpp(x, x, rows[group],
-            graph$k, setup$resources$reference_chunk_rows,
+            graph$k, massive_exact_audit_reference_chunk(x, setup),
             setup$workers, TRUE)
         if (!identical(exact$backend_used,
             "native_cpu_exact_stream") || !isTRUE(exact$exact)) stop(

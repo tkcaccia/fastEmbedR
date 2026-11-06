@@ -586,6 +586,8 @@ finalize_prepared_umap <- function(layout, graph, init, cfg) {
         cfg$metal_graph_input <- attr(layout, "metal_graph_input")
         cfg$metal_csr_width <- attr(layout, "metal_csr_width")
         cfg$metal_truncated_edges <- attr(layout, "metal_truncated_edges")
+        cfg$metal_allocated_bytes_observed <-
+            attr(layout, "metal_allocated_bytes_observed")
     }
     layout <- finalize_embedding_layout(
         layout,

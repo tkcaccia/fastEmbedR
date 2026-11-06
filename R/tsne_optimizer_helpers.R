@@ -406,6 +406,10 @@ finalize_opentsne_native_result <- function(
         )
     )
     metal_stage_timing <- out$metal_stage_timing
+    if (identical(optimizer_backend, "metal")) {
+        cfg$metal_allocated_bytes_observed <-
+            out$metal_allocated_bytes_observed
+    }
     if (!is.null(metal_stage_timing) && NROW(metal_stage_timing) > 0L) {
         cfg$metal_stage_timing <- metal_stage_timing
     }
