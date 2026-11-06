@@ -40,3 +40,23 @@ These rules apply to the whole repository.
 - Add the smallest test that proves the changed behavior and rejects fallback.
 - Run `Rscript tools/check_source_style.R` and the relevant package tests.
 - Do not commit, push, publish, or clean user files without explicit approval.
+
+## Mandatory HPC GPU policy
+
+Before preparing, submitting, retrying or monitoring HPC/GPU work, read:
+/Users/stefano/Documents/ChatGPT/Development Coordinator/docs/hpc-gpu-policy.md
+
+- UCT HPC GPU work is paused until explicit user lifting AND HPC
+  administrator approval. This includes retries, resumes, pilots, held
+  controllers and CPU jobs/automations that can submit GPU descendants.
+- On timeout, cancellation, abnormal exit or uncertain cleanup, fail the
+  entire GPU bundle. Never launch its next GPU case, scorer or retry.
+- Queue disappearance or a successful kill is not cleanup proof. Verify
+  owned descendants/job steps and assigned GPU contexts with bounded
+  checks; unknown cleanup means stop and escalate to administrators.
+- Use finite shutdown/verification waits and bounded work units with
+  atomic checkpoints before the scheduler deadline. Respect GPU allocations.
+- Validate lifecycle failure cases on Chiamaka within approved scope first;
+  its single GPU does not qualify multi-GPU or exact HPC shutdown behavior.
+- Preserve active-job scripts, evidence and existing work. Do not reset GPUs
+  or reboot nodes. Source/job changes still require explicit approval.

@@ -798,6 +798,32 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// pca_project_block_metal_cpp
+NumericMatrix pca_project_block_metal_cpp(SEXP block, NumericMatrix loadings, NumericVector centers, NumericVector scales);
+RcppExport SEXP _fastEmbedR_pca_project_block_metal_cpp(SEXP blockSEXP, SEXP loadingsSEXP, SEXP centersSEXP, SEXP scalesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type block(blockSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type loadings(loadingsSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type centers(centersSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type scales(scalesSEXP);
+    rcpp_result_gen = Rcpp::wrap(pca_project_block_metal_cpp(block, loadings, centers, scales));
+    return rcpp_result_gen;
+END_RCPP
+}
+// pca_crossprod_block_metal_cpp
+List pca_crossprod_block_metal_cpp(SEXP block, bool center);
+RcppExport SEXP _fastEmbedR_pca_crossprod_block_metal_cpp(SEXP blockSEXP, SEXP centerSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type block(blockSEXP);
+    Rcpp::traits::input_parameter< bool >::type center(centerSEXP);
+    rcpp_result_gen = Rcpp::wrap(pca_crossprod_block_metal_cpp(block, center));
+    return rcpp_result_gen;
+END_RCPP
+}
 // pca_tsvd_metal_cpp
 List pca_tsvd_metal_cpp(SEXP data, int n_components, bool center, bool scale, int seed, int oversample, int power);
 RcppExport SEXP _fastEmbedR_pca_tsvd_metal_cpp(SEXP dataSEXP, SEXP n_componentsSEXP, SEXP centerSEXP, SEXP scaleSEXP, SEXP seedSEXP, SEXP oversampleSEXP, SEXP powerSEXP) {
@@ -2084,8 +2110,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // massive_read_rows_cpp
-SEXP massive_read_rows_cpp(List spec, double first_row, int count, double max_bytes, bool float32);
-RcppExport SEXP _fastEmbedR_massive_read_rows_cpp(SEXP specSEXP, SEXP first_rowSEXP, SEXP countSEXP, SEXP max_bytesSEXP, SEXP float32SEXP) {
+SEXP massive_read_rows_cpp(List spec, double first_row, int count, double max_bytes, bool float32, bool row_major);
+RcppExport SEXP _fastEmbedR_massive_read_rows_cpp(SEXP specSEXP, SEXP first_rowSEXP, SEXP countSEXP, SEXP max_bytesSEXP, SEXP float32SEXP, SEXP row_majorSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2094,7 +2120,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type count(countSEXP);
     Rcpp::traits::input_parameter< double >::type max_bytes(max_bytesSEXP);
     Rcpp::traits::input_parameter< bool >::type float32(float32SEXP);
-    rcpp_result_gen = Rcpp::wrap(massive_read_rows_cpp(spec, first_row, count, max_bytes, float32));
+    Rcpp::traits::input_parameter< bool >::type row_major(row_majorSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_read_rows_cpp(spec, first_row, count, max_bytes, float32, row_major));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3329,6 +3356,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_knn_embed_metal_csr_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_metal_csr_cpp, 14},
     {"_fastEmbedR_knn_umap_refine_rows_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_rows_metal_cpp, 10},
     {"_fastEmbedR_rsvd_multiply_metal_cpp", (DL_FUNC) &_fastEmbedR_rsvd_multiply_metal_cpp, 3},
+    {"_fastEmbedR_pca_project_block_metal_cpp", (DL_FUNC) &_fastEmbedR_pca_project_block_metal_cpp, 4},
+    {"_fastEmbedR_pca_crossprod_block_metal_cpp", (DL_FUNC) &_fastEmbedR_pca_crossprod_block_metal_cpp, 2},
     {"_fastEmbedR_pca_tsvd_metal_cpp", (DL_FUNC) &_fastEmbedR_pca_tsvd_metal_cpp, 7},
     {"_fastEmbedR_transform_tsne_metal_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_metal_cpp, 19},
     {"_fastEmbedR_knn_tsne_opentsne_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_metal_cpp, 21},
@@ -3403,7 +3432,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_leiden_cuda_refine_cpp", (DL_FUNC) &_fastEmbedR_massive_leiden_cuda_refine_cpp, 12},
     {"_fastEmbedR_massive_leiden_refine_cpp", (DL_FUNC) &_fastEmbedR_massive_leiden_refine_cpp, 13},
     {"_fastEmbedR_massive_reference_buffer_cpp", (DL_FUNC) &_fastEmbedR_massive_reference_buffer_cpp, 1},
-    {"_fastEmbedR_massive_read_rows_cpp", (DL_FUNC) &_fastEmbedR_massive_read_rows_cpp, 5},
+    {"_fastEmbedR_massive_read_rows_cpp", (DL_FUNC) &_fastEmbedR_massive_read_rows_cpp, 6},
     {"_fastEmbedR_massive_read_knn_rows_cpp", (DL_FUNC) &_fastEmbedR_massive_read_knn_rows_cpp, 8},
     {"_fastEmbedR_massive_validate_graph_cpp", (DL_FUNC) &_fastEmbedR_massive_validate_graph_cpp, 6},
     {"_fastEmbedR_massive_graph_storage_cpp", (DL_FUNC) &_fastEmbedR_massive_graph_storage_cpp, 2},

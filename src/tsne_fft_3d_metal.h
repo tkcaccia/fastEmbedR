@@ -971,12 +971,16 @@ List run_metal_tsne_3d(
       layout(i, axis) = value;
     }
   }
+  const double metal_allocated_bytes_observed =
+    static_cast<double>(state.device.currentAllocatedSize);
   [mass_data release];
   [kernel_data release];
   [potential_data release];
   [fft_graph release];
   return List::create(
     Rcpp::Named("Y") = layout,
+    Rcpp::Named("metal_allocated_bytes_observed") =
+      metal_allocated_bytes_observed,
     Rcpp::Named("costs") = NumericVector(0),
     Rcpp::Named("itercosts") = NumericVector(0),
     Rcpp::Named("optimizer") = "tsne_fft_grid_3d_native_metal",

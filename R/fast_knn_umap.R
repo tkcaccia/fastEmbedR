@@ -697,6 +697,8 @@ finalize_prepared_umap <- function(layout, graph, init, cfg) {
         cfg$metal_optimizer_pipeline <- attr(
             layout, "metal_optimizer_pipeline"
         )
+        cfg$metal_allocated_bytes_observed <-
+            attr(layout, "metal_allocated_bytes_observed")
     }
     layout <- finalize_embedding_layout(
         layout,

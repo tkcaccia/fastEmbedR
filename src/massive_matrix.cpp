@@ -2928,12 +2928,65 @@ SEXP massive_reference_buffer_cpp(List spec) {
   return buffer;
 }
 
+namespace {
+
+void copy_float_rows_to_r_matrix(const std::vector<float>& source,
+                                 Rcpp::IntegerMatrix& target) {
+  static_assert(sizeof(float) == sizeof(int), "float32 needs 32-bit integers");
+  const int rows = target.nrow();
+  const int columns = target.ncol();
+  int* output = INTEGER(target);
+  for (int row_start = 0; row_start < rows; row_start += 128) {
+    const int row_end = row_start + std::min(128, rows - row_start);
+    for (int column_start = 0; column_start < columns;
+         column_start += 32) {
+      const int column_end = column_start +
+        std::min(32, columns - column_start);
+      for (int column = column_start; column < column_end; ++column) {
+        int* destination = output +
+          static_cast<std::size_t>(column) * rows + row_start;
+        for (int row = row_start; row < row_end; ++row) {
+          const float value = source[
+            static_cast<std::size_t>(row) * columns + column];
+          std::memcpy(destination++, &value, sizeof(float));
+        }
+      }
+    }
+  }
+}
+
+void copy_float_rows_to_numeric_matrix(const std::vector<float>& source,
+                                       NumericMatrix& target) {
+  const int rows = target.nrow();
+  const int columns = target.ncol();
+  double* output = REAL(target);
+  for (int row_start = 0; row_start < rows; row_start += 128) {
+    const int row_end = row_start + std::min(128, rows - row_start);
+    for (int column_start = 0; column_start < columns;
+         column_start += 32) {
+      const int column_end = column_start +
+        std::min(32, columns - column_start);
+      for (int column = column_start; column < column_end; ++column) {
+        double* destination = output +
+          static_cast<std::size_t>(column) * rows + row_start;
+        for (int row = row_start; row < row_end; ++row) {
+          *destination++ = source[
+            static_cast<std::size_t>(row) * columns + column];
+        }
+      }
+    }
+  }
+}
+
+}  // namespace
+
 // [[Rcpp::export]]
 SEXP massive_read_rows_cpp(List spec,
                            double first_row,
                            int count,
                            double max_bytes,
-                           bool float32 = false) {
+                           bool float32 = false,
+                           bool row_major = false) {
   auto source = make_source(spec);
   const auto start = whole_number(first_row, "first_row");
   if (start < 1 || count < 1 || start > source->nrow() ||
@@ -2945,6 +2998,9 @@ SEXP massive_read_rows_cpp(List spec,
     Rcpp::stop("Massive row read needs a positive byte limit.");
   }
   const int bytes_per_item = float32 ? 4 : 8;
+  if (row_major && !float32) {
+    Rcpp::stop("Row-major massive reads require float32.");
+  }
   if (source->ncol() > std::numeric_limits<int>::max() ||
       items > static_cast<std::uint64_t>(
         std::floor(max_bytes / bytes_per_item))) {
@@ -2952,28 +3008,24 @@ SEXP massive_read_rows_cpp(List spec,
   }
   std::vector<float> buffer(static_cast<std::size_t>(items));
   source->read_rows(start - 1, count, buffer.data());
+  if (row_major) {
+    Rcpp::RawVector payload(items * sizeof(float));
+    std::memcpy(RAW(payload), buffer.data(),
+      static_cast<std::size_t>(items) * sizeof(float));
+    payload.attr("fastembed_row_major_float32") = true;
+    payload.attr("nrow") = count;
+    payload.attr("ncol") = static_cast<int>(source->ncol());
+    return payload;
+  }
   if (float32) {
     Rcpp::IntegerMatrix payload(count, static_cast<int>(source->ncol()));
-    for (int col = 0; col < payload.ncol(); ++col) {
-      for (int row = 0; row < count; ++row) {
-        const float value = buffer[
-          static_cast<std::size_t>(row) * payload.ncol() + col
-        ];
-        std::memcpy(&payload(row, col), &value, sizeof(float));
-      }
-    }
+    copy_float_rows_to_r_matrix(buffer, payload);
     Rcpp::S4 result("float32");
     result.slot("Data") = payload;
     return result;
   }
   NumericMatrix result(count, static_cast<int>(source->ncol()));
-  for (int col = 0; col < result.ncol(); ++col) {
-    for (int row = 0; row < count; ++row) {
-      result(row, col) = buffer[
-        static_cast<std::size_t>(row) * result.ncol() + col
-      ];
-    }
-  }
+  copy_float_rows_to_numeric_matrix(buffer, result);
   return result;
 }
 

@@ -327,6 +327,8 @@ fastembedr_metal_rsvd_pca <- function(data,
         backend_reason = NA_character_,
         engine = "native_metal_mps",
         precision = fit$precision,
+        metal_allocated_bytes_observed =
+            fit$metal_allocated_bytes_observed,
         oversample = as.integer(fit$oversample),
         power = as.integer(fit$power),
         seed = as.integer(seed),
@@ -865,15 +867,26 @@ pca <- function(x, ncomp = 2L, xtest = NULL,
 
 fastembedr_rsvd_tuning <- function(n, p, rank, backend) {
     backend <- if (is.null(backend)) "cpu" else backend
+    large_input <- as.double(n) * p >= 5e6
     if (identical(backend, "cuda")) {
         oversample <- 16L
         power <- 2L
     } else if (identical(backend, "metal")) {
-        oversample <- if (n * p >= 5e6) 16L else 10L
-        power <- if (rank <= 20L) 1L else 2L
+        oversample <- if (rank <= 20L && large_input) 48L else
+            if (large_input) 20L else 10L
+        power <- if (rank <= 20L && large_input) 4L else
+            if (rank <= 20L) 1L else 2L
     } else {
         oversample <- 20L
         power <- if (rank <= 20L) 1L else 2L
+    }
+    if (identical(backend, "metal")) {
+        sketch <- min(n - 1, p)
+        max_elements <- .Machine$integer.max
+        if (as.double(p) * (as.double(n) + 3) > max_elements ||
+            as.double(n) * (as.double(sketch) + 3) > max_elements) {
+            stop("Metal PCA matrix exceeds the safe MPS size limit")
+        }
     }
     list(
         oversample = as.integer(max(0L, oversample)),

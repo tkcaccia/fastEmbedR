@@ -79,10 +79,23 @@ massive_embedding_paths <- function(data, count, k, dimensions,
         graph_bytes = rows * k * 8)
 }
 
+massive_embedding_ef_search <- function(value, nn, backend) {
+    value <- integer_scalar(value)
+    if (is.na(value) || value < 0L) stop(
+        "`ef_search` must be a nonnegative integer.", call. = FALSE)
+    if (!is.null(nn) && value > 0L) stop(
+        "`ef_search` cannot change a reused landmark graph.",
+        call. = FALSE)
+    if (value > 0L && backend != "cpu") stop(
+        "`ef_search` requires CPU HNSW landmark UMAP; ",
+        "no backend fallback was used.", call. = FALSE)
+    value
+}
+
 massive_embedding_request <- function(data, landmarks, backend,
         metric, standardize, pca_dims, nn, keep_knn, output,
         memory_limit, chunk_rows, devices, landmark_method,
-        checkpoint, resume) {
+        checkpoint, resume, ef_search = 0L) {
     massive_checkpoint_validate_controls(checkpoint, resume)
     if (!inherits(data, "fastEmbedR_massive_matrix")) stop(
         "EXPERIMENTAL landmark mode requires `massive_matrix()`.",
@@ -94,11 +107,9 @@ massive_embedding_request <- function(data, landmarks, backend,
     metric <- match.arg(metric, c("euclidean", "cosine", "correlation"))
     if (metric != "euclidean" || !identical(standardize, FALSE) ||
         !is.null(pca_dims) ||
-        !identical(keep_knn, FALSE)) {
-        stop("EXPERIMENTAL landmark mode needs Euclidean raw data, ",
-            "without preprocessing or `keep_knn`.",
-            call. = FALSE)
-    }
+        !identical(keep_knn, FALSE)) stop(
+        "EXPERIMENTAL landmark mode needs Euclidean raw data, ",
+        "without preprocessing or `keep_knn`.", call. = FALSE)
     if (!backend %in% c("cpu", "cuda", "metal")) stop(
         "EXPERIMENTAL landmark mode requires CPU, CUDA, or Metal; ",
         "no backend fallback was used.", call. = FALSE)
@@ -122,12 +133,13 @@ massive_embedding_request <- function(data, landmarks, backend,
             chunk_rows != floor(chunk_rows) ||
             chunk_rows > .Machine$integer.max))
         stop("`chunk_rows` must be one positive integer.", call. = FALSE)
+    ef_search <- massive_embedding_ef_search(ef_search, nn, backend)
     list(count = count, output = output, reuse = nn,
         memory_limit = memory_limit, chunk_rows = chunk_rows,
         devices = massive_validate_devices(devices, backend, data$nrow),
         landmark_method = match.arg(landmark_method,
             c("reservoir", "random")), checkpoint = checkpoint,
-        resume = resume)
+        resume = resume, ef_search = ef_search)
 }
 
 massive_embedding_reused_graph <- function(data, previous, count,
@@ -296,7 +308,8 @@ massive_embedding_graph <- function(data, selection, request, paths,
             chunk_rows = request$chunk_rows,
             memory_limit = request$memory_limit,
             devices = request$devices, checkpoint = request$checkpoint,
-            resume = request$resume && file.exists(sidecar))
+            resume = request$resume && file.exists(sidecar),
+            ef_search = request$ef_search)
     workflow <- massive_workflow_stage(workflow, "graph",
         list(graph = graph))
     list(graph = graph, workflow = workflow)
@@ -325,7 +338,8 @@ massive_embedding_off <- function(output, chunk_rows, memory_limit,
                                     landmark_method = "reservoir",
                                     init = NULL,
                                     layout_storage = "memory",
-                                    checkpoint = FALSE, resume = FALSE) {
+                                    checkpoint = FALSE, resume = FALSE,
+                                    ef_search = 0L) {
     massive_checkpoint_validate_controls(checkpoint, resume)
     if (checkpoint) stop("`checkpoint` requires massive mode.",
         call. = FALSE)
@@ -339,7 +353,8 @@ massive_embedding_off <- function(output, chunk_rows, memory_limit,
         !identical(local_refine, FALSE) ||
         !identical(local_neighbors, 15L) ||
         !identical(overlap_rows, 500L) || !is.null(devices) ||
-        !identical(landmark_method, "reservoir")) {
+        !identical(landmark_method, "reservoir") ||
+        !identical(ef_search, 0L)) {
         stop("Experimental output controls require ",
             "`massive = \"landmark\"`.", call. = FALSE)
     }
@@ -351,7 +366,7 @@ dispatch_massive_umap <- function(data, landmarks, n_neighbors,
         transform_k, massive, output, chunk_rows, memory_limit,
         refinement_epochs, local_refine, local_neighbors,
         overlap_rows, devices, landmark_method, init,
-        layout_storage, checkpoint, resume, cpu_update) {
+        layout_storage, checkpoint, resume, cpu_update, ef_search) {
     if (identical(massive, "out_of_core_graph")) return(
         run_massive_umap_graph(data, init, output, n_components,
             seed, backend, n.cores, chunk_rows, memory_limit,
@@ -359,7 +374,7 @@ dispatch_massive_umap <- function(data, landmarks, n_neighbors,
             keep_knn, graph_mode, verbose, landmarks, transform_k,
             refinement_epochs, local_refine, local_neighbors,
             overlap_rows, devices, landmark_method,
-            layout_storage, checkpoint, resume, cpu_update))
+            layout_storage, checkpoint, resume, cpu_update, ef_search))
     if (!identical(layout_storage, "memory")) stop(
         "`layout_storage` requires full-graph UMAP.", call. = FALSE)
     if (!is.null(init)) stop("`init` requires full-graph UMAP.",
@@ -369,7 +384,7 @@ dispatch_massive_umap <- function(data, landmarks, n_neighbors,
         keep_knn, graph_mode, verbose, transform_k, massive, output,
         chunk_rows, memory_limit, refinement_epochs, local_refine,
         local_neighbors, overlap_rows, devices, landmark_method,
-        checkpoint, resume)
+        checkpoint, resume, ef_search)
 }
 
 run_massive_umap_graph <- function(data, init, output, n_components,
@@ -378,7 +393,7 @@ run_massive_umap_graph <- function(data, init, output, n_components,
         keep_knn, graph_mode, verbose, landmarks, transform_k,
         refinement_epochs, local_refine, local_neighbors,
         overlap_rows, devices, landmark_method,
-        layout_storage, checkpoint, resume, cpu_update) {
+        layout_storage, checkpoint, resume, cpu_update, ef_search) {
     if (!is.null(n_neighbors) || !identical(standardize, FALSE) ||
         !is.null(pca_dims) || !is.null(nn) ||
         !identical(keep_knn, FALSE) || !identical(verbose, FALSE) ||
@@ -389,7 +404,8 @@ run_massive_umap_graph <- function(data, init, output, n_components,
         !identical(overlap_rows, 500L) ||
         !identical(landmark_method, "reservoir") ||
         !identical(metric, c("euclidean", "cosine", "correlation")) ||
-        !identical(graph_mode, c("fuzzy", "binary"))) {
+        !identical(graph_mode, c("fuzzy", "binary")) ||
+        !identical(ef_search, 0L)) {
         stop("Full-graph UMAP accepts a prepared fuzzy graph, not ",
             "matrix preprocessing or landmark controls.", call. = FALSE)
     }
@@ -438,6 +454,7 @@ massive_embedding_run <- function(data, request, k, dimensions, backend,
             iterations = transform_iter, perplexity = transform_perplexity,
             local_refine = local_refine, local_neighbors = local_neighbors,
             overlap_rows = overlap_rows))
+    if (request$ef_search > 0L) config$ef_search <- request$ef_search
     workflow <- massive_embedding_workflow(data, request, paths, config)
     selected <- massive_workflow_selection(data, request, paths,
         seed, workflow, reused)
@@ -477,7 +494,8 @@ run_massive_umap_landmark <- function(data, landmarks, n_neighbors,
                             massive, output, chunk_rows, memory_limit,
                             refinement_epochs, local_refine,
                             local_neighbors, overlap_rows, devices,
-                            landmark_method, checkpoint, resume) {
+                            landmark_method, checkpoint, resume,
+                            ef_search = 0L) {
     match.arg(massive, c("landmark"))
     state <- validate_umap_request(backend, graph_mode,
         n_components, n.cores, keep_knn)
@@ -495,7 +513,7 @@ run_massive_umap_landmark <- function(data, landmarks, n_neighbors,
     request <- massive_embedding_request(data, landmarks,
         state$backend, metric, standardize, pca_dims, nn,
         keep_knn, output, memory_limit, chunk_rows, devices,
-        landmark_method, checkpoint, resume)
+        landmark_method, checkpoint, resume, ef_search)
     n_neighbors <- validate_umap_n_neighbors(n_neighbors, request$count)
     k <- integer_scalar(transform_k %||% n_neighbors)
     if (is.na(k) || k < 1L || k > request$count)

@@ -177,6 +177,14 @@ rsvd_multiply_metal_cpp <- function(left, right, transpose_left) {
     .Call(`_fastEmbedR_rsvd_multiply_metal_cpp`, left, right, transpose_left)
 }
 
+pca_project_block_metal_cpp <- function(block, loadings, centers, scales) {
+    .Call(`_fastEmbedR_pca_project_block_metal_cpp`, block, loadings, centers, scales)
+}
+
+pca_crossprod_block_metal_cpp <- function(block, center) {
+    .Call(`_fastEmbedR_pca_crossprod_block_metal_cpp`, block, center)
+}
+
 pca_tsvd_metal_cpp <- function(data, n_components, center = TRUE, scale = FALSE, seed = 4L, oversample = 16L, power = 1L) {
     .Call(`_fastEmbedR_pca_tsvd_metal_cpp`, data, n_components, center, scale, seed, oversample, power)
 }
@@ -473,8 +481,8 @@ massive_reference_buffer_cpp <- function(spec) {
     .Call(`_fastEmbedR_massive_reference_buffer_cpp`, spec)
 }
 
-massive_read_rows_cpp <- function(spec, first_row, count, max_bytes, float32 = FALSE) {
-    .Call(`_fastEmbedR_massive_read_rows_cpp`, spec, first_row, count, max_bytes, float32)
+massive_read_rows_cpp <- function(spec, first_row, count, max_bytes, float32 = FALSE, row_major = FALSE) {
+    .Call(`_fastEmbedR_massive_read_rows_cpp`, spec, first_row, count, max_bytes, float32, row_major)
 }
 
 massive_read_knn_rows_cpp <- function(indices_path, distances_path, n_rows, k, n_reference, first_row, count, max_bytes) {

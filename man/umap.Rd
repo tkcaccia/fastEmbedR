@@ -34,7 +34,8 @@ umap(
   layout_storage = "memory",
   checkpoint = FALSE,
   resume = FALSE,
-  cpu_update = "sgd"
+  cpu_update = "sgd",
+  ef_search = 0L
 )
 }
 \arguments{
@@ -165,6 +166,10 @@ Changed input, backend, or fit controls fail without recomputation.}
 \item{cpu_update}{\code{"sgd"} (default) uses ordered single-worker updates.
 \code{"synchronized"} enables deterministic multicore CPU updates for
 full-graph UMAP. Other modes and backends reject this choice.}
+
+\item{ef_search}{CPU HNSW search effort for experimental massive landmark
+UMAP. Zero uses the faissR preset. A positive value requires CPU HNSW
+and does not guarantee recall; audit the resulting graph separately.}
 }
 \value{
 A \code{fastEmbedR_embedding} object. Landmark fits also contain \code{model},

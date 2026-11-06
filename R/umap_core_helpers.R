@@ -284,6 +284,8 @@ optimize_umap_gpu_csr <- function(graph, init, cfg, backend, seed) {
         cfg$metal_optimizer_pipeline <- attr(
             out, "metal_optimizer_pipeline"
         )
+        cfg$metal_allocated_bytes_observed <-
+            attr(out, "metal_allocated_bytes_observed")
         return(list(layout = out, cfg = cfg))
     }
 

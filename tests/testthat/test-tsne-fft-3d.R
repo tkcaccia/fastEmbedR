@@ -314,6 +314,7 @@ test_that("3D Metal one-call fit retains native PCA and FFT", {
     expect_identical(fit$parameters$nn_backend, "metal")
     expect_identical(fit$parameters$init_backend, "metal_mps_rsvd")
     expect_identical(fit$parameters$repulsion, "fft_grid_3d_metal")
+    expect_gt(fit$parameters$metal_allocated_bytes_observed, 0)
 })
 
 test_that("3D CUDA one-call fit retains native PCA and FFT", {

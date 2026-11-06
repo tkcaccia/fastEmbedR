@@ -337,6 +337,9 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #' @param local_neighbors Non-self neighbors in each local query window.
 #' @param overlap_rows Extra rows on each side of a local query window;
 #'   at least `local_neighbors`.
+#' @param ef_search CPU HNSW search effort for experimental massive landmark
+#'   UMAP. Zero uses the faissR preset. A positive value requires CPU HNSW
+#'   and does not guarantee recall; audit the resulting graph separately.
 #' @details Landmark mode fits the requested fuzzy or binary UMAP graph on the
 #' landmark rows, projects the remaining rows with query-to-reference KNN, and
 #' optionally refines only projected rows while landmark coordinates remain
@@ -359,7 +362,7 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
     local_refine = FALSE, local_neighbors = 15L, overlap_rows = 500L,
     devices = NULL, landmark_method = "reservoir", init = NULL,
     layout_storage = "memory", checkpoint = FALSE, resume = FALSE,
-    cpu_update = "sgd") {
+    cpu_update = "sgd", ef_search = 0L) {
     resident_epochs <- if (missing(refinement_epochs)) NULL else
         refinement_epochs
     if (missing(massive)) massive <- embedding_default_massive(
@@ -370,7 +373,8 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
         seed, backend, n.cores, keep_knn, graph_mode, verbose, transform_k,
         massive, output, chunk_rows, memory_limit, refinement_epochs,
         local_refine, local_neighbors, overlap_rows, devices,
-        landmark_method, init, layout_storage, checkpoint, resume, cpu_update))
+        landmark_method, init, layout_storage, checkpoint,
+        resume, cpu_update, ef_search))
     validate_resident_umap_output_controls(devices, backend,
         landmarks, output, chunk_rows, memory_limit,
         resident_epochs, local_refine, local_neighbors,
@@ -383,6 +387,9 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
             keep_knn, graph_mode, verbose, nn, resident_epochs,
             devices))
     }
+    if (!identical(ef_search, 0L)) stop(
+        "`ef_search` requires massive landmark UMAP.",
+        call. = FALSE)
     state <- validate_umap_request(backend, graph_mode,
         n_components, n.cores, keep_knn)
     if (is_knn_input(data))
