@@ -87,6 +87,14 @@ parallelize. Current CPU priorities are:
 - keep t-SNE attractive affinities sparse;
 - avoid unnecessary copies between R matrices and C++ buffers.
 
+Resident CPU UMAP accepts `n.cores` from one to 32 for 2D and 3D output.
+Native stages use a workload-size cap, so a small graph may use fewer
+workers than requested. On graphs with at least 10,000 rows, the 2D and
+3D optimizers use concurrent atomic coordinate updates. Their exact
+coordinates can vary with scheduling even at a fixed seed; assess
+quality over repeated runs. The `n.cores_effective` field records the
+configured maximum, not a per-stage thread measurement.
+
 ## Metal
 
 Metal is implemented with Objective-C++ and Metal kernels. Public Metal and CUDA

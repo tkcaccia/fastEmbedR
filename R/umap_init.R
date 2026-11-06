@@ -184,7 +184,7 @@ configure_umap_init_threads <- function(cfg, n.cores) {
         stop("`n.cores` must be NULL or a positive integer.", call. = FALSE)
     }
     cfg$n.cores_requested <- as.integer(requested)
-    cfg$n_threads <- max(1L, min(4L, requested))
+    cfg$n_threads <- max(1L, min(32L, requested))
     cfg$n.cores_effective <- cfg$n_threads
     cfg
 }

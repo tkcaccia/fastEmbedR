@@ -23,10 +23,10 @@ column is removed automatically.}
 
 \item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}.}
 
-\item{n.cores}{Requested CPU core count. CPU UMAP currently uses at most
-four workers and records both requested and effective values. \code{NULL}
-selects a size-aware default from one to four workers. Native GPU
-backends ignore this argument.}
+\item{n.cores}{Requested CPU core count. CPU UMAP accepts up to 32 workers
+and records requested and configured counts. Individual stages may use
+fewer workers when their inputs are small. \code{NULL} selects a size-aware
+default from one to four workers. Native GPU backends ignore this argument.}
 
 \item{graph_mode}{Graph weighting mode. \code{"fuzzy"} (the default) uses
 standard UMAP fuzzy graph weights. \code{"binary"} uses a symmetric

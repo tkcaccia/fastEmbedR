@@ -39,8 +39,9 @@
 #'   UMAP runs its optimizer on Metal. Other GPU requests must resolve to a
 #'   native backend; the package does not relabel CPU work as GPU.
 #' @param n.cores Requested CPU core count. For matrix input, the value is
-#'   passed to CPU PCA preprocessing, KNN, and UMAP. UMAP uses at most four
-#'   workers and records both requested and effective values. With `NULL`,
+#'   passed to CPU PCA preprocessing, KNN, and UMAP. UMAP accepts up to 32
+#'   workers and records both requested and configured values; individual
+#'   stages may use fewer workers when their inputs are small. With `NULL`,
 #'   PCA uses `options(n.cores)` (one by default); KNN and UMAP use their
 #'   stage defaults. The ordered CPU stage of a 2D Metal fit uses one thread;
 #'   native GPU stages ignore this argument.

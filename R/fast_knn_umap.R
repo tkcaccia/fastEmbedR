@@ -1424,7 +1424,7 @@ spectral_umap_threads <- function(n_threads) {
         n_threads < 1L) {
         n_threads <- 1L
     }
-    max(1L, min(4L, n_threads))
+    max(1L, min(32L, n_threads))
 }
 
 run_spectral_knn_gpu <- function(input, n_components, n_iter,
@@ -1532,10 +1532,10 @@ spectral_knn_init <- function(
 #' @param seed Integer random seed.
 #' @param verbose Print native optimizer progress.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`.
-#' @param n.cores Requested CPU core count. CPU UMAP currently uses at most
-#'   four workers and records both requested and effective values. `NULL`
-#'   selects a size-aware default from one to four workers. Native GPU
-#'   backends ignore this argument.
+#' @param n.cores Requested CPU core count. CPU UMAP accepts up to 32 workers
+#'   and records requested and configured counts. Individual stages may use
+#'   fewer workers when their inputs are small. `NULL` selects a size-aware
+#'   default from one to four workers. Native GPU backends ignore this argument.
 #' @param graph_mode Graph weighting mode. `"fuzzy"` (the default) uses
 #'   standard UMAP fuzzy graph weights. `"binary"` uses a symmetric
 #'   unit-weight sensitivity graph.

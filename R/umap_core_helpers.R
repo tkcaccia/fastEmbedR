@@ -69,7 +69,7 @@ apply_umap_thread_override <- function(cfg, n_threads) {
     }
     n_threads <- resolve_n_cores(n_threads)
     cfg$n.cores_requested <- as.integer(n_threads)
-    cfg$n_threads <- as.integer(max(1L, min(4L, n_threads)))
+    cfg$n_threads <- as.integer(max(1L, min(32L, n_threads)))
     cfg$n.cores_effective <- cfg$n_threads
     cfg
 }

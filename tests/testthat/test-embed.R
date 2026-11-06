@@ -964,6 +964,6 @@ test_that("UMAP reports requested and validated effective CPU workers", {
         graph_mode = "fuzzy"
     )
     expect_identical(prepared$config$n.cores_requested, 8L)
-    expect_identical(prepared$config$n.cores_effective, 4L)
-    expect_identical(prepared$config$n_threads, 4L)
+    expect_identical(prepared$config$n.cores_effective, 8L)
+    expect_identical(prepared$config$n_threads, 8L)
 })

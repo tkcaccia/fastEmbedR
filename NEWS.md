@@ -1,5 +1,12 @@
 # fastEmbedR 0.1
 
+* CPU UMAP now accepts up to 32 requested workers for resident 2D and 3D
+  fits. Native stages choose fewer workers for small workloads; the
+  concurrent 3D optimizer is enabled on graphs with at least 10,000 rows.
+  The reported effective count is the configured maximum, not a count
+  measured separately for every stage. Concurrent atomic updates can
+  change the exact coordinates between otherwise identical runs.
+
 * Simplify the public file-backed reader API: `massive_read_rows()` now
   reads bounded matrix rows, full-graph cluster labels, and landmark
   membership with confidence. The four result-specific readers are

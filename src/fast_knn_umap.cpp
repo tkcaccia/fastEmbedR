@@ -88,8 +88,12 @@ class ReusableBarrier {
 
 int effective_cpu_threads(const int n_threads, const int n_items) {
   if (n_items <= 1) return 1;
+  // Keep small stages cheap while allowing larger graphs to use the CPU
+  // allocation requested by the caller.  The cap grows only when there is
+  // enough work to give each worker at least 2048 items.
   const int work_cap = n_items < 256 ? 1 :
-    n_items < 2048 ? 2 : 4;
+    n_items < 2048 ? 2 :
+    std::min(32, std::max(4, n_items / 2048));
   return std::max(1, std::min(std::min(n_threads, work_cap), n_items));
 }
 
@@ -3161,9 +3165,10 @@ NumericMatrix optimize_layout_csr(const int n,
   double* emb = embedding.begin();
   double* emb_x = emb;
   double* emb_y = emb + n;
+  double* emb_z = n_components == 3 ? emb + 2 * n : nullptr;
 
   const int threads = effective_cpu_threads(n_threads, static_cast<int>(active_pos.size()));
-  if (n_components == 2 && threads > 1 && n >= 10000) {
+  if ((n_components == 2 || n_components == 3) && threads > 1 && n >= 10000) {
     const int* active_rows_ptr = active_rows.data();
     const int* active_tails_ptr = active_tails.data();
     const float* epochs_per_sample_ptr = epochs_per_sample.data();
@@ -3180,6 +3185,9 @@ NumericMatrix optimize_layout_csr(const int n,
 
     std::vector<std::atomic<float>> emb_xf(static_cast<std::size_t>(n));
     std::vector<std::atomic<float>> emb_yf(static_cast<std::size_t>(n));
+    std::vector<std::atomic<float>> emb_zf(
+      n_components == 3 ? static_cast<std::size_t>(n) : 0u
+    );
     for (int i = 0; i < n; ++i) {
       emb_xf[static_cast<std::size_t>(i)].store(
         static_cast<float>(emb_x[i]), std::memory_order_relaxed
@@ -3187,9 +3195,15 @@ NumericMatrix optimize_layout_csr(const int n,
       emb_yf[static_cast<std::size_t>(i)].store(
         static_cast<float>(emb_y[i]), std::memory_order_relaxed
       );
+      if (n_components == 3) {
+        emb_zf[static_cast<std::size_t>(i)].store(
+          static_cast<float>(emb_z[i]), std::memory_order_relaxed
+        );
+      }
     }
     std::atomic<float>* x = emb_xf.data();
     std::atomic<float>* y = emb_yf.data();
+    std::atomic<float>* z = n_components == 3 ? emb_zf.data() : nullptr;
 
     ReusableBarrier barrier(threads);
     std::vector<std::size_t> worker_begin(static_cast<std::size_t>(threads) + 1u, 0u);
@@ -3223,7 +3237,10 @@ NumericMatrix optimize_layout_csr(const int n,
           const float tail_y = y[k].load(std::memory_order_relaxed);
           const float dx = head_x - tail_x;
           const float dy = head_y - tail_y;
-          const float dist_sq = std::max(eps, dx * dx + dy * dy);
+          const float dz = n_components == 3 ?
+            z[j].load(std::memory_order_relaxed) -
+              z[k].load(std::memory_order_relaxed) : 0.0f;
+          const float dist_sq = std::max(eps, dx * dx + dy * dy + dz * dz);
 
           const float dist_pow = umap_powf_fast(dist_sq, bf);
           const float grad_coeff =
@@ -3234,6 +3251,11 @@ NumericMatrix optimize_layout_csr(const int n,
           atomic_add_float(y[j], gy);
           atomic_add_float(x[k], -gx);
           atomic_add_float(y[k], -gy);
+          if (n_components == 3) {
+            const float gz = clip4f(grad_coeff * dz) * alpha;
+            atomic_add_float(z[j], gz);
+            atomic_add_float(z[k], -gz);
+          }
           epoch_of_next_sample[i] += epochs_per_sample_ptr[i];
 
           int n_neg_samples = 0;
@@ -3253,12 +3275,19 @@ NumericMatrix optimize_layout_csr(const int n,
             const float neg_y = y[neg].load(std::memory_order_relaxed);
             const float ndx = current_head_x - neg_x;
             const float ndy = current_head_y - neg_y;
-            const float neg_dist_sq = std::max(eps, ndx * ndx + ndy * ndy);
+            const float ndz = n_components == 3 ?
+              z[j].load(std::memory_order_relaxed) -
+                z[neg].load(std::memory_order_relaxed) : 0.0f;
+            const float neg_dist_sq =
+              std::max(eps, ndx * ndx + ndy * ndy + ndz * ndz);
             const float neg_pow = umap_powf_fast(neg_dist_sq, bf);
             const float repulse =
               repulsion_const / ((0.001f + neg_dist_sq) * (af * neg_pow + 1.0f));
             atomic_add_float(x[j], clip4f(repulse * ndx) * alpha);
             atomic_add_float(y[j], clip4f(repulse * ndy) * alpha);
+            if (n_components == 3) {
+              atomic_add_float(z[j], clip4f(repulse * ndz) * alpha);
+            }
           }
           if (n_neg_samples > 0) {
             epoch_of_next_negative_sample[i] += n_neg_samples * epochs_per_negative_sample_ptr[i];
@@ -3286,6 +3315,9 @@ NumericMatrix optimize_layout_csr(const int n,
     for (int i = 0; i < n; ++i) {
       emb_x[i] = static_cast<double>(x[i].load(std::memory_order_relaxed));
       emb_y[i] = static_cast<double>(y[i].load(std::memory_order_relaxed));
+      if (n_components == 3) {
+        emb_z[i] = static_cast<double>(z[i].load(std::memory_order_relaxed));
+      }
     }
 
     return embedding;
