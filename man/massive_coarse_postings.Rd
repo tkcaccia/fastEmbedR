@@ -46,3 +46,4 @@ The resulting float32 rows are contiguous by posting and retain one-based
 original row IDs. This builds storage only; it does not perform KNN search
 or certify the quality of the supplied centers.
 }
+\keyword{internal}

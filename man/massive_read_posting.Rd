@@ -21,3 +21,4 @@ Original one-based row IDs and a double matrix of features.
 \description{
 Read a bounded part of an experimental physical posting list
 }
+\keyword{internal}

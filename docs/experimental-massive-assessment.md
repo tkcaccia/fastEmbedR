@@ -1,5 +1,11 @@
 # EXPERIMENTAL massive-data architecture assessment
 
+This is a historical implementation assessment. Stage names such as
+`massive_umap_optimize()` and `massive_leiden()` below refer to internal
+functions. The supported user workflow now calls `pca()`, `tsne()`,
+`umap()`, or `graph_cluster()` with a file-backed descriptor or prepared
+graph. See [Usage and API](usage-api.md) for current examples.
+
 This assessment describes the current in-memory boundary and the first
 implemented out-of-core route. It does not claim that the complete massive
 backend exists.
@@ -119,13 +125,16 @@ strict row validation and edge order; the before/after diagnostic is in
 gradient, update, and gain arrays still consume RAM; the
 resource preflight rejects requests that exceed its budget. The new
 full-graph CUDA route streams the same affinity graph in bounded batches,
-reuses the package's 2D cuFFT repulsion and optimizer update, and retains
-the coordinate state on one GPU. It rejects three-dimensional inputs and
+reuses the package's cuFFT repulsion and optimizer update in 2D or 3D,
+and retains coordinate state on the selected GPU or GPUs. It rejects
 layouts that exceed free VRAM; it does not provide over-VRAM optimizer
-state. On one RTX 5060 Ti, a 32-row five-step fixture agreed with the CPU
+state. A current candidate passed a 16-row CPU/CUDA numerical comparison
+in both dimensions on one RTX 5060 Ti. An earlier 2D 32-row fixture agreed
+with the CPU
 FFT result within 5.83e-10 maximum absolute difference and reported the
 CUDA backend. This is narrow functional evidence, not a large-graph
-speed, memory, or embedding-quality result. CPU full-graph t-SNE can save
+speed, memory, multi-GPU qualification, or embedding-quality result. CPU
+full-graph t-SNE can save
 coordinates, momentum updates, and adaptive gains at completed iterations.
 A forced interruption after iteration two resumed to a byte-identical
 five-iteration layout; changed optimizer controls were rejected. Each
@@ -315,7 +324,10 @@ query KNN, backend, and neighbor count before reusing the same KNN files.
 It still builds the small resident graph among landmarks. This avoids a
 second all-row KNN pass and second KNN file pair; it does not change the
 clustering objective or improve approximate assignment quality.
-Metal streaming is not implemented.
+Metal file-backed PCA, UMAP, t-SNE, and clustering routes are
+experimental. Their supported modes and actual-device evidence are
+listed in the backend capability table; none should be treated as
+publication-scale performance evidence without a matched run.
 For landmark embeddings, the reported `peak_ram_bytes` and
 `peak_vram_bytes` are the largest estimates across reference fitting,
 KNN, and projection, not measured peaks or guaranteed ceilings. They

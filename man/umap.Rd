@@ -33,7 +33,8 @@ umap(
   init = NULL,
   layout_storage = "memory",
   checkpoint = FALSE,
-  resume = FALSE
+  resume = FALSE,
+  cpu_update = "sgd"
 )
 }
 \arguments{
@@ -73,14 +74,18 @@ Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
 cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
 that threshold. The KNN result stays on the device through graph
 construction and optimization.
-GPU requests must resolve to a real native backend; the package does not
-relabel CPU work as GPU.}
+A resident 2D Metal fit uses one CPU thread for the first half of the
+optimizer epochs, then a native Metal kernel for the remaining epochs.
+The stage counts are recorded in \code{fit$parameters}. Resident 3D Metal
+UMAP runs its optimizer on Metal. Other GPU requests must resolve to a
+native backend; the package does not relabel CPU work as GPU.}
 
 \item{n.cores}{Requested CPU core count. For matrix input, the value is
 passed to CPU PCA preprocessing, KNN, and UMAP. UMAP uses at most four
 workers and records both requested and effective values. With \code{NULL},
 PCA uses \code{options(n.cores)} (one by default); KNN and UMAP use their
-stage defaults. Native GPU stages ignore this argument.}
+stage defaults. The ordered CPU stage of a 2D Metal fit uses one thread;
+native GPU stages ignore this argument.}
 
 \item{keep_knn}{Keep KNN matrices in the returned object.}
 
@@ -94,16 +99,19 @@ or necessarily faster.}
 \item{landmarks}{\code{FALSE} (the default) embeds all observations. A fraction
 in \verb{(0, 1)}, a positive landmark count, or explicit row indices enables
 landmark embedding followed by fixed-reference projection of the remaining
-rows.}
+rows. File-backed landmark mode currently accepts a count only;
+fractions and explicit row indices require resident input.}
 
 \item{transform_k}{Number of landmark neighbors used to project non-landmark
 observations. Used only when \code{landmarks} enables landmarking and defaults
 to \code{n_neighbors}.}
 
 \item{massive}{\code{"off"} (default), experimental \code{"landmark"},
-or \code{"out_of_core_graph"}. Landmarking is always explicit. The
-full-graph route needs a symmetric fuzzy
-\code{\link[=massive_umap_fuzzy_graph]{massive_umap_fuzzy_graph()}} and file-backed \code{init}. The experimental
+or \code{"out_of_core_graph"}. When omitted, a prepared file-backed graph
+selects full-graph mode; a file-backed matrix with explicit landmarks
+selects landmark mode. The
+full-graph route needs a symmetric fuzzy graph and file-backed \code{init}.
+Build the graph with \code{\link[=massive_umap_fuzzy_graph]{massive_umap_fuzzy_graph()}}. The experimental
 CUDA full-graph route requires a device-resident 2D layout.}
 
 \item{output}{New \code{.f32} path for experimental file-backed coordinates.}
@@ -112,9 +120,10 @@ CUDA full-graph route requires a device-resident 2D layout.}
 
 \item{memory_limit}{Conservative experimental RAM budget.}
 
-\item{refinement_epochs}{Fixed-reference UMAP projection epochs in
-experimental mode. Defaults to zero on CPU and CUDA; CUDA currently
-rejects positive values.}
+\item{refinement_epochs}{Fixed-reference UMAP projection epochs. In
+resident landmark mode, the default is 50 and an explicit zero disables
+refinement. In experimental file-backed mode, the default is zero on CPU
+and CUDA; CUDA currently rejects positive values.}
 
 \item{local_refine}{Enable EXPERIMENTAL bounded query-to-query graph
 refinement in massive landmark mode. Requires CPU and positive epochs.}
@@ -124,8 +133,15 @@ refinement in massive landmark mode. Requires CPU and positive epochs.}
 \item{overlap_rows}{Extra rows on each side of a local query window;
 at least \code{local_neighbors}.}
 
-\item{devices}{Optional CUDA device indices for experimental landmark
-query projection. Reference fitting and KNN use the first device.}
+\item{devices}{Optional CUDA device indices. In resident full-data mode,
+two to four devices coordinate one 2D or 3D fit with host-RAM graph
+construction. Native CUDA KNN is materialized in host RAM for this
+route. In experimental landmark mode, devices distribute query
+projection while reference fitting and KNN use the first device.
+Resident landmark mode coordinates the reference fit and shards query
+projection across two to four devices. Query KNN is materialized in
+host RAM before sharding. Sharded refinement samples negative examples
+from the fixed reference rows.}
 
 \item{landmark_method}{Sampling method for experimental landmark mode:
 \code{"reservoir"} (default) or \code{"random"} for fast random-access storage.
@@ -145,6 +161,10 @@ Only available for massive landmark or full-graph mode.}
 
 \item{resume}{Continue a matching interrupted experimental workflow.
 Changed input, backend, or fit controls fail without recomputation.}
+
+\item{cpu_update}{\code{"sgd"} (default) uses ordered single-worker updates.
+\code{"synchronized"} enables deterministic multicore CPU updates for
+full-graph UMAP. Other modes and backends reject this choice.}
 }
 \value{
 A \code{fastEmbedR_embedding} object. Landmark fits also contain \code{model},
@@ -175,7 +195,8 @@ wide-shell profile; learning rate is correspondingly 1 or 1.25. Use
 or \code{\link[=umap_knn]{umap_knn()}} to supply an externally controlled KNN graph. These controls
 are scientifically consequential; fixing them is a scope
 decision made to keep one tested objective and update schedule aligned across
-CPU, Metal, and CUDA, not a claim that the values are universally optimal.
+CPU, Metal, and CUDA. Their update order can differ. These settings are
+not a claim that the values are universally optimal.
 Arbitrary \code{min_dist}, \code{spread}, epoch, learning-rate, negative-sampling, or
 optimizer-mode sweeps should use a
 general-purpose UMAP implementation; fastEmbedR does not claim API or
@@ -184,8 +205,8 @@ parameter interchangeability with those packages.
 Landmark mode fits the requested fuzzy or binary UMAP graph on the
 landmark rows, projects the remaining rows with query-to-reference KNN, and
 optionally refines only projected rows while landmark coordinates remain
-fixed. Metal and CUDA landmark refinement currently requires 2D output;
-3D landmark requests fail explicitly. Resident precomputed KNN input
+fixed. CUDA and Metal landmark refinement support 2D or 3D output.
+Resident precomputed KNN input
 cannot be combined with landmarking.
 The returned \code{model} retains the fitted preprocessing transform so new data
 can be supplied in the same original feature space.

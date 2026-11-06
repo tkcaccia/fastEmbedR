@@ -18,6 +18,7 @@ project_landmark_model(
   keep_knn = FALSE,
   n.cores = NULL,
   verbose = FALSE,
+  devices = NULL,
   ...
 )
 }
@@ -53,6 +54,10 @@ as a genuinely new query, even when its row count matches the training set.}
 \item{n.cores}{Number of CPU cores.}
 
 \item{verbose}{Print optimizer progress.}
+
+\item{devices}{Optional two to four CUDA devices for held-out query
+projection. Query KNN is materialized in host RAM, then the fixed
+reference layout and query rows are sharded across the devices.}
 
 \item{...}{Low-level t-SNE transform controls.}
 }

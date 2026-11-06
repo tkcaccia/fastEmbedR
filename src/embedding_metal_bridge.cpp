@@ -68,7 +68,9 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
                                        double max_weight,
                                        double repulsion_strength,
                                        int seed,
-                                       int sampler_mode);
+                                       int sampler_mode,
+                                       int start_epoch,
+                                       int total_epochs);
 NumericMatrix knn_umap_refine_rows_metal_impl(IntegerMatrix indices,
                                               SEXP distances,
                                               IntegerVector row_ids,
@@ -129,6 +131,20 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
                                   bool record_costs,
                                   bool auto_config,
                                   double auto_iter_end);
+List massive_tsne_optimize_metal_impl(
+    const std::string& offsets_path,
+    const std::string& indices_path,
+    const std::string& weights_path,
+    const std::string& init_path,
+    const std::string& output_path,
+    int n, int dims, int early_iter, int normal_iter,
+    double early_exaggeration, double exaggeration,
+    double learning_rate, bool learning_rate_auto,
+    double initial_momentum, double final_momentum,
+    double min_gain, double max_step_norm,
+    int start_iter, const std::string& state_path,
+    int checkpoint_every, SEXP checkpoint_callback,
+    const std::string& graph_access, int edge_chunk_capacity);
 // [[Rcpp::export]]
 bool embedding_metal_available_cpp() {
   return embedding_metal_available_impl();
@@ -272,11 +288,14 @@ NumericMatrix knn_embed_metal_csr_cpp(IntegerVector offsets,
                                       double max_weight,
                                       double repulsion_strength,
                                       int seed,
-                                      int sampler_mode = 0) {
+                                      int sampler_mode = 0,
+                                      int start_epoch = 0,
+                                      int total_epochs = -1) {
   return knn_embed_metal_csr_impl(
     offsets, neighbors, weights, init, n_epochs,
     negative_sample_rate, learning_rate, min_dist, max_weight,
-    repulsion_strength, seed, sampler_mode
+    repulsion_strength, seed, sampler_mode,
+    start_epoch, total_epochs
   );
 }
 
@@ -413,4 +432,27 @@ List knn_tsne_opentsne_metal_cpp(IntegerMatrix indices,
     auto_config,
     auto_iter_end
   );
+}
+
+// [[Rcpp::export]]
+List massive_tsne_optimize_metal_cpp(
+    std::string offsets_path, std::string indices_path,
+    std::string weights_path, std::string init_path,
+    std::string output_path, int n, int dims,
+    int early_iter, int normal_iter,
+    double early_exaggeration, double exaggeration,
+    double learning_rate, bool learning_rate_auto,
+    double initial_momentum, double final_momentum,
+    double min_gain, double max_step_norm,
+    int start_iter, std::string state_path,
+    int checkpoint_every, SEXP checkpoint_callback,
+    std::string graph_access, int edge_chunk_capacity) {
+  return massive_tsne_optimize_metal_impl(
+    offsets_path, indices_path, weights_path, init_path,
+    output_path, n, dims, early_iter, normal_iter,
+    early_exaggeration, exaggeration, learning_rate,
+    learning_rate_auto, initial_momentum, final_momentum,
+    min_gain, max_step_norm, start_iter, state_path,
+    checkpoint_every, checkpoint_callback,
+    graph_access, edge_chunk_capacity);
 }

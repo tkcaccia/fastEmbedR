@@ -331,3 +331,28 @@ test_that("CUDA landmark t-SNE returns every projected row", {
     expect_identical(fit$parameters$backend, "cuda")
     expect_identical(fit$parameters$transform_backend, "cuda")
 })
+
+test_that("3D CUDA landmark t-SNE projects all coordinate axes", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+
+    x <- scale(as.matrix(iris[, 1:4]))
+    fit <- fastEmbedR::tsne(
+        x, perplexity = 5, n_components = 3L,
+        backend = "cuda", n.cores = 1L, landmarks = 0.2,
+        transform_perplexity = 5,
+        early_exaggeration_iter = 2L, n_iter = 3L,
+        transform_iter = 2L, seed = 5L
+    )
+    projected <- fastEmbedR::project_landmark_model(
+        fit$model, x[1:5, , drop = FALSE],
+        transform_perplexity = 5, transform_iter = 2L
+    )
+
+    expect_equal(dim(fit$layout), c(nrow(x), 3L))
+    expect_true(all(is.finite(fit$layout)))
+    expect_identical(fit$parameters$transform_backend, "cuda")
+    expect_equal(dim(projected$layout), c(5L, 3L))
+    expect_true(all(is.finite(projected$layout)))
+    expect_identical(projected$parameters$projection_backend, "cuda")
+})

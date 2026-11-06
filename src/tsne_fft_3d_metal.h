@@ -143,16 +143,19 @@ kernel void finalize_bounds_3d(
 }
 
 kernel void clear_fft_3d(
-  device atomic_float* mass [[buffer(0)]],
-  device float* kernel_values [[buffer(1)]],
-  device atomic_int* bin_head [[buffer(2)]],
-  constant uint& side [[buffer(3)]],
-  constant uint& bins [[buffer(4)]],
+  device atomic_uint* mass_low [[buffer(0)]],
+  device atomic_uint* mass_high [[buffer(1)]],
+  device float* kernel_values [[buffer(2)]],
+  device atomic_int* bin_head [[buffer(3)]],
+  constant uint& side [[buffer(4)]],
+  constant uint& bins [[buffer(5)]],
   uint pos [[thread_position_in_grid]]
 ) {
   uint total = side * side * side;
   if (pos < total) {
-    atomic_store_explicit(&mass[pos], 0.0f,
+    atomic_store_explicit(&mass_low[pos], 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&mass_high[pos], 0u,
                           memory_order_relaxed);
     kernel_values[pos] = 0.0f;
   }
@@ -182,10 +185,11 @@ kernel void kernel_fft_3d(
 
 kernel void scatter_fft_3d(
   device const float* y [[buffer(0)]],
-  device atomic_float* mass [[buffer(1)]],
-  device atomic_int* bin_head [[buffer(2)]],
-  device int* bin_next [[buffer(3)]],
-  constant Grid3d& g [[buffer(4)]],
+  device atomic_uint* mass_low [[buffer(1)]],
+  device atomic_uint* mass_high [[buffer(2)]],
+  device atomic_int* bin_head [[buffer(3)]],
+  device int* bin_next [[buffer(4)]],
+  constant Grid3d& g [[buffer(5)]],
   uint row [[thread_position_in_grid]]
 ) {
   if (row >= g.n) return;
@@ -198,10 +202,17 @@ kernel void scatter_fft_3d(
         uint pos = (uint(start[2] + z) * g.side +
                     uint(start[1] + yy)) * g.side +
                    uint(start[0] + x);
+        float contribution = w[0][x] * w[1][yy] * w[2][z];
+        long fixed = long(rint(contribution * 16777216.0f));
+        ulong bits = as_type<ulong>(fixed);
+        uint low = uint(bits);
+        uint high = uint(bits >> 32u);
+        uint previous = atomic_fetch_add_explicit(
+          &mass_low[pos], low, memory_order_relaxed);
+        uint carry = (previous + low) < previous ? 1u : 0u;
         atomic_fetch_add_explicit(
-          &mass[pos], w[0][x] * w[1][yy] * w[2][z],
-          memory_order_relaxed
-        );
+          &mass_high[pos], high + carry,
+          memory_order_relaxed);
       }
   if (g.cutoff2 <= 0.01f) return;
   int bx = clamp(int((y[row * 3u] - g.lower_x) / g.cutoff),
@@ -215,6 +226,22 @@ kernel void scatter_fft_3d(
   bin_next[row] = atomic_exchange_explicit(
     &bin_head[bin], int(row), memory_order_relaxed
   );
+}
+
+kernel void convert_mass_3d(
+  device const atomic_uint* mass_low [[buffer(0)]],
+  device const atomic_uint* mass_high [[buffer(1)]],
+  device float* mass [[buffer(2)]],
+  constant uint& side [[buffer(3)]],
+  uint pos [[thread_position_in_grid]]
+) {
+  if (pos >= side * side * side) return;
+  ulong bits = (ulong(atomic_load_explicit(
+    &mass_high[pos], memory_order_relaxed)) << 32u) |
+    ulong(atomic_load_explicit(
+      &mass_low[pos], memory_order_relaxed));
+  mass[pos] = float(as_type<long>(bits)) *
+    (1.0f / 16777216.0f);
 }
 
 kernel void gather_fft_3d(
@@ -273,7 +300,8 @@ kernel void gather_fft_3d(
           auto_w[1][yy] * cross_w[2][z];
       }
   value -= self_value;
-  float near_slope[3] = {};
+  long near_value_fixed = 0;
+  long near_slope_fixed[3] = {};
   if (g.cutoff2 > 0.01f) {
     float3 yi = float3(y[row * 3u], y[row * 3u + 1u],
                        y[row * 3u + 2u]);
@@ -305,18 +333,25 @@ kernel void gather_fft_3d(
               2.0f * g.qcut * g.qcut * g.qcut * delta;
             float correction = 2.0f *
               (-q * q - smooth_derivative);
-            value += q - smooth_q_3d(d2, g);
-            near_slope[0] += correction * diff.x;
-            near_slope[1] += correction * diff.y;
-            near_slope[2] += correction * diff.z;
+            near_value_fixed += long(rint(
+              (q - smooth_q_3d(d2, g)) * 16777216.0f));
+            near_slope_fixed[0] += long(rint(
+              correction * diff.x * 16777216.0f));
+            near_slope_fixed[1] += long(rint(
+              correction * diff.y * 16777216.0f));
+            near_slope_fixed[2] += long(rint(
+              correction * diff.z * 16777216.0f));
           }
         }
   }
+  value += float(near_value_fixed) *
+    (1.0f / 16777216.0f);
   row_q[row] = value;
   for (uint axis = 0u; axis < 3u; ++axis) {
     repulsive[row * 3u + axis] = 0.5f *
       ((slope[axis] - self_slope[axis]) * g.inv_spacing +
-       near_slope[axis]);
+       float(near_slope_fixed[axis]) *
+         (1.0f / 16777216.0f));
   }
 }
 
@@ -365,7 +400,7 @@ struct Update3d {
 };
 
 kernel void update_tsne_3d(
-  device const int* row_ptr [[buffer(0)]],
+  device const ulong* row_ptr [[buffer(0)]],
   device const int* col [[buffer(1)]],
   device const float* p [[buffer(2)]],
   device const float* y [[buffer(3)]],
@@ -375,17 +410,22 @@ kernel void update_tsne_3d(
   device float* gains [[buffer(7)]],
   device float* updates [[buffer(8)]],
   constant Update3d& params [[buffer(9)]],
-  uint row [[thread_position_in_grid]]
+  constant uint& first_row [[buffer(10)]],
+  constant ulong& edge_base [[buffer(11)]],
+  constant uint& index_base [[buffer(12)]],
+  uint local_row [[thread_position_in_grid]]
 ) {
+  uint row = first_row + local_row;
   if (row >= params.n) return;
   float grad[3];
   for (uint axis = 0u; axis < 3u; ++axis) {
     grad[axis] = repulsive[row * 3u + axis] *
       inv_sum_q[0];
   }
-  for (int edge = row_ptr[row]; edge < row_ptr[row + 1u];
+  for (ulong edge = row_ptr[local_row] - edge_base;
+       edge < row_ptr[local_row + 1u] - edge_base;
        ++edge) {
-    uint neighbor = uint(col[edge]);
+    uint neighbor = uint(col[edge]) - index_base;
     float3 diff = float3(
       y[row * 3u] - y[neighbor * 3u],
       y[row * 3u + 1u] - y[neighbor * 3u + 1u],
@@ -442,6 +482,7 @@ struct MetalTsne3dPipelines {
   id<MTLComputePipelineState> clear = nil;
   id<MTLComputePipelineState> kernel = nil;
   id<MTLComputePipelineState> scatter = nil;
+  id<MTLComputePipelineState> convert = nil;
   id<MTLComputePipelineState> gather = nil;
   id<MTLComputePipelineState> sum_blocks = nil;
   id<MTLComputePipelineState> sum = nil;
@@ -454,6 +495,7 @@ struct MetalTsne3dPipelines {
     [sum release];
     [sum_blocks release];
     [gather release];
+    [convert release];
     [scatter release];
     [kernel release];
     [clear release];
@@ -499,6 +541,7 @@ MetalTsne3dPipelines& metal_tsne_3d_pipelines(
   kernels.clear = load("clear_fft_3d");
   kernels.kernel = load("kernel_fft_3d");
   kernels.scatter = load("scatter_fft_3d");
+  kernels.convert = load("convert_mass_3d");
   kernels.gather = load("gather_fft_3d");
   kernels.sum_blocks = load("sum_q_blocks_3d");
   kernels.sum = load("sum_q_3d");
@@ -516,6 +559,9 @@ struct MetalTsne3dBuffers {
     for (id<MTLBuffer> buffer : owned) [buffer release];
   }
   id<MTLBuffer> make(std::size_t bytes, const void* data = nullptr) {
+    if (bytes == 0 || bytes > device.maxBufferLength) {
+      Rcpp::stop("Metal 3D t-SNE buffer exceeds the device limit.");
+    }
     id<MTLBuffer> buffer = data == nullptr ?
       [device newBufferWithLength:bytes
                          options:MTLResourceStorageModeShared] :
@@ -568,9 +614,38 @@ struct MetalTsne3dUpdate {
   float max_step_norm;
 };
 
+struct MetalTsne3dStream {
+  const std::uint64_t* offsets;
+  const std::uint32_t* indices;
+  const float* weights;
+  std::uint32_t edge_capacity;
+};
+
+void metal_tsne_3d_write_buffers(
+    const std::string& path,
+    std::initializer_list<id<MTLBuffer>> buffers,
+    std::size_t bytes) {
+  const std::string partial = path + ".part";
+  if (std::filesystem::exists(path) ||
+      std::filesystem::exists(partial)) {
+    Rcpp::stop("Metal t-SNE output path already exists.");
+  }
+  std::ofstream output(partial, std::ios::binary);
+  for (id<MTLBuffer> buffer : buffers) {
+    output.write(static_cast<const char*>([buffer contents]),
+                 static_cast<std::streamsize>(bytes));
+  }
+  output.close();
+  if (!output) Rcpp::stop("Metal t-SNE output write failed.");
+  std::error_code error;
+  std::filesystem::rename(partial, path, error);
+  if (error) Rcpp::stop("Metal t-SNE output rename failed: " +
+                        error.message());
+}
+
 List run_metal_tsne_3d(
     MetalEmbeddingState& state,
-    const TsneSparseMetalGraph& graph,
+    const TsneSparseMetalGraph* graph,
     const std::vector<float>& initial,
     int n,
     int early_iter,
@@ -583,10 +658,29 @@ List run_metal_tsne_3d(
     double final_momentum,
     double min_gain,
     double max_step_norm,
-    bool auto_config) {
+    bool auto_config,
+    id<MTLBuffer> mapped_offsets = nil,
+    id<MTLBuffer> mapped_indices = nil,
+    id<MTLBuffer> mapped_weights = nil,
+    const std::string& output_path = "",
+    int start_iter = 0,
+    const std::string& state_path = "",
+    int checkpoint_every = 0,
+    SEXP checkpoint_callback = R_NilValue,
+    const MetalTsne3dStream* stream = nullptr) {
+  if (initial.size() != static_cast<std::size_t>(n) * 3u ||
+      start_iter < 0 || start_iter > early_iter + normal_iter ||
+      (start_iter > 0 && state_path.empty()) ||
+      (checkpoint_every > 0 &&
+       (output_path.empty() || checkpoint_callback == R_NilValue))) {
+    Rcpp::stop("Invalid Metal 3D t-SNE graph or checkpoint controls.");
+  }
   MetalTsne3dPipelines& pipe = metal_tsne_3d_pipelines(state);
   MetalTsne3dBuffers memory(state.device);
   const std::uint32_t rows = static_cast<std::uint32_t>(n);
+  const std::uint32_t first_row = 0u;
+  const std::uint64_t edge_base = 0u;
+  const std::uint32_t index_base = graph == nullptr ? 1u : 0u;
   const std::uint32_t block_size = 256u;
   const std::uint32_t blocks = (rows + block_size - 1u) /
     block_size;
@@ -598,25 +692,74 @@ List run_metal_tsne_3d(
     side * side;
   const std::size_t layout_bytes = initial.size() *
     sizeof(float);
-  id<MTLBuffer> row_ptr = memory.make(
-    graph.row_ptr.size() * sizeof(std::int32_t),
-    graph.row_ptr.data()
-  );
-  id<MTLBuffer> col = memory.make(
-    graph.col.size() * sizeof(std::int32_t), graph.col.data()
-  );
-  id<MTLBuffer> prob = memory.make(
-    graph.val.size() * sizeof(float), graph.val.data()
-  );
+  id<MTLBuffer> row_ptr = stream != nullptr ? nil :
+    graph == nullptr ? mapped_offsets :
+    memory.make(graph->row_ptr.size() * sizeof(std::uint64_t),
+                graph->row_ptr.data());
+  id<MTLBuffer> col = stream != nullptr ? nil :
+    graph == nullptr ? mapped_indices :
+    memory.make(graph->col.size() * sizeof(std::int32_t),
+                graph->col.data());
+  id<MTLBuffer> prob = stream != nullptr ? nil :
+    graph == nullptr ? mapped_weights :
+    memory.make(graph->val.size() * sizeof(float),
+                graph->val.data());
+  if (stream == nullptr &&
+      (row_ptr == nil || col == nil || prob == nil)) {
+    Rcpp::stop("Metal t-SNE graph buffers are unavailable.");
+  }
+  const std::uint32_t row_capacity = 262144u;
+  id<MTLBuffer> tile_offsets = nil;
+  id<MTLBuffer> tile_indices = nil;
+  id<MTLBuffer> tile_weights = nil;
+  std::vector<std::pair<std::uint32_t, std::uint32_t>> tiles;
+  if (stream != nullptr) {
+    const std::size_t capacity = std::min<std::size_t>(
+      stream->edge_capacity, stream->offsets[n]);
+    tile_offsets = memory.make((row_capacity + 1u) *
+                                sizeof(std::uint64_t));
+    tile_indices = memory.make(std::max<std::size_t>(1u, capacity) *
+                               sizeof(std::uint32_t));
+    tile_weights = memory.make(std::max<std::size_t>(1u, capacity) *
+                               sizeof(float));
+    for (std::uint32_t begin = 0u; begin < rows;) {
+      std::uint32_t end = begin;
+      const std::uint64_t edge_start = stream->offsets[begin];
+      while (end < rows && end - begin < row_capacity &&
+             stream->offsets[end + 1u] - edge_start <= capacity) {
+        ++end;
+      }
+      if (end == begin) Rcpp::stop(
+        "Metal t-SNE graph row exceeds `edge_chunk_capacity`.");
+      tiles.emplace_back(begin, end);
+      begin = end;
+    }
+  }
   id<MTLBuffer> current = memory.make(layout_bytes,
                                        initial.data());
   id<MTLBuffer> next = memory.make(layout_bytes);
   id<MTLBuffer> gradient = memory.make(layout_bytes);
   id<MTLBuffer> gains = memory.make(layout_bytes);
   id<MTLBuffer> updates = memory.make(layout_bytes);
-  std::vector<float> ones(initial.size(), 1.0f);
-  std::memcpy([gains contents], ones.data(), layout_bytes);
+  std::fill_n(static_cast<float*>([gains contents]),
+              initial.size(), 1.0f);
   std::memset([updates contents], 0, layout_bytes);
+  if (start_iter > 0) {
+    if (!std::filesystem::exists(state_path) ||
+        std::filesystem::file_size(state_path) != 3 * layout_bytes) {
+      Rcpp::stop("Metal t-SNE checkpoint has invalid size.");
+    }
+    std::ifstream saved(state_path, std::ios::binary);
+    for (id<MTLBuffer> buffer : {current, updates, gains}) {
+      saved.read(static_cast<char*>([buffer contents]),
+                 static_cast<std::streamsize>(layout_bytes));
+    }
+    if (!saved) Rcpp::stop("Cannot read Metal t-SNE checkpoint.");
+  }
+  id<MTLBuffer> mass_low = memory.make(
+    cube * sizeof(std::uint32_t));
+  id<MTLBuffer> mass_high = memory.make(
+    cube * sizeof(std::uint32_t));
   id<MTLBuffer> mass = memory.make(cube * sizeof(float));
   id<MTLBuffer> kernel = memory.make(cube * sizeof(float));
   id<MTLBuffer> potential = memory.make(cube * sizeof(float));
@@ -683,7 +826,8 @@ List run_metal_tsne_3d(
       static_cast<const void*>(&value), sizeof(value)
     );
   };
-  for (int iteration = 0;
+  const auto started = std::chrono::steady_clock::now();
+  for (int iteration = start_iter;
        iteration < early_iter + normal_iter; ++iteration) {
     id<MTLCommandBuffer> prepare = [state.queue commandBuffer];
     metal_tsne_3d_encode(prepare, pipe.bounds, blocks,
@@ -694,12 +838,16 @@ List run_metal_tsne_3d(
                          {scalar(blocks), scalar(rows),
                           scalar(grid)});
     metal_tsne_3d_encode(prepare, pipe.clear, cube,
-                         {mass, kernel, head},
+                         {mass_low, mass_high, kernel, head},
                          {scalar(side), scalar(bins)});
     metal_tsne_3d_encode(prepare, pipe.kernel, cube,
                          {kernel, params});
     metal_tsne_3d_encode(prepare, pipe.scatter, rows,
-                         {current, mass, head, links, params});
+                         {current, mass_low, mass_high,
+                          head, links, params});
+    metal_tsne_3d_encode(prepare, pipe.convert, cube,
+                         {mass_low, mass_high, mass},
+                         {scalar(side)});
     metal_tsne_3d_wait(prepare, "FFT preparation");
     [fft_graph runWithMTLCommandQueue:state.queue feeds:feeds
                       targetOperations:nil
@@ -727,10 +875,38 @@ List run_metal_tsne_3d(
       static_cast<float>(max_step_norm > 0.0 ?
                          max_step_norm : FLT_MAX)
     };
-    metal_tsne_3d_encode(optimize, pipe.update, rows,
-                         {row_ptr, col, prob, current, gradient,
-                          inv_sum_q, next, gains, updates},
-                         {scalar(update_params)});
+    if (stream == nullptr) {
+      metal_tsne_3d_encode(optimize, pipe.update, rows,
+                           {row_ptr, col, prob, current, gradient,
+                            inv_sum_q, next, gains, updates},
+                           {scalar(update_params), scalar(first_row),
+                            scalar(edge_base), scalar(index_base)});
+    } else {
+      metal_tsne_3d_wait(optimize, "repulsion");
+      for (const auto& tile : tiles) {
+        const std::uint32_t begin = tile.first;
+        const std::uint32_t count = tile.second - begin;
+        const std::uint64_t base = stream->offsets[begin];
+        const std::size_t edges = stream->offsets[tile.second] - base;
+        std::memcpy([tile_offsets contents], stream->offsets + begin,
+                    (static_cast<std::size_t>(count) + 1u) *
+                      sizeof(std::uint64_t));
+        if (edges > 0) {
+          std::memcpy([tile_indices contents], stream->indices + base,
+                      edges * sizeof(std::uint32_t));
+          std::memcpy([tile_weights contents], stream->weights + base,
+                      edges * sizeof(float));
+        }
+        id<MTLCommandBuffer> attraction = [state.queue commandBuffer];
+        metal_tsne_3d_encode(attraction, pipe.update, count,
+          {tile_offsets, tile_indices, tile_weights, current, gradient,
+           inv_sum_q, next, gains, updates},
+          {scalar(update_params), scalar(begin), scalar(base),
+           scalar(index_base)});
+        metal_tsne_3d_wait(attraction, "streamed attraction");
+      }
+      optimize = [state.queue commandBuffer];
+    }
     metal_tsne_3d_encode(optimize, pipe.bounds, blocks,
                          {next, block_bounds},
                          {scalar(rows), scalar(block_size)});
@@ -742,10 +918,47 @@ List run_metal_tsne_3d(
                          {next, center}, {scalar(rows)});
     metal_tsne_3d_wait(optimize, "optimizer update");
     std::swap(current, next);
+    if (checkpoint_every > 0 &&
+        ((iteration + 1) % checkpoint_every == 0 ||
+         iteration + 1 == early_iter + normal_iter)) {
+      const auto snapshot = output_path + ".iter_" +
+        std::to_string(iteration + 1) + ".state.f32";
+      metal_tsne_3d_write_buffers(snapshot,
+        {current, updates, gains}, layout_bytes);
+      const double elapsed = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - started).count();
+      Rcpp::Function callback(checkpoint_callback);
+      callback(iteration + 1, snapshot, elapsed);
+    }
+    if ((iteration & 7) == 0) Rcpp::checkUserInterrupt();
   }
   const float* final = static_cast<const float*>(
     [current contents]
   );
+  if (!std::all_of(final, final + initial.size(),
+                   [](float value) { return std::isfinite(value); })) {
+    Rcpp::stop("Metal 3D t-SNE produced nonfinite coordinates.");
+  }
+  if (!output_path.empty()) {
+    metal_tsne_3d_write_buffers(output_path, {current},
+                                layout_bytes);
+    [mass_data release];
+    [kernel_data release];
+    [potential_data release];
+    [fft_graph release];
+    const double elapsed = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - started).count();
+    return List::create(
+      Rcpp::Named("backend_used") = stream == nullptr ?
+        "native_metal_fft_graph_mmap" :
+        "native_metal_fft_graph_stream",
+      Rcpp::Named("repulsion") = "fft_grid_3d_metal",
+      Rcpp::Named("fft_grid_size") = static_cast<int>(grid),
+      Rcpp::Named("iterations") = early_iter + normal_iter,
+      Rcpp::Named("resumed_from_iteration") = start_iter,
+      Rcpp::Named("n_threads") = 1,
+      Rcpp::Named("elapsed_seconds") = elapsed);
+  }
   NumericMatrix layout(n, 3);
   for (int i = 0; i < n; ++i) {
     for (int axis = 0; axis < 3; ++axis) {

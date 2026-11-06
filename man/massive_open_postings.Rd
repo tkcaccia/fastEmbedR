@@ -18,3 +18,4 @@ Loads the saved centers and posting descriptor without rescanning the
 source matrix or rebuilding the posting files. File identity, dimensions,
 and center identity are checked before the descriptor is returned.
 }
+\keyword{internal}

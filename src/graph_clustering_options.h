@@ -2,23 +2,68 @@
 // SPDX-License-Identifier: MIT
 // CPU graph options; included inside graph_clustering.cpp's private namespace.
 
+struct PartitionRun {
+  std::vector<int> labels;
+  double score = NA_REAL;
+  std::exception_ptr error;
+};
+
+void cluster_partition_run(const Graph& graph, const std::string& method,
+    double resolution, int iterations, std::uint64_t seed,
+    PartitionRun& result, int fit_threads = 1) {
+  try {
+    result.labels = method == "louvain" ?
+      louvain_partition(graph, iterations, resolution, seed,
+        fit_threads) :
+      leiden_partition(graph, iterations, iterations, resolution,
+        seed, fit_threads);
+    result.score = modularity_score(graph, result.labels, resolution);
+  } catch (...) {
+    result.error = std::current_exception();
+  }
+}
+
 std::vector<int> cluster_partition(const Graph& graph,
     const std::string& method, double resolution, int iterations,
-    int runs, std::uint64_t seed) {
+    int runs, std::uint64_t seed, int threads = 1,
+    int fit_threads = 1) {
   std::vector<int> best(static_cast<std::size_t>(graph.n));
   std::iota(best.begin(), best.end(), 0);
   double quality = modularity_score(graph, best, resolution);
-  for (int run = 0; run < runs; ++run) {
+  for (int start = 0; start < runs; start += threads) {
     Rcpp::checkUserInterrupt();
-    const std::uint64_t run_seed = seed +
-      static_cast<std::uint64_t>(run) * 0x9e3779b97f4a7c15ULL;
-    std::vector<int> labels = method == "louvain" ?
-      louvain_partition(graph, iterations, resolution, run_seed) :
-      leiden_partition(graph, iterations, iterations, resolution, run_seed);
-    const double score = modularity_score(graph, labels, resolution);
-    if (run == 0 || score > quality + 1e-12) {
-      best = std::move(labels);
-      quality = score;
+    const int width = std::min(threads, runs - start);
+    std::vector<PartitionRun> results(static_cast<std::size_t>(width));
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(width));
+    try {
+      for (int j = 0; j < width; ++j) {
+        const std::uint64_t run_seed = seed +
+          static_cast<std::uint64_t>(start + j) * 0x9e3779b97f4a7c15ULL;
+        if (threads == 1) {
+          cluster_partition_run(graph, method, resolution, iterations,
+            run_seed, results[static_cast<std::size_t>(j)],
+            fit_threads);
+        } else {
+          workers.emplace_back([&, j, run_seed]() {
+            cluster_partition_run(graph, method, resolution, iterations,
+              run_seed, results[static_cast<std::size_t>(j)],
+              fit_threads);
+          });
+        }
+      }
+    } catch (...) {
+      for (std::thread& worker : workers) worker.join();
+      throw;
+    }
+    for (std::thread& worker : workers) worker.join();
+    for (int j = 0; j < width; ++j) {
+      PartitionRun& run = results[static_cast<std::size_t>(j)];
+      if (run.error) std::rethrow_exception(run.error);
+      if (start + j == 0 || run.score > quality + 1e-12) {
+        best = std::move(run.labels);
+        quality = run.score;
+      }
     }
   }
   return best;

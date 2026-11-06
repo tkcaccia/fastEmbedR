@@ -17,3 +17,4 @@ Reopens a file-backed projection without loading its coordinates. The
 coordinate and KNN files must retain their paths, sizes, and modification
 times. This local completion record is not a portable content hash.
 }
+\keyword{internal}

@@ -19,3 +19,4 @@ A list of resident \code{indices} and \code{distances} matrices.
 \description{
 Read a bounded range of experimental landmark KNN rows
 }
+\keyword{internal}

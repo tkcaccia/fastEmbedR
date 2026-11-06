@@ -290,6 +290,13 @@ List landmark_tsne_transform_cuda_gpu_impl(SEXP,
   Rcpp::stop("CUDA GPU-resident landmark t-SNE is available only when the package is built with CUDA support.");
 }
 
+List landmark_tsne_transform_cuda_devices_impl(
+    SEXP, SEXP, SEXP, IntegerMatrix, NumericMatrix, double, int, int,
+    double, double, double, double, double, double, double, int, int,
+    int, IntegerVector) {
+  Rcpp::stop("Multi-GPU landmark t-SNE requires a CUDA build.");
+}
+
 List landmark_umap_project_refine_cuda_gpu_impl(SEXP,
                                                 SEXP,
                                                 SEXP,
@@ -307,6 +314,12 @@ List landmark_umap_project_refine_cuda_gpu_impl(SEXP,
                                                 double,
                                                 double) {
   Rcpp::stop("CUDA GPU-resident landmark UMAP is available only when the package is built with CUDA support.");
+}
+
+List landmark_umap_project_refine_cuda_devices_impl(
+    SEXP, SEXP, SEXP, IntegerMatrix, NumericMatrix,
+    int, double, int, double, double, int, IntegerVector) {
+  Rcpp::stop("CUDA multi-GPU landmark UMAP requires a CUDA build.");
 }
 
 NumericVector knn_structure_score_cuda_impl(NumericMatrix,

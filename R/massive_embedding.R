@@ -1,8 +1,31 @@
-massive_embedding_mode <- function(mode) {
+pca_resolve_massive <- function(x, massive, automatic) {
+    if (automatic && inherits(x, "fastEmbedR_massive_matrix"))
+        massive <- "auto"
+    match.arg(massive, c("off", "auto", "out_of_core"))
+}
+
+embedding_default_massive <- function(data, landmarks) {
+    if (inherits(data, "fastEmbedR_massive_graph"))
+        return("out_of_core_graph")
+    if (inherits(data, "fastEmbedR_massive_matrix") &&
+        landmark_embedding_requested(landmarks)) return("landmark")
+    "off"
+}
+
+massive_embedding_mode <- function(mode, cpu_update = "sgd") {
     if (identical(mode, "auto")) stop(
         "Automatic embedding cannot choose an approximation; use ",
         "`massive = \"landmark\"` explicitly.", call. = FALSE)
-    match.arg(mode, c("off", "landmark", "out_of_core_graph"))
+    if (!is.character(cpu_update) || length(cpu_update) != 1L ||
+        is.na(cpu_update) ||
+        !cpu_update %in% c("sgd", "synchronized")) stop(
+        "`cpu_update` must be 'sgd' or 'synchronized'.",
+        call. = FALSE)
+    mode <- match.arg(mode, c("off", "landmark", "out_of_core_graph"))
+    if (mode != "out_of_core_graph" &&
+        !identical(cpu_update, "sgd")) stop(
+        "`cpu_update` requires full-graph UMAP.", call. = FALSE)
+    mode
 }
 
 massive_embedding_paths <- function(data, count, k, dimensions,
@@ -328,7 +351,7 @@ dispatch_massive_umap <- function(data, landmarks, n_neighbors,
         transform_k, massive, output, chunk_rows, memory_limit,
         refinement_epochs, local_refine, local_neighbors,
         overlap_rows, devices, landmark_method, init,
-        layout_storage, checkpoint, resume) {
+        layout_storage, checkpoint, resume, cpu_update) {
     if (identical(massive, "out_of_core_graph")) return(
         run_massive_umap_graph(data, init, output, n_components,
             seed, backend, n.cores, chunk_rows, memory_limit,
@@ -336,7 +359,7 @@ dispatch_massive_umap <- function(data, landmarks, n_neighbors,
             keep_knn, graph_mode, verbose, landmarks, transform_k,
             refinement_epochs, local_refine, local_neighbors,
             overlap_rows, devices, landmark_method,
-            layout_storage, checkpoint, resume))
+            layout_storage, checkpoint, resume, cpu_update))
     if (!identical(layout_storage, "memory")) stop(
         "`layout_storage` requires full-graph UMAP.", call. = FALSE)
     if (!is.null(init)) stop("`init` requires full-graph UMAP.",
@@ -355,7 +378,7 @@ run_massive_umap_graph <- function(data, init, output, n_components,
         keep_knn, graph_mode, verbose, landmarks, transform_k,
         refinement_epochs, local_refine, local_neighbors,
         overlap_rows, devices, landmark_method,
-        layout_storage, checkpoint, resume) {
+        layout_storage, checkpoint, resume, cpu_update) {
     if (!is.null(n_neighbors) || !identical(standardize, FALSE) ||
         !is.null(pca_dims) || !is.null(nn) ||
         !identical(keep_knn, FALSE) || !identical(verbose, FALSE) ||
@@ -383,7 +406,7 @@ run_massive_umap_graph <- function(data, init, output, n_components,
         n.cores = resolve_n_cores(n.cores),
         layout_storage = layout_storage,
         checkpoint = checkpoint, resume = resume,
-        devices = devices)
+        devices = devices, cpu_update = cpu_update)
 }
 
 massive_auto_cuda_free <- function(devices, rows) {
@@ -617,8 +640,7 @@ run_massive_tsne_landmark <- function(data, nn, settings, extra, controls,
     if (settings$backend %in% c("cuda", "metal") && workers != 1L)
         stop("GPU projection requires `n.cores = 1`.", call. = FALSE)
     if (settings$backend %in% c("cuda", "metal") &&
-        (k > 128L || !(settings$n_components %in% if (
-            settings$backend == "metal") 2L else c(2L, 3L)))) stop(
+        (k > 128L || !(settings$n_components %in% c(2L, 3L)))) stop(
         "EXPERIMENTAL GPU t-SNE projection needs supported dimensions ",
         "and k <= 128; no CPU fallback was used.", call. = FALSE)
     fit_reference <- function(reference) run_matrix_input_tsne(

@@ -1,6 +1,6 @@
 Package: fastEmbedR
 Type: Package
-Title: Native UMAP and Interpolation-Based t-SNE Embeddings
+Title: Native Embeddings, PCA, and Graph Clustering
 Version: 0.1
 Authors@R: person(
     given = "Stefano",
@@ -11,21 +11,19 @@ Authors@R: person(
     )
 Copyright: See inst/COPYRIGHTS and inst/NOTICE for source-level ownership,
     adapted components, and optional linked dependencies.
-Description: A native float32 UMAP implementation and a configurable
-    interpolation-based t-SNE implementation for embeddings from data
-    matrices or precomputed nearest-neighbor indices and distances. One-call
-    workflows use native CPU exact or FAISS HNSW search and Apple Metal
-    exact or IVF-Flat search. Optional CUDA support links to the RAPIDS cuVS
-    C API while
-    retaining nearest-neighbor results on the device.
-    Preprocessing, graph or affinity construction, fixed-reference transform,
-    and layout optimization use native code with explicit CPU, Metal, and CUDA
-    backend reporting. UMAP exposes neighborhood, metric, graph mode, backend,
-    seed, and preprocessing controls, while optimizer controls such as epochs,
-    minimum distance, spread, learning rate, repulsion, and negative sampling
-    follow a recorded release policy rather than a general-purpose sweep API.
-    Optional graph utilities support downstream Louvain, Leiden, and Walktrap
-    community detection.
+Description: Native UMAP and interpolation-based t-SNE embeddings, PCA, and
+    Louvain, Leiden, and Walktrap graph clustering for data matrices or
+    precomputed nearest-neighbor graphs. One-call workflows use native CPU
+    exact or FAISS HNSW search and Apple Metal exact or IVF-Flat search.
+    Optional CUDA support links to the RAPIDS cuVS C API and retains selected
+    nearest-neighbor results on the device. Preprocessing, graph or affinity
+    construction, fixed-reference transforms, and optimizers report their
+    CPU, Metal, or CUDA execution backend. Experimental landmark and
+    file-backed routes address larger inputs with method-specific backend
+    limits. Selected resident and file-backed CUDA routes coordinate multiple
+    GPUs. UMAP exposes neighborhood, metric, graph mode, backend, seed, and
+    preprocessing controls; other optimizer settings follow a recorded
+    release policy.
 License: MIT + file LICENSE
 URL: https://github.com/tkcaccia/fastEmbedR,
     https://tkcaccia.github.io/fastEmbedR/,
@@ -64,3 +62,4 @@ VignetteBuilder: knitr
 Roxygen: list(markdown = TRUE)
 Config/roxygen2/version: 8.1.0
 Config/testthat/edition: 3
+RoxygenNote: 7.3.3

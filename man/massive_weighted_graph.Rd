@@ -26,3 +26,4 @@ weights between 0 and 1. This is a directed, externally supplied graph;
 import
 does not construct or verify a symmetric UMAP fuzzy graph.
 }
+\keyword{internal}

@@ -90,6 +90,31 @@ test_that("landmark UMAP preserves its requested graph mode", {
     }
 })
 
+test_that("resident UMAP exposes landmark refinement epochs", {
+    set.seed(618L)
+    x <- matrix(rnorm(80L * 5L), nrow = 80L)
+    old <- getOption("fastEmbedR.landmark_umap_refine_epochs", NULL)
+    on.exit(options(fastEmbedR.landmark_umap_refine_epochs = old))
+    options(fastEmbedR.landmark_umap_refine_epochs = 3L)
+    controls <- list(data = x, landmarks = 40L,
+        n_neighbors = 8L, backend = "cpu", seed = 18L)
+    default <- do.call(umap, controls)
+    disabled <- do.call(umap, c(controls,
+        list(refinement_epochs = 0L)))
+    refined <- do.call(umap, c(controls,
+        list(refinement_epochs = 10L)))
+    expect_identical(default$parameters$landmark_refinement_epochs, 3L)
+    expect_identical(disabled$parameters$landmark_refinement_epochs, 0L)
+    expect_identical(refined$parameters$landmark_refinement_epochs, 10L)
+    expect_gt(sum(abs(refined$layout - disabled$layout)), 0)
+    expect_equal(refined$landmarks$layout,
+        disabled$landmarks$layout)
+    expect_error(do.call(umap, c(controls,
+        list(refinement_epochs = -1L))), "non-negative integer")
+    expect_error(umap(x, backend = "cpu", refinement_epochs = 2L),
+        "massive")
+})
+
 test_that("primary embedding functions disable landmarking by default", {
     expect_identical(formals(tsne)$landmarks, FALSE)
     expect_identical(formals(umap)$landmarks, FALSE)
@@ -202,6 +227,41 @@ test_that("integrated landmark t-SNE returns a reusable model", {
     expect_true(all(is.finite(projected$layout)))
     expect_true(fit$metrics$landmark_reference_memory_saving > 0)
     expect_gt(fit$metrics$landmark_projection_knn_bytes, 0)
+})
+
+test_that("resident landmark t-SNE can widen reference affinities", {
+    set.seed(629)
+    x <- matrix(rnorm(100L * 5L), 100L, 5L)
+    controls <- list(x, landmarks = 50L, perplexity = 3,
+        early_exaggeration_iter = 1L, n_iter = 2L,
+        transform_iter = 0L, auto_config = FALSE,
+        backend = "cpu", n.cores = 2L, seed = 629L)
+    compact <- do.call(tsne, controls)
+    wide <- do.call(tsne, c(controls, list(affinity_k = 9L)))
+    expect_identical(wide$landmarks$indices,
+        compact$landmarks$indices)
+    expect_equal(dim(wide$layout), c(100L, 2L))
+    expect_identical(wide$parameters$affinity_support_k, 9L)
+    expect_identical(wide$parameters$affinity_support,
+        "conventional")
+    expect_identical(wide$model$affinity_support,
+        "conventional")
+    expect_identical(wide$landmarks$reference_fit$parameters$
+        affinity_support_k, 9L)
+    expect_gt(max(abs(wide$layout - compact$layout)), 1e-8)
+    expect_error(do.call(tsne, c(controls,
+        list(affinity_k = 50L))), "affinity_k")
+    all_controls <- controls
+    all_controls$landmarks <- 100L
+    all_rows <- do.call(tsne, c(all_controls,
+        list(affinity_k = 9L)))
+    expect_identical(all_rows$parameters$affinity_support_k, 9L)
+    expect_identical(all_rows$model$affinity_support,
+        "conventional")
+    three_d <- do.call(tsne, c(controls,
+        list(affinity_k = 9L, n_components = 3L)))
+    expect_equal(dim(three_d$layout), c(100L, 3L))
+    expect_identical(three_d$parameters$affinity_support_k, 9L)
 })
 
 test_that("original reconstruction requires explicit query indices", {

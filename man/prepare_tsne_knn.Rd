@@ -21,7 +21,8 @@ KNN index matrix.}
 \item{n_neighbors}{Optional number of non-self neighbor columns to use from
 the supplied KNN graph. This lets you compute a wide KNN once and reuse
 its first columns. If omitted, the compact affinity policy uses
-\code{ceiling(perplexity)} columns. An explicit value must equal that width.}
+\code{ceiling(perplexity)} columns. A wider value such as
+\code{ceiling(3 * perplexity)} is an explicit affinity-model control.}
 
 \item{perplexity}{t-SNE perplexity. If \code{NULL}, the optimizer chooses a safe
 value from the supplied KNN width and sample size.}
@@ -31,7 +32,7 @@ A prepared t-SNE KNN object.
 }
 \description{
 \code{prepare_tsne_knn()} strips self-neighbors, trims to the requested
-non-self width, and stores compact KNN matrices once. Pass the returned
+non-self width, and stores the selected KNN matrices once. Pass the returned
 object to \code{\link[=tsne_knn]{tsne_knn()}} for repeated seeds or backend comparisons without
 repeating KNN normalization/materialization.
 }
@@ -48,3 +49,4 @@ prep <- prepare_tsne_knn(idx, dst, perplexity = 5)
 y1 <- tsne_knn(prep, seed = 1, early_exaggeration_iter = 5, n_iter = 10)
 y2 <- tsne_knn(prep, seed = 2, early_exaggeration_iter = 5, n_iter = 10)
 }
+\keyword{internal}

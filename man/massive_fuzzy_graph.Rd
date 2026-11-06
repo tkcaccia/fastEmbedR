@@ -23,3 +23,4 @@ written by \code{\link[=massive_umap_fuzzy_graph]{massive_umap_fuzzy_graph()}}. 
 without that manifest remain unverified. Reimport scans the graph twice
 but does not reconstruct nearest neighbors or fuzzy memberships.
 }
+\keyword{internal}

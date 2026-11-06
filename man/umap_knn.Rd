@@ -12,7 +12,8 @@ umap_knn(
   verbose = FALSE,
   backend = NULL,
   n.cores = NULL,
-  graph_mode = c("fuzzy", "binary")
+  graph_mode = c("fuzzy", "binary"),
+  devices = NULL
 )
 }
 \arguments{
@@ -77,3 +78,4 @@ dst <- matrix(
 layout <- umap_knn(idx, dst, seed = 1)
 plot(layout, pch = 21, bg = iris$Species)
 }
+\keyword{internal}

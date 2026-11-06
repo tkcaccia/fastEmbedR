@@ -2,7 +2,7 @@
 #define FASTEMBEDR_MASSIVE_TSNE_CUDA_H
 
 extern "C" void* fastembedr_massive_tsne_cuda_create(
-    int vertices, int edge_capacity);
+    int vertices, int dimensions, int edge_capacity);
 extern "C" int fastembedr_massive_tsne_cuda_upload(
     void* context, int field, int first, int rows, const float* values);
 extern "C" int fastembedr_massive_tsne_cuda_begin(void* context);
@@ -21,7 +21,8 @@ extern "C" int fastembedr_cuda_opentsne_fft_grid_size(int vertices);
 
 #ifdef FASTEMBEDR_HAS_NCCL
 extern "C" void* fastembedr_massive_tsne_multigpu_create(
-    int vertices, int edge_capacity, const int* devices,
+    int vertices, int dimensions, int edge_capacity,
+    const int* devices,
     int device_count);
 extern "C" void fastembedr_massive_tsne_multigpu_destroy(
     void* context);

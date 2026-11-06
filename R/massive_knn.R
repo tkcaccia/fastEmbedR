@@ -585,7 +585,7 @@ massive_knn_result <- function(x, setup, state, elapsed,
 #' @param checkpoint_every Commit every this many query blocks for sharded
 #'   CUDA search. Other search methods use their existing checkpoint policy.
 #' @return A lightweight `fastEmbedR_massive_knn` descriptor.
-#' @export
+#' @keywords internal
 massive_landmark_knn <- function(x, reference, k, output,
         backend = "cpu", n.cores = 1L,
         method = c("auto", "exact", "stream_exact",
@@ -872,7 +872,7 @@ massive_landmark_knn_sharded <- function(x, reference, k, output,
 #' @param first First one-based query row.
 #' @param n Number of consecutive query rows to inspect.
 #' @return A list of resident `indices` and `distances` matrices.
-#' @export
+#' @keywords internal
 massive_read_knn_rows <- function(x, first = 1, n = 6L) {
     if (!inherits(x, "fastEmbedR_massive_knn")) {
         stop("`x` must be a massive_landmark_knn() result.",
@@ -935,7 +935,7 @@ massive_knn_audit_verify <- function(knn, query, reference,
 #' @param memory_limit RAM budget for exact-search buffers.
 #' @return `knn` with sampled mean and minimum row recall, a count of
 #'   sampled rows below the target, and sampled row IDs in metadata.
-#' @export
+#' @keywords internal
 massive_audit_landmark_knn <- function(knn, query, reference,
                                         sample_rows = 32L,
                                         memory_limit = "1GB") {
@@ -1649,6 +1649,17 @@ massive_sharded_graph <- function(x, k, output, n.cores,
         build_seconds, started, audit_rows, checkpoint, resume, hnsw, ivf)
 }
 
+massive_full_knn_audit_reference_rows <- function(x, setup) {
+    # Leave headroom below the native 256,000,000-byte reference guard.
+    # This affects exact audit reads only, never HNSW shard construction.
+    audit_buffer_bytes <- 192000000
+    rows <- floor(audit_buffer_bytes / (4 * as.double(x$ncol)))
+    if (!is.finite(rows) || rows < 1) stop(
+        "Exact KNN audit requires at least one float32 reference row ",
+        "within its read buffer.", call. = FALSE)
+    as.integer(min(setup$resources$reference_chunk_rows, rows))
+}
+
 massive_full_knn_audit <- function(graph, x, audit_rows, setup,
         rows = NULL) {
     if (audit_rows == 0L) return(graph)
@@ -1659,16 +1670,16 @@ massive_full_knn_audit <- function(graph, x, audit_rows, setup,
         "Full-graph audit rows are invalid.", call. = FALSE)
     identity <- if (!is.null(x$path))
         massive_checkpoint_source_identity(x) else NULL
-    recall <- numeric(audit_rows)
-    distance_recall <- numeric(audit_rows)
+    recall <- distance_recall <- numeric(audit_rows)
     started <- proc.time()[[3L]]
     groups <- split(seq_along(rows), ceiling(seq_along(rows) /
         setup$resources$chunk_rows))
+    audit_reference_rows <- massive_full_knn_audit_reference_rows(x, setup)
     message("Full KNN audit: ", audit_rows, " rows; ",
         length(groups), " reference passes")
     for (group in groups) {
         exact <- massive_exact_sample_batch_cpp(x, x, rows[group],
-            graph$k, setup$resources$reference_chunk_rows,
+            graph$k, audit_reference_rows,
             setup$workers, TRUE)
         if (!identical(exact$backend_used,
             "native_cpu_exact_stream") || !isTRUE(exact$exact)) stop(
@@ -1685,8 +1696,7 @@ massive_full_knn_audit <- function(graph, x, audit_rows, setup,
     }
     if (!is.null(identity) &&
         !identical(identity, massive_checkpoint_source_identity(x)))
-        stop("Full-graph source changed during recall audit.",
-            call. = FALSE)
+        stop("Full-graph source changed during recall audit.", call. = FALSE)
     graph$recall_audited <- TRUE
     graph$audit_rows <- audit_rows
     graph$audit_sample_rows <- rows
@@ -1694,6 +1704,7 @@ massive_full_knn_audit <- function(graph, x, audit_rows, setup,
     graph$distance_equivalent_recall <- mean(distance_recall)
     graph$distance_equivalent_row_recall <- distance_recall
     graph$audit_reference_passes <- length(groups)
+    graph$audit_reference_chunk_rows <- audit_reference_rows
     stats <- massive_recall_summary(recall, 0.99)
     graph[names(stats)] <- stats
     graph$audit_seconds <- unname(proc.time()[[3L]] - started)
@@ -1871,6 +1882,7 @@ massive_full_knn_controls <- function(x, k, backend, method,
 #'   requests fail explicitly; the graph is never moved to another route.
 #' @return A validated `fastEmbedR_massive_graph` descriptor.
 #' @export
+#' @keywords internal
 massive_full_knn_graph <- function(x, k, output, backend = "cpu",
         n.cores = 1L, chunk_rows = NULL, reference_chunk_rows = NULL,
         memory_limit = "8GB", checkpoint = FALSE, resume = FALSE,

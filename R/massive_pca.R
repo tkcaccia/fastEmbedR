@@ -150,9 +150,6 @@ run_massive_auto_pca <- function(x, ncomp, xtest, center, scale,
     backend <- validate_pca_backend(resolve_embedding_backend(backend))
     route <- massive_pca_auto_route(x, memory_limit, output,
         backend, devices)
-    if (route$mode == "off" && !is.null(devices)) stop(
-        "Auto PCA selected in-memory processing; `devices` requires ",
-        "out-of-core PCA.", call. = FALSE)
     if (route$mode == "off" && !is.null(chunk_rows)) {
         stop("Auto PCA selected in-memory processing; `chunk_rows` ",
             "is not used.", call. = FALSE)
@@ -432,10 +429,7 @@ validate_massive_pca <- function(x, ncomp, xtest, center, scale,
     if (!identical(tsne_init, FALSE) && !identical(tsne_init, TRUE)) {
         stop("`tsne_init` must be TRUE or FALSE.", call. = FALSE)
     }
-    if (!is.null(xtest) || tsne_init) {
-        stop("Out-of-core `xtest` and `tsne_init` are not implemented.",
-            call. = FALSE)
-    }
+    massive_pca_validate_xtest(x, xtest)
     if (!is.logical(center) || !is.logical(scale) ||
         length(center) != 1L || length(scale) != 1L ||
         is.na(center) || is.na(scale)) {
@@ -448,7 +442,20 @@ validate_massive_pca <- function(x, ncomp, xtest, center, scale,
         stop("Streamed PCA needs rank < nrow and ",
             "rank <= ncol <= 2^31 - 1.", call. = FALSE)
     }
+    if (tsne_init && !rank %in% c(2L, 3L)) stop(
+        "Out-of-core t-SNE initialization needs two or three components.",
+        call. = FALSE)
     list(rank = rank, backend = backend)
+}
+
+massive_pca_validate_xtest <- function(x, xtest) {
+    if (is.null(xtest)) return(invisible(NULL))
+    if (!inherits(xtest, "fastEmbedR_massive_matrix") ||
+        xtest$ncol != x$ncol || xtest$nrow < 1L ||
+        xtest$format == "synthetic") stop(
+        "Out-of-core `xtest` needs a nonempty matching massive_matrix().",
+        call. = FALSE)
+    invisible(NULL)
 }
 
 finish_massive_pca <- function(fit, path, x, rank, workers, seed,
@@ -487,6 +494,8 @@ finish_massive_pca <- function(fit, path, x, rank, workers, seed,
     fit$implementation_identity <-
         massive_checkpoint_implementation_identity()
     fit$elapsed_sec <- unname(proc.time()[[3L]] - started)
+    fit$source_identity <- if (x$format == "memory") NULL else
+        massive_checkpoint_source_identity(x)
     fit$score_identity <- massive_checkpoint_file_identity(path)
     fit$manifest_path <- paste0(path, ".manifest.rds")
     class(fit) <- c("fastEmbedR_massive_pca", "fastEmbedR_pca")
@@ -503,6 +512,7 @@ finish_massive_pca <- function(fit, path, x, rank, workers, seed,
 #' @param output The `.f32` path supplied to `pca()` in out-of-core mode.
 #' @return The lightweight PCA fit with file-backed `scores`.
 #' @export
+#' @keywords internal
 massive_open_pca <- function(output) {
     if (!is.character(output) || length(output) != 1L ||
         is.na(output) || tolower(tools::file_ext(output)) != "f32") {
@@ -546,6 +556,191 @@ massive_open_pca <- function(output) {
         !identical(identity$bytes,
             as.numeric(4 * fit$scores$nrow * fit$ncomp))) stop(
         "PCA score file changed since completion.", call. = FALSE)
+    massive_pca_check_test_scores(fit)
+    massive_pca_check_init(fit)
+    fit
+}
+
+massive_pca_check_test_scores <- function(fit) {
+    if (is.null(fit$test_projection)) return(invisible(NULL))
+    test <- fit$test_projection
+    if (!inherits(test$scores, "fastEmbedR_massive_matrix") ||
+        !inherits(fit$scores_test, "fastEmbedR_massive_matrix")) stop(
+        "PCA test scores changed since completion.", call. = FALSE)
+    identity <- tryCatch(
+        massive_checkpoint_file_identity(test$scores$path),
+        error = function(e) NULL)
+    if (!identical(identity, test$score_identity) ||
+        !identical(test$scores$path, fit$scores_test$path)) stop(
+        "PCA test scores changed since completion.", call. = FALSE)
+    invisible(NULL)
+}
+
+massive_pca_test_path <- function(output) {
+    sub("\\.f32$", ".test.f32", output, ignore.case = TRUE)
+}
+
+massive_pca_init_path <- function(output) {
+    sub("\\.f32$", ".init.f32", output, ignore.case = TRUE)
+}
+
+massive_pca_check_init <- function(fit) {
+    if (is.null(fit$tsne_init)) return(invisible(NULL))
+    init <- fit$tsne_init
+    identity <- tryCatch(massive_checkpoint_file_identity(init$path),
+        error = function(e) NULL)
+    if (!inherits(init, "fastEmbedR_massive_matrix") ||
+        !identical(identity, fit$init_identity) ||
+        init$nrow != fit$scores$nrow || init$ncol != fit$ncomp) stop(
+        "PCA t-SNE initialization changed since completion.",
+        call. = FALSE)
+    invisible(NULL)
+}
+
+massive_pca_preflight_test <- function(xtest, path, rank, checkpoint) {
+    if (is.null(xtest)) return(invisible(NULL))
+    if (checkpoint && xtest$format == "memory") stop(
+        "Checkpointed PCA test projection needs a file-backed `xtest`.",
+        call. = FALSE)
+    massive_float_output(massive_pca_test_path(path),
+        4 * xtest$nrow * rank)
+    invisible(NULL)
+}
+
+massive_pca_preflight_init <- function(path, rows, rank, requested) {
+    if (requested) massive_float_output(massive_pca_init_path(path),
+        4 * rows * rank)
+    invisible(NULL)
+}
+
+massive_pca_report <- function(x, rank, backend, workers, resources) {
+    method <- if (massive_pca_covariance_route(x$ncol, backend))
+        "streamed_covariance" else "streamed_randomized"
+    message("EXPERIMENTAL out-of-core PCA: ", x$nrow, " x ", x$ncol,
+        "; method=", method, "; backend=", backend,
+        "; CPU workers=", workers,
+        "; chunk rows=", resources$chunk_rows,
+        "; estimated algorithm RAM=",
+        round(resources$peak_ram_bytes / 1024^2),
+        " MB; scores=", round(resources$output_bytes / 1024^2), " MB")
+}
+
+massive_pca_project_test <- function(fit, xtest, output, workers,
+        chunk_rows, memory_limit, devices, checkpoint) {
+    if (is.null(xtest)) return(fit)
+    test_path <- massive_pca_test_path(output)
+    projected <- massive_project_pca(fit, xtest, test_path,
+        backend = fit$backend, n.cores = workers,
+        chunk_rows = chunk_rows, memory_limit = memory_limit,
+        devices = devices, checkpoint = checkpoint)
+    fit$scores_test <- projected$scores
+    fit$test_projection <- projected
+    massive_checkpoint_write(list(version = 1L, fit = fit),
+        fit$manifest_path)
+    fit
+}
+
+massive_pca_init_stats <- function(scores, chunk_rows) {
+    count <- 0
+    mean <- numeric(scores$ncol)
+    squares <- numeric(scores$ncol)
+    first <- 1
+    while (first <= scores$nrow) {
+        rows <- as.integer(min(chunk_rows, scores$nrow - first + 1))
+        block <- massive_read_rows_cpp(scores, first, rows,
+            8 * rows * scores$ncol)
+        if (any(!is.finite(block))) stop(
+            "PCA scores contain nonfinite values.", call. = FALSE)
+        block_mean <- colMeans(block)
+        next_count <- count + rows
+        delta <- block_mean - mean
+        squares <- squares + colSums(sweep(block, 2L,
+            block_mean)^2) + delta^2 * count * rows / next_count
+        mean <- mean + delta * rows / next_count
+        count <- next_count
+        first <- first + rows
+    }
+    deviation <- sqrt(max(squares / (count - 1)))
+    list(center = mean, scale = if (deviation > 0) 1e-4 / deviation
+        else 1)
+}
+
+massive_pca_write_init <- function(scores, output, stats, chunk_rows) {
+    part <- paste0(output, ".part")
+    con <- file(part, "wb")
+    closed <- FALSE
+    on.exit({
+        if (!closed) close(con)
+        if (!closed) unlink(part)
+    })
+    first <- 1
+    while (first <= scores$nrow) {
+        rows <- as.integer(min(chunk_rows, scores$nrow - first + 1))
+        block <- massive_read_rows_cpp(scores, first, rows,
+            8 * rows * scores$ncol)
+        block <- sweep(block, 2L, stats$center)
+        block <- block * stats$scale
+        writeBin(as.numeric(t(block)), con, size = 4L,
+            endian = "little")
+        first <- first + rows
+    }
+    close(con)
+    closed <- TRUE
+    if (file.info(part)$size != 4 * scores$nrow * scores$ncol ||
+        !file.rename(part, output)) stop(
+        "PCA t-SNE initialization did not finalize.", call. = FALSE)
+    massive_matrix(output, nrow = scores$nrow, ncol = scores$ncol)
+}
+
+#' Create file-backed t-SNE initialization from streamed PCA
+#'
+#' Centers completed PCA scores and scales their largest sample standard
+#' deviation to `1e-4`, matching resident PCA initialization. The two
+#' bounded passes run on CPU and write a new row-major `.f32` file.
+#'
+#' @param fit A completed out-of-core PCA fit with two or three components.
+#' @param output New `.f32` initialization path.
+#' @param chunk_rows Maximum score rows read per pass, capped at 16 MB.
+#' @param resume If `TRUE`, replace an interrupted `.part` file and restart
+#'   both bounded passes from the verified PCA scores.
+#' @return A file-backed [massive_matrix()] descriptor for
+#'   [massive_tsne_optimize()].
+#' @keywords internal
+massive_pca_tsne_init <- function(fit, output,
+        chunk_rows = 65536L, resume = FALSE) {
+    if (!inherits(fit, "fastEmbedR_massive_pca") ||
+        !fit$ncomp %in% c(2L, 3L) ||
+        !identical(massive_checkpoint_file_identity(
+            fit$scores$path), fit$score_identity)) stop(
+        "A verified file-backed 2D/3D PCA fit is required.",
+        call. = FALSE)
+    rows <- integer_scalar(chunk_rows)
+    if (is.na(rows) || rows < 1L) stop(
+        "`chunk_rows` must be positive.", call. = FALSE)
+    rows <- as.integer(min(rows, floor(16e6 / (8 * fit$ncomp))))
+    if (!is.logical(resume) || length(resume) != 1L || is.na(resume))
+        stop("`resume` must be TRUE or FALSE.", call. = FALSE)
+    path <- massive_float_output(output,
+        4 * fit$scores$nrow * fit$ncomp, resume = resume)
+    stats <- massive_pca_init_stats(fit$scores, rows)
+    result <- massive_pca_write_init(fit$scores, path, stats, rows)
+    if (!identical(massive_checkpoint_file_identity(
+            fit$scores$path), fit$score_identity)) stop(
+        "PCA score file changed during initialization.",
+        call. = FALSE)
+    result$normalization_backend <- "cpu"
+    result$center <- stats$center
+    result$scale <- stats$scale
+    result
+}
+
+massive_pca_attach_init <- function(fit, requested, path) {
+    if (!requested) return(fit)
+    init <- massive_pca_tsne_init(fit, massive_pca_init_path(path))
+    fit$tsne_init <- init
+    fit$init_identity <- massive_checkpoint_file_identity(init$path)
+    massive_checkpoint_write(list(version = 1L, fit = fit),
+        fit$manifest_path)
     fit
 }
 
@@ -920,6 +1115,190 @@ massive_pca_project_metal <- function(x, path, fit, resources,
         call. = FALSE)
 }
 
+massive_pca_projection_backend <- function(fit, x, backend, devices,
+        workers) {
+    if (!inherits(fit, "fastEmbedR_massive_pca") ||
+        !is.matrix(fit$loadings) || !is.numeric(fit$loadings) ||
+        ncol(fit$loadings) < 1L ||
+        !inherits(x, "fastEmbedR_massive_matrix") ||
+        nrow(fit$loadings) != x$ncol ||
+        !is.numeric(fit$center) || !is.numeric(fit$scale) ||
+        length(fit$center) != x$ncol ||
+        length(fit$scale) != x$ncol ||
+        !all(is.finite(c(fit$loadings, fit$center, fit$scale))) ||
+        any(fit$scale <= 0) ||
+        !isTRUE(fit$backend %in% c("cpu", "cuda", "metal"))) stop(
+        "Projection needs a valid streamed PCA fit and ",
+        "matching matrix columns.",
+        call. = FALSE)
+    backend <- validate_pca_backend(backend %||% fit$backend)
+    if (backend == "cuda" &&
+        !isTRUE(embedding_cuda_available_cpp())) stop(
+        "CUDA PCA projection needs native CUDA; no fallback was used.",
+        call. = FALSE)
+    if (backend == "metal" &&
+        (!isTRUE(embedding_metal_available_cpp()) ||
+            x$ncol > 1024L)) stop(
+        "Metal PCA projection needs native Metal and <=1024 columns; ",
+        "no fallback was used.", call. = FALSE)
+    if (backend == "metal" && workers != 1L) stop(
+        "Metal PCA projection requires `n.cores = 1`.",
+        call. = FALSE)
+    list(backend = backend,
+        devices = massive_validate_devices(devices, backend, x$nrow))
+}
+
+massive_pca_projection_landmarks <- function(fit, x, selection) {
+    if (is.null(selection)) return(NULL)
+    if (!is.list(selection) ||
+        !inherits(selection$data, "fastEmbedR_massive_matrix") ||
+        is.null(fit$source_identity) ||
+        is.null(selection$source_identity) ||
+        !identical(fit$source_identity,
+            massive_checkpoint_source_identity(selection$data)) ||
+        !identical(selection$source_identity,
+            massive_checkpoint_source_identity(x))) stop(
+        "PCA landmark selection does not match fit and source.",
+        call. = FALSE)
+    indices <- selection$indices
+    if (!is.numeric(indices) ||
+        length(indices) != selection$data$nrow ||
+        any(!is.finite(indices)) || any(indices < 1) ||
+        any(indices > x$nrow) || any(indices != floor(indices)) ||
+        is.unsorted(indices, strictly = TRUE) ||
+        !identical(selection$indices_signature,
+            massive_checkpoint_signature(indices))) stop(
+        "PCA landmark row IDs changed since selection.",
+        call. = FALSE)
+    list(indices = indices, count = length(indices),
+        method = selection$method, seed = selection$seed,
+        indices_signature = selection$indices_signature)
+}
+
+massive_pca_projection_checkpoint <- function(x, path, model, selected,
+        resources, backend, workers, devices, checkpoint, resume) {
+    massive_checkpoint_validate_controls(checkpoint, resume)
+    sidecar <- paste0(path, ".checkpoint.rds")
+    if (!checkpoint) {
+        if (file.exists(sidecar)) stop("PCA projection checkpoint exists.")
+        return(list(rows = 0, progress = NULL,
+            resume_part = FALSE, sidecar = NULL))
+    }
+    if (x$format == "memory") stop(
+        "PCA projection checkpointing needs a file-backed source.",
+        call. = FALSE)
+    signature <- massive_checkpoint_signature(list(version = 1L,
+        implementation = massive_checkpoint_implementation_identity(),
+        source = massive_checkpoint_source_identity(x),
+        model = model, landmarks = selected$indices_signature %||% NULL,
+        output = path, backend = backend,
+        workers = workers, chunk_rows = resources$chunk_rows,
+        devices = devices, gpu_identity = if (length(devices) > 1L)
+            massive_cuda_device_uuids(devices) else NULL))
+    part <- paste0(path, ".part")
+    if (resume) {
+        state <- tryCatch(readRDS(sidecar), error = function(e) NULL)
+        rows <- if (is.list(state)) state$completed_rows else NULL
+        size <- if (file.exists(part)) file.info(part)$size else 0
+        valid <- is.list(state) &&
+            identical(state$signature, signature) &&
+            is.numeric(rows) && length(rows) == 1L &&
+            is.finite(rows) && rows == floor(rows) &&
+            rows >= 0 && rows <= x$nrow &&
+            (rows == x$nrow || rows %% resources$chunk_rows == 0) &&
+            (length(devices) <= 1L || rows == 0) &&
+            is.finite(size) &&
+            size >= rows * ncol(model$loadings) * 4 &&
+            size <= resources$output_bytes
+        if (!isTRUE(valid)) stop(
+            "PCA projection checkpoint does not match this run.",
+            call. = FALSE)
+    } else {
+        if (file.exists(sidecar)) stop("PCA projection checkpoint exists.")
+        state <- list(signature = signature, completed_rows = 0)
+        massive_checkpoint_write(state, sidecar)
+    }
+    progress <- function(rows) {
+        state$completed_rows <- rows
+        massive_checkpoint_write(state, sidecar)
+    }
+    list(rows = state$completed_rows, progress = progress,
+        resume_part = resume && file.exists(part), sidecar = sidecar)
+}
+
+#' Experimental file-backed PCA projection
+#'
+#' Projects a file-backed matrix through a completed streamed PCA fit.
+#' Fit PCA on a sampled landmark file with [pca()], then use this call to
+#' project the full source without loading all rows into RAM. The selected
+#' backend writes row-major float32 scores to a new `.f32` file.
+#'
+#' @param fit A completed out-of-core PCA fit.
+#' @param x A [massive_matrix()] descriptor with matching columns.
+#' @param output New `.f32` score-file path.
+#' @param backend Projection backend; defaults to the fit backend.
+#' @param n.cores CPU worker limit; Metal requires one.
+#' @param chunk_rows Maximum projection rows per block.
+#' @param memory_limit Conservative algorithm RAM budget.
+#' @param devices Optional distinct CUDA device IDs for row sharding.
+#' @param landmarks Optional [massive_select_landmarks()] result. When
+#'   supplied, its row IDs and source identity must match the fit and input.
+#' @param checkpoint Save partial score batches for recovery.
+#' @param resume Continue from a matching checkpoint and partial score file.
+#' @return A list with file-backed `scores`, backend, worker, resource,
+#'   input, model, and output identities, plus any verified landmark rows.
+#'   This projection is experimental.
+#' @export
+#' @keywords internal
+massive_project_pca <- function(fit, x, output, backend = NULL,
+        n.cores = NULL, chunk_rows = NULL, memory_limit = "512MB",
+        devices = NULL, landmarks = NULL, checkpoint = FALSE,
+        resume = FALSE) {
+    workers <- normalize_pca_threads(n.cores)
+    route <- massive_pca_projection_backend(fit, x, backend,
+        devices, workers)
+    selected <- massive_pca_projection_landmarks(fit, x, landmarks)
+    backend <- route$backend
+    devices <- route$devices
+    if (length(devices)) {
+        previous <- massive_cuda_memory_cpp()$device
+        on.exit(massive_cuda_select_cpp(previous))
+        massive_cuda_select_cpp(devices[[1L]])
+    }
+    rank <- ncol(fit$loadings)
+    resources <- massive_pca_resources(x, rank, workers,
+        chunk_rows, memory_limit, backend)
+    path <- massive_float_output(output, resources$output_bytes,
+        resume = resume && file.exists(paste0(output, ".part")))
+    if (length(devices) > 1L) massive_pca_shards_check(x, path,
+        rank, resources$output_bytes, devices, resume)
+    input <- massive_checkpoint_source_identity(x)
+    model <- massive_checkpoint_signature(list(
+        loadings = fit$loadings, center = fit$center,
+        scale = fit$scale, source = fit$source_identity))
+    started <- proc.time()[[3L]]
+    prepared <- massive_pca_projection_checkpoint(x, path, fit, selected,
+        resources, backend, workers, devices, checkpoint, resume)
+    resources <- massive_pca_project(x, path, fit, resources,
+        workers, backend, prepared, devices, memory_limit,
+        checkpoint, resume)
+    if (!identical(input, massive_checkpoint_source_identity(x))) stop(
+        "PCA projection input changed during calculation.",
+        call. = FALSE)
+    result <- list(scores = massive_matrix(path, nrow = x$nrow,
+        ncol = rank), backend = backend, n_threads = workers,
+        resources = resources, source_identity = input,
+        model_identity = model,
+        mode = if (is.null(selected)) "projection" else "landmark",
+        landmarks = selected,
+        score_identity = massive_checkpoint_file_identity(path),
+        elapsed_sec = unname(proc.time()[[3L]] - started),
+        experimental = TRUE)
+    class(result) <- "fastEmbedR_massive_pca_projection"
+    if (!is.null(prepared$sidecar)) unlink(prepared$sidecar)
+    result
+}
+
 run_massive_pca <- function(x, ncomp, xtest, center, scale, backend,
                             n.cores, seed, tsne_init, output,
                             chunk_rows, memory_limit, checkpoint, resume,
@@ -944,17 +1323,11 @@ run_massive_pca <- function(x, ncomp, xtest, center, scale, backend,
     if (length(devices) > 1L) resources$gpu_devices <- devices
     path <- massive_pca_output(output, resources$output_bytes,
         x$ncol, rank, resume)
+    massive_pca_preflight_test(xtest, path, rank, checkpoint)
+    massive_pca_preflight_init(path, x$nrow, rank, tsne_init)
     if (length(devices) > 1L) massive_pca_shards_check(x, path,
         rank, resources$output_bytes, devices, resume)
-    method <- if (massive_pca_covariance_route(x$ncol, backend))
-        "streamed_covariance" else "streamed_randomized"
-    message("EXPERIMENTAL out-of-core PCA: ", x$nrow, " x ", x$ncol,
-        "; method=", method,
-        "; backend=", backend, "; CPU workers=", workers,
-        "; chunk rows=", resources$chunk_rows,
-        "; estimated algorithm RAM=",
-        round(resources$peak_ram_bytes / 1024^2),
-        " MB; scores=", round(resources$output_bytes / 1024^2), " MB")
+    massive_pca_report(x, rank, backend, workers, resources)
     started <- proc.time()[[3L]]
     prepared <- massive_pca_prepare(x, path, rank, center, scale,
         backend, workers, seed, resources, checkpoint, resume)
@@ -967,5 +1340,7 @@ run_massive_pca <- function(x, ncomp, xtest, center, scale, backend,
         backend
     )
     if (!is.null(prepared$sidecar)) unlink(prepared$sidecar)
-    fit
+    fit <- massive_pca_project_test(fit, xtest, path, workers,
+        chunk_rows, memory_limit, devices, checkpoint)
+    massive_pca_attach_init(fit, tsne_init, path)
 }

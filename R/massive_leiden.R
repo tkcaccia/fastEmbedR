@@ -20,9 +20,9 @@ massive_leiden_refinement_output <- function(output, bytes) {
 #'
 #' Refines one Louvain local-move partition using Leiden's constrained
 #' singleton-merge rule. Graph edges are streamed in bounded blocks and
-#' labels and refinement state are memory-mapped. This is one stage; use
-#' [massive_leiden()] for the multilevel fit. Mapped pages can contribute
-#' to process RSS.
+#' CPU labels and refinement state are memory-mapped. Metal and CUDA retain
+#' refinement state on the GPU and stream bounded CSR blocks from the SSD.
+#' This is one stage; use [massive_leiden()] for the multilevel fit.
 #'
 #' @param graph A result of [massive_umap_fuzzy_graph()].
 #' @param parent A first-level [massive_louvain_level()] result for `graph`.
@@ -31,13 +31,16 @@ massive_leiden_refinement_output <- function(output, bytes) {
 #' @param seed Nonnegative refinement seed.
 #' @param chunk_rows Maximum consecutive CSR rows per scan block.
 #' @param memory_limit RAM budget for graph scan buffers.
-#' @param backend Only `"cpu"` is implemented; no fallback is used.
+#' @param backend `"cpu"`, `"cuda"`, or `"metal"`; no fallback is used.
+#' @param n.cores CPU workers for bounded row-candidate preparation.
+#'   Refinement commits remain ordered. GPU routes require one coordinator.
 #' @return A file-backed refinement and refined-to-parent label map.
-#' @export
+#' @keywords internal
 massive_leiden_refine_level <- function(graph, parent, output,
-        resolution = 1, seed = 1L, chunk_rows = 8192L,
-        memory_limit = "1GB", backend = "cpu") {
-    massive_louvain_graph_check(graph, backend)
+        resolution = 1, seed = 1L, chunk_rows = NULL,
+        memory_limit = "1GB", backend = "cpu", n.cores = 1L) {
+    massive_louvain_graph_check(graph, backend, TRUE, TRUE)
+    n.cores <- massive_louvain_cpu_workers(n.cores, backend)
     if (!inherits(parent, "fastEmbedR_massive_louvain_level") ||
         parent$n_vertices != graph$n_vertices ||
         !identical(parent$resolution, resolution)) stop(
@@ -45,9 +48,12 @@ massive_leiden_refine_level <- function(graph, parent, output,
     run_seed <- integer_scalar(seed)
     if (is.na(run_seed) || run_seed < 0L) stop(
         "`seed` must be a nonnegative integer.", call. = FALSE)
+    chunk_rows <- massive_louvain_chunk_rows(chunk_rows, backend)
     resources <- massive_louvain_resources(graph, chunk_rows,
         memory_limit)
-    mapped <- 32 * graph$n_vertices + 8 * parent$n_communities
+    mapped <- if (backend %in% c("metal", "cuda"))
+        8 * graph$n_vertices + 4 * parent$n_communities else
+        32 * graph$n_vertices + 8 * parent$n_communities
     path <- massive_leiden_refinement_output(output, mapped)
     files <- c(graph$offsets_path, graph$indices_path,
         graph$weights_path, parent$membership_path)
@@ -61,15 +67,18 @@ massive_leiden_refine_level <- function(graph, parent, output,
         before$bytes[[4L]] != 4 * graph$n_vertices) stop(
         "Leiden graph or parent labels changed since fitting.",
         call. = FALSE)
-    result <- massive_leiden_refine_cpp(files[[1L]], files[[2L]],
-        files[[3L]], files[[4L]], graph$n_vertices,
-        parent$n_communities, path, resolution,
-        resources$chunk_rows, resources$edge_budget, run_seed,
-        identical(graph$weight_dtype, "float64"))
+    result <- massive_leiden_refine_native(files, graph, parent,
+        path, resolution, resources, run_seed, backend, n.cores)
     if (!identical(before, massive_checkpoint_file_identity(files))) {
         stop("Leiden inputs changed during refinement.",
             call. = FALSE)
     }
+    massive_leiden_refine_result(result, graph, parent, path,
+        resources, mapped, backend)
+}
+
+massive_leiden_refine_result <- function(result, graph, parent,
+        path, resources, mapped, backend) {
     result$membership_identity <- massive_checkpoint_file_identity(path)
     result$parent_mapping_identity <- massive_checkpoint_file_identity(
         result$parent_mapping_path)
@@ -78,10 +87,34 @@ massive_leiden_refine_level <- function(graph, parent, output,
     result$total_edge_weight <- parent$total_edge_weight
     result$resources <- resources
     result$resources$mapped_state_bytes <- mapped
+    if (identical(backend, "metal"))
+        result$resources$metal_state_bytes <-
+            32 * graph$n_vertices + 4 * parent$n_communities
+    if (identical(backend, "cuda")) {
+        result$resources$cuda_state_bytes <-
+            36 * graph$n_vertices + 4 * parent$n_communities
+        result$gpu_devices <- as.integer(massive_cuda_memory_cpp()$device)
+        result$gpu_identity <- massive_cuda_device_uuids(
+            result$gpu_devices)
+    }
     result$method <- "leiden_refinement_level"
     result$experimental <- TRUE
     class(result) <- "fastEmbedR_massive_leiden_refinement"
     result
+}
+
+massive_leiden_refine_native <- function(files, graph, parent,
+        path, resolution, resources, seed, backend, n.cores) {
+    native <- switch(backend,
+        metal = massive_leiden_metal_refine_cpp,
+        cuda = massive_leiden_cuda_refine_cpp,
+        cpu = massive_leiden_refine_cpp)
+    args <- list(files[[1L]], files[[2L]], files[[3L]], files[[4L]],
+        graph$n_vertices, parent$n_communities, path, resolution,
+        resources$chunk_rows, resources$edge_budget, seed,
+        identical(graph$weight_dtype, "float64"))
+    if (backend == "cpu") args <- c(args, list(n.cores))
+    do.call(native, args)
 }
 
 massive_leiden_output <- function(graph, output, memory_limit,
@@ -206,20 +239,21 @@ massive_leiden_finish_level <- function(step, output,
 }
 
 massive_leiden_run_level <- function(graph, initial, prefix,
-        index, passes, resolution, seed, chunk_rows, memory_limit) {
+        index, passes, resolution, seed, chunk_rows, memory_limit,
+        backend = "cpu", n.cores = 1L) {
     run_seed <- as.integer((as.double(seed) + index) %%
         (.Machine$integer.max + 1))
     parent <- massive_louvain_run_level(graph,
         paste0(prefix, ".parent.u32"), passes, resolution,
         run_seed, chunk_rows, memory_limit, index > 0L,
-        index, initial)
+        index, initial, backend, n.cores)
     if (parent$n_communities == graph$n_vertices) return(list(
         parent = parent, refined = NULL,
         mapping = parent$membership_path,
         n_communities = parent$n_communities))
     refined <- massive_leiden_refine_level(graph, parent,
         paste0(prefix, ".refined.u32"), resolution,
-        run_seed, chunk_rows, memory_limit)
+        run_seed, chunk_rows, memory_limit, backend, n.cores)
     mapping <- if (refined$n_refined == graph$n_vertices) {
         parent$membership_path
     } else refined$membership_path
@@ -229,9 +263,15 @@ massive_leiden_run_level <- function(graph, initial, prefix,
             refined$n_refined)
 }
 
+massive_leiden_level_workers <- function(step) {
+    max(step$parent$cpu_workers_effective %||% 1L,
+        if (is.null(step$refined)) 1L else
+            step$refined$cpu_workers_effective %||% 1L)
+}
+
 massive_leiden_hierarchy <- function(graph, output, controls,
         chunk_rows, memory_limit, resources, signature = NULL,
-        saved = NULL, initial = NULL) {
+        saved = NULL, initial = NULL, backend = "cpu") {
     current <- if (is.null(saved)) graph else saved$current
     previous <- if (is.null(saved)) initial else saved$previous
     part <- paste0(output, ".part")
@@ -245,11 +285,14 @@ massive_leiden_hierarchy <- function(graph, output, controls,
         prefix <- paste0(output, ".level", index)
         step <- massive_leiden_run_level(current, previous, prefix,
             index, controls$passes, controls$resolution,
-            controls$seed, chunk_rows, memory_limit)
+            controls$seed, chunk_rows, memory_limit, backend,
+            controls$n_threads %||% 1L)
         levels[[index + 1L]] <- list(
             vertices = current$n_vertices,
             parent = step$parent$n_communities,
             parent_modularity = step$parent$modularity_final,
+            cpu_workers = massive_leiden_level_workers(step),
+            quality_rollback = isTRUE(step$parent$quality_rollback),
             refined = if (is.null(step$refined)) NA_integer_ else
                 step$refined$n_refined)
         if (index == 0L) {
@@ -281,12 +324,13 @@ massive_leiden_hierarchy <- function(graph, output, controls,
 #'
 #' Applies disk-backed modularity local moves and the existing Leiden
 #' refinement rule, then externally contracts each refined graph. Labels,
-#' graph edges, and intermediate mappings remain file-backed. Currently
-#' CPU-only and single-worker. With checkpoints, completed graph levels
-#' can resume after identity validation; interrupted levels retain partial
-#' files and require separate recovery. The memory budget does not cover
-#' mapped pages or the R process itself. One hierarchy is run per call;
-#' `max_passes` controls local moves within each level.
+#' graph edges, and intermediate mappings remain file-backed. Each call
+#' uses one CPU, CUDA, or Metal worker. Verified checkpoints resume
+#' completed graph levels; interrupted levels retain partial files for
+#' separate recovery. The memory budget excludes mapped pages and R.
+#' One hierarchy runs per call;
+#' `max_passes` controls local moves within each level. Metal final labels
+#' receive a CPU connectivity and modularity audit; CUDA does too.
 #'
 #' @param graph A symmetric result of [massive_umap_fuzzy_graph()].
 #' @param output New path for one-based `uint32` final labels.
@@ -295,23 +339,30 @@ massive_leiden_hierarchy <- function(graph, output, controls,
 #' @param seed Nonnegative random seed.
 #' @param chunk_rows Maximum CSR rows scanned per block.
 #' @param memory_limit RAM budget for graph scan buffers.
-#' @param backend Only `"cpu"` is implemented; no fallback is used.
+#' @param backend `"cpu"`, `"cuda"`, or `"metal"`; no fallback is used.
+#' @param n.cores CPU workers for bounded row-candidate preparation.
+#'   Local-move and refinement commits remain ordered.
 #' @param checkpoint Save completed graph levels for later resumption.
 #' @param resume Resume matching completed levels; requires `checkpoint`.
 #' @param initial Optional `massive_cluster_landmarks()` result whose saved
 #'   labels initialize local moves. Its row order must match `graph`.
 #' @return Lightweight file-backed Leiden result with modularity.
-#' @export
+#' @keywords internal
 massive_leiden <- function(graph, output, max_passes = 10L,
-        resolution = 1, seed = 1L, chunk_rows = 8192L,
+        resolution = 1, seed = 1L, chunk_rows = NULL,
         memory_limit = "1GB", backend = "cpu",
-        checkpoint = FALSE, resume = FALSE, initial = NULL) {
-    massive_louvain_graph_check(graph, backend)
+        checkpoint = FALSE, resume = FALSE, initial = NULL,
+        n.cores = 1L) {
+    massive_louvain_graph_check(graph, backend, TRUE, TRUE)
+    n.cores <- massive_louvain_cpu_workers(n.cores, backend)
+    chunk_rows <- massive_louvain_chunk_rows(chunk_rows, backend)
     massive_checkpoint_validate_controls(checkpoint, resume)
     controls <- massive_louvain_controls(max_passes, resolution, seed)
+    if (n.cores > 1L) controls$n_threads <- n.cores
     initial <- massive_cluster_initial(graph, initial)
     if (!is.null(initial))
         controls$initial <- initial$parent_mapping_identity
+    if (backend %in% c("metal", "cuda")) controls$backend <- backend
     resources <- massive_leiden_output(graph, output, memory_limit,
         resume)
     before <- massive_checkpoint_file_identity(c(
@@ -324,9 +375,14 @@ massive_leiden <- function(graph, output, max_passes = 10L,
         resources$path, signature) else NULL
     fitted <- massive_leiden_hierarchy(graph, resources$path,
         controls, chunk_rows, memory_limit, resources,
-        signature, saved, initial)
+        signature, saved, initial, backend)
     score <- massive_graph_modularity(graph, fitted$part,
-        fitted$n_communities, resolution, chunk_rows, memory_limit)
+        fitted$n_communities, resolution, chunk_rows,
+        memory_limit, connectivity = backend %in% c("metal", "cuda"))
+    if (backend %in% c("metal", "cuda") &&
+        score$disconnected_communities != 0L) stop(
+        "GPU Leiden returned disconnected communities.",
+        call. = FALSE)
     if (score$modularity < fitted$first_modularity - 1e-7) stop(
         "Contracted Leiden reduced original-graph modularity.",
         call. = FALSE)
@@ -338,16 +394,35 @@ massive_leiden <- function(graph, output, max_passes = 10L,
         "Cannot finalize Leiden label file.", call. = FALSE)
     if (checkpoint) unlink(paste0(resources$path,
         ".checkpoint.rds"))
-    result <- list(membership_path = resources$path,
-        membership_identity = massive_checkpoint_file_identity(
-            resources$path), n_vertices = graph$n_vertices,
+    massive_leiden_result(graph, resources$path, fitted, score,
+        before, backend, initial, n.cores)
+}
+
+massive_leiden_result <- function(graph, path, fitted, score,
+        identity, backend, initial, n.cores) {
+    result <- list(membership_path = path,
+        membership_identity = massive_checkpoint_file_identity(path),
+        n_vertices = graph$n_vertices,
         n_communities = fitted$n_communities,
         modularity_final = score$modularity,
-        levels = fitted$levels, graph_identity = before,
-        method = "leiden_multilevel", backend = "cpu",
+        levels = fitted$levels, graph_identity = identity,
+        quality_rollbacks = sum(vapply(fitted$levels,
+            function(level) isTRUE(level$quality_rollback), FALSE)),
+        method = "leiden_multilevel", backend = backend,
+        cpu_workers = n.cores,
+        cpu_workers_effective = max(vapply(fitted$levels,
+            function(level) level$cpu_workers %||% 1L, 1L)),
+        parallel_stage = "none",
         initial_partition_path = if (is.null(initial)) NULL else
             initial$parent_mapping_path,
         experimental = TRUE)
+    if (result$cpu_workers_effective > 1L)
+        result$parallel_stage <- "row_candidate_preparation"
+    if (identical(backend, "cuda")) {
+        result$gpu_devices <- as.integer(massive_cuda_memory_cpp()$device)
+        result$gpu_identity <- massive_cuda_device_uuids(
+            result$gpu_devices)
+    }
     class(result) <- "fastEmbedR_massive_leiden"
     result
 }
@@ -358,7 +433,7 @@ massive_leiden <- function(graph, output, max_passes = 10L,
 #' @param first First one-based vertex row.
 #' @param n Number of labels to read; capped at one million.
 #' @return One-based integer community labels.
-#' @export
+#' @keywords internal
 massive_read_leiden_rows <- function(x, first = 1, n = 6L) {
     if (!inherits(x, "fastEmbedR_massive_leiden")) stop(
         "`x` must be a massive_leiden() result.", call. = FALSE)

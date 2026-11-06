@@ -58,14 +58,31 @@ test_that("Metal UMAP accepts precomputed neighbors in 3D", {
     )
 })
 
-test_that("Metal 3D landmarks never use CPU refinement silently", {
+test_that("Metal 3D landmark UMAP fixes references and projects new rows", {
     skip_if_not(embedding_metal_available_cpp())
     x <- scale(as.matrix(iris[seq_len(45L), 1:4]))
-    expect_error(
-        umap(
-            x, n_neighbors = 10L, n_components = 3L,
-            landmarks = 0.5, backend = "metal", seed = 11L
-        ),
-        "Metal 3D landmark refinement is not available"
+    fit <- umap(
+        x, n_neighbors = 10L, n_components = 3L,
+        landmarks = 0.5, backend = "metal", seed = 11L
     )
+    layout <- as.matrix(fit$layout)
+    reference <- as.matrix(fit$landmarks$layout)
+    indices <- fit$landmarks$indices
+    expect_identical(dim(layout), c(45L, 3L))
+    expect_true(all(is.finite(layout)))
+    expect_gt(stats::sd(layout[, 3L]), 0)
+    expect_equal(
+        as.numeric(layout[indices, , drop = FALSE]),
+        as.numeric(reference), tolerance = 1e-5
+    )
+    expect_identical(
+        fit$parameters$landmark_refinement_backend, "metal")
+    held_out <- project_landmark_model(
+        fit$model, x[1:3, , drop = FALSE], transform_k = 10L,
+        refinement_epochs = 5L
+    )
+    expect_identical(dim(held_out$layout), c(3L, 3L))
+    expect_true(all(is.finite(as.matrix(held_out$layout))))
+    expect_identical(
+        held_out$parameters$projection_backend, "metal")
 })

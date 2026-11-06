@@ -99,19 +99,51 @@ test_that("native small-group assignment preserves unresolved rows", {
     }
 })
 
+test_that("host option wrappers preserve CPU graph-option semantics", {
+    graph <- three_clique_graph()
+    layout <- cbind(c(seq(0, 0.25, length.out = 6L),
+        seq(0.3, 0.55, length.out = 6L),
+        seq(5, 5.25, length.out = 6L)), rep(0, 18L))
+    option <- list(layout = layout, k = 3L, stretch = 2)
+    projection <- fastEmbedR:::fastembedr_graph_projection_cpp(
+        graph$from, graph$to, graph$weight, graph$n_vertices, option)
+    reference <- graph_cluster(graph, backend = "cpu",
+        projection = option)$reweighted_graph
+    expect_equal(projection$graph, reference)
+    small <- list(from = c(1L, 1L, 2L), to = c(2L, 3L, 3L),
+        weight = rep(1, 3), n_vertices = 5L)
+    nn <- list(indices = matrix(c(2L, 1L, 1L, 2L, 4L), ncol = 1L),
+        distances = matrix(rep(1, 5), ncol = 1L))
+    raw <- graph_cluster(small, backend = "cpu")
+    post <- fastEmbedR:::fastembedr_graph_small_groups_cpp(
+        small$from, small$to, small$weight, small$n_vertices,
+        raw$membership, 1, c(nn, min_size = 2L))
+    expected <- graph_cluster(small, backend = "cpu",
+        small_groups = list(knn = nn, min_size = 2L))
+    expect_identical(post$membership, expected$membership)
+    expect_identical(post$unassigned, expected$unassigned)
+    expect_equal(post$modularity, expected$modularity)
+})
+
 test_that("graph options reject unsupported routes and invalid controls", {
     graph <- three_clique_graph()
     layout <- cbind(seq_len(18L), rep(0, 18L))
-    for (backend in c("cuda", "metal")) {
-        expect_error(graph_cluster(graph, backend = backend,
-            resolution = c(0.1, 0.2)), "require CPU")
-        expect_error(graph_cluster(graph, backend = backend,
-            seed = c(1L, 2L)), "require CPU")
-        expect_error(graph_cluster(graph, backend = backend,
-            projection = list(layout = layout)), "require CPU")
+    if (!fastEmbedR:::graph_clustering_metal_available_cpp()) {
+        expect_error(graph_cluster(graph, backend = "metal",
+            resolution = c(0.1, 0.2)), "Metal.*unavailable")
+        expect_error(graph_cluster(graph, backend = "metal",
+            seed = c(1L, 2L)), "Metal.*unavailable")
+        expect_error(graph_cluster(graph, backend = "metal",
+            projection = list(layout = layout)), "Metal.*unavailable")
+    }
+    if (!fastEmbedR:::graph_clustering_cuda_available_cpp()) {
+        expect_error(graph_cluster(graph, backend = "cuda",
+            resolution = c(0.1, 0.2)), "CUDA.*unavailable")
+        expect_error(graph_cluster(graph, backend = "cuda",
+            projection = list(layout = layout)), "CUDA.*unavailable")
     }
     expect_error(graph_cluster(graph, method = "walktrap", backend = "cpu",
-        seed = c(1L, 2L)), "require CPU")
+        seed = c(1L, 2L)), "require Louvain or Leiden")
     expect_error(graph_cluster(graph, resolution = numeric()),
         "positive finite")
     expect_error(graph_cluster(graph, resolution = c(1, NA_real_)),
@@ -129,11 +161,183 @@ test_that("graph options reject unsupported routes and invalid controls", {
         layout = matrix(0, 18, 2), k = 3L)), "radii must be positive")
     expect_error(graph_cluster(graph, resolution = c(0.1, 0.2),
         layout_merge = list(layout = layout)), "cannot be combined")
-    expect_error(graph_cluster(graph, consensus = list()), "unused argument")
+    expect_error(graph_cluster(graph, consensus = list()),
+        "File-backed controls require")
     defaults <- graph_cluster(graph, backend = "cpu")
     expect_null(defaults$parameters$consensus)
     expect_null(defaults$reweighted_graph)
     expect_null(formals(graph_cluster)$projection)
+})
+
+test_that("CUDA projection and nearest-core options retain CUDA clustering", {
+    if (!fastEmbedR:::graph_clustering_cuda_available_cpp()) {
+        skip("CUDA device unavailable")
+    }
+    graph <- three_clique_graph()
+    layout <- cbind(c(seq(0, 0.25, length.out = 6L),
+        seq(0.3, 0.55, length.out = 6L),
+        seq(5, 5.25, length.out = 6L)), rep(0, 18L))
+    projection <- list(layout = layout, k = 3L, stretch = 2)
+    nn <- list(indices = matrix(c(2:18, 1L), ncol = 1L),
+        distances = matrix(rep(1, 18L), ncol = 1L))
+    for (method in c("leiden", "louvain")) {
+        result <- graph_cluster(graph, method = method, backend = "cuda",
+            projection = projection, small_groups = list(knn = nn,
+                min_size = 1L))
+        expected <- graph_cluster(graph, method = method, backend = "cpu",
+            projection = projection)$reweighted_graph
+        expect_equal(result$reweighted_graph$weight, expected$weight,
+            tolerance = 1e-12)
+        expect_identical(result$backend, "cuda")
+        expect_identical(result$repeatability,
+            "not_bitwise_deterministic")
+        expect_identical(result$parameters$projection$execution,
+            "host_native_cpp")
+        expect_identical(result$parameters$small_groups$execution,
+            "host_native_cpp")
+        expect_identical(result$membership, result$membership_original)
+        raw <- graph_cluster(result$reweighted_graph, method = method,
+            backend = "cuda")
+        expect_identical(raw$repeatability,
+            "not_bitwise_deterministic")
+        expect_identical(result$membership_original, raw$membership)
+        combined <- graph_cluster(graph, method = method, backend = "cuda",
+            resolution = c(0.001, 1), seed = c(3L, 4L),
+            projection = projection, small_groups = list(knn = nn,
+                min_size = 1L))
+        expect_identical(combined$parameters$processing_order,
+            c("consensus", "projection", "clustering", "small_groups"))
+        expect_identical(combined$backend, "cuda")
+        expect_true(combined$reweighted_graph$n_edges > 0)
+    }
+    small <- list(from = c(1L, 1L, 2L), to = c(2L, 3L, 3L),
+        weight = rep(1, 3), n_vertices = 5L)
+    nearest <- list(indices = matrix(c(2L, 1L, 1L, 2L, 4L), ncol = 1L),
+        distances = matrix(rep(1, 5), ncol = 1L))
+    reassigned <- graph_cluster(small, method = "leiden", backend = "cuda",
+        small_groups = list(knn = nearest, min_size = 2L))
+    expect_identical(reassigned$membership, c(1L, 1L, 1L, 1L, 0L))
+    expect_identical(reassigned$reassigned, 4L)
+    expect_identical(reassigned$unassigned, 5L)
+})
+
+test_that("CPU graph restarts use requested workers and preserve selection", {
+    graph <- three_clique_graph()
+    positional <- graph_cluster(graph, "leiden", "cpu", 1, 10L, 1L,
+        4L, 17L, NULL, NULL, NULL)
+    named <- graph_cluster(graph, method = "leiden", backend = "cpu",
+        seed = 17L)
+    expect_identical(positional$membership, named$membership)
+    for (method in c("louvain", "leiden")) {
+        serial <- graph_cluster(graph, method = method, backend = "cpu",
+            n_runs = 5L, n.cores = 1L, seed = 17L)
+        parallel <- graph_cluster(graph, method = method, backend = "cpu",
+            n_runs = 5L, n.cores = 3L, seed = 17L)
+        expect_identical(parallel$membership, serial$membership)
+        expect_identical(parallel$modularity, serial$modularity)
+        expect_identical(parallel$effective_cpu_workers, 3L)
+        expect_identical(parallel$parameters$n.cores, 3L)
+    }
+    expect_error(graph_cluster(graph, n_runs = 2L, n.cores = 3L),
+        "n_runs >= n.cores")
+    expect_error(graph_cluster(graph, n.cores = 0L), "n.cores")
+    expect_error(graph_cluster(graph, n.cores = 1.5), "n.cores")
+    expect_error(graph_cluster(graph, method = "walktrap", n_runs = 3L,
+        n.cores = 2L), "CPU restart workers")
+    expect_error(graph_cluster(graph, backend = "cuda", n_runs = 3L,
+        n.cores = 2L), "CPU restart workers")
+    expect_error(graph_cluster(graph, resolution = c(0.5, 1),
+        n.cores = 2L), "CPU restart workers")
+})
+
+test_that("CPU graph threads coordinate one partition in fit mode", {
+    graph <- three_clique_graph()
+    for (method in c("louvain", "leiden")) {
+        for (cores in c(2L, 4L)) {
+            fit <- graph_cluster(graph, method = method,
+                backend = "cpu", n_runs = 1L, n.cores = cores,
+                parallel.mode = "fit", seed = 17L)
+            expect_identical(fit$parallel_mode, "fit")
+            expect_identical(fit$effective_cpu_workers, cores)
+            expect_identical(fit$parameters$parallel.mode, "fit")
+            expect_identical(fit$n_communities, 3L)
+            expect_gt(fit$modularity, 0.5)
+            expect_true(fit$connected_communities)
+        }
+    }
+    expect_error(graph_cluster(graph, backend = "cuda",
+        parallel.mode = "fit"), "requires CPU")
+    expect_error(graph_cluster(graph, method = "walktrap",
+        parallel.mode = "fit"), "requires CPU")
+    expect_error(graph_cluster(graph, n.cores = 33L,
+        parallel.mode = "fit"), "at most 32")
+})
+
+test_that("CUDA consensus uses CUDA partitions and exact edge agreement", {
+    if (!fastEmbedR:::graph_clustering_cuda_available_cpp()) {
+        skip("CUDA device unavailable")
+    }
+    graph <- three_clique_graph()
+    index <- order(graph$from, graph$to)
+    for (field in c("from", "to", "weight")) {
+        graph[[field]] <- graph[[field]][index]
+    }
+    resolutions <- c(0.001, 1)
+    seeds <- c(3L, 4L)
+    for (method in c("leiden", "louvain")) {
+        agreement <- numeric(length(graph$weight))
+        for (resolution in resolutions) for (seed in seeds) {
+            labels <- graph_cluster(graph, method = method, backend = "cuda",
+                resolution = resolution, seed = seed)$membership
+            agreement <- agreement +
+                (labels[graph$from] == labels[graph$to])
+        }
+        result <- graph_cluster(graph, method = method, backend = "cuda",
+            resolution = resolutions, seed = seeds)
+        expected <- graph$weight * (agreement / 4)^2
+        expect_equal(result$reweighted_graph$weight,
+            expected[expected > 0], tolerance = 1e-6)
+        expect_identical(result$backend, "cuda")
+        expect_identical(result$parameters$consensus$implementation,
+            "cuda_partitions_host_sparse_edge_consensus")
+        reference <- graph_cluster(result$reweighted_graph,
+            method = method, backend = "cuda", resolution = resolutions[1L],
+            seed = seeds[1L])
+        expect_identical(result$membership, reference$membership)
+    }
+})
+
+test_that("Metal graph options retain native final partitions", {
+    skip_if_not(fastEmbedR:::graph_clustering_metal_available_cpp())
+    graph <- three_clique_graph()
+    layout <- cbind(rep(c(0, 0.5, 5), each = 6L) +
+        rep(seq(0, 0.25, length.out = 6L), 3L), rep(0, 18L))
+    neighbor <- c(2:6, 1L, 8:12, 7L, 14:18, 13L)
+    knn <- list(indices = matrix(neighbor, ncol = 1L),
+        distances = matrix(1, nrow = 18L, ncol = 1L))
+    for (method in c("leiden", "louvain")) {
+        result <- with_mocked_bindings(
+            fastembedr_graph_cluster_cpp = function(...)
+                stop("CPU clustering fallback"),
+            graph_cluster(graph, method = method, backend = "metal",
+                resolution = c(0.001, 1), seed = c(3L, 4L),
+                projection = list(layout = layout, k = 3L,
+                    stretch = 2),
+                small_groups = list(knn = knn, min_size = 2L,
+                    k = 1L)),
+            .package = "fastEmbedR")
+        expect_identical(result$backend, "metal")
+        expect_equal(length(result$membership), 18L)
+        expect_identical(result$parameters$consensus$partitions, 4L)
+        expect_identical(result$parameters$consensus$implementation,
+            "metal_partitions_host_sparse_edge_consensus")
+        expect_identical(result$parameters$projection$execution,
+            "host_native_cpp")
+        expect_identical(result$parameters$small_groups$execution,
+            "host_native_cpp")
+        expect_identical(result$parameters$processing_order,
+            c("consensus", "projection", "clustering", "small_groups"))
+    }
 })
 
 test_that("projection is applied after vector-triggered consensus", {

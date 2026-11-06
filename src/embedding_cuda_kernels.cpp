@@ -686,6 +686,7 @@ struct LandmarkTsneParams {
   float momentum;
   float max_grad_norm;
   float max_step_norm;
+  int query_row_offset = 0;
 };
 
 static __device__ __forceinline__ float landmark_median_float(
@@ -716,11 +717,12 @@ static __device__ __forceinline__ unsigned int landmark_reference_sample(
   return mix_uint(x) % n;
 }
 
+template <int D>
 static __device__ __forceinline__ void landmark_affine_fallback(
                                          const float* reference_layout,
                                          const int* projection_indices,
                                          const float* projection_distances,
-                                         float2* out,
+                                         float* out,
                                          int n_reference,
                                          int n_query,
                                          int k,
@@ -730,7 +732,7 @@ static __device__ __forceinline__ void landmark_affine_fallback(
                                          float sigma) {
   constexpr float eps = 1.4901161193847656e-8f;
   float weight_sum = 0.0f;
-  float2 value = make_float2(0.0f, 0.0f);
+  float value[D] = {};
   for (int j = 0; j < k; ++j) {
     const std::size_t pos = static_cast<std::size_t>(j) * n_query + row;
     const int ref = projection_indices[pos] - index_offset;
@@ -739,19 +741,24 @@ static __device__ __forceinline__ void landmark_affine_fallback(
     const float w = expf(-fmaxf(0.0f, d - rho) / fmaxf(sigma, eps));
     if (!isfinite(w) || w <= 0.0f) continue;
     weight_sum += w;
-    value.x += w * reference_layout[ref];
-    value.y += w * reference_layout[static_cast<std::size_t>(n_reference) + ref];
+    for (int dim = 0; dim < D; ++dim) {
+      value[dim] += w * reference_layout[
+        static_cast<std::size_t>(dim) * n_reference + ref];
+    }
   }
   if (!isfinite(weight_sum) || weight_sum <= 0.0f) weight_sum = 1.0f;
-  out[row] = make_float2(value.x / weight_sum, value.y / weight_sum);
+  for (int dim = 0; dim < D; ++dim) {
+    out[static_cast<std::size_t>(row) * D + dim] = value[dim] / weight_sum;
+  }
 }
 
+template <int D>
 __global__ void landmark_affine_projection_kernel(const float* reference_data,
                                                    const float* query_data,
                                                    const float* reference_layout,
                                                    const int* projection_indices,
                                                    const float* projection_distances,
-                                                   float2* out,
+                                                   float* out,
                                                    int n_reference,
                                                    int n_query,
                                                    int n_features,
@@ -772,7 +779,7 @@ __global__ void landmark_affine_projection_kernel(const float* reference_data,
   float centered[kCudaAffineMaxNeighbors];
   float row_norm[kCudaAffineMaxNeighbors];
   float gram[kCudaAffineMaxNeighbors * kCudaAffineMaxNeighbors];
-  float rhs[kCudaAffineMaxNeighbors * 2];
+  float rhs[kCudaAffineMaxNeighbors * D];
   float q[kCudaAffineMaxNeighbors];
 
   int zero_col = -1;
@@ -789,10 +796,10 @@ __global__ void landmark_affine_projection_kernel(const float* reference_data,
   if (!isfinite(rho)) rho = 0.0f;
   if (zero_col >= 0) {
     const int ref = projection_indices[static_cast<std::size_t>(zero_col) * n_query + row] - index_offset;
-    out[row] = make_float2(
-      reference_layout[ref],
-      reference_layout[static_cast<std::size_t>(n_reference) + ref]
-    );
+    for (int dim = 0; dim < D; ++dim) {
+      out[static_cast<std::size_t>(row) * D + dim] = reference_layout[
+        static_cast<std::size_t>(dim) * n_reference + ref];
+    }
     return;
   }
 
@@ -814,7 +821,7 @@ __global__ void landmark_affine_projection_kernel(const float* reference_data,
     weight_sum += w;
   }
   if (!isfinite(weight_sum) || weight_sum <= 0.0f) {
-    landmark_affine_fallback(
+    landmark_affine_fallback<D>(
       reference_layout, projection_indices, projection_distances, out,
       n_reference, n_query, k, index_offset, row, rho, sigma
     );
@@ -822,24 +829,29 @@ __global__ void landmark_affine_projection_kernel(const float* reference_data,
   }
   for (int j = 0; j < m; ++j) weights[j] /= weight_sum;
 
-  float2 y_center = make_float2(0.0f, 0.0f);
+  float y_center[D] = {};
   for (int j = 0; j < m; ++j) {
     const int ref = refs[j];
     if (ref < 0 || ref >= n_reference) continue;
-    y_center.x += weights[j] * reference_layout[ref];
-    y_center.y += weights[j] * reference_layout[static_cast<std::size_t>(n_reference) + ref];
+    for (int dim = 0; dim < D; ++dim) {
+      y_center[dim] += weights[j] * reference_layout[
+        static_cast<std::size_t>(dim) * n_reference + ref];
+    }
   }
 
   float layout_radius_sq = 0.0f;
   for (int a = 0; a < m; ++a) {
     const int ref = refs[a];
     const float sqrt_w = sqrtf(fmaxf(weights[a], 0.0f));
-    const float yc0 = ref >= 0 && ref < n_reference ? reference_layout[ref] - y_center.x : 0.0f;
-    const float yc1 = ref >= 0 && ref < n_reference ?
-      reference_layout[static_cast<std::size_t>(n_reference) + ref] - y_center.y : 0.0f;
-    rhs[a * 2] = sqrt_w * yc0;
-    rhs[a * 2 + 1] = sqrt_w * yc1;
-    layout_radius_sq = fmaxf(layout_radius_sq, yc0 * yc0 + yc1 * yc1);
+    float radius_sq = 0.0f;
+    for (int dim = 0; dim < D; ++dim) {
+      const float yc = ref >= 0 && ref < n_reference ?
+        reference_layout[static_cast<std::size_t>(dim) * n_reference + ref] -
+        y_center[dim] : 0.0f;
+      rhs[a * D + dim] = sqrt_w * yc;
+      radius_sq += yc * yc;
+    }
+    layout_radius_sq = fmaxf(layout_radius_sq, radius_sq);
     row_norm[a] = 0.0f;
     q[a] = 0.0f;
   }
@@ -893,46 +905,51 @@ __global__ void landmark_affine_projection_kernel(const float* reference_data,
     }
   }
   if (!ok) {
-    landmark_affine_fallback(
+    landmark_affine_fallback<D>(
       reference_layout, projection_indices, projection_distances, out,
       n_reference, n_query, k, index_offset, row, rho, sigma
     );
     return;
   }
-  for (int component = 0; component < 2; ++component) {
+  for (int component = 0; component < D; ++component) {
     for (int i = 0; i < m; ++i) {
-      float s = rhs[i * 2 + component];
-      for (int kk = 0; kk < i; ++kk) s -= gram[i * m + kk] * rhs[kk * 2 + component];
-      rhs[i * 2 + component] = s / gram[i * m + i];
+      float s = rhs[i * D + component];
+      for (int kk = 0; kk < i; ++kk) s -= gram[i * m + kk] * rhs[kk * D + component];
+      rhs[i * D + component] = s / gram[i * m + i];
     }
     for (int i = m - 1; i >= 0; --i) {
-      float s = rhs[i * 2 + component];
-      for (int kk = i + 1; kk < m; ++kk) s -= gram[kk * m + i] * rhs[kk * 2 + component];
-      rhs[i * 2 + component] = s / gram[i * m + i];
+      float s = rhs[i * D + component];
+      for (int kk = i + 1; kk < m; ++kk) s -= gram[kk * m + i] * rhs[kk * D + component];
+      rhs[i * D + component] = s / gram[i * m + i];
     }
   }
 
-  float2 displacement = make_float2(0.0f, 0.0f);
+  float displacement[D] = {};
   for (int a = 0; a < m; ++a) {
-    displacement.x += q[a] * rhs[a * 2];
-    displacement.y += q[a] * rhs[a * 2 + 1];
+    for (int dim = 0; dim < D; ++dim) {
+      displacement[dim] += q[a] * rhs[a * D + dim];
+    }
   }
   const float max_disp = max_extrapolation * sqrtf(fmaxf(layout_radius_sq, eps));
-  const float disp_sq = displacement.x * displacement.x + displacement.y * displacement.y;
+  float disp_sq = 0.0f;
+  for (int dim = 0; dim < D; ++dim) {
+    disp_sq += displacement[dim] * displacement[dim];
+  }
   if (disp_sq > max_disp * max_disp) {
     const float scale = max_disp / (sqrtf(disp_sq) + eps);
-    displacement.x *= scale;
-    displacement.y *= scale;
+    for (int dim = 0; dim < D; ++dim) displacement[dim] *= scale;
   }
-  float2 value = make_float2(y_center.x + displacement.x, y_center.y + displacement.y);
-  if (!isfinite(value.x) || !isfinite(value.y)) {
-    landmark_affine_fallback(
-      reference_layout, projection_indices, projection_distances, out,
-      n_reference, n_query, k, index_offset, row, rho, sigma
-    );
-    return;
+  for (int dim = 0; dim < D; ++dim) {
+    const float value = y_center[dim] + displacement[dim];
+    if (!isfinite(value)) {
+      landmark_affine_fallback<D>(
+        reference_layout, projection_indices, projection_distances, out,
+        n_reference, n_query, k, index_offset, row, rho, sigma
+      );
+      return;
+    }
+    out[static_cast<std::size_t>(row) * D + dim] = value;
   }
-  out[row] = value;
 }
 
 __global__ void landmark_tsne_probabilities_kernel(const float* distances,
@@ -997,7 +1014,8 @@ __global__ void landmark_tsne_epoch_kernel(const float* reference_layout,
   const int samples = p.exact_repulsion ? p.n_reference : p.n_negatives;
   for (int sample = 0; sample < samples; ++sample) {
     const unsigned int ref = p.exact_repulsion ? static_cast<unsigned int>(sample) :
-      landmark_reference_sample(p.n_reference, p.seed, epoch, row, sample);
+      landmark_reference_sample(p.n_reference, p.seed, epoch,
+        row + p.query_row_offset, sample);
     float distance2 = 0.0f;
     for (int dim = 0; dim < D; ++dim) {
       const float delta = yi[dim] - reference_layout[
@@ -1008,7 +1026,8 @@ __global__ void landmark_tsne_epoch_kernel(const float* reference_layout,
   }
   for (int sample = 0; sample < samples; ++sample) {
     const unsigned int ref = p.exact_repulsion ? static_cast<unsigned int>(sample) :
-      landmark_reference_sample(p.n_reference, p.seed, epoch, row, sample);
+      landmark_reference_sample(p.n_reference, p.seed, epoch,
+        row + p.query_row_offset, sample);
     float delta[D];
     float distance2 = 0.0f;
     for (int dim = 0; dim < D; ++dim) {
@@ -1157,8 +1176,9 @@ __global__ void landmark_umap_prepare_kernel(const float* distances,
   }
 }
 
+template <int D>
 __global__ void landmark_umap_assemble_kernel(const float* reference_layout,
-                                              const float2* query_layout,
+                                              const float* query_layout,
                                               const int* landmark_rows,
                                               const int* query_rows,
                                               int n_reference,
@@ -1167,17 +1187,21 @@ __global__ void landmark_umap_assemble_kernel(const float* reference_layout,
   const int id = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
   if (id < n_reference) {
     const int row = landmark_rows[id] - 1;
-    layout[static_cast<std::size_t>(row) * 2u] = reference_layout[id];
-    layout[static_cast<std::size_t>(row) * 2u + 1u] =
-      reference_layout[static_cast<std::size_t>(n_reference) + id];
+    for (int dim = 0; dim < D; ++dim) {
+      layout[static_cast<std::size_t>(row) * D + dim] =
+        reference_layout[static_cast<std::size_t>(dim) * n_reference + id];
+    }
   }
   if (id < n_query) {
     const int row = query_rows[id] - 1;
-    layout[static_cast<std::size_t>(row) * 2u] = query_layout[id].x;
-    layout[static_cast<std::size_t>(row) * 2u + 1u] = query_layout[id].y;
+    for (int dim = 0; dim < D; ++dim) {
+      layout[static_cast<std::size_t>(row) * D + dim] =
+        query_layout[static_cast<std::size_t>(id) * D + dim];
+    }
   }
 }
 
+template <int D>
 __global__ void landmark_umap_refine_epoch_kernel(float* layout,
                                                   const int* indices,
                                                   const float* weights,
@@ -1188,16 +1212,18 @@ __global__ void landmark_umap_refine_epoch_kernel(float* layout,
                                                   int n_query,
                                                   int k,
                                                   int index_offset,
+                                                  int negative_reference_only,
+                                                  int query_seed_offset,
                                                   EmbedParams p,
                                                   unsigned int epoch) {
   const int local_row = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
   if (local_row >= n_query) return;
   const int head = query_rows[local_row] - 1;
   if (head < 0 || head >= p.n) return;
-  float2 yi = make_float2(
-    layout[static_cast<std::size_t>(head) * 2u],
-    layout[static_cast<std::size_t>(head) * 2u + 1u]
-  );
+  float yi[D];
+  for (int dim = 0; dim < D; ++dim) {
+    yi[dim] = layout[static_cast<std::size_t>(head) * D + dim];
+  }
   const float alpha = p.learning_rate *
     (1.0f - static_cast<float>(epoch) / fmaxf(1.0f, static_cast<float>(p.n_epochs)));
   constexpr float eps = 1.1920928955078125e-7f;
@@ -1210,33 +1236,46 @@ __global__ void landmark_umap_refine_epoch_kernel(float* layout,
     const float period = epochs_per_sample[pos];
     const int positive_samples = positive_samples_this_epoch_period(period, epoch);
     if (positive_samples <= 0) continue;
-    const float tx = layout[static_cast<std::size_t>(tail) * 2u];
-    const float ty = layout[static_cast<std::size_t>(tail) * 2u + 1u];
     for (int sample = 0; sample < positive_samples; ++sample) {
-      const float dx = yi.x - tx;
-      const float dy = yi.y - ty;
-      const float d2 = fmaxf(eps, dx * dx + dy * dy);
+      float delta[D];
+      float d2 = 0.0f;
+      for (int dim = 0; dim < D; ++dim) {
+        delta[dim] = yi[dim] -
+          layout[static_cast<std::size_t>(tail) * D + dim];
+        d2 += delta[dim] * delta[dim];
+      }
+      d2 = fmaxf(eps, d2);
       const float coeff = attractive_coeff(d2, weights[pos], p);
-      yi.x += alpha * clip4(coeff * dx);
-      yi.y += alpha * clip4(coeff * dy);
+      for (int dim = 0; dim < D; ++dim) {
+        yi[dim] += alpha * clip4(coeff * delta[dim]);
+      }
     }
     const int negative_samples = negative_samples_this_epoch_period(period, p, epoch);
     for (int sample = 0; sample < negative_samples; ++sample) {
-      const unsigned int neg = deterministic_vertex(
-        p.n, p.seed, epoch, head, j, sample
-      );
-      if (static_cast<int>(neg) == head || static_cast<int>(neg) == tail) continue;
-      const float nx = layout[static_cast<std::size_t>(neg) * 2u];
-      const float ny = layout[static_cast<std::size_t>(neg) * 2u + 1u];
-      const float dx = yi.x - nx;
-      const float dy = yi.y - ny;
-      const float d2 = fmaxf(eps, dx * dx + dy * dy);
+      const unsigned int picked = deterministic_vertex(
+        negative_reference_only ? n_reference : p.n,
+        p.seed, epoch,
+        negative_reference_only ? query_seed_offset + local_row : head,
+        j, sample);
+      const int neg = negative_reference_only ?
+        landmark_rows[picked] - 1 : static_cast<int>(picked);
+      if (neg == head || neg == tail) continue;
+      float delta[D];
+      float d2 = 0.0f;
+      for (int dim = 0; dim < D; ++dim) {
+        delta[dim] = yi[dim] -
+          layout[static_cast<std::size_t>(neg) * D + dim];
+        d2 += delta[dim] * delta[dim];
+      }
+      d2 = fmaxf(eps, d2);
       const float coeff = repulsive_coeff(d2, p);
-      yi.x += alpha * clip4(coeff * dx);
-      yi.y += alpha * clip4(coeff * dy);
+      for (int dim = 0; dim < D; ++dim) {
+        yi[dim] += alpha * clip4(coeff * delta[dim]);
+      }
     }
-    layout[static_cast<std::size_t>(head) * 2u] = yi.x;
-    layout[static_cast<std::size_t>(head) * 2u + 1u] = yi.y;
+    for (int dim = 0; dim < D; ++dim) {
+      layout[static_cast<std::size_t>(head) * D + dim] = yi[dim];
+    }
   }
 }
 
@@ -1397,6 +1436,30 @@ __global__ void add_umap_incoming_kernel(const int* direct_neighbors,
     const std::size_t out = static_cast<std::size_t>(nb) * p.width + pos;
     union_neighbors[out] = row;
     union_weights[out] = w;
+  }
+}
+
+__global__ void sort_umap_union_rows_kernel(int* neighbors,
+                                            float* weights,
+                                            const int* row_counts,
+                                            int n,
+                                            int width) {
+  const int row = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (row >= n) return;
+  const int count = min(row_counts[row], width);
+  const std::size_t base = static_cast<std::size_t>(row) * width;
+  for (int i = 1; i < count; ++i) {
+    const int nb = neighbors[base + i];
+    const float weight = weights[base + i];
+    int j = i - 1;
+    while (j >= 0 && (neighbors[base + j] > nb ||
+           (neighbors[base + j] == nb && weights[base + j] < weight))) {
+      neighbors[base + j + 1] = neighbors[base + j];
+      weights[base + j + 1] = weights[base + j];
+      --j;
+    }
+    neighbors[base + j + 1] = nb;
+    weights[base + j + 1] = weight;
   }
 }
 
@@ -2712,6 +2775,31 @@ __global__ void massive_tsne_attractive_kernel(
     (1.0f + dx * dx + dy * dy);
   atomicAdd(gradient + from, factor * dx);
   atomicAdd(gradient + from + 1u, factor * dy);
+}
+
+__global__ void massive_tsne_attractive_3d_kernel(
+    const int* heads, const int* tails,
+    const float* weights, const float* current,
+    float* gradient, int edges, float exaggeration) {
+  const int edge = static_cast<int>(blockIdx.x * blockDim.x +
+                                    threadIdx.x);
+  if (edge >= edges) return;
+  const std::size_t from =
+    static_cast<std::size_t>(heads[edge]) * 3u;
+  const std::size_t to =
+    static_cast<std::size_t>(tails[edge]) * 3u;
+  float diff[3];
+  float distance2 = 0.0f;
+  for (int axis = 0; axis < 3; ++axis) {
+    diff[axis] = current[from + axis] -
+      current[to + axis];
+    distance2 += diff[axis] * diff[axis];
+  }
+  const float factor = exaggeration * weights[edge] /
+    (1.0f + distance2);
+  for (int axis = 0; axis < 3; ++axis) {
+    atomicAdd(gradient + from + axis, factor * diff[axis]);
+  }
 }
 
 __global__ void opentsne_update_reduce_kernel(float* current,
@@ -4134,6 +4222,7 @@ extern "C" int fastembedr_cuda_landmark_tsne_from_device_knn(
     int n_reference,
     int n_query,
     int n_features,
+    int n_components,
     int k,
     float perplexity,
     int n_iter,
@@ -4148,6 +4237,7 @@ extern "C" int fastembedr_cuda_landmark_tsne_from_device_knn(
     int n_negatives,
     int exact_repulsion_threshold,
     unsigned int seed,
+    int query_row_offset,
     int affine_neighbors,
     float affine_ridge,
     float max_extrapolation,
@@ -4161,6 +4251,7 @@ extern "C" int fastembedr_cuda_landmark_tsne_from_device_knn(
   }
   if (n_reference < 1 || n_query < 1 || n_features < 1 || k < 1 ||
       k > kCudaProjectionMaxK || perplexity <= 0.0f ||
+      (n_components != 2 && n_components != 3) ||
       n_iter < 0 || early_exaggeration_iter < 0 ||
       n_iter + early_exaggeration_iter < 0) {
     set_embedding_error("invalid CUDA landmark t-SNE dimensions or parameters");
@@ -4170,15 +4261,17 @@ extern "C" int fastembedr_cuda_landmark_tsne_from_device_knn(
   affine_neighbors = std::max(3, std::min(affine_neighbors, std::min(k, kCudaAffineMaxNeighbors)));
   const std::size_t reference_items = static_cast<std::size_t>(n_reference) * n_features;
   const std::size_t query_items = static_cast<std::size_t>(n_query) * n_features;
-  const std::size_t layout_items = static_cast<std::size_t>(n_reference) * 2u;
+  const std::size_t layout_items =
+    static_cast<std::size_t>(n_reference) * n_components;
   const std::size_t graph_items = static_cast<std::size_t>(n_query) * k;
-  const std::size_t query_layout_items = static_cast<std::size_t>(n_query);
+  const std::size_t query_layout_items =
+    static_cast<std::size_t>(n_query) * n_components;
   const std::size_t required_bytes =
     align_bytes(reference_items * sizeof(float)) +
     align_bytes(query_items * sizeof(float)) +
     align_bytes(layout_items * sizeof(float)) +
     align_bytes(graph_items * sizeof(float)) +
-    3u * align_bytes(query_layout_items * sizeof(float2));
+    3u * align_bytes(query_layout_items * sizeof(float));
   if (check_embedding_memory_available(required_bytes, "CUDA landmark t-SNE workspace")) return 1;
   CudaWorkspace workspace;
   if (workspace.init(required_bytes, "landmark t-SNE")) return 1;
@@ -4186,9 +4279,9 @@ extern "C" int fastembedr_cuda_landmark_tsne_from_device_knn(
   float* d_query_data = workspace.alloc<float>(query_items, "landmark t-SNE query data");
   float* d_reference_layout = workspace.alloc<float>(layout_items, "landmark t-SNE reference layout");
   float* d_probabilities = workspace.alloc<float>(graph_items, "landmark t-SNE probabilities");
-  float2* d_current = workspace.alloc<float2>(query_layout_items, "landmark t-SNE current");
-  float2* d_gains = workspace.alloc<float2>(query_layout_items, "landmark t-SNE gains");
-  float2* d_updates = workspace.alloc<float2>(query_layout_items, "landmark t-SNE updates");
+  float* d_current = workspace.alloc<float>(query_layout_items, "landmark t-SNE current");
+  float* d_gains = workspace.alloc<float>(query_layout_items, "landmark t-SNE gains");
+  float* d_updates = workspace.alloc<float>(query_layout_items, "landmark t-SNE updates");
   if (d_reference_data == nullptr || d_query_data == nullptr || d_reference_layout == nullptr ||
       d_probabilities == nullptr || d_current == nullptr || d_gains == nullptr || d_updates == nullptr) return 1;
   if (check_cuda(cudaMemcpy(d_reference_data, reference_data, reference_items * sizeof(float), cudaMemcpyHostToDevice),
@@ -4200,18 +4293,29 @@ extern "C" int fastembedr_cuda_landmark_tsne_from_device_knn(
 
   constexpr int threads = 128;
   const int blocks = (n_query + threads - 1) / threads;
-  landmark_affine_projection_kernel<<<blocks, threads>>>(
-    d_reference_data, d_query_data, d_reference_layout,
-    device_indices, device_distances, d_current,
-    n_reference, n_query, n_features, k, index_offset,
-    affine_neighbors, affine_ridge, max_extrapolation
-  );
+  if (n_components == 2) {
+    landmark_affine_projection_kernel<2><<<blocks, threads>>>(
+      d_reference_data, d_query_data, d_reference_layout,
+      device_indices, device_distances, d_current,
+      n_reference, n_query, n_features, k, index_offset,
+      affine_neighbors, affine_ridge, max_extrapolation);
+  } else {
+    landmark_affine_projection_kernel<3><<<blocks, threads>>>(
+      d_reference_data, d_query_data, d_reference_layout,
+      device_indices, device_distances, d_current,
+      n_reference, n_query, n_features, k, index_offset,
+      affine_neighbors, affine_ridge, max_extrapolation);
+  }
   landmark_tsne_probabilities_kernel<<<blocks, threads>>>(
     device_distances, d_probabilities, n_query, k, perplexity
   );
-  landmark_tsne_state_init_kernel<2><<<blocks, threads>>>(
-    reinterpret_cast<float*>(d_gains),
-    reinterpret_cast<float*>(d_updates), n_query);
+  if (n_components == 2) {
+    landmark_tsne_state_init_kernel<2><<<blocks, threads>>>(
+      d_gains, d_updates, n_query);
+  } else {
+    landmark_tsne_state_init_kernel<3><<<blocks, threads>>>(
+      d_gains, d_updates, n_query);
+  }
   if (check_cuda(cudaGetLastError(), "CUDA landmark t-SNE setup kernels")) return 1;
 
   const int total_iter = n_iter + early_exaggeration_iter;
@@ -4228,18 +4332,24 @@ extern "C" int fastembedr_cuda_landmark_tsne_from_device_knn(
       early ? early_exaggeration : exaggeration,
       early ? initial_momentum : final_momentum,
       max_grad_norm,
-      max_step_norm
+      max_step_norm,
+      query_row_offset
     };
-    landmark_tsne_epoch_kernel<2><<<blocks, threads>>>(
-      d_reference_layout, device_indices, d_probabilities,
-      reinterpret_cast<float*>(d_current),
-      reinterpret_cast<float*>(d_gains),
-      reinterpret_cast<float*>(d_updates), params,
-      static_cast<unsigned int>(iter), index_offset
-    );
+    if (n_components == 2) {
+      landmark_tsne_epoch_kernel<2><<<blocks, threads>>>(
+        d_reference_layout, device_indices, d_probabilities,
+        d_current, d_gains, d_updates, params,
+        static_cast<unsigned int>(iter), index_offset);
+    } else {
+      landmark_tsne_epoch_kernel<3><<<blocks, threads>>>(
+        d_reference_layout, device_indices, d_probabilities,
+        d_current, d_gains, d_updates, params,
+        static_cast<unsigned int>(iter), index_offset);
+    }
   }
   if (check_cuda(cudaGetLastError(), "CUDA landmark t-SNE transform kernels") ||
-      check_cuda(cudaMemcpy(out, d_current, query_layout_items * sizeof(float2), cudaMemcpyDeviceToHost),
+      check_cuda(cudaMemcpy(out, d_current,
+        query_layout_items * sizeof(float), cudaMemcpyDeviceToHost),
                  "cudaMemcpy(landmark t-SNE layout D2H)")) return 1;
   return 0;
 }
@@ -4257,6 +4367,7 @@ extern "C" int fastembedr_cuda_landmark_umap_from_device_knn(
     int n_reference,
     int n_query,
     int n_features,
+    int n_components,
     int k,
     int n_epochs,
     int negative_sample_rate,
@@ -4268,6 +4379,9 @@ extern "C" int fastembedr_cuda_landmark_umap_from_device_knn(
     int affine_neighbors,
     float affine_ridge,
     float max_extrapolation,
+    int negative_reference_only,
+    int query_seed_offset,
+    float global_mean_override,
     float* out) {
   embedding_last_error.clear();
   if (device_indices == nullptr || device_distances == nullptr ||
@@ -4277,14 +4391,20 @@ extern "C" int fastembedr_cuda_landmark_umap_from_device_knn(
     return 1;
   }
   if (n_total < n_reference + n_query || n_reference < 1 || n_query < 1 ||
-      n_features < 1 || k < 1 || k > kCudaProjectionMaxK || n_epochs < 0) {
+      n_features < 1 || (n_components != 2 && n_components != 3) ||
+      k < 1 || k > kCudaProjectionMaxK || n_epochs < 0) {
     set_embedding_error("invalid CUDA landmark UMAP dimensions or parameters");
     return 1;
   }
   affine_neighbors = std::max(3, std::min(affine_neighbors, std::min(k, kCudaAffineMaxNeighbors)));
   const std::size_t reference_items = static_cast<std::size_t>(n_reference) * n_features;
   const std::size_t query_items = static_cast<std::size_t>(n_query) * n_features;
-  const std::size_t reference_layout_items = static_cast<std::size_t>(n_reference) * 2u;
+  const std::size_t reference_layout_items =
+    static_cast<std::size_t>(n_reference) * n_components;
+  const std::size_t query_layout_items =
+    static_cast<std::size_t>(n_query) * n_components;
+  const std::size_t full_layout_items =
+    static_cast<std::size_t>(n_total) * n_components;
   const std::size_t graph_items = static_cast<std::size_t>(n_query) * k;
   const std::size_t required_bytes =
     align_bytes(reference_items * sizeof(float)) +
@@ -4292,8 +4412,8 @@ extern "C" int fastembedr_cuda_landmark_umap_from_device_knn(
     align_bytes(reference_layout_items * sizeof(float)) +
     align_bytes(static_cast<std::size_t>(n_reference) * sizeof(int)) +
     align_bytes(static_cast<std::size_t>(n_query) * sizeof(int)) +
-    align_bytes(static_cast<std::size_t>(n_query) * sizeof(float2)) +
-    align_bytes(static_cast<std::size_t>(n_total) * 2u * sizeof(float)) +
+    align_bytes(query_layout_items * sizeof(float)) +
+    align_bytes(full_layout_items * sizeof(float)) +
     2u * align_bytes(graph_items * sizeof(float)) +
     align_bytes(sizeof(float)) + align_bytes(sizeof(unsigned int));
   if (check_embedding_memory_available(required_bytes, "CUDA landmark UMAP workspace")) return 1;
@@ -4304,8 +4424,8 @@ extern "C" int fastembedr_cuda_landmark_umap_from_device_knn(
   float* d_reference_layout = workspace.alloc<float>(reference_layout_items, "landmark UMAP reference layout");
   int* d_landmark_rows = workspace.alloc<int>(n_reference, "landmark UMAP landmark rows");
   int* d_query_rows = workspace.alloc<int>(n_query, "landmark UMAP query rows");
-  float2* d_query_layout = workspace.alloc<float2>(n_query, "landmark UMAP query layout");
-  float* d_layout = workspace.alloc<float>(static_cast<std::size_t>(n_total) * 2u, "landmark UMAP full layout");
+  float* d_query_layout = workspace.alloc<float>(query_layout_items, "landmark UMAP query layout");
+  float* d_layout = workspace.alloc<float>(full_layout_items, "landmark UMAP full layout");
   float* d_weights = workspace.alloc<float>(graph_items, "landmark UMAP weights");
   float* d_epochs_per_sample = workspace.alloc<float>(graph_items, "landmark UMAP epoch schedule");
   float* d_distance_sum = workspace.alloc<float>(1u, "landmark UMAP distance sum");
@@ -4324,7 +4444,7 @@ extern "C" int fastembedr_cuda_landmark_umap_from_device_knn(
                  "cudaMemcpy(landmark UMAP landmark rows H2D)") ||
       check_cuda(cudaMemcpy(d_query_rows, query_rows, static_cast<std::size_t>(n_query) * sizeof(int), cudaMemcpyHostToDevice),
                  "cudaMemcpy(landmark UMAP query rows H2D)") ||
-      check_cuda(cudaMemset(d_layout, 0, static_cast<std::size_t>(n_total) * 2u * sizeof(float)),
+      check_cuda(cudaMemset(d_layout, 0, full_layout_items * sizeof(float)),
                  "cudaMemset(landmark UMAP layout)") ||
       check_cuda(cudaMemset(d_distance_sum, 0, sizeof(float)),
                  "cudaMemset(landmark UMAP distance sum)") ||
@@ -4333,17 +4453,31 @@ extern "C" int fastembedr_cuda_landmark_umap_from_device_knn(
 
   constexpr int threads = 128;
   const int query_blocks = (n_query + threads - 1) / threads;
-  landmark_affine_projection_kernel<<<query_blocks, threads>>>(
-    d_reference_data, d_query_data, d_reference_layout,
-    device_indices, device_distances, d_query_layout,
-    n_reference, n_query, n_features, k, index_offset,
-    affine_neighbors, affine_ridge, max_extrapolation
-  );
+  if (n_components == 2) {
+    landmark_affine_projection_kernel<2><<<query_blocks, threads>>>(
+      d_reference_data, d_query_data, d_reference_layout,
+      device_indices, device_distances, d_query_layout,
+      n_reference, n_query, n_features, k, index_offset,
+      affine_neighbors, affine_ridge, max_extrapolation);
+  } else {
+    landmark_affine_projection_kernel<3><<<query_blocks, threads>>>(
+      d_reference_data, d_query_data, d_reference_layout,
+      device_indices, device_distances, d_query_layout,
+      n_reference, n_query, n_features, k, index_offset,
+      affine_neighbors, affine_ridge, max_extrapolation);
+  }
   const int assemble_items = std::max(n_reference, n_query);
-  landmark_umap_assemble_kernel<<<(assemble_items + threads - 1) / threads, threads>>>(
-    d_reference_layout, d_query_layout, d_landmark_rows, d_query_rows,
-    n_reference, n_query, d_layout
-  );
+  if (n_components == 2) {
+    landmark_umap_assemble_kernel<2><<<
+      (assemble_items + threads - 1) / threads, threads>>>(
+      d_reference_layout, d_query_layout, d_landmark_rows, d_query_rows,
+      n_reference, n_query, d_layout);
+  } else {
+    landmark_umap_assemble_kernel<3><<<
+      (assemble_items + threads - 1) / threads, threads>>>(
+      d_reference_layout, d_query_layout, d_landmark_rows, d_query_rows,
+      n_reference, n_query, d_layout);
+  }
   const int graph_count = n_query * k;
   landmark_distance_sum_kernel<<<(graph_count + threads - 1) / threads, threads>>>(
     device_distances, graph_count, d_distance_sum, d_distance_count
@@ -4355,7 +4489,9 @@ extern "C" int fastembedr_cuda_landmark_umap_from_device_knn(
                  "cudaMemcpy(landmark UMAP distance sum D2H)") ||
       check_cuda(cudaMemcpy(&distance_count, d_distance_count, sizeof(unsigned int), cudaMemcpyDeviceToHost),
                  "cudaMemcpy(landmark UMAP distance count D2H)")) return 1;
-  const float global_mean = distance_count > 0u ? distance_sum / distance_count : 1.0f;
+  const float global_mean = global_mean_override > 0.0f ?
+    global_mean_override :
+    (distance_count > 0u ? distance_sum / distance_count : 1.0f);
   landmark_umap_prepare_kernel<<<query_blocks, threads>>>(
     device_distances, d_weights, d_epochs_per_sample, n_query, k, global_mean
   );
@@ -4373,14 +4509,22 @@ extern "C" int fastembedr_cuda_landmark_umap_from_device_knn(
     repulsion_strength
   };
   for (int epoch = 0; epoch < n_epochs; ++epoch) {
-    landmark_umap_refine_epoch_kernel<<<query_blocks, threads>>>(
-      d_layout, device_indices, d_weights, d_epochs_per_sample,
-      d_landmark_rows, d_query_rows, n_reference, n_query, k,
-      index_offset, params, static_cast<unsigned int>(epoch)
-    );
+    if (n_components == 2) {
+      landmark_umap_refine_epoch_kernel<2><<<query_blocks, threads>>>(
+        d_layout, device_indices, d_weights, d_epochs_per_sample,
+        d_landmark_rows, d_query_rows, n_reference, n_query, k,
+        index_offset, negative_reference_only, query_seed_offset,
+        params, static_cast<unsigned int>(epoch));
+    } else {
+      landmark_umap_refine_epoch_kernel<3><<<query_blocks, threads>>>(
+        d_layout, device_indices, d_weights, d_epochs_per_sample,
+        d_landmark_rows, d_query_rows, n_reference, n_query, k,
+        index_offset, negative_reference_only, query_seed_offset,
+        params, static_cast<unsigned int>(epoch));
+    }
   }
   if (check_cuda(cudaGetLastError(), "CUDA landmark UMAP refinement kernels") ||
-      check_cuda(cudaMemcpy(out, d_layout, static_cast<std::size_t>(n_total) * 2u * sizeof(float), cudaMemcpyDeviceToHost),
+      check_cuda(cudaMemcpy(out, d_layout, full_layout_items * sizeof(float), cudaMemcpyDeviceToHost),
                  "cudaMemcpy(landmark UMAP layout D2H)")) return 1;
   return 0;
 }
@@ -5482,11 +5626,15 @@ extern "C" int fastembedr_cuda_silhouette_score(const double* layout,
   return 0;
 }
 
+#include "embedding_cuda_umap_3d.cuh"
+
 template <typename DistanceT>
 int fastembedr_cuda_spectral_init_from_knn_impl(const int* indices,
                                                       const DistanceT* distances,
                                                       int n,
                                                        int k,
+                                                       int graph_width,
+                                                       int n_components,
                                                        int spectral_n_iter,
                                                        unsigned int seed,
                                                        int index_offset,
@@ -5496,15 +5644,18 @@ int fastembedr_cuda_spectral_init_from_knn_impl(const int* indices,
     set_embedding_error("null host pointer");
     return 1;
   }
-  if (n < 2 || k < 1 || k > 256 || spectral_n_iter < 1) {
+  if (n < 2 || k < 1 || k > 256 || graph_width < k ||
+      graph_width > 256 || spectral_n_iter < 1 ||
+      (n_components != 2 && n_components != 3)) {
     set_embedding_error("invalid spectral initialization dimensions or parameters");
     return 1;
   }
 
-  const int width = std::min(256, std::max(k, 2 * k));
+  const int width = graph_width;
   const std::size_t input_items = static_cast<std::size_t>(n) * k;
   const std::size_t graph_items = static_cast<std::size_t>(n) * width;
-  const std::size_t embed_bytes = static_cast<std::size_t>(n) * 2u * sizeof(float);
+  const std::size_t embed_bytes = static_cast<std::size_t>(n) *
+    n_components * sizeof(float);
   const int threads = 256;
   const int blocks = (n + threads - 1) / threads;
   const int stat_blocks = std::max(1, std::min(1024, blocks));
@@ -5514,7 +5665,7 @@ int fastembedr_cuda_spectral_init_from_knn_impl(const int* indices,
     static_cast<std::size_t>(n) * sizeof(int) +
     2u * embed_bytes +
     static_cast<std::size_t>(stat_blocks) * 5u * sizeof(double) +
-    5u * sizeof(double);
+    (n_components == 3 ? 9u : 5u) * sizeof(double);
 
   int* d_indices = nullptr;
   DistanceT* d_distances = nullptr;
@@ -5573,7 +5724,9 @@ int fastembedr_cuda_spectral_init_from_knn_impl(const int* indices,
     cleanup();
     return 1;
   }
-  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_stats), 5u * sizeof(double)), "cudaMalloc(spectral stats)")) {
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_stats),
+                            (n_components == 3 ? 9u : 5u) * sizeof(double)),
+                 "cudaMalloc(spectral stats)")) {
     cleanup();
     return 1;
   }
@@ -5593,23 +5746,62 @@ int fastembedr_cuda_spectral_init_from_knn_impl(const int* indices,
     return 1;
   }
 
-  random_init_kernel<<<blocks, threads>>>(d_current, n, seed);
+  std::vector<int> row_counts(static_cast<std::size_t>(n));
+  if (check_cuda(cudaMemcpy(row_counts.data(), d_counts,
+                            static_cast<std::size_t>(n) * sizeof(int),
+                            cudaMemcpyDeviceToHost),
+                 "cudaMemcpy(spectral row counts D2H)")) {
+    cleanup();
+    return 1;
+  }
+  for (int row = 0; row < n; ++row) {
+    if (row_counts[static_cast<std::size_t>(row)] > width) {
+      set_embedding_error("CUDA spectral graph row exceeded reserved width");
+      cleanup();
+      return 1;
+    }
+  }
+  sort_umap_union_rows_kernel<<<blocks, threads>>>(
+    d_neighbors, d_weights, d_counts, n, width);
+  if (check_cuda(cudaGetLastError(),
+                 "sort_umap_union_rows_kernel launch")) {
+    cleanup();
+    return 1;
+  }
+
+  if (n_components == 3) {
+    umap_random_init_3d<<<blocks, threads>>>(d_current, n, seed);
+  } else {
+    random_init_kernel<<<blocks, threads>>>(d_current, n, seed);
+  }
   if (check_cuda(cudaGetLastError(), "random_init_kernel launch")) {
     cleanup();
     return 1;
   }
-  if (normalize_device_init(d_current, d_partial, d_stats, n, stat_blocks, threads)) {
+  const auto normalize_init = [&](float* values) {
+    return n_components == 3 ?
+      normalize_device_init_3d(values, d_stats, n, blocks, threads) :
+      normalize_device_init(
+        values, d_partial, d_stats, n, stat_blocks, threads);
+  };
+  if (normalize_init(d_current)) {
     cleanup();
     return 1;
   }
 
   for (int iter = 0; iter < spectral_n_iter; ++iter) {
-    diffuse_init_kernel<<<blocks, threads>>>(d_neighbors, d_weights, d_current, d_next, n, width);
+    if (n_components == 3) {
+      umap_diffuse_init_3d<<<blocks, threads>>>(
+        d_neighbors, d_weights, d_current, d_next, n, width);
+    } else {
+      diffuse_init_kernel<<<blocks, threads>>>(
+        d_neighbors, d_weights, d_current, d_next, n, width);
+    }
     if (check_cuda(cudaGetLastError(), "diffuse_init_kernel launch")) {
       cleanup();
       return 1;
     }
-    if (normalize_device_init(d_next, d_partial, d_stats, n, stat_blocks, threads)) {
+    if (normalize_init(d_next)) {
       cleanup();
       return 1;
     }
@@ -5633,12 +5825,16 @@ extern "C" int fastembedr_cuda_spectral_init_from_knn(const int* indices,
                                                       const double* distances,
                                                       int n,
                                                       int k,
+                                                      int graph_width,
+                                                      int n_components,
                                                       int spectral_n_iter,
                                                       unsigned int seed,
                                                       int index_offset,
                                                       float* out) {
   return fastembedr_cuda_spectral_init_from_knn_impl<double>(
-    indices, distances, n, k, spectral_n_iter, seed, index_offset, out
+    indices, distances, n, k, graph_width, n_components,
+    spectral_n_iter, seed,
+    index_offset, out
   );
 }
 
@@ -5805,8 +6001,6 @@ extern "C" int fastembedr_cuda_umap_graph_dump_from_knn(const int* indices,
     out_epochs_per_sample, out_width, out_capacity
   );
 }
-
-#include "embedding_cuda_umap_3d.cuh"
 
 template <typename DistanceT>
 int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
@@ -6358,6 +6552,7 @@ extern "C" int fastembedr_cuda_umap_optimize_coo(const int* heads,
                                                   const float* epochs_per_sample,
                                                   const float* init,
                                                   int n,
+                                                  int n_components,
                                                   int n_edges_capacity,
                                                   int n_epochs,
                                                   int negative_sample_rate,
@@ -6374,7 +6569,9 @@ extern "C" int fastembedr_cuda_umap_optimize_coo(const int* heads,
     set_embedding_error("null host pointer");
     return 1;
   }
-  if (n < 2 || n_edges_capacity < 1 || n_epochs < 1 ||
+  if (n < 2 || (n_components != 2 && n_components != 3) ||
+      (n_components == 3 && optimizer_mode != 1) ||
+      n_edges_capacity < 1 || n_epochs < 1 ||
       negative_sample_rate < 0 || learning_rate <= 0.0f ||
       repulsion_strength <= 0.0f) {
     set_embedding_error("invalid CUDA COO UMAP optimization parameters");
@@ -6382,7 +6579,8 @@ extern "C" int fastembedr_cuda_umap_optimize_coo(const int* heads,
   }
 
   const std::size_t edge_items = static_cast<std::size_t>(n_edges_capacity);
-  const std::size_t embed_bytes = static_cast<std::size_t>(n) * 2u * sizeof(float);
+  const std::size_t embed_bytes =
+    static_cast<std::size_t>(n) * n_components * sizeof(float);
   const std::size_t required_bytes =
     edge_items * (2u * sizeof(int) + 2u * sizeof(float)) +
     (optimizer_mode == 1 ? 2u : 1u) * embed_bytes;
@@ -6440,17 +6638,28 @@ extern "C" int fastembedr_cuda_umap_optimize_coo(const int* heads,
         cleanup();
         return 1;
       }
-      embed_epoch_coo_delta_kernel<2><<<edge_blocks, threads>>>(
-        d_layout, d_delta, d_heads, d_tails, d_weights, d_epochs,
-        params, static_cast<unsigned int>(epoch), n_edges_capacity,
-        1.0
-      );
+      if (n_components == 3) {
+        embed_epoch_coo_delta_kernel<3><<<edge_blocks, threads>>>(
+          d_layout, d_delta, d_heads, d_tails, d_weights, d_epochs,
+          params, static_cast<unsigned int>(epoch), n_edges_capacity,
+          1.0);
+      } else {
+        embed_epoch_coo_delta_kernel<2><<<edge_blocks, threads>>>(
+          d_layout, d_delta, d_heads, d_tails, d_weights, d_epochs,
+          params, static_cast<unsigned int>(epoch), n_edges_capacity,
+          1.0);
+      }
       if (check_cuda(cudaGetLastError(), "embed_epoch_coo_delta_kernel(coo umap) launch")) {
         cleanup();
         return 1;
       }
-      apply_delta_sanitize_layout_kernel<2><<<
-        row_blocks, threads>>>(d_layout, d_delta, n, max_abs_coord);
+      if (n_components == 3) {
+        apply_delta_sanitize_layout_kernel<3><<<
+          row_blocks, threads>>>(d_layout, d_delta, n, max_abs_coord);
+      } else {
+        apply_delta_sanitize_layout_kernel<2><<<
+          row_blocks, threads>>>(d_layout, d_delta, n, max_abs_coord);
+      }
       if (check_cuda(cudaGetLastError(), "apply_delta_sanitize_layout_kernel(coo umap) launch")) {
         cleanup();
         return 1;
@@ -7104,26 +7313,42 @@ struct MassiveTsneCudaContext {
   bool owns_stream = false;
   cufftHandle forward = 0;
   cufftHandle inverse = 0;
+  cufftHandle fft3d = 0;
   float* current = nullptr;
   float* gradient = nullptr;
   float* gains = nullptr;
   float* update = nullptr;
   float2* grid_position = nullptr;
   cufftComplex* slab = nullptr;
+  cufftComplex* mass3d = nullptr;
+  cufftComplex* kernel3d = nullptr;
+  int* bin_head = nullptr;
+  int* bin_next = nullptr;
+  float* row_q = nullptr;
+  float* inv_sum = nullptr;
+  double* q_partial = nullptr;
+  CudaTsneBounds3d* bounds3d = nullptr;
+  CudaTsneGrid3d* params3d = nullptr;
+  float* center3d = nullptr;
   double* partial = nullptr;
   double* stats = nullptr;
   int* heads = nullptr;
   int* tails = nullptr;
   float* weights = nullptr;
   int n = 0;
+  int dimensions = 2;
   int capacity = 0;
   int grid_size = 0;
   int fft_size = 0;
   int point_blocks = 0;
   int layout_blocks = 0;
   int fft_blocks = 0;
+  int bound_blocks = 0;
+  int bins3d = 0;
+  std::size_t cube3d = 0;
 
   ~MassiveTsneCudaContext() {
+    if (fft3d != 0) cufftDestroy(fft3d);
     if (repulsion_start != nullptr) cudaEventDestroy(repulsion_start);
     if (repulsion_end != nullptr) cudaEventDestroy(repulsion_end);
     if (owns_stream && stream != nullptr) cudaStreamDestroy(stream);
@@ -7138,10 +7363,12 @@ extern "C" void fastembedr_massive_tsne_cuda_destroy(void* raw) {
 }
 
 MassiveTsneCudaContext* massive_tsne_cuda_create_impl(
-    int vertices, int edge_capacity, bool fft_enabled,
+    int vertices, int dimensions, int edge_capacity,
+    bool fft_enabled,
     bool own_stream, int actual_vertices) {
   embedding_last_error.clear();
-  if (vertices < 2 || vertices > INT_MAX / 2 ||
+  if (vertices < 2 || (dimensions != 2 && dimensions != 3) ||
+      vertices > INT_MAX / dimensions ||
       actual_vertices < 2 || actual_vertices > vertices ||
       edge_capacity < 1 || edge_capacity > INT_MAX / 3) {
     set_embedding_error("invalid massive CUDA t-SNE dimensions");
@@ -7149,14 +7376,28 @@ MassiveTsneCudaContext* massive_tsne_cuda_create_impl(
   }
   auto* ctx = new MassiveTsneCudaContext();
   ctx->n = actual_vertices;
+  ctx->dimensions = dimensions;
   ctx->capacity = edge_capacity;
-  ctx->grid_size = resolve_cuda_tsne_fft_grid_size(actual_vertices);
+  ctx->grid_size = dimensions == 3 ?
+    (actual_vertices < 5000 ? 16 : 64) :
+    resolve_cuda_tsne_fft_grid_size(actual_vertices);
   ctx->fft_size = ctx->grid_size * 2;
+  if (dimensions == 3) {
+    ctx->bins3d = actual_vertices < 5000 ?
+      (ctx->grid_size + 2) / 3 :
+      (ctx->grid_size + 1) / 2;
+    ctx->cube3d = static_cast<std::size_t>(ctx->fft_size) *
+      ctx->fft_size * ctx->fft_size;
+  }
   constexpr int threads = 256;
   ctx->point_blocks = (actual_vertices - 1) / threads + 1;
   ctx->layout_blocks = std::min(1024, ctx->point_blocks);
-  const int fft_items = ctx->fft_size * ctx->fft_size;
-  ctx->fft_blocks = (fft_items - 1) / threads + 1;
+  const std::size_t fft_items = dimensions == 3 ?
+    ctx->cube3d : static_cast<std::size_t>(ctx->fft_size) *
+      ctx->fft_size;
+  ctx->fft_blocks = static_cast<int>((fft_items - 1) /
+    threads + 1);
+  ctx->bound_blocks = ctx->point_blocks;
   if (!own_stream) {
     CudaStreamOwner& owner = cuda_execution_stream();
     if (owner.init()) {
@@ -7180,7 +7421,8 @@ MassiveTsneCudaContext* massive_tsne_cuda_create_impl(
     delete ctx;
     return nullptr;
   }
-  CudaFftPlanCache* cache = fft_enabled ? &cuda_fft_plan_cache() : nullptr;
+  CudaFftPlanCache* cache = fft_enabled && dimensions == 2 ?
+    &cuda_fft_plan_cache() : nullptr;
   if (cache != nullptr) {
     if (cache->acquire(ctx->fft_size, ctx->stream)) {
       delete ctx;
@@ -7189,12 +7431,35 @@ MassiveTsneCudaContext* massive_tsne_cuda_create_impl(
     ctx->forward = cache->forward();
     ctx->inverse = cache->inverse();
   }
+  if (fft_enabled && dimensions == 3 &&
+      (check_cufft(cufftPlan3d(&ctx->fft3d, ctx->fft_size,
+        ctx->fft_size, ctx->fft_size, CUFFT_C2C),
+        "cufftPlan3d(massive t-SNE)") ||
+       check_cufft(cufftSetStream(ctx->fft3d, ctx->stream),
+        "cufftSetStream(massive 3D t-SNE)"))) {
+    delete ctx;
+    return nullptr;
+  }
   const std::size_t n = static_cast<std::size_t>(vertices);
-  const std::size_t grid = static_cast<std::size_t>(fft_items);
+  const std::size_t grid = fft_items;
+  const std::size_t layout = n *
+    static_cast<std::size_t>(dimensions);
   const std::size_t partial = static_cast<std::size_t>(
     std::max(ctx->layout_blocks * 4, ctx->point_blocks * 2));
-  const std::size_t bytes = n * (8u * sizeof(float) + sizeof(float2)) +
-    (fft_enabled ? grid * 9u * sizeof(cufftComplex) : 0u) +
+  const std::size_t fft_2d_bytes = fft_enabled && dimensions == 2 ?
+    n * sizeof(float2) +
+    grid * 9u * sizeof(cufftComplex) : 0u;
+  const std::size_t fft_3d_bytes = fft_enabled && dimensions == 3 ?
+    2u * grid * sizeof(cufftComplex) +
+    static_cast<std::size_t>(ctx->bins3d) *
+      ctx->bins3d * ctx->bins3d * sizeof(int) +
+    n * (sizeof(int) + sizeof(float)) +
+    ctx->bound_blocks * sizeof(double) + sizeof(float) : 0u;
+  const std::size_t bounds_3d_bytes = dimensions == 3 ?
+    ctx->bound_blocks * sizeof(CudaTsneBounds3d) +
+    sizeof(CudaTsneGrid3d) + 3u * sizeof(float) : 0u;
+  const std::size_t bytes = layout * 4u * sizeof(float) +
+    fft_2d_bytes + fft_3d_bytes + bounds_3d_bytes +
     partial * sizeof(double) +
     4u * sizeof(double) +
     static_cast<std::size_t>(edge_capacity) * 12u +
@@ -7217,15 +7482,40 @@ MassiveTsneCudaContext* massive_tsne_cuda_create_impl(
     delete ctx;
     return nullptr;
   }
-  ctx->current = ctx->workspace.alloc<float>(2u * n, "t-SNE layout");
-  ctx->gradient = ctx->workspace.alloc<float>(2u * n, "t-SNE gradient");
-  ctx->gains = ctx->workspace.alloc<float>(2u * n, "t-SNE gains");
-  ctx->update = ctx->workspace.alloc<float>(2u * n, "t-SNE update");
-  if (fft_enabled) {
+  ctx->current = ctx->workspace.alloc<float>(layout, "t-SNE layout");
+  ctx->gradient = ctx->workspace.alloc<float>(layout, "t-SNE gradient");
+  ctx->gains = ctx->workspace.alloc<float>(layout, "t-SNE gains");
+  ctx->update = ctx->workspace.alloc<float>(layout, "t-SNE update");
+  if (fft_enabled && dimensions == 2) {
     ctx->grid_position = ctx->workspace.alloc<float2>(n,
       "t-SNE grid");
     ctx->slab = ctx->workspace.alloc<cufftComplex>(9u * grid,
       "t-SNE FFT slab");
+  }
+  if (dimensions == 3) {
+    ctx->bounds3d = ctx->workspace.alloc<CudaTsneBounds3d>(
+      ctx->bound_blocks, "t-SNE 3D bounds");
+    ctx->params3d = ctx->workspace.alloc<CudaTsneGrid3d>(
+      1u, "t-SNE 3D grid parameters");
+    ctx->center3d = ctx->workspace.alloc<float>(
+      3u, "t-SNE 3D center");
+    if (fft_enabled) {
+      ctx->mass3d = ctx->workspace.alloc<cufftComplex>(
+        grid, "t-SNE 3D mass FFT");
+      ctx->kernel3d = ctx->workspace.alloc<cufftComplex>(
+        grid, "t-SNE 3D kernel FFT");
+      ctx->bin_head = ctx->workspace.alloc<int>(
+        static_cast<std::size_t>(ctx->bins3d) *
+          ctx->bins3d * ctx->bins3d, "t-SNE 3D bin heads");
+      ctx->bin_next = ctx->workspace.alloc<int>(
+        n, "t-SNE 3D bin links");
+      ctx->row_q = ctx->workspace.alloc<float>(
+        n, "t-SNE 3D row Q");
+      ctx->inv_sum = ctx->workspace.alloc<float>(
+        1u, "t-SNE 3D inverse sum Q");
+      ctx->q_partial = ctx->workspace.alloc<double>(
+        ctx->bound_blocks, "t-SNE 3D Q partial sums");
+    }
   }
   ctx->partial = ctx->workspace.alloc<double>(partial,
     "t-SNE reduction");
@@ -7236,25 +7526,33 @@ MassiveTsneCudaContext* massive_tsne_cuda_create_impl(
     "t-SNE weights");
   if (ctx->current == nullptr || ctx->gradient == nullptr ||
       ctx->gains == nullptr || ctx->update == nullptr ||
-      (fft_enabled && (ctx->grid_position == nullptr ||
-        ctx->slab == nullptr)) ||
+      (fft_enabled && dimensions == 2 &&
+        (ctx->grid_position == nullptr || ctx->slab == nullptr)) ||
+      (dimensions == 3 && (ctx->bounds3d == nullptr ||
+        ctx->params3d == nullptr || ctx->center3d == nullptr)) ||
+      (fft_enabled && dimensions == 3 &&
+        (ctx->mass3d == nullptr || ctx->kernel3d == nullptr ||
+         ctx->bin_head == nullptr || ctx->bin_next == nullptr ||
+         ctx->row_q == nullptr || ctx->inv_sum == nullptr ||
+         ctx->q_partial == nullptr)) ||
       ctx->partial == nullptr || ctx->stats == nullptr ||
       ctx->heads == nullptr || ctx->tails == nullptr ||
       ctx->weights == nullptr ||
       check_cuda(cudaMemsetAsync(ctx->current, 0,
-        2u * n * sizeof(float), ctx->stream),
+        layout * sizeof(float), ctx->stream),
         "cudaMemsetAsync(massive t-SNE layout)") ||
       check_cuda(cudaMemsetAsync(ctx->gradient, 0,
-        2u * n * sizeof(float), ctx->stream),
+        layout * sizeof(float), ctx->stream),
         "cudaMemsetAsync(massive t-SNE gradient)") ||
       check_cuda(cudaMemsetAsync(ctx->update, 0,
-        2u * n * sizeof(float), ctx->stream),
+        layout * sizeof(float), ctx->stream),
         "cudaMemsetAsync(massive t-SNE update)")) {
     delete ctx;
     return nullptr;
   }
-  fill_float_kernel<<<(2 * vertices - 1) / threads + 1,
-    threads, 0, ctx->stream>>>(ctx->gains, 2 * vertices, 1.0f);
+  fill_float_kernel<<<(vertices * dimensions - 1) /
+    threads + 1, threads, 0, ctx->stream>>>(
+      ctx->gains, vertices * dimensions, 1.0f);
   if (check_cuda(cudaGetLastError(),
       "fill_float_kernel(massive t-SNE gains)") ||
       check_cuda(cudaStreamSynchronize(ctx->stream),
@@ -7266,9 +7564,9 @@ MassiveTsneCudaContext* massive_tsne_cuda_create_impl(
 }
 
 extern "C" void* fastembedr_massive_tsne_cuda_create(
-    int vertices, int edge_capacity) {
-  return massive_tsne_cuda_create_impl(vertices, edge_capacity,
-    true, false, vertices);
+    int vertices, int dimensions, int edge_capacity) {
+  return massive_tsne_cuda_create_impl(vertices, dimensions,
+    edge_capacity, true, false, vertices);
 }
 
 extern "C" int fastembedr_massive_tsne_cuda_upload(
@@ -7282,12 +7580,62 @@ extern "C" int fastembedr_massive_tsne_cuda_upload(
   float* target = field == 0 ? ctx->current :
     field == 1 ? ctx->update : ctx->gains;
   return check_cuda(cudaMemcpyAsync(target +
-      static_cast<std::size_t>(first) * 2u, values,
-      static_cast<std::size_t>(rows) * 2u * sizeof(float),
+      static_cast<std::size_t>(first) * ctx->dimensions,
+      values, static_cast<std::size_t>(rows) *
+        ctx->dimensions * sizeof(float),
       cudaMemcpyHostToDevice, ctx->stream),
       "cudaMemcpyAsync(massive t-SNE upload)") ||
     check_cuda(cudaStreamSynchronize(ctx->stream),
       "cudaStreamSynchronize(massive t-SNE upload)");
+}
+
+int massive_tsne_cuda_repulsion_3d(MassiveTsneCudaContext* ctx) {
+  const int n = ctx->n;
+  const int threads = 256;
+  cudaStream_t stream = ctx->stream;
+  cuda_tsne_bounds_blocks_3d<<<ctx->bound_blocks, 1,
+    0, stream>>>(ctx->current, ctx->bounds3d, n, threads);
+  cuda_tsne_finalize_bounds_3d<<<1, 1, 0, stream>>>(
+    ctx->bounds3d, ctx->params3d, ctx->center3d,
+    ctx->bound_blocks, n, ctx->grid_size);
+  cuda_tsne_clear_fft_3d<<<ctx->fft_blocks, threads,
+    0, stream>>>(ctx->mass3d, ctx->kernel3d,
+    ctx->bin_head, ctx->fft_size, ctx->bins3d);
+  cuda_tsne_kernel_fft_3d<<<ctx->fft_blocks, threads,
+    0, stream>>>(ctx->kernel3d, ctx->params3d,
+    static_cast<int>(ctx->cube3d));
+  cuda_tsne_scatter_fft_3d<<<ctx->point_blocks, threads,
+    0, stream>>>(ctx->current, ctx->mass3d,
+    ctx->bin_head, ctx->bin_next, ctx->params3d, n);
+  if (check_cuda(cudaGetLastError(),
+      "massive 3D t-SNE FFT preparation")) return 1;
+  if (check_cufft(cufftExecC2C(ctx->fft3d, ctx->mass3d,
+        ctx->mass3d, CUFFT_FORWARD),
+        "cufftExecC2C(massive 3D mass forward)") ||
+      check_cufft(cufftExecC2C(ctx->fft3d, ctx->kernel3d,
+        ctx->kernel3d, CUFFT_FORWARD),
+        "cufftExecC2C(massive 3D kernel forward)")) return 1;
+  cuda_tsne_multiply_fft_3d<<<ctx->fft_blocks, threads,
+    0, stream>>>(ctx->mass3d, ctx->kernel3d,
+    static_cast<int>(ctx->cube3d));
+  if (check_cufft(cufftExecC2C(ctx->fft3d, ctx->mass3d,
+        ctx->mass3d, CUFFT_INVERSE),
+        "cufftExecC2C(massive 3D inverse)")) return 1;
+  const float fft_scale = 1.0f /
+    static_cast<float>(ctx->cube3d);
+  cuda_tsne_gather_fft_3d<<<ctx->point_blocks, threads,
+    0, stream>>>(ctx->current, ctx->mass3d,
+    ctx->bin_head, ctx->bin_next, ctx->gradient,
+    ctx->row_q, ctx->params3d, n, fft_scale);
+  cuda_tsne_sum_q_blocks_3d<<<ctx->bound_blocks, threads,
+    0, stream>>>(ctx->row_q, ctx->q_partial, n);
+  cuda_tsne_sum_q_3d<<<1, threads, 0, stream>>>(
+    ctx->q_partial, ctx->inv_sum, ctx->bound_blocks);
+  cuda_tsne_scale_repulsion_3d<<<(
+    n * 3 - 1) / threads + 1, threads,
+    0, stream>>>(ctx->gradient, ctx->inv_sum, n * 3);
+  return check_cuda(cudaGetLastError(),
+    "massive 3D t-SNE repulsion");
 }
 
 extern "C" int fastembedr_massive_tsne_cuda_begin(void* raw) {
@@ -7296,15 +7644,20 @@ extern "C" int fastembedr_massive_tsne_cuda_begin(void* raw) {
     set_embedding_error("invalid massive CUDA t-SNE context");
     return 1;
   }
-  const TsneFft2dIteration repulsion = {
-    ctx->current, ctx->gradient, ctx->grid_position, ctx->slab,
-    ctx->partial, ctx->stats, ctx->forward, ctx->inverse,
-    ctx->stream, ctx->n, ctx->grid_size, ctx->fft_size,
-    ctx->layout_blocks, ctx->point_blocks, ctx->fft_blocks, 256
-  };
   if (check_cuda(cudaEventRecord(ctx->repulsion_start, ctx->stream),
         "cudaEventRecord(t-SNE repulsion start)")) return 1;
-  const int status = repulsion.repulsion(true);
+  int status = 0;
+  if (ctx->dimensions == 3) {
+    status = massive_tsne_cuda_repulsion_3d(ctx);
+  } else {
+    const TsneFft2dIteration repulsion = {
+      ctx->current, ctx->gradient, ctx->grid_position, ctx->slab,
+      ctx->partial, ctx->stats, ctx->forward, ctx->inverse,
+      ctx->stream, ctx->n, ctx->grid_size, ctx->fft_size,
+      ctx->layout_blocks, ctx->point_blocks, ctx->fft_blocks, 256
+    };
+    status = repulsion.repulsion(true);
+  }
   if (status != 0) return status;
   return check_cuda(cudaEventRecord(ctx->repulsion_end, ctx->stream),
     "cudaEventRecord(t-SNE repulsion end)");
@@ -7344,9 +7697,17 @@ extern "C" int fastembedr_massive_tsne_cuda_attract(
       check_cuda(cudaMemcpyAsync(ctx->weights, weights, bytes,
         cudaMemcpyHostToDevice, ctx->stream),
         "cudaMemcpyAsync(massive t-SNE weights)")) return 1;
-  massive_tsne_attractive_kernel<<<(edges - 1) / 256 + 1,
-    256, 0, ctx->stream>>>(ctx->heads, ctx->tails, ctx->weights,
-    ctx->current, ctx->gradient, edges, exaggeration);
+  if (ctx->dimensions == 3) {
+    massive_tsne_attractive_3d_kernel<<<(edges - 1) /
+      256 + 1, 256, 0, ctx->stream>>>(ctx->heads,
+      ctx->tails, ctx->weights, ctx->current,
+      ctx->gradient, edges, exaggeration);
+  } else {
+    massive_tsne_attractive_kernel<<<(edges - 1) /
+      256 + 1, 256, 0, ctx->stream>>>(ctx->heads,
+      ctx->tails, ctx->weights, ctx->current,
+      ctx->gradient, edges, exaggeration);
+  }
   return check_cuda(cudaGetLastError(),
       "massive_tsne_attractive_kernel launch") ||
     check_cuda(cudaStreamSynchronize(ctx->stream),
@@ -7363,6 +7724,26 @@ extern "C" int fastembedr_massive_tsne_cuda_finish(
       min_gain <= 0.0f || max_step_norm <= 0.0f) {
     set_embedding_error("invalid massive CUDA t-SNE update");
     return 1;
+  }
+  if (ctx->dimensions == 3) {
+    cuda_tsne_update_3d<<<ctx->point_blocks, 256,
+      0, ctx->stream>>>(ctx->current, ctx->gradient,
+      ctx->gains, ctx->update, ctx->n, learning_rate,
+      momentum, min_gain, max_step_norm);
+    cuda_tsne_bounds_blocks_3d<<<ctx->bound_blocks, 1,
+      0, ctx->stream>>>(ctx->current, ctx->bounds3d,
+      ctx->n, 256);
+    cuda_tsne_finalize_bounds_3d<<<1, 1,
+      0, ctx->stream>>>(ctx->bounds3d, ctx->params3d,
+      ctx->center3d, ctx->bound_blocks, ctx->n,
+      ctx->grid_size);
+    cuda_tsne_center_3d<<<ctx->point_blocks, 256,
+      0, ctx->stream>>>(ctx->current, ctx->center3d,
+      ctx->n);
+    return check_cuda(cudaGetLastError(),
+        "massive 3D t-SNE update") ||
+      check_cuda(cudaStreamSynchronize(ctx->stream),
+        "cudaStreamSynchronize(massive 3D t-SNE)");
   }
   opentsne_update_reduce_kernel<<<ctx->point_blocks, 256,
     2u * 256u * sizeof(double), ctx->stream>>>(ctx->current,
@@ -7394,8 +7775,9 @@ extern "C" int fastembedr_massive_tsne_cuda_download(
   const float* source = field == 0 ? ctx->current :
     field == 1 ? ctx->update : ctx->gains;
   return check_cuda(cudaMemcpyAsync(values, source +
-      static_cast<std::size_t>(first) * 2u,
-      static_cast<std::size_t>(rows) * 2u * sizeof(float),
+      static_cast<std::size_t>(first) * ctx->dimensions,
+      static_cast<std::size_t>(rows) * ctx->dimensions *
+        sizeof(float),
       cudaMemcpyDeviceToHost, ctx->stream),
       "cudaMemcpyAsync(massive t-SNE download)") ||
     check_cuda(cudaStreamSynchronize(ctx->stream),
@@ -7405,6 +7787,7 @@ extern "C" int fastembedr_massive_tsne_cuda_download(
 #ifdef FASTEMBEDR_HAS_NCCL
 struct MassiveTsneMultiCudaContext {
   int n = 0;
+  int dimensions = 2;
   int block_rows = 0;
   int previous_device = 0;
   std::vector<int> devices;
@@ -7426,9 +7809,12 @@ extern "C" void fastembedr_massive_tsne_multigpu_destroy(void* raw) {
 }
 
 extern "C" void* fastembedr_massive_tsne_multigpu_create(
-    int n, int edge_capacity, const int* devices, int device_count) {
+    int n, int dimensions, int edge_capacity,
+    const int* devices, int device_count) {
   embedding_last_error.clear();
-  if (n < 2 || n > INT_MAX / 2 || edge_capacity < 1 ||
+  if (n < 2 || (dimensions != 2 && dimensions != 3) ||
+      n > INT_MAX / dimensions ||
+      edge_capacity < 1 ||
       devices == nullptr || device_count < 2 || device_count > 4) {
     set_embedding_error("invalid multi-GPU t-SNE request");
     return nullptr;
@@ -7453,12 +7839,14 @@ extern "C" void* fastembedr_massive_tsne_multigpu_create(
   }
   const int block = (n - 1) / device_count + 1;
   const auto padded = static_cast<std::int64_t>(block) * device_count;
-  if (n <= (device_count - 1) * block || padded > INT_MAX / 2) {
+  if (n <= (device_count - 1) * block ||
+      padded > INT_MAX / dimensions) {
     set_embedding_error("multi-GPU t-SNE needs rows on every device");
     return nullptr;
   }
   auto* ctx = new MassiveTsneMultiCudaContext();
   ctx->n = n;
+  ctx->dimensions = dimensions;
   ctx->block_rows = block;
   ctx->previous_device = previous;
   ctx->devices.assign(devices, devices + device_count);
@@ -7471,8 +7859,8 @@ extern "C" void* fastembedr_massive_tsne_multigpu_create(
       return nullptr;
     }
     ctx->workers[rank] = massive_tsne_cuda_create_impl(
-      static_cast<int>(padded), edge_capacity, rank == 0,
-      true, n);
+      static_cast<int>(padded), dimensions, edge_capacity,
+      rank == 0, true, n);
     if (ctx->workers[rank] == nullptr) {
       fastembedr_massive_tsne_multigpu_destroy(ctx);
       return nullptr;
@@ -7518,16 +7906,16 @@ extern "C" int fastembedr_massive_tsne_multigpu_begin(void* raw) {
     ctx->block_rows;
   if (ctx->n != padded &&
       check_cuda(cudaMemsetAsync(ctx->workers[0]->gradient +
-        2u * ctx->n, 0,
+        static_cast<std::size_t>(ctx->dimensions) * ctx->n, 0,
         static_cast<std::size_t>(padded - ctx->n) *
-          2u * sizeof(float),
+          ctx->dimensions * sizeof(float),
         ctx->workers[0]->stream),
         "cudaMemsetAsync(t-SNE padded gradient)")) return 1;
   for (std::size_t rank = 1; rank < ctx->devices.size(); ++rank) {
     if (check_cuda(cudaSetDevice(ctx->devices[rank]),
           "cudaSetDevice(t-SNE gradient)") ||
         check_cuda(cudaMemsetAsync(ctx->workers[rank]->gradient, 0,
-          static_cast<std::size_t>(padded) * 2u *
+          static_cast<std::size_t>(padded) * ctx->dimensions *
             sizeof(float), ctx->workers[rank]->stream),
           "cudaMemsetAsync(t-SNE gradient)")) return 1;
   }
@@ -7589,7 +7977,8 @@ extern "C" int fastembedr_massive_tsne_multigpu_finish(
     set_embedding_error("invalid multi-GPU t-SNE update");
     return 1;
   }
-  const auto count = static_cast<std::size_t>(ctx->block_rows) * 2u;
+  const auto count = static_cast<std::size_t>(ctx->block_rows) *
+    ctx->dimensions;
   if (massive_umap_nccl_check(ncclGroupStart(),
         "ncclGroupStart(t-SNE reduce)")) return 1;
   int failed = 0;
@@ -7616,19 +8005,37 @@ extern "C" int fastembedr_massive_tsne_multigpu_finish(
       ctx->n - rank * ctx->block_rows);
     const int blocks = (rows - 1) / 256 + 1;
     const auto offset = rank * count;
-    opentsne_update_reduce_kernel<<<blocks, 256,
-      2u * 256u * sizeof(double), worker->stream>>>(
-      worker->current + offset, worker->gradient + offset,
-      worker->gains + offset, worker->update + offset,
-      worker->partial, rows, learning_rate, momentum,
-      min_gain, max_step_norm);
-    if (check_cuda(cudaGetLastError(),
-          "opentsne_update_reduce_kernel(t-SNE owner)")) return 1;
-    tsne_finalize_mean_kernel<<<1, 256,
-      2u * 256u * sizeof(double), worker->stream>>>(
-      worker->partial, worker->stats, blocks, ctx->n);
-    if (check_cuda(cudaGetLastError(),
-          "tsne_finalize_mean_kernel(t-SNE owner)")) return 1;
+    if (ctx->dimensions == 3) {
+      cuda_tsne_update_3d<<<blocks, 256, 0,
+        worker->stream>>>(worker->current + offset,
+        worker->gradient + offset, worker->gains + offset,
+        worker->update + offset, rows, learning_rate,
+        momentum, min_gain, max_step_norm);
+      if (check_cuda(cudaGetLastError(),
+            "cuda_tsne_update_3d(t-SNE owner)")) return 1;
+      cuda_tsne_bounds_blocks_3d<<<blocks, 1, 0,
+        worker->stream>>>(worker->current + offset,
+        worker->bounds3d, rows, 256);
+      cuda_tsne_finalize_bounds_3d<<<1, 1, 0,
+        worker->stream>>>(worker->bounds3d, worker->params3d,
+        worker->center3d, blocks, ctx->n, worker->grid_size);
+      if (check_cuda(cudaGetLastError(),
+            "cuda_tsne_bounds_3d(t-SNE owner)")) return 1;
+    } else {
+      opentsne_update_reduce_kernel<<<blocks, 256,
+        2u * 256u * sizeof(double), worker->stream>>>(
+        worker->current + offset, worker->gradient + offset,
+        worker->gains + offset, worker->update + offset,
+        worker->partial, rows, learning_rate, momentum,
+        min_gain, max_step_norm);
+      if (check_cuda(cudaGetLastError(),
+            "opentsne_update_reduce_kernel(t-SNE owner)")) return 1;
+      tsne_finalize_mean_kernel<<<1, 256,
+        2u * 256u * sizeof(double), worker->stream>>>(
+        worker->partial, worker->stats, blocks, ctx->n);
+      if (check_cuda(cudaGetLastError(),
+            "tsne_finalize_mean_kernel(t-SNE owner)")) return 1;
+    }
   }
   if (massive_umap_nccl_check(ncclGroupStart(),
         "ncclGroupStart(t-SNE mean)")) return 1;
@@ -7638,8 +8045,14 @@ extern "C" int fastembedr_massive_tsne_multigpu_finish(
     failed |= check_cuda(cudaSetDevice(ctx->devices[rank]),
       "cudaSetDevice(t-SNE mean)");
     if (!failed) failed |= massive_umap_nccl_check(
-      ncclAllReduce(ctx->workers[rank]->stats,
-        ctx->workers[rank]->stats, 2, ncclFloat64, ncclSum,
+      ncclAllReduce(ctx->dimensions == 3 ?
+          ctx->workers[rank]->center3d :
+          static_cast<void*>(ctx->workers[rank]->stats),
+        ctx->dimensions == 3 ?
+          ctx->workers[rank]->center3d :
+          static_cast<void*>(ctx->workers[rank]->stats),
+        ctx->dimensions, ctx->dimensions == 3 ?
+          ncclFloat32 : ncclFloat64, ncclSum,
         ctx->comms[rank], ctx->workers[rank]->stream),
       "ncclAllReduce(t-SNE mean)");
   }
@@ -7653,11 +8066,18 @@ extern "C" int fastembedr_massive_tsne_multigpu_finish(
     auto* worker = ctx->workers[rank];
     const int rows = std::min(ctx->block_rows,
       ctx->n - rank * ctx->block_rows);
-    tsne_center_kernel<<<(rows - 1) / 256 + 1, 256, 0,
-      worker->stream>>>(worker->current + rank * count,
-      worker->stats, rows);
+    if (ctx->dimensions == 3) {
+      cuda_tsne_center_3d<<<(rows - 1) / 256 + 1,
+        256, 0, worker->stream>>>(
+        worker->current + rank * count,
+        worker->center3d, rows);
+    } else {
+      tsne_center_kernel<<<(rows - 1) / 256 + 1, 256, 0,
+        worker->stream>>>(worker->current + rank * count,
+        worker->stats, rows);
+    }
     if (check_cuda(cudaGetLastError(),
-          "tsne_center_kernel(t-SNE owner)")) return 1;
+          "t-SNE owner centering kernel")) return 1;
   }
   if (massive_umap_nccl_check(ncclGroupStart(),
         "ncclGroupStart(t-SNE gather)")) return 1;
@@ -7693,7 +8113,8 @@ extern "C" int fastembedr_massive_tsne_multigpu_gather_state(
     set_embedding_error("invalid multi-GPU t-SNE checkpoint");
     return 1;
   }
-  const auto count = static_cast<std::size_t>(ctx->block_rows) * 2u;
+  const auto count = static_cast<std::size_t>(ctx->block_rows) *
+    ctx->dimensions;
   for (int field = 1; field <= 2; ++field) {
     if (massive_umap_nccl_check(ncclGroupStart(),
           "ncclGroupStart(t-SNE state)")) return 1;

@@ -161,7 +161,7 @@ massive_walktrap_hierarchy <- function(graph, plan) {
 #' @param memory_limit Host working-memory budget.
 #' @param backend Must be `"cpu"`.
 #' @return File-backed Walktrap labels and approximation metadata.
-#' @export
+#' @keywords internal
 massive_walktrap <- function(graph, output, steps = 4L,
         chunk_rows = 4000L, memory_limit = "1GB", backend = "cpu") {
     plan <- massive_walktrap_plan(graph, output, chunk_rows,
@@ -200,7 +200,7 @@ massive_walktrap <- function(graph, output, steps = 4L,
 #' @param first First one-based vertex row.
 #' @param n Number of labels to read; capped at one million.
 #' @return One-based integer community labels.
-#' @export
+#' @keywords internal
 massive_read_walktrap_rows <- function(x, first = 1, n = 6L) {
     if (!inherits(x, "fastEmbedR_massive_walktrap")) stop(
         "`x` must be a massive_walktrap() result.", call. = FALSE)

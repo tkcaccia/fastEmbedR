@@ -21,7 +21,9 @@ massive_cluster_landmarks(
   seed = 1L,
   checkpoint = FALSE,
   checkpoint_every = 100L,
-  resume = FALSE
+  resume = FALSE,
+  devices = NULL,
+  parallel.mode = c("restarts", "fit")
 )
 }
 \arguments{
@@ -41,7 +43,8 @@ query source; selected rows retain their fitted community labels.}
 landmark-graph Louvain and Leiden. Streamed community voting remains
 on CPU. GPU requests fail explicitly if unavailable.}
 
-\item{n.cores}{CPU workers used for weighted community voting.}
+\item{n.cores}{CPU workers for community voting and, when \code{n_runs > 1},
+independent Leiden/Louvain fitting restarts.}
 
 \item{chunk_rows}{Maximum query rows per batch.}
 
@@ -62,6 +65,13 @@ on CPU. GPU requests fail explicitly if unavailable.}
 \item{checkpoint_every}{Save progress after this many query batches.}
 
 \item{resume}{Continue from matching partial outputs and checkpoint.}
+
+\item{devices}{Optional one to four distinct CUDA devices. Two to four
+devices coordinate one resident landmark-graph fit; label voting remains
+CPU-streamed.}
+
+\item{parallel.mode}{\code{"restarts"} uses workers for independent CPU fits;
+\code{"fit"} uses them for one shared CPU Louvain/Leiden fit.}
 }
 \value{
 A lightweight \code{fastEmbedR_massive_clusters} descriptor with
@@ -73,3 +83,4 @@ a resident landmark graph. Saved CPU-, CUDA-, or Metal-built KNN rows
 are streamed through inverse-distance weighted community voting. A supplied
 landmark selection preserves reference labels at their source rows.
 }
+\keyword{internal}

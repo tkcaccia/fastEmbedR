@@ -41,8 +41,10 @@ parameter.
 CPU uses native exhaustive float32 search below 5,000 observations and
 faissR's compiled FAISS HNSW interface for Euclidean distance otherwise.
 Cosine and correlation retain native HNSW. HNSW targets recall 0.99; its
-recall is not audited during each call. Metal uses native exact search for
-small inputs and recall-tuned IVF-Flat for larger inputs. CUDA uses RAPIDS
+recall is not audited during each call. Metal uses native exact search below
+4,096 rows and for inputs with at most 50,000 rows, 16,384 columns, and
+125 billion row-pair feature operations; otherwise it uses recall-tuned
+IVF-Flat. CUDA uses RAPIDS
 cuVS brute-force exact search below 100,000 observations and cuVS IVF-Flat
 above that threshold. Approximate Metal and CUDA routes use an internal
 recall target of 0.99 and report whether their pilot audit met it.

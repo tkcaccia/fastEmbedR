@@ -34,14 +34,15 @@ massive_cluster_workflow_checkpoint <- function(x, plan, paths,
 massive_cluster_workflow_controls <- function(k, method, backend,
         workers, devices, landmark_method, knn_method, chunk_rows,
         memory_limit, resolution, n_iterations, n_runs, steps,
-        seed, checkpoint_every) {
+        seed, checkpoint_every, parallel.mode = "restarts") {
     list(k = k, method = method, backend = backend,
         workers = workers, devices = devices,
         landmark_method = landmark_method, knn_method = knn_method,
         chunk_rows = chunk_rows, memory_limit = memory_limit,
         resolution = resolution, n_iterations = n_iterations,
         n_runs = n_runs, steps = steps, seed = seed,
-        checkpoint_every = checkpoint_every)
+        checkpoint_every = checkpoint_every,
+        parallel.mode = parallel.mode)
 }
 
 massive_cluster_checkpoint_controls <- function(checkpoint, resume,

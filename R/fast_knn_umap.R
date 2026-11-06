@@ -14,13 +14,15 @@
 #' @param graph_mode Graph weighting mode. `"fuzzy"` (the default) uses
 #'   standard UMAP fuzzy graph weights. `"binary"` uses a symmetric
 #'   unit-weight sensitivity graph.
+#' @param devices Optional two to four CUDA device indices for one
+#'   resident coordinated fit. Its KNN graph is built in host RAM.
 #' @return A numeric matrix with `nrow(indices)` rows and `n_components`
 #'   columns.
 #' @details The public API intentionally keeps only the inputs that matter. The
 #'   package chooses epochs, negative sampling, learning rate, spectral
 #'   iterations, CPU thread count, and the UMAP repulsion weight internally
-#'   using size-aware defaults. CUDA prepared-graph reuse currently supports
-#'   two dimensions; ordinary matrix and KNN CUDA fits also support three.
+#'   using size-aware defaults. CUDA prepared-graph reuse supports two or
+#'   three dimensions.
 #' @noRd
 fast_knn_umap <- function(indices,
                             distances = NULL,
@@ -29,7 +31,8 @@ fast_knn_umap <- function(indices,
                             verbose = FALSE,
                             backend = NULL,
                             n_threads = NULL,
-                            graph_mode = c("fuzzy", "binary")) {
+                            graph_mode = c("fuzzy", "binary"),
+                            devices = NULL) {
     fast_knn_umap_core(
         indices,
         distances,
@@ -38,7 +41,8 @@ fast_knn_umap <- function(indices,
         verbose = verbose,
         backend = backend,
         n_threads = n_threads,
-        graph_mode = graph_mode
+        graph_mode = graph_mode,
+        devices = devices
     )
 }
 
@@ -93,8 +97,11 @@ fast_knn_umap_core <- function(
     indices, distances = NULL, n_components = 2L,
     seed = 42L, verbose = FALSE, backend = NULL,
     n_threads = NULL, n_epochs = NULL, config_override = NULL,
-    graph_mode = c("fuzzy", "binary")
+    graph_mode = c("fuzzy", "binary"), devices = NULL
 ) {
+    if (!is.null(devices)) return(run_resident_umap_multigpu(
+        indices, distances, n_components, seed, backend, n_threads,
+        n_epochs, graph_mode, devices))
     prepared <- dispatch_prepared_umap_input(
         indices,
         distances,
@@ -120,6 +127,77 @@ fast_knn_umap_core <- function(
         return(dispatch_gpu_umap_core(indices, distances, settings))
     }
     dispatch_host_umap_core(indices, distances, settings)
+}
+
+resident_umap_prepared <- function(indices, distances, backend,
+                                    n_threads, graph_mode) {
+    if (inherits(indices, "fastEmbedR_umap_initialization")) {
+        prepared <- indices$prepared
+        prepared$initialization <- indices$layout
+        prepared$initialization_parameters <- indices$parameters
+        return(prepared)
+    }
+    if (inherits(indices, "fastEmbedR_umap_prepared")) {
+        if (!is.null(distances)) stop(
+            "Do not pass distances with a prepared UMAP input.",
+            call. = FALSE)
+        return(indices)
+    }
+    if (fastembedr_is_gpu_knn(indices)) {
+        if (!is.null(distances)) stop(
+            "Do not pass distances with GPU KNN.", call. = FALSE)
+        indices <- fastembedr_gpu_knn_to_host(indices)
+    }
+    prepare_umap_knn(indices, distances, backend = backend,
+        n.cores = n_threads, graph_mode = graph_mode)
+}
+
+run_resident_umap_multigpu <- function(indices, distances,
+        n_components, seed, backend, n_threads, n_epochs,
+        graph_mode, devices) {
+    backend <- resolve_embedding_backend(backend)
+    if (backend != "cuda" || !isTRUE(
+            massive_nccl_available_cpp())) stop(
+        "Resident multi-GPU UMAP requires CUDA and NCCL.",
+        call. = FALSE)
+    n_components <- validate_n_components(n_components)
+    if (!n_components %in% c(2L, 3L)) stop(
+        "Resident multi-GPU UMAP supports 2D or 3D.",
+        call. = FALSE)
+    from_gpu <- fastembedr_is_gpu_knn(indices)
+    prepared <- resident_umap_prepared(indices, distances,
+        backend, n_threads,
+        match.arg(graph_mode, c("fuzzy", "binary")))
+    devices <- massive_validate_devices(devices, backend,
+        nrow(prepared$knn$indices))
+    if (length(devices) < 2L || length(devices) > 4L) stop(
+        "Resident multi-GPU UMAP requires two to four devices.",
+        call. = FALSE)
+    identity <- massive_cuda_device_uuids(devices)
+    cfg <- configure_prepared_umap(prepared, backend,
+        n_components, n_threads, n_epochs)
+    init <- prepare_reusable_umap_init(prepared, cfg,
+        n_components, seed)
+    graph <- prepared$graph
+    initial <- matrix(as.numeric(init$value),
+        nrow = nrow(prepared$knn$indices))
+    out <- umap_cuda_optimize_csr_multigpu_cpp(
+        graph$offsets, graph$neighbors,
+        as.numeric(graph$weights), initial,
+        as.integer(cfg$n_epochs),
+        as.integer(cfg$negative_sample_rate),
+        cfg$learning_rate, cfg$min_dist,
+        cfg$repulsion_strength, as.integer(seed), devices)
+    cfg$optimizer <- out$optimizer
+    cfg$gpu_devices <- out$gpu_devices
+    cfg$gpu_identity <- identity
+    cfg$per_device_edge_visits <- out$per_device_edge_visits
+    cfg$delta_scale <- out$delta_scale
+    cfg$synchronization_seconds <- out$synchronization_seconds
+    cfg$knn_materialized_for_gpu <- from_gpu
+    cfg$input_storage <- "resident_knn"
+    cfg$layout_storage <- "resident"
+    finalize_prepared_umap(out$Y, graph, init, cfg)
 }
 
 validate_gpu_resident_umap <- function(gpu_knn, n_components) {
@@ -369,6 +447,7 @@ build_prepared_umap_graph <- function(knn, cfg, graph_mode) {
 
 #' @rdname prepare_umap_knn
 #' @export
+#' @keywords internal
 prepare_umap_knn <- function(indices,
                                 distances = NULL,
                                 backend = NULL,
@@ -406,18 +485,16 @@ configure_prepared_umap <- function(
     n_threads,
     n_epochs
 ) {
-    if (n_components != 2L && backend == "cuda") {
-        stop(
-            "Prepared CUDA UMAP supports only `n_components = 2`.",
-            call. = FALSE
-        )
-    }
     cfg <- prepared$config
     cfg$n_components <- as.integer(n_components)
     cfg$backend <- backend
     cfg$optimizer_backend <- backend
     cfg$prepared_reuse_hit <- TRUE
-    cfg$sgd_loop <- "csr_float32_contiguous_inplace"
+    cfg$sgd_loop <- if (backend == "cuda" && n_components == 3L) {
+        "coo_float32_snapshot_delta"
+    } else {
+        "csr_float32_contiguous_inplace"
+    }
     cfg <- apply_umap_thread_override(cfg, n_threads)
     if (!is.null(n_epochs)) {
         cfg$n_epochs <- validate_epoch_count(n_epochs)
@@ -508,20 +585,47 @@ optimize_prepared_umap_metal <- function(graph, init, cfg, seed) {
             call. = FALSE
         )
     }
-    knn_embed_metal_csr_cpp(
+    warm_epochs <- if (cfg$n_components == 2L) {
+        as.integer(cfg$n_epochs %/% 2L)
+    } else {
+        0L
+    }
+    if (warm_epochs > 0L) {
+        init <- fast_knn_umap_csr_clean_atomic_cpp(
+            graph$offsets, graph$neighbors, graph$weights,
+            init, warm_epochs, cfg$min_dist,
+            as.integer(cfg$negative_sample_rate),
+            cfg$learning_rate, cfg$repulsion_strength,
+            1L, as.integer(seed), 0L, FALSE,
+            start_epoch = 0L,
+            total_epochs = as.integer(cfg$n_epochs)
+        )
+    }
+    gpu_epochs <- as.integer(cfg$n_epochs - warm_epochs)
+    layout <- knn_embed_metal_csr_cpp(
         graph$offsets,
         graph$neighbors,
         graph$weights,
         init,
-        as.integer(cfg$n_epochs),
+        gpu_epochs,
         as.integer(cfg$negative_sample_rate),
         cfg$learning_rate,
         cfg$min_dist,
         as.numeric(graph$max_weight),
         cfg$repulsion_strength,
         as.integer(seed),
-        1L
+        1L,
+        start_epoch = warm_epochs,
+        total_epochs = as.integer(cfg$n_epochs)
     )
+    attr(layout, "metal_cpu_warm_epochs") <- warm_epochs
+    attr(layout, "metal_gpu_epochs") <- gpu_epochs
+    attr(layout, "metal_optimizer_pipeline") <- if (warm_epochs > 0L) {
+        "cpu_ordered_warm_metal_parallel"
+    } else {
+        "metal_parallel"
+    }
+    layout
 }
 
 optimize_prepared_umap_cuda <- function(graph, init, cfg, seed) {
@@ -542,7 +646,7 @@ optimize_prepared_umap_cuda <- function(graph, init, cfg, seed) {
         cfg$min_dist,
         cfg$repulsion_strength,
         as.integer(seed),
-        0L
+        if (cfg$n_components == 3L) 1L else 0L
     )
 }
 
@@ -586,6 +690,13 @@ finalize_prepared_umap <- function(layout, graph, init, cfg) {
         cfg$metal_graph_input <- attr(layout, "metal_graph_input")
         cfg$metal_csr_width <- attr(layout, "metal_csr_width")
         cfg$metal_truncated_edges <- attr(layout, "metal_truncated_edges")
+        cfg$metal_cpu_warm_epochs <- attr(
+            layout, "metal_cpu_warm_epochs"
+        )
+        cfg$metal_gpu_epochs <- attr(layout, "metal_gpu_epochs")
+        cfg$metal_optimizer_pipeline <- attr(
+            layout, "metal_optimizer_pipeline"
+        )
     }
     layout <- finalize_embedding_layout(
         layout,
@@ -1327,10 +1438,15 @@ run_spectral_knn_gpu <- function(input, n_components, n_iter,
             call. = FALSE
         )
     }
-    if (as.integer(n_components) != 2L) {
-        stop(backend, " spectral initialization supports only 2D.",
-            call. = FALSE
-        )
+    if (backend == "metal" &&
+        !as.integer(n_components) %in% c(2L, 3L)) {
+        stop("metal spectral initialization supports 2D or 3D.",
+            call. = FALSE)
+    }
+    if (backend == "cuda" &&
+        !as.integer(n_components) %in% c(2L, 3L)) {
+        stop("cuda spectral initialization supports 2D or 3D.",
+            call. = FALSE)
     }
     fun <- if (backend == "cuda") {
         spectral_knn_init_cuda_cpp
@@ -1450,6 +1566,7 @@ spectral_knn_init <- function(
 #' layout <- umap_knn(idx, dst, seed = 1)
 #' plot(layout, pch = 21, bg = iris$Species)
 #' @export
+#' @keywords internal
 umap_knn <- function(indices,
                         distances = NULL,
                         n_components = 2L,
@@ -1457,7 +1574,8 @@ umap_knn <- function(indices,
                         verbose = FALSE,
                         backend = NULL,
                         n.cores = NULL,
-                        graph_mode = c("fuzzy", "binary")) {
+                        graph_mode = c("fuzzy", "binary"),
+                        devices = NULL) {
     fast_knn_umap(
         indices,
         distances,
@@ -1466,6 +1584,7 @@ umap_knn <- function(indices,
         verbose = verbose,
         backend = backend,
         n_threads = n.cores,
-        graph_mode = graph_mode
+        graph_mode = graph_mode,
+        devices = devices
     )
 }

@@ -144,9 +144,12 @@ The public workflow is intentionally small:
 | Precompute native non-self neighbors | `precompute_knn()` |
 | Run UMAP from a data matrix | `umap()` |
 | Run interpolation-based t-SNE from a data matrix | `tsne()` |
-| Reuse a KNN graph | `umap_knn()` or `tsne_knn()` |
+| Reuse a KNN graph | pass it to `umap()` or `tsne()` |
 | Compute reusable PCA scores or t-SNE initialization | `pca()` |
 | Approximate a very large run | `landmarks` in `tsne()` or `umap()` |
+| Cluster a graph or landmarks | `graph_cluster()`; set `landmarks` if needed |
+| Work with a file-backed source | `massive_matrix()` then a high-level fit |
+| Inspect bounded file-backed rows | `massive_read_rows()` |
 | Place new observations in a fixed t-SNE reference | `transform_tsne()` |
 | Quantify embedding quality | `evaluate_embedding()` |
 

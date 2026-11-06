@@ -33,13 +33,17 @@
 #'   cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
 #'   that threshold. The KNN result stays on the device through graph
 #'   construction and optimization.
-#'   GPU requests must resolve to a real native backend; the package does not
-#'   relabel CPU work as GPU.
+#'   A resident 2D Metal fit uses one CPU thread for the first half of the
+#'   optimizer epochs, then a native Metal kernel for the remaining epochs.
+#'   The stage counts are recorded in `fit$parameters`. Resident 3D Metal
+#'   UMAP runs its optimizer on Metal. Other GPU requests must resolve to a
+#'   native backend; the package does not relabel CPU work as GPU.
 #' @param n.cores Requested CPU core count. For matrix input, the value is
 #'   passed to CPU PCA preprocessing, KNN, and UMAP. UMAP uses at most four
 #'   workers and records both requested and effective values. With `NULL`,
 #'   PCA uses `options(n.cores)` (one by default); KNN and UMAP use their
-#'   stage defaults. Native GPU stages ignore this argument.
+#'   stage defaults. The ordered CPU stage of a 2D Metal fit uses one thread;
+#'   native GPU stages ignore this argument.
 #' @param keep_knn Keep KNN matrices in the returned object.
 #' @param graph_mode Graph weighting mode. `"fuzzy"` (the default) uses the
 #'   standard UMAP fuzzy graph. `"binary"` uses a symmetric unit-weight graph
@@ -65,7 +69,8 @@
 #' or [umap_knn()] to supply an externally controlled KNN graph. These controls
 #' are scientifically consequential; fixing them is a scope
 #' decision made to keep one tested objective and update schedule aligned across
-#' CPU, Metal, and CUDA, not a claim that the values are universally optimal.
+#' CPU, Metal, and CUDA. Their update order can differ. These settings are
+#' not a claim that the values are universally optimal.
 #' Arbitrary `min_dist`, `spread`, epoch, learning-rate, negative-sampling, or
 #' optimizer-mode sweeps should use a
 #' general-purpose UMAP implementation; fastEmbedR does not claim API or
@@ -96,6 +101,33 @@ validate_umap_request <- function(backend, graph_mode, n_components,
     )
 }
 
+validate_resident_umap_output_controls <- function(devices, backend,
+        landmarks, output, chunk_rows, memory_limit,
+        refinement_epochs, local_refine, local_neighbors,
+        overlap_rows, landmark_method, init, layout_storage,
+        checkpoint, resume) {
+    if (!is.null(devices) &&
+        resolve_embedding_backend(backend) != "cuda") stop(
+        "Resident `devices` requires CUDA UMAP.",
+        call. = FALSE)
+    if (landmark_embedding_requested(landmarks)) {
+        if (!is.null(refinement_epochs)) {
+            epochs <- integer_scalar(refinement_epochs)
+            if (is.na(epochs) || epochs < 0L) stop(
+                "`refinement_epochs` must be a non-negative integer.",
+                call. = FALSE)
+        }
+        refinement_epochs <- 0L
+    } else if (is.null(refinement_epochs)) {
+        refinement_epochs <- 0L
+    }
+    massive_embedding_off(output, chunk_rows, memory_limit,
+        refinement_epochs, local_refine, local_neighbors, overlap_rows,
+        landmark_method = landmark_method, init = init,
+        layout_storage = layout_storage, checkpoint = checkpoint,
+        resume = resume)
+}
+
 resolve_umap_layout_k <- function(data, cfg) {
     resolved_k <- cfg$knn_n_neighbors %||% cfg$n_neighbors
     if (!is.null(resolved_k) && length(resolved_k) > 0L && !is.na(resolved_k)) {
@@ -107,7 +139,8 @@ resolve_umap_layout_k <- function(data, cfg) {
     as.integer(coerce_knn_input(data)$n_neighbors)
 }
 
-umap_knn_input_fit <- function(data, nn, state, seed, verbose) {
+umap_knn_input_fit <- function(data, nn, state, seed, verbose,
+                                devices = NULL) {
     if (fastembedr_is_gpu_knn(data)) data <- fastembedr_as_gpu_knn(data)
     if (!is.null(nn)) {
         stop("When `data` is a KNN object, do not also pass `nn`.",
@@ -117,7 +150,8 @@ umap_knn_input_fit <- function(data, nn, state, seed, verbose) {
     timed <- timed_do_call(fast_knn_umap, list(
         indices = data, n_components = state$n_components, seed = seed,
         verbose = verbose, backend = state$backend,
-        n_threads = state$n_threads, graph_mode = state$graph_mode
+        n_threads = state$n_threads, graph_mode = state$graph_mode,
+        devices = devices
     ))
     layout <- timed$value
     cfg <- attr(layout, "fastEmbedR_config")
@@ -181,7 +215,8 @@ compute_umap_matrix_knn <- function(x, nn, n_neighbors, metric, state) {
     engine <- "supplied"
     timed <- system.time({
         result <- if (is.null(nn)) {
-            policy <- fastembedr_embedding_nn_policy(state$backend, nrow(x))
+            policy <- fastembedr_embedding_nn_policy(
+                state$backend, nrow(x), ncol(x))
             keep_gpu <- identical(state$backend, "cuda")
             engine <- fastembedr_nn_policy_engine(
                 policy, keep_gpu = keep_gpu, metric = metric
@@ -214,12 +249,13 @@ new_embedding_result <- function(layout, method, metrics, parameters,
 assemble_umap_matrix_fit <- function(input, prepared, knn_state,
                                         embedding, state, standardize,
                                         metric) {
+    cfg <- attr(embedding$value, "fastEmbedR_config")
     layout <- finalize_embedding_layout(
         embedding$value, "UMAP",
         return_float32 = is_float32_matrix(input) &&
             is_float32_matrix(prepared$prepared$data)
     )
-    cfg <- attr(layout, "fastEmbedR_config")
+    attr(layout, "fastEmbedR_config") <- cfg
     times <- list(prepared$time, knn_state$time, embedding$time)
     elapsed <- sum(vapply(times, function(x) x[["elapsed"]], numeric(1)))
     metrics <- data.frame(
@@ -251,14 +287,17 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #' @param landmarks `FALSE` (the default) embeds all observations. A fraction
 #'   in `(0, 1)`, a positive landmark count, or explicit row indices enables
 #'   landmark embedding followed by fixed-reference projection of the remaining
-#'   rows.
+#'   rows. File-backed landmark mode currently accepts a count only;
+#'   fractions and explicit row indices require resident input.
 #' @param transform_k Number of landmark neighbors used to project non-landmark
 #'   observations. Used only when `landmarks` enables landmarking and defaults
 #'   to `n_neighbors`.
 #' @param massive `"off"` (default), experimental `"landmark"`,
-#'   or `"out_of_core_graph"`. Landmarking is always explicit. The
-#'   full-graph route needs a symmetric fuzzy
-#'   [massive_umap_fuzzy_graph()] and file-backed `init`. The experimental
+#'   or `"out_of_core_graph"`. When omitted, a prepared file-backed graph
+#'   selects full-graph mode; a file-backed matrix with explicit landmarks
+#'   selects landmark mode. The
+#'   full-graph route needs a symmetric fuzzy graph and file-backed `init`.
+#'   Build the graph with [massive_umap_fuzzy_graph()]. The experimental
 #'   CUDA full-graph route requires a device-resident 2D layout.
 #' @param init File-backed 2D or 3D initial coordinates for experimental
 #'   full-graph UMAP. Other routes do not accept this argument.
@@ -277,11 +316,22 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #' @param layout_storage `"memory"` (default), `"mmap"` for a writable
 #'   CPU mapping, or `"managed"` for CUDA managed-memory coordinates in
 #'   experimental full-graph UMAP. CUDA rejects `"mmap"`.
-#' @param devices Optional CUDA device indices for experimental landmark
-#'   query projection. Reference fitting and KNN use the first device.
-#' @param refinement_epochs Fixed-reference UMAP projection epochs in
-#'   experimental mode. Defaults to zero on CPU and CUDA; CUDA currently
-#'   rejects positive values.
+#' @param cpu_update `"sgd"` (default) uses ordered single-worker updates.
+#'   `"synchronized"` enables deterministic multicore CPU updates for
+#'   full-graph UMAP. Other modes and backends reject this choice.
+#' @param devices Optional CUDA device indices. In resident full-data mode,
+#'   two to four devices coordinate one 2D or 3D fit with host-RAM graph
+#'   construction. Native CUDA KNN is materialized in host RAM for this
+#'   route. In experimental landmark mode, devices distribute query
+#'   projection while reference fitting and KNN use the first device.
+#'   Resident landmark mode coordinates the reference fit and shards query
+#'   projection across two to four devices. Query KNN is materialized in
+#'   host RAM before sharding. Sharded refinement samples negative examples
+#'   from the fixed reference rows.
+#' @param refinement_epochs Fixed-reference UMAP projection epochs. In
+#'   resident landmark mode, the default is 50 and an explicit zero disables
+#'   refinement. In experimental file-backed mode, the default is zero on CPU
+#'   and CUDA; CUDA currently rejects positive values.
 #' @param local_refine Enable EXPERIMENTAL bounded query-to-query graph
 #'   refinement in massive landmark mode. Requires CPU and positive epochs.
 #' @param local_neighbors Non-self neighbors in each local query window.
@@ -290,8 +340,8 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #' @details Landmark mode fits the requested fuzzy or binary UMAP graph on the
 #' landmark rows, projects the remaining rows with query-to-reference KNN, and
 #' optionally refines only projected rows while landmark coordinates remain
-#' fixed. Metal and CUDA landmark refinement currently requires 2D output;
-#' 3D landmark requests fail explicitly. Resident precomputed KNN input
+#' fixed. CUDA and Metal landmark refinement support 2D or 3D output.
+#' Resident precomputed KNN input
 #' cannot be combined with landmarking.
 #' The returned `model` retains the fitted preprocessing transform so new data
 #' can be supplied in the same original feature space.
@@ -308,28 +358,43 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
                     memory_limit = "8GB", refinement_epochs = 0L,
     local_refine = FALSE, local_neighbors = 15L, overlap_rows = 500L,
     devices = NULL, landmark_method = "reservoir", init = NULL,
-    layout_storage = "memory", checkpoint = FALSE, resume = FALSE) {
-    massive <- massive_embedding_mode(massive)
+    layout_storage = "memory", checkpoint = FALSE, resume = FALSE,
+    cpu_update = "sgd") {
+    resident_epochs <- if (missing(refinement_epochs)) NULL else
+        refinement_epochs
+    if (missing(massive)) massive <- embedding_default_massive(
+        data, landmarks)
+    massive <- massive_embedding_mode(massive, cpu_update)
     if (!identical(massive, "off")) return(dispatch_massive_umap(data,
         landmarks, n_neighbors, n_components, standardize, pca_dims, metric, nn,
         seed, backend, n.cores, keep_knn, graph_mode, verbose, transform_k,
         massive, output, chunk_rows, memory_limit, refinement_epochs,
         local_refine, local_neighbors, overlap_rows, devices,
-        landmark_method, init, layout_storage, checkpoint, resume))
-    massive_embedding_off(output, chunk_rows, memory_limit,
-        refinement_epochs, local_refine, local_neighbors, overlap_rows,
-        devices, landmark_method, init, layout_storage,
+        landmark_method, init, layout_storage, checkpoint, resume, cpu_update))
+    validate_resident_umap_output_controls(devices, backend,
+        landmarks, output, chunk_rows, memory_limit,
+        resident_epochs, local_refine, local_neighbors,
+        overlap_rows, landmark_method, init, layout_storage,
         checkpoint, resume)
     if (landmark_embedding_requested(landmarks)) {
         return(run_landmark_umap(
             data, landmarks, n_neighbors, n_components, standardize,
             pca_dims, metric, seed, backend, transform_k, n.cores,
-            keep_knn, graph_mode, verbose, nn))
+            keep_knn, graph_mode, verbose, nn, resident_epochs,
+            devices))
     }
     state <- validate_umap_request(backend, graph_mode,
         n_components, n.cores, keep_knn)
     if (is_knn_input(data))
-        return(umap_knn_input_fit(data, nn, state, seed, verbose))
+        return(umap_knn_input_fit(data, nn, state, seed, verbose,
+            devices))
+    run_umap_matrix_request(data, n_neighbors, standardize,
+        pca_dims, metric, nn, seed, verbose, state, devices)
+}
+
+run_umap_matrix_request <- function(data, n_neighbors,
+        standardize, pca_dims, metric, nn, seed, verbose,
+        state, devices) {
     prepared <- prepare_umap_matrix(data, standardize, pca_dims,
         seed, state$backend, state$n_threads)
     x <- prepared$prepared$data
@@ -343,7 +408,8 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
     embedding <- timed_do_call(fast_knn_umap, list(
         indices = knn_state$knn, n_components = state$n_components,
         seed = seed, verbose = verbose, backend = state$backend,
-        n_threads = state$n_threads, graph_mode = state$graph_mode))
+        n_threads = state$n_threads, graph_mode = state$graph_mode,
+        devices = devices))
     assemble_umap_matrix_fit(data, prepared, knn_state, embedding,
         state, standardize, metric)
 }
@@ -351,7 +417,8 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
 run_landmark_umap <- function(data, landmarks, n_neighbors, n_components,
                                 standardize, pca_dims, metric, seed, backend,
                                 transform_k, n.cores, keep_knn, graph_mode,
-                                verbose, nn = NULL) {
+                                verbose, nn = NULL, refinement_epochs = NULL,
+                                devices = NULL) {
     if (!is.null(nn) || is_knn_input(data))
         stop("Landmark UMAP requires matrix input without `nn`.",
             call. = FALSE)
@@ -359,29 +426,34 @@ run_landmark_umap <- function(data, landmarks, n_neighbors, n_components,
         data, landmarks, n_neighbors, n_components, standardize,
         pca_dims, metric, seed, backend, n.cores, graph_mode
     )
-    if (state$backend == "metal" && state$n_components == 3L &&
-        !state$all_landmarks) {
-        stop("Metal 3D landmark refinement is not available.",
-            call. = FALSE)
-    }
-    if (state$backend == "cuda" && state$n_components == 3L &&
-        !state$all_landmarks) {
-        stop("CUDA 3D landmark refinement is not available.",
-            call. = FALSE)
-    }
     if (state$all_landmarks) {
         return(run_full_landmark_umap(
-            state, seed, keep_knn, verbose
+            state, seed, keep_knn, verbose, devices
         ))
     }
+    if (!is.null(devices)) {
+        devices <- massive_validate_devices(
+            devices, state$backend,
+            nrow(state$partition$query))
+        if (length(devices) > 4L ||
+            (length(devices) > 1L &&
+                !isTRUE(massive_nccl_available_cpp()))) stop(
+            "Resident landmark UMAP needs at most four CUDA ",
+            "devices and NCCL for multi-GPU use.", call. = FALSE)
+        state$gpu_identity <- massive_cuda_device_uuids(devices)
+        previous <- massive_cuda_memory_cpp()$device
+        on.exit(massive_cuda_select_cpp(previous), add = TRUE)
+        massive_cuda_select_cpp(devices[[1L]])
+    }
     reference <- fit_landmark_umap_reference(
-        state, seed, keep_knn, verbose
+        state, seed, keep_knn, verbose, devices
     )
     projection <- project_landmark_umap_rows(
-        state, reference$fit, transform_k, seed
+        state, reference$fit, transform_k, seed, devices
     )
     refinement <- refine_landmark_umap(
-        state, reference$fit, projection, seed, verbose
+        state, reference$fit, projection, seed, verbose,
+        refinement_epochs, devices
     )
     assemble_landmark_umap_fit(
         state, reference, projection, refinement,
@@ -453,7 +525,8 @@ prepare_landmark_umap <- function(data, landmarks, n_neighbors,
     )
 }
 
-run_full_landmark_umap <- function(state, seed, keep_knn, verbose) {
+run_full_landmark_umap <- function(state, seed, keep_knn, verbose,
+                                    devices = NULL) {
     fit <- umap(
         state$x,
         n_neighbors = state$n_neighbors,
@@ -461,7 +534,8 @@ run_full_landmark_umap <- function(state, seed, keep_knn, verbose) {
         pca_dims = NULL, metric = state$metric,
         seed = seed, backend = state$backend,
         n.cores = state$n_threads, keep_knn = keep_knn,
-        graph_mode = state$graph_mode, verbose = verbose
+        graph_mode = state$graph_mode, verbose = verbose,
+        devices = devices
     )
     elapsed <- state$preprocess_time[["elapsed"]] +
         fit$metrics$elapsed[[1L]]
@@ -480,7 +554,8 @@ run_full_landmark_umap <- function(state, seed, keep_knn, verbose) {
     fit
 }
 
-fit_landmark_umap_reference <- function(state, seed, keep_knn, verbose) {
+fit_landmark_umap_reference <- function(state, seed, keep_knn, verbose,
+                                        devices = NULL) {
     x_landmarks <- state$partition$landmarks
     k <- min(state$n_neighbors, nrow(x_landmarks) - 1L)
     timed <- system.time({
@@ -496,7 +571,8 @@ fit_landmark_umap_reference <- function(state, seed, keep_knn, verbose) {
             pca_dims = NULL, metric = state$metric,
             seed = seed, backend = state$backend,
             nn = knn, n.cores = state$n_threads, keep_knn = keep_knn,
-            graph_mode = state$graph_mode, verbose = verbose
+            graph_mode = state$graph_mode, verbose = verbose,
+            devices = devices
         )
     })
     list(fit = fit, knn = knn, time = timed, n_neighbors = k)
@@ -539,7 +615,8 @@ project_landmark_umap_host <- function(state, fit, knn) {
     projection_fun(fit$layout, knn$indices, knn$distances)
 }
 
-project_landmark_umap_rows <- function(state, fit, transform_k, seed) {
+project_landmark_umap_rows <- function(state, fit, transform_k, seed,
+                                        devices = NULL) {
     n_landmarks <- nrow(state$partition$landmarks)
     if (is.null(transform_k)) {
         transform_k <- min(n_landmarks, state$n_neighbors)
@@ -554,6 +631,17 @@ project_landmark_umap_rows <- function(state, fit, transform_k, seed) {
         )
         resident <- identical(state$backend, "cuda") &&
             fastembedr_is_gpu_knn(knn)
+        if (length(devices) > 1L) {
+            if (!resident) stop(
+                "Resident multi-GPU UMAP requires native CUDA query KNN.",
+                call. = FALSE)
+            gpu_knn <- knn
+            knn <- fastembedr_gpu_knn_to_host(gpu_knn)
+            attr(knn, "approximation") <-
+                attr(gpu_knn, "approximation", exact = TRUE)
+            rm(gpu_knn)
+            invisible(gc())
+        }
         projected <- if (resident) {
             NULL
         } else {
@@ -566,10 +654,9 @@ project_landmark_umap_rows <- function(state, fit, transform_k, seed) {
     )
 }
 
-landmark_umap_refinement_epochs <- function() {
-    value <- integer_scalar(getOption(
-        "fastEmbedR.landmark_umap_refine_epochs", 50L
-    ))
+landmark_umap_refinement_epochs <- function(requested = NULL) {
+    value <- integer_scalar(requested %||% getOption(
+        "fastEmbedR.landmark_umap_refine_epochs", 50L))
     if (length(value) != 1L || is.na(value) || value < 0L) 50L else value
 }
 
@@ -597,7 +684,11 @@ landmark_umap_optimizer_parameters <- function(fit) {
 }
 
 run_landmark_umap_cuda_refinement <- function(state, fit, projection,
-                                                epochs, params, seed) {
+                                                epochs, params, seed,
+                                                devices = NULL) {
+    if (length(devices) > 1L) return(
+        run_landmark_umap_cuda_devices_refinement(
+            state, fit, projection, epochs, params, seed, devices))
     result <- landmark_umap_project_refine_cuda_gpu_cpp(
         projection$knn, state$partition$landmarks,
         state$partition$query, fit$layout,
@@ -608,6 +699,28 @@ run_landmark_umap_cuda_refinement <- function(state, fit, projection,
         as.integer(seed + 2003L), 12L, 1e-3, 2.5
     )
     list(layout = result$layout, backend = "cuda")
+}
+
+run_landmark_umap_cuda_devices_refinement <- function(
+    state, fit, projection, epochs, params, seed, devices
+) {
+    result <- landmark_umap_project_refine_cuda_devices_cpp(
+        state$partition$landmarks, state$partition$query,
+        fit$layout, projection$knn$indices,
+        projection$knn$distances,
+        as.integer(epochs), params$min_dist, params$negative_rate,
+        params$learning_rate, params$repulsion,
+        as.integer(seed + 2003L), as.integer(devices)
+    )
+    layout <- assemble_landmark_layout(
+        fit$layout, result$query_layout,
+        state$selection$indices, state$selection$query_indices,
+        state$n, prefix = "UMAP", return_float32 = FALSE
+    )
+    list(layout = layout, backend = "cuda",
+        gpu_devices = as.integer(devices),
+        gpu_identity = state$gpu_identity,
+        config = result$config)
 }
 
 landmark_projection_global_indices <- function(state, projection) {
@@ -663,7 +776,7 @@ run_landmark_umap_host_refinement <- function(state, fit, projection,
                                                 layout, epochs, params,
                                                 seed, verbose) {
     indices <- landmark_projection_global_indices(state, projection)
-    use_metal <- state$n_components == 2L &&
+    use_metal <- state$n_components %in% c(2L, 3L) &&
         identical(state$backend, "metal") &&
         isTRUE(embedding_metal_available_cpp())
     result <- if (use_metal) {
@@ -681,8 +794,10 @@ run_landmark_umap_host_refinement <- function(state, fit, projection,
     result
 }
 
-refine_landmark_umap <- function(state, fit, projection, seed, verbose) {
-    epochs <- landmark_umap_refinement_epochs()
+refine_landmark_umap <- function(state, fit, projection, seed, verbose,
+                                refinement_epochs = NULL,
+                                devices = NULL) {
+    epochs <- landmark_umap_refinement_epochs(refinement_epochs)
     params <- landmark_umap_optimizer_parameters(fit)
     layout <- if (projection$resident) {
         NULL
@@ -703,7 +818,7 @@ refine_landmark_umap <- function(state, fit, projection, seed, verbose) {
     timed <- system.time({
         result <- if (projection$resident) {
             run_landmark_umap_cuda_refinement(
-                state, fit, projection, epochs, params, seed
+                state, fit, projection, epochs, params, seed, devices
             )
         } else {
             run_landmark_umap_host_refinement(
@@ -714,7 +829,10 @@ refine_landmark_umap <- function(state, fit, projection, seed, verbose) {
     })
     list(
         layout = result$layout, backend = result$backend,
-        epochs = epochs, time = timed
+        epochs = epochs, time = timed,
+        gpu_devices = result$gpu_devices %||% NULL,
+        gpu_identity = result$gpu_identity %||% NULL,
+        config = result$config %||% NULL
     )
 }
 
@@ -800,6 +918,9 @@ landmark_umap_parameters <- function(state, reference, projection,
         } else {
             NA_character_
         },
+        landmark_refinement_gpu_devices = refinement$gpu_devices,
+        landmark_refinement_gpu_identity = refinement$gpu_identity,
+        landmark_refinement_config = refinement$config,
         keep_knn = keep_knn,
         provenance = "UMAP_landmark_projection_native_cpp"
     ), memory, state$prepared$preprocess)

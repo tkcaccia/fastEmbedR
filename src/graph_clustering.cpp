@@ -16,6 +16,7 @@
 #include <cmath>
 #include <climits>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <numeric>
 #include <random>
@@ -304,6 +305,133 @@ LocalMoveResult local_move(const Graph& graph,
   return result;
 }
 
+int parallel_vertex_color(int vertex, std::uint64_t seed) {
+  std::uint32_t value = static_cast<std::uint32_t>(vertex) ^
+    static_cast<std::uint32_t>(seed ^ (seed >> 32U));
+  value ^= value >> 16U;
+  value *= 0x7feb352dU;
+  value ^= value >> 15U;
+  value *= 0x846ca68bU;
+  value ^= value >> 16U;
+  return static_cast<int>(value & 7U);
+}
+
+LocalMoveResult local_move_parallel(const Graph& graph,
+    const std::vector<int>& initial, int max_passes,
+    double resolution, std::uint64_t seed, int threads) {
+  LocalMoveResult result;
+  result.membership = compact_membership(initial);
+  if (!(graph.volume > 0.0) || graph.n < 2) return result;
+  const int n = graph.n;
+  threads = std::min(threads, n);
+  const double tolerance = louvain_move_tolerance(
+    graph.total_edge_weight);
+  std::vector<int> proposal(static_cast<std::size_t>(n));
+  std::vector<double> volume(static_cast<std::size_t>(n));
+  std::vector<int> count(static_cast<std::size_t>(n));
+  for (int pass = 0; pass < max_passes; ++pass) {
+    Rcpp::checkUserInterrupt();
+    const std::uint64_t pass_seed = seed ^
+      (0x9e3779b97f4a7c15ULL * static_cast<std::uint64_t>(pass + 1));
+    int pass_moves = 0;
+    for (int color = 0; color < 8; ++color) {
+      std::fill(volume.begin(), volume.end(), 0.0);
+      std::fill(count.begin(), count.end(), 0);
+      for (int u = 0; u < n; ++u) {
+        const int label = result.membership[static_cast<std::size_t>(u)];
+        volume[static_cast<std::size_t>(label)] +=
+          graph.degree[static_cast<std::size_t>(u)];
+        ++count[static_cast<std::size_t>(label)];
+      }
+      proposal = result.membership;
+      std::vector<std::exception_ptr> errors(
+        static_cast<std::size_t>(threads));
+      std::vector<std::thread> workers;
+      workers.reserve(static_cast<std::size_t>(threads));
+      auto propose_range = [&](int worker, int begin, int end) {
+        try {
+          for (int u = begin; u < end; ++u) {
+            if (parallel_vertex_color(u, pass_seed) != color) continue;
+            const double degree = graph.degree[static_cast<std::size_t>(u)];
+            if (!(degree > 0.0)) continue;
+            const int old = result.membership[static_cast<std::size_t>(u)];
+            std::unordered_map<int, double> neighbor_weight;
+            for (int pos = graph.row_ptr[static_cast<std::size_t>(u)];
+                 pos < graph.row_ptr[static_cast<std::size_t>(u + 1)];
+                 ++pos) {
+              const int v = graph.col_idx[static_cast<std::size_t>(pos)];
+              if (v == u) continue;
+              const int label =
+                result.membership[static_cast<std::size_t>(v)];
+              neighbor_weight[label] +=
+                graph.adjacency_weight[static_cast<std::size_t>(pos)];
+            }
+            const double old_inside = neighbor_weight[old];
+            const double old_score = louvain_move_score(old_inside,
+              degree, volume[static_cast<std::size_t>(old)] - degree,
+              graph.volume, resolution);
+            int best = old;
+            double best_score = old_score;
+            for (const auto& candidate : neighbor_weight) {
+              const int label = candidate.first;
+              if (label == old ||
+                  count[static_cast<std::size_t>(label)] == 0) continue;
+              const double score = louvain_move_score(
+                candidate.second, degree,
+                volume[static_cast<std::size_t>(label)],
+                graph.volume, resolution);
+              if (score > best_score + tolerance ||
+                  (std::abs(score - best_score) <= tolerance &&
+                   score > old_score + tolerance && label < best)) {
+                best = label;
+                best_score = score;
+              }
+            }
+            proposal[static_cast<std::size_t>(u)] = best;
+          }
+        } catch (...) {
+          errors[static_cast<std::size_t>(worker)] =
+            std::current_exception();
+        }
+      };
+      try {
+        for (int worker = 0; worker < threads; ++worker) {
+          const int begin = static_cast<int>(
+            static_cast<long long>(n) * worker / threads);
+          const int end = static_cast<int>(
+            static_cast<long long>(n) * (worker + 1) / threads);
+          workers.emplace_back(propose_range, worker, begin, end);
+        }
+      } catch (...) {
+        for (auto& worker : workers) worker.join();
+        throw;
+      }
+      for (auto& worker : workers) worker.join();
+      for (const auto& error : errors) {
+        if (error) std::rethrow_exception(error);
+      }
+      int changes = 0;
+      for (int u = 0; u < n; ++u) {
+        changes += proposal[static_cast<std::size_t>(u)] !=
+          result.membership[static_cast<std::size_t>(u)];
+      }
+      if (changes == 0) continue;
+      const double before = modularity_score(
+        graph, result.membership, resolution);
+      const double after = modularity_score(graph, proposal, resolution);
+      if (after + tolerance >= before) {
+        result.membership.swap(proposal);
+        pass_moves += changes;
+      }
+    }
+    result.moves += pass_moves;
+    ++result.passes;
+    if (pass_moves == 0) break;
+  }
+  result.membership = compact_membership(result.membership);
+  return result;
+}
+
 Graph aggregate_graph(const Graph& graph, const std::vector<int>& membership0) {
   const std::vector<int> membership = compact_membership(membership0);
   const int n = community_count(membership);
@@ -337,16 +465,21 @@ Graph aggregate_graph(const Graph& graph, const std::vector<int>& membership0) {
 std::vector<int> louvain_partition(const Graph& original,
                                    int max_passes,
                                    double resolution,
-                                   std::uint64_t seed) {
+                                   std::uint64_t seed,
+                                   int fit_threads = 1) {
   Graph graph = original;
   std::vector<int> original_to_current(static_cast<std::size_t>(original.n));
   std::iota(original_to_current.begin(), original_to_current.end(), 0);
   for (int level = 0; level < 64; ++level) {
     std::vector<int> singleton(static_cast<std::size_t>(graph.n));
     std::iota(singleton.begin(), singleton.end(), 0);
-    LocalMoveResult moved = local_move(
-      graph, singleton, max_passes, resolution,
-      seed + static_cast<std::uint64_t>(level) * 0x9e3779b97f4a7c15ULL);
+    const std::uint64_t level_seed = seed +
+      static_cast<std::uint64_t>(level) * 0x9e3779b97f4a7c15ULL;
+    LocalMoveResult moved = fit_threads == 1 ?
+      local_move(graph, singleton, max_passes, resolution,
+        level_seed) :
+      local_move_parallel(graph, singleton, max_passes, resolution,
+        level_seed, fit_threads);
     const int count = community_count(moved.membership);
     for (int& node : original_to_current) {
       node = moved.membership[static_cast<std::size_t>(node)];
@@ -457,16 +590,21 @@ std::vector<int> leiden_hierarchy(const Graph& original,
                                   const std::vector<int>& initial,
                                   int max_passes,
                                   double resolution,
-                                  std::uint64_t seed) {
+                                  std::uint64_t seed,
+                                  int fit_threads = 1) {
   Graph graph = original;
   std::vector<int> original_to_current(static_cast<std::size_t>(original.n));
   std::iota(original_to_current.begin(), original_to_current.end(), 0);
   std::vector<int> partition = compact_membership(initial);
 
   for (int level = 0; level < 64; ++level) {
-    LocalMoveResult moved = local_move(
-      graph, partition, max_passes, resolution,
-      seed + static_cast<std::uint64_t>(level) * 0x9e3779b97f4a7c15ULL);
+    const std::uint64_t level_seed = seed +
+      static_cast<std::uint64_t>(level) * 0x9e3779b97f4a7c15ULL;
+    LocalMoveResult moved = fit_threads == 1 ?
+      local_move(graph, partition, max_passes, resolution,
+        level_seed) :
+      local_move_parallel(graph, partition, max_passes, resolution,
+        level_seed, fit_threads);
     partition = std::move(moved.membership);
     if (community_count(partition) == graph.n) break;
 
@@ -503,13 +641,15 @@ std::vector<int> leiden_partition(const Graph& graph,
                                   int outer_iterations,
                                   int max_passes,
                                   double resolution,
-                                  std::uint64_t seed) {
+                                  std::uint64_t seed,
+                                  int fit_threads = 1) {
   std::vector<int> membership(static_cast<std::size_t>(graph.n));
   std::iota(membership.begin(), membership.end(), 0);
   for (int iteration = 0; iteration < outer_iterations; ++iteration) {
     std::vector<int> next = leiden_hierarchy(
       graph, membership, max_passes, resolution,
-      seed + static_cast<std::uint64_t>(iteration) * 0x94d049bb133111ebULL);
+      seed + static_cast<std::uint64_t>(iteration) *
+        0x94d049bb133111ebULL, fit_threads);
     if (next == membership) break;
     membership.swap(next);
   }
@@ -726,6 +866,70 @@ Rcpp::List fastembedr_graph_from_knn_cpp(Rcpp::IntegerMatrix indices,
 }
 
 // [[Rcpp::export]]
+Rcpp::List fastembedr_graph_canonical_cpp(Rcpp::IntegerVector from,
+                                         Rcpp::IntegerVector to,
+                                         Rcpp::NumericVector weight,
+                                         int n_vertices) {
+  return graph_edges_r(graph_from_r(from, to, weight, n_vertices));
+}
+
+// [[Rcpp::export]]
+Rcpp::List fastembedr_graph_projection_cpp(Rcpp::IntegerVector from,
+                                          Rcpp::IntegerVector to,
+                                          Rcpp::NumericVector weight,
+                                          int n_vertices,
+                                          SEXP projection) {
+  Rcpp::List metadata;
+  Graph graph = projection_graph(
+    graph_from_r(from, to, weight, n_vertices), projection, metadata);
+  return Rcpp::List::create(Rcpp::Named("graph") = graph_edges_r(graph),
+                            Rcpp::Named("metadata") = metadata);
+}
+
+// [[Rcpp::export]]
+Rcpp::List fastembedr_graph_small_groups_cpp(Rcpp::IntegerVector from,
+                                            Rcpp::IntegerVector to,
+                                            Rcpp::NumericVector weight,
+                                            int n_vertices,
+                                            Rcpp::IntegerVector membership,
+                                            double resolution,
+                                            SEXP small_groups) {
+  if (membership.size() != n_vertices) {
+    Rcpp::stop("CUDA membership length must equal graph vertices.");
+  }
+  if (!std::isfinite(resolution) || resolution <= 0) {
+    Rcpp::stop("Resolution must be positive and finite.");
+  }
+  Graph graph = graph_from_r(from, to, weight, n_vertices);
+  std::vector<int> raw(static_cast<std::size_t>(n_vertices));
+  for (int i = 0; i < n_vertices; ++i) {
+    if (membership[i] < 1 || membership[i] > n_vertices) {
+      Rcpp::stop("CUDA membership must contain valid one-based labels.");
+    }
+    raw[static_cast<std::size_t>(i)] = membership[i] - 1;
+  }
+  raw = compact_membership(raw);
+  Rcpp::List metadata;
+  Rcpp::IntegerVector reassigned, unassigned;
+  const auto labels = resolve_graph_groups(raw, small_groups, metadata,
+    reassigned, unassigned);
+  return Rcpp::List::create(
+    Rcpp::Named("membership") = graph_membership_r(labels),
+    Rcpp::Named("modularity") = unassigned.size() ? NA_REAL :
+      modularity_score(graph, labels, resolution),
+    Rcpp::Named("n_communities") = community_count(labels),
+    Rcpp::Named("connected_communities") =
+      Rcpp::LogicalVector::create(unassigned.size() ? NA_LOGICAL :
+        communities_are_connected(graph, labels)),
+    Rcpp::Named("membership_original") = membership,
+    Rcpp::Named("modularity_original") =
+      modularity_score(graph, raw, resolution),
+    Rcpp::Named("reassigned") = reassigned,
+    Rcpp::Named("unassigned") = unassigned,
+    Rcpp::Named("metadata") = metadata);
+}
+
+// [[Rcpp::export]]
 Rcpp::List fastembedr_graph_cluster_cpp(Rcpp::IntegerVector from,
                                         Rcpp::IntegerVector to,
                                         Rcpp::NumericVector weight,
@@ -738,7 +942,9 @@ Rcpp::List fastembedr_graph_cluster_cpp(Rcpp::IntegerVector from,
                                         Rcpp::NumericVector seed =
                                           Rcpp::NumericVector::create(1.0),
                                         SEXP projection = R_NilValue,
-                                        SEXP small_groups = R_NilValue) {
+                                        SEXP small_groups = R_NilValue,
+                                        int n_threads = 1,
+                                        bool parallel_fit = false) {
   if (method != "louvain" && method != "leiden") {
     Rcpp::stop("Native modularity clustering supports `louvain` and `leiden`.");
   }
@@ -757,9 +963,18 @@ Rcpp::List fastembedr_graph_cluster_cpp(Rcpp::IntegerVector from,
   if (n_iterations < 1 || n_runs < 1) {
     Rcpp::stop("`n_iterations` and `n_runs` must be positive.");
   }
+  if (n_threads < 1 || (!parallel_fit && n_threads > n_runs)) {
+    Rcpp::stop("CPU restart workers must be between 1 and `n_runs`.");
+  }
+  if (parallel_fit && n_threads > 32) {
+    Rcpp::stop("CPU fit mode supports at most 32 workers.");
+  }
   const bool consensus = resolution.size() > 1 || seed.size() > 1;
   if (consensus && n_runs != 1) {
     Rcpp::stop("With vector controls use n_runs = 1; seed defines repeats.");
+  }
+  if (consensus && n_threads != 1) {
+    Rcpp::stop("CPU restart workers require scalar controls.");
   }
   const double final_resolution = resolution[0];
   Graph graph = graph_from_r(from, to, weight, n_vertices);
@@ -779,7 +994,8 @@ Rcpp::List fastembedr_graph_cluster_cpp(Rcpp::IntegerVector from,
   const std::uint64_t base_seed =
     static_cast<std::uint64_t>(std::llround(seed[0]));
   std::vector<int> best = cluster_partition(graph, method, final_resolution,
-    n_iterations, n_runs, base_seed);
+    n_iterations, n_runs, base_seed,
+    parallel_fit ? 1 : n_threads, parallel_fit ? n_threads : 1);
   order.push_back("clustering");
   const std::vector<int> original = best;
   Rcpp::IntegerVector reassigned, unassigned;
@@ -798,7 +1014,11 @@ Rcpp::List fastembedr_graph_cluster_cpp(Rcpp::IntegerVector from,
     Rcpp::Named("connected_communities") = Rcpp::LogicalVector::create(
       unassigned.size() ? NA_LOGICAL : communities_are_connected(graph, best)),
     Rcpp::Named("implementation") = method == "louvain" ?
-      "native_multilevel_louvain" : "native_leiden_local_move_refine_aggregate"
+      "native_multilevel_louvain" : "native_leiden_local_move_refine_aggregate",
+    Rcpp::Named("effective_cpu_workers") = parallel_fit ?
+      std::min(n_threads, n_vertices) : n_threads,
+    Rcpp::Named("parallel_mode") = parallel_fit ? "fit" :
+      (n_threads > 1 ? "restarts" : "single")
   );
   if (consensus || projection != R_NilValue) {
     result["reweighted_graph"] = graph_edges_r(graph);

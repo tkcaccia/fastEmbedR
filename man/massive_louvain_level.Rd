@@ -10,9 +10,10 @@ massive_louvain_level(
   max_passes = 10L,
   resolution = 1,
   seed = 1L,
-  chunk_rows = 8192L,
+  chunk_rows = NULL,
   memory_limit = "1GB",
-  backend = "cpu"
+  backend = "cpu",
+  n.cores = 1L
 )
 }
 \arguments{
@@ -26,23 +27,29 @@ massive_louvain_level(
 
 \item{seed}{Nonnegative seed controlling the scan start of each pass.}
 
-\item{chunk_rows}{Maximum consecutive CSR rows per scan block.}
+\item{chunk_rows}{Maximum consecutive CSR rows per scan block. The
+default is 8,192 on CPU/CUDA and 65,536 on Metal; the edge budget may
+shorten a block.}
 
 \item{memory_limit}{RAM budget for graph scan buffers.}
 
-\item{backend}{Only \code{"cpu"} is implemented; other requests fail.}
+\item{backend}{\code{"cpu"}, \code{"cuda"}, or \code{"metal"} for one graph level.}
+
+\item{n.cores}{CPU workers for bounded row-candidate preparation.}
 }
 \value{
 A lightweight file-backed first-level Louvain partition.
 }
 \description{
-Applies the existing Louvain modularity move rule to every vertex of a
-symmetric file-backed UMAP fuzzy graph. CSR blocks are read from a seeded
-start in cyclic order; rows within each block are shuffled. Labels,
-counts, and volumes are memory-mapped. This function returns one
-local-moving level; use
-\code{\link[=massive_louvain]{massive_louvain()}} for memory-gated multilevel Louvain. Mapped pages
-may contribute to RSS, so \code{memory_limit} bounds scan buffers rather than
+Applies Louvain local moves to every vertex of a symmetric file-backed
+UMAP fuzzy graph. The CPU route scans seeded CSR blocks and maps community
+state. Metal and CUDA retain community state on the GPU and stream
+bounded CSR blocks from the SSD through eight color phases. All routes
+audit final modularity on the CPU. This function returns one local-moving
+level; use \code{\link[=massive_louvain]{massive_louvain()}} for multilevel Louvain. Mapped pages and
+Metal shared buffers
+can contribute to RSS, so \code{memory_limit} bounds scan buffers rather than
 total process memory. Interrupted runs retain partial files for inspection
 and cannot yet resume.
 }
+\keyword{internal}

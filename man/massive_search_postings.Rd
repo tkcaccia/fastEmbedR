@@ -53,3 +53,4 @@ queried list is scanned exactly; with \code{nprobe = postings$nlist}, results
 match full exact Euclidean search. Fewer probes are approximate and have
 no recall guarantee. This returns one bounded batch, not a full graph.
 }
+\keyword{internal}

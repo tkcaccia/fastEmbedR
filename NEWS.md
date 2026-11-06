@@ -1,5 +1,35 @@
 # fastEmbedR 0.1
 
+* Simplify the public file-backed reader API: `massive_read_rows()` now
+  reads bounded matrix rows, full-graph cluster labels, and landmark
+  membership with confidence. The four result-specific readers are
+  internal; replace calls to `massive_read_louvain_rows()`,
+  `massive_read_leiden_rows()`, `massive_read_walktrap_rows()`, or
+  `massive_read_cluster_rows()` with `massive_read_rows()`.
+  This reduces exported functions from 59 to 55 without removing the
+  underlying readers or result types. The site and vignettes now lead
+  with the integrated analysis functions and group direct stages as
+  advanced controls.
+
+* Stage an experimental `massive_cluster(gpu_storage = "stream")` path for
+  multi-GPU, file-backed, multilevel Louvain and Leiden. It bounds GPU edge
+  batches, keeps graph and partition state on host storage, and independently
+  audits modularity. Leiden refinement and graph contraction run on CPU;
+  CUDA device correctness and quality remain unqualified.
+
+* Resident full t-SNE now accepts `affinity_k` to choose a wider affinity
+  neighborhood, including conventional `ceiling(3 * perplexity)` support.
+  `tsne_knn()` and `prepare_tsne_knn()` accept the same width through
+  `n_neighbors`; compact support remains the default. Results report the
+  selected width and affinity policy.
+
+* Out-of-core `pca()` now accepts a matching file-backed `xtest` and writes
+  projected scores to `.test.f32` on the requested CPU, CUDA, or Metal
+  backend. For two or three components, `tsne_init = TRUE` writes bounded
+  `.init.f32` coordinates for full-graph t-SNE. `massive_open_pca()` verifies
+  both outputs, and `massive_pca_tsne_init()` can regenerate initialization
+  from a completed fit after interruption.
+
 * Fix supplied KNN validation in `umap(data, nn = ...)`: reject row-count
   mismatches, honor explicit host `n_neighbors`, and reject insufficient
   neighbor support. With `n_neighbors = NULL`, use all supplied non-self

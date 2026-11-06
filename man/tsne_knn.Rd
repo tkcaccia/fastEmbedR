@@ -27,6 +27,7 @@ tsne_knn(
   negative_gradient_method = "auto",
   record_costs = FALSE,
   auto_config = TRUE,
+  devices = NULL,
   ...
 )
 }
@@ -40,7 +41,8 @@ KNN index matrix.}
 \item{n_neighbors}{Optional number of non-self neighbor columns to use from
 the supplied KNN graph. This lets you compute a wide KNN once and reuse
 its first columns. If omitted, the compact affinity policy uses
-\code{ceiling(perplexity)} columns. An explicit value must equal that width.}
+\code{ceiling(perplexity)} columns. A wider value such as
+\code{ceiling(3 * perplexity)} is an explicit affinity-model control.}
 
 \item{perplexity}{t-SNE perplexity. If \code{NULL}, the optimizer chooses a safe
 value from the supplied KNN width and sample size.}
@@ -65,13 +67,13 @@ initialization.}
 selects affinity construction and layout optimization only; it does not
 trigger a nearest-neighbor search. Host KNN matrices can be consumed by
 any compiled backend. A CUDA-resident KNN object can be consumed directly
-only by the CUDA backend. Unavailable GPU requests fail without CPU
-fallback.}
+only by the CUDA backend. Coordinated CUDA fits materialize KNN in
+host RAM. Unavailable GPU requests fail without CPU fallback.}
 
 \item{n.cores}{Number of CPU cores used for CPU affinity construction and
 t-SNE optimization. \code{NULL} uses the package t-SNE thread option, which
-defaults to four. No KNN search is performed. Metal and CUDA optimizers
-ignore this argument.}
+defaults to four. No KNN search is performed. Coordinated CUDA fits
+use this count for host sparse-affinity construction.}
 
 \item{learning_rate}{Positive number or \code{"auto"}. With \code{"auto"}, the native
 optimizer uses \code{n / exaggeration} separately for each phase.}
@@ -106,6 +108,9 @@ C++ opt-SNE-inspired policy. The policy uses \code{n / early_exaggeration} for
 KLD-based early stopping on small CPU runs where the monitor is not
 prohibitively expensive. Explicit user-supplied values are respected.}
 
+\item{devices}{Optional two to four CUDA device indices for one resident
+2D or 3D fit with NCCL. KNN affinities remain in host RAM.}
+
 \item{...}{Additional low-level optimizer controls, including \code{theta} and
 \code{min_gain}.}
 }
@@ -114,8 +119,8 @@ An embedding matrix with settings stored in
 \code{attr(layout, "fastEmbedR_config")}. Float32 KNN distances, including a
 CUDA-resident KNN object, produce a \code{float::float32} layout; host double
 distances produce a standard R double matrix. Native optimization uses
-float32 in both cases. The exact returned representation is recorded in
-\code{attr(layout, "precision")} and in \code{fastEmbedR_config$output_precision}.
+float32 in both cases. The returned type is recorded in
+\code{attr(layout, "precision")} and the configuration's \code{output_precision}.
 }
 \description{
 \code{tsne_knn()} is the direct KNN-input entry point for the native
@@ -142,3 +147,4 @@ layout <- tsne_knn(idx, dst,
     early_exaggeration_iter = 5, n_iter = 10
 )
 }
+\keyword{internal}

@@ -4,19 +4,21 @@
 \name{fastEmbedR-package}
 \alias{fastEmbedR}
 \alias{fastEmbedR-package}
-\title{fastEmbedR: native UMAP and interpolation-based t-SNE embeddings}
+\title{fastEmbedR: native embedding, PCA, and clustering}
 \description{
 fastEmbedR provides an opinionated fixed-policy float32 UMAP implementation
 and a configurable native interpolation-based t-SNE implementation from
 data or
-precomputed nearest-neighbor matrices. Use \code{\link[=umap]{umap()}} or \code{\link[=tsne]{tsne()}}
-for one-call workflows, \code{\link[=precompute_knn]{precompute_knn()}} to run CPU,
-Metal, or CUDA search separately, or pass reusable KNN \code{indices} and
-\code{distances} to \code{\link[=umap_knn]{umap_knn()}} or \code{\link[=tsne_knn]{tsne_knn()}}.
-Use \code{\link[=pca]{pca()}} for reusable backend-native PCA and request
+precomputed nearest-neighbor matrices. Use \code{\link[=umap]{umap()}}, \code{\link[=tsne]{tsne()}}, or \code{\link[=pca]{pca()}}
+for everyday analysis. \code{\link[=precompute_knn]{precompute_knn()}} can run CPU, Metal, or CUDA
+search once; pass its result to \code{\link[=umap]{umap()}} or \code{\link[=tsne]{tsne()}} for reuse.
+Request
 \code{tsne_init = TRUE} when a t-SNE-ready initialization is needed.
-Score embeddings with \code{\link[=evaluate_embedding]{evaluate_embedding()}}. Optional downstream graph
-utilities are available through \code{\link[=knn_graph]{knn_graph()}} and \code{\link[=graph_cluster]{graph_cluster()}}.
+Use \code{\link[=graph_cluster]{graph_cluster()}} for resident or file-backed clustering;
+set \code{landmarks} for approximate all-row assignment.
+Score embeddings with \code{\link[=evaluate_embedding]{evaluate_embedding()}}. Precomputed KNN results can
+be passed directly to \code{\link[=umap]{umap()}} or \code{\link[=tsne]{tsne()}}; full file-backed fits also
+expose graph preparation helpers.
 Session defaults can be set with
 \code{options(backend = "cpu", n.cores = 4L)}; explicit function arguments take
 precedence over these options.
@@ -43,11 +45,6 @@ Useful links:
 }
 \author{
 \strong{Maintainer}: Stefano Cacciatore \email{tkcaccia@gmail.com} (\href{https://orcid.org/0000-0001-7052-7156}{ORCID})
-
-Authors:
-\itemize{
-  \item Stefano Cacciatore \email{tkcaccia@gmail.com} (\href{https://orcid.org/0000-0001-7052-7156}{ORCID})
-}
 
 }
 \keyword{internal}

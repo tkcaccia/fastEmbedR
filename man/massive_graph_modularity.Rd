@@ -16,7 +16,8 @@ massive_graph_modularity(
 )
 }
 \arguments{
-\item{graph}{A result of \code{\link[=massive_umap_fuzzy_graph]{massive_umap_fuzzy_graph()}}.}
+\item{graph}{A result of \code{\link[=massive_umap_fuzzy_graph]{massive_umap_fuzzy_graph()}} or a contracted
+float64 CSR graph from the multilevel Louvain/Leiden workflow.}
 
 \item{membership}{Path to a \code{uint32} label file, or a
 \code{fastEmbedR_massive_clusters} descriptor.}
@@ -47,3 +48,4 @@ bounded buffers. Labels are one-based little-endian \code{uint32} values and
 are memory-mapped; their pages may contribute to process RSS. This is a
 CPU-only quality diagnostic, not a full-graph clustering algorithm.
 }
+\keyword{internal}

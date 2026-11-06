@@ -41,6 +41,10 @@ umap_cuda_optimize_csr_cpp <- function(offsets, neighbors, weights, epochs_per_s
     .Call(`_fastEmbedR_umap_cuda_optimize_csr_cpp`, offsets, neighbors, weights, epochs_per_sample, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, optimizer_mode)
 }
 
+umap_cuda_optimize_csr_multigpu_cpp <- function(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, devices) {
+    .Call(`_fastEmbedR_umap_cuda_optimize_csr_multigpu_cpp`, offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, devices)
+}
+
 knn_tsne_opentsne_cuda_cpp <- function(indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs) {
     .Call(`_fastEmbedR_knn_tsne_opentsne_cuda_cpp`, indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs)
 }
@@ -89,8 +93,16 @@ landmark_tsne_transform_cuda_gpu_cpp <- function(gpu_knn, reference_data, query_
     .Call(`_fastEmbedR_landmark_tsne_transform_cuda_gpu_cpp`, gpu_knn, reference_data, query_data, reference_layout, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, seed, affine_neighbors, affine_ridge, max_extrapolation)
 }
 
+landmark_tsne_transform_cuda_devices_cpp <- function(reference_data, query_data, reference_layout, indices, distances, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, seed, devices) {
+    .Call(`_fastEmbedR_landmark_tsne_transform_cuda_devices_cpp`, reference_data, query_data, reference_layout, indices, distances, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, seed, devices)
+}
+
 landmark_umap_project_refine_cuda_gpu_cpp <- function(gpu_knn, reference_data, query_data, reference_layout, landmark_rows, query_rows, n_total, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, seed, affine_neighbors, affine_ridge, max_extrapolation) {
     .Call(`_fastEmbedR_landmark_umap_project_refine_cuda_gpu_cpp`, gpu_knn, reference_data, query_data, reference_layout, landmark_rows, query_rows, n_total, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, seed, affine_neighbors, affine_ridge, max_extrapolation)
+}
+
+landmark_umap_project_refine_cuda_devices_cpp <- function(reference_data, query_data, reference_layout, indices, distances, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, seed, devices) {
+    .Call(`_fastEmbedR_landmark_umap_project_refine_cuda_devices_cpp`, reference_data, query_data, reference_layout, indices, distances, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, seed, devices)
 }
 
 knn_structure_score_cuda_cpp <- function(layout, indices, keep, preserve_k, labels, n_label_levels) {
@@ -153,8 +165,8 @@ knn_embed_metal_cpp <- function(indices, distances, init, objective, n_epochs, n
     .Call(`_fastEmbedR_knn_embed_metal_cpp`, indices, distances, init, objective, n_epochs, negative_sample_rate, learning_rate, min_dist, seed)
 }
 
-knn_embed_metal_csr_cpp <- function(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, repulsion_strength, seed, sampler_mode = 0L) {
-    .Call(`_fastEmbedR_knn_embed_metal_csr_cpp`, offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, repulsion_strength, seed, sampler_mode)
+knn_embed_metal_csr_cpp <- function(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, repulsion_strength, seed, sampler_mode = 0L, start_epoch = 0L, total_epochs = -1L) {
+    .Call(`_fastEmbedR_knn_embed_metal_csr_cpp`, offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, repulsion_strength, seed, sampler_mode, start_epoch, total_epochs)
 }
 
 knn_umap_refine_rows_metal_cpp <- function(indices, distances, row_ids, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, seed) {
@@ -175,6 +187,10 @@ transform_tsne_metal_cpp <- function(reference_layout, indices, distances, y_ini
 
 knn_tsne_opentsne_metal_cpp <- function(indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs, auto_config, auto_iter_end) {
     .Call(`_fastEmbedR_knn_tsne_opentsne_metal_cpp`, indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs, auto_config, auto_iter_end)
+}
+
+massive_tsne_optimize_metal_cpp <- function(offsets_path, indices_path, weights_path, init_path, output_path, n, dims, early_iter, normal_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, start_iter, state_path, checkpoint_every, checkpoint_callback, graph_access, edge_chunk_capacity) {
+    .Call(`_fastEmbedR_massive_tsne_optimize_metal_cpp`, offsets_path, indices_path, weights_path, init_path, output_path, n, dims, early_iter, normal_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, start_iter, state_path, checkpoint_every, checkpoint_callback, graph_access, edge_chunk_capacity)
 }
 
 pca_rsvd_cpu_cpp <- function(data, n_components, center, scale, omega, power, n_threads = 1L) {
@@ -321,8 +337,8 @@ fast_knn_umap_csr_atomic_cpp <- function(offsets, neighbors, weights, init_embed
     .Call(`_fastEmbedR_fast_knn_umap_csr_atomic_cpp`, offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, verbose)
 }
 
-fast_knn_umap_csr_clean_atomic_cpp <- function(offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, decay_mode, verbose) {
-    .Call(`_fastEmbedR_fast_knn_umap_csr_clean_atomic_cpp`, offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, decay_mode, verbose)
+fast_knn_umap_csr_clean_atomic_cpp <- function(offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, decay_mode, verbose, start_epoch = 0L, total_epochs = -1L) {
+    .Call(`_fastEmbedR_fast_knn_umap_csr_clean_atomic_cpp`, offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, decay_mode, verbose, start_epoch, total_epochs)
 }
 
 fast_knn_umap_coo_replay_cpp <- function(heads, tails, weights, epochs_per_sample, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, sanitize_each_epoch, verbose) {
@@ -357,8 +373,20 @@ fastembedr_graph_from_knn_cpp <- function(indices, distances, weight_type = "snn
     .Call(`_fastEmbedR_fastembedr_graph_from_knn_cpp`, indices, distances, weight_type, mutual, prune, n_threads)
 }
 
-fastembedr_graph_cluster_cpp <- function(from, to, weight, n_vertices, method = "leiden", resolution = as.numeric( c(1.0)), n_iterations = 10L, n_runs = 1L, seed = as.numeric( c(1.0)), projection = NULL, small_groups = NULL) {
-    .Call(`_fastEmbedR_fastembedr_graph_cluster_cpp`, from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, projection, small_groups)
+fastembedr_graph_canonical_cpp <- function(from, to, weight, n_vertices) {
+    .Call(`_fastEmbedR_fastembedr_graph_canonical_cpp`, from, to, weight, n_vertices)
+}
+
+fastembedr_graph_projection_cpp <- function(from, to, weight, n_vertices, projection) {
+    .Call(`_fastEmbedR_fastembedr_graph_projection_cpp`, from, to, weight, n_vertices, projection)
+}
+
+fastembedr_graph_small_groups_cpp <- function(from, to, weight, n_vertices, membership, resolution, small_groups) {
+    .Call(`_fastEmbedR_fastembedr_graph_small_groups_cpp`, from, to, weight, n_vertices, membership, resolution, small_groups)
+}
+
+fastembedr_graph_cluster_cpp <- function(from, to, weight, n_vertices, method = "leiden", resolution = as.numeric( c(1.0)), n_iterations = 10L, n_runs = 1L, seed = as.numeric( c(1.0)), projection = NULL, small_groups = NULL, n_threads = 1L, parallel_fit = FALSE) {
+    .Call(`_fastEmbedR_fastembedr_graph_cluster_cpp`, from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, projection, small_groups, n_threads, parallel_fit)
 }
 
 fastembedr_graph_modularity_cpp <- function(from, to, weight, n_vertices, membership, resolution = 1.0) {
@@ -371,6 +399,10 @@ graph_clustering_cuda_available_cpp <- function() {
 
 fastembedr_graph_cluster_cuda_cpp <- function(from, to, weight, n_vertices, method = "leiden", resolution = 1.0, n_iterations = 10L, n_runs = 1L, seed = 1) {
     .Call(`_fastEmbedR_fastembedr_graph_cluster_cuda_cpp`, from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed)
+}
+
+fastembedr_graph_cluster_cuda_devices_cpp <- function(from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, devices) {
+    .Call(`_fastEmbedR_fastembedr_graph_cluster_cuda_devices_cpp`, from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, devices)
 }
 
 graph_clustering_metal_available_cpp <- function() {
@@ -393,6 +425,14 @@ massive_reorder_posting_graph_cpp <- function(posting_ids_path, grouped_indices_
     invisible(.Call(`_fastEmbedR_massive_reorder_posting_graph_cpp`, posting_ids_path, grouped_indices_path, grouped_distances_path, output_indices_path, output_distances_path, n_vertices, k, bucket_rows, read_rows, restart_work))
 }
 
+pca_cuda_resident_covariance_cpp <- function(input, devices, centered) {
+    .Call(`_fastEmbedR_pca_cuda_resident_covariance_cpp`, input, devices, centered)
+}
+
+pca_cuda_resident_project_cpp <- function(input, devices, center, scale, loadings) {
+    .Call(`_fastEmbedR_pca_cuda_resident_project_cpp`, input, devices, center, scale, loadings)
+}
+
 massive_file_info_cpp <- function(path, format, rows, columns) {
     .Call(`_fastEmbedR_massive_file_info_cpp`, path, format, rows, columns)
 }
@@ -401,16 +441,32 @@ massive_disk_available_cpp <- function(output) {
     .Call(`_fastEmbedR_massive_disk_available_cpp`, output)
 }
 
-massive_graph_modularity_cpp <- function(offsets_path, indices_path, weights_path, membership_path, n_vertices, n_communities, resolution, chunk_rows, edge_budget, connectivity) {
-    .Call(`_fastEmbedR_massive_graph_modularity_cpp`, offsets_path, indices_path, weights_path, membership_path, n_vertices, n_communities, resolution, chunk_rows, edge_budget, connectivity)
+massive_graph_modularity_cpp <- function(offsets_path, indices_path, weights_path, membership_path, n_vertices, n_communities, resolution, chunk_rows, edge_budget, connectivity, contracted = FALSE) {
+    .Call(`_fastEmbedR_massive_graph_modularity_cpp`, offsets_path, indices_path, weights_path, membership_path, n_vertices, n_communities, resolution, chunk_rows, edge_budget, connectivity, contracted)
 }
 
-massive_louvain_level_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted, initial_path = "", initial_count = 0L) {
-    .Call(`_fastEmbedR_massive_louvain_level_cpp`, offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted, initial_path, initial_count)
+massive_louvain_level_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted, initial_path = "", initial_count = 0L, n_threads = 1L) {
+    .Call(`_fastEmbedR_massive_louvain_level_cpp`, offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted, initial_path, initial_count, n_threads)
 }
 
-massive_leiden_refine_cpp <- function(offsets_path, indices_path, weights_path, parent_path, n_vertices, n_parent, output, resolution, chunk_rows, edge_budget, seed, contracted) {
-    .Call(`_fastEmbedR_massive_leiden_refine_cpp`, offsets_path, indices_path, weights_path, parent_path, n_vertices, n_parent, output, resolution, chunk_rows, edge_budget, seed, contracted)
+massive_louvain_metal_level_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted = FALSE, initial_path = "", initial_count = 0L) {
+    .Call(`_fastEmbedR_massive_louvain_metal_level_cpp`, offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted, initial_path, initial_count)
+}
+
+massive_louvain_cuda_level_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted = FALSE, initial_path = "", initial_count = 0L) {
+    .Call(`_fastEmbedR_massive_louvain_cuda_level_cpp`, offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted, initial_path, initial_count)
+}
+
+massive_leiden_metal_refine_cpp <- function(offsets_path, indices_path, weights_path, parent_path, n_vertices, n_parent, output, resolution, chunk_rows, edge_budget, seed, contracted) {
+    .Call(`_fastEmbedR_massive_leiden_metal_refine_cpp`, offsets_path, indices_path, weights_path, parent_path, n_vertices, n_parent, output, resolution, chunk_rows, edge_budget, seed, contracted)
+}
+
+massive_leiden_cuda_refine_cpp <- function(offsets_path, indices_path, weights_path, parent_path, n_vertices, n_parent, output, resolution, chunk_rows, edge_budget, seed, contracted) {
+    .Call(`_fastEmbedR_massive_leiden_cuda_refine_cpp`, offsets_path, indices_path, weights_path, parent_path, n_vertices, n_parent, output, resolution, chunk_rows, edge_budget, seed, contracted)
+}
+
+massive_leiden_refine_cpp <- function(offsets_path, indices_path, weights_path, parent_path, n_vertices, n_parent, output, resolution, chunk_rows, edge_budget, seed, contracted, n_threads = 1L) {
+    .Call(`_fastEmbedR_massive_leiden_refine_cpp`, offsets_path, indices_path, weights_path, parent_path, n_vertices, n_parent, output, resolution, chunk_rows, edge_budget, seed, contracted, n_threads)
 }
 
 massive_reference_buffer_cpp <- function(spec) {
@@ -469,8 +525,8 @@ massive_umap_optimize_cpp <- function(offsets_path, indices_path, weights_path, 
     .Call(`_fastEmbedR_massive_umap_optimize_cpp`, offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, dimensions, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, memory_limit_bytes, start_epoch, positive_done, negative_done, checkpoint_every, checkpoint_callback, layout_storage, n_threads, cpu_update)
 }
 
-massive_umap_optimize_metal_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, edge_capacity, memory_limit_bytes, start_epoch = 0L, positive_done = 0, negative_done = 0, checkpoint_every = 0L, checkpoint_callback = NULL, layout_storage = "memory") {
-    .Call(`_fastEmbedR_massive_umap_optimize_metal_cpp`, offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, edge_capacity, memory_limit_bytes, start_epoch, positive_done, negative_done, checkpoint_every, checkpoint_callback, layout_storage)
+massive_umap_optimize_metal_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, n_components, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, edge_capacity, memory_limit_bytes, start_epoch = 0L, positive_done = 0, negative_done = 0, checkpoint_every = 0L, checkpoint_callback = NULL, layout_storage = "memory") {
+    .Call(`_fastEmbedR_massive_umap_optimize_metal_cpp`, offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, n_components, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, edge_capacity, memory_limit_bytes, start_epoch, positive_done, negative_done, checkpoint_every, checkpoint_callback, layout_storage)
 }
 
 massive_nccl_available_cpp <- function() {
@@ -655,6 +711,10 @@ native_cuda_index_build_cpp <- function(data, k, method, target_recall = 0.99) {
 
 native_cuda_index_search_cpp <- function(pointer, query, k) {
     .Call(`_fastEmbedR_native_cuda_index_search_cpp`, pointer, query, k)
+}
+
+knn_tsne_opentsne_cuda_multigpu_cpp <- function(indices, distances, y_init, n_components, perplexity, early_iter, normal_iter, early_exag, exag, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, n_threads, devices) {
+    .Call(`_fastEmbedR_knn_tsne_opentsne_cuda_multigpu_cpp`, indices, distances, y_init, n_components, perplexity, early_iter, normal_iter, early_exag, exag, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, n_threads, devices)
 }
 
 opentsne_kl_diagnostic_cpp <- function(indices, distances, layout, perplexity, n_threads) {

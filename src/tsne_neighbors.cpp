@@ -26,10 +26,13 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <numeric>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -37,6 +40,9 @@
 
 #include "tsne_affinity_common.h"
 #include "massive_graph_attraction.h"
+#include "massive_tsne_cuda.h"
+
+extern "C" const char* fastembedr_cuda_embedding_last_error();
 
 using Rcpp::IntegerMatrix;
 using Rcpp::IntegerVector;
@@ -1591,6 +1597,184 @@ void compute_tsne_transform_gradient_2d_flat(const std::vector<double>& referenc
 }
 
 } // namespace
+
+#if defined(FASTEMBEDR_HAS_CUDA) && defined(FASTEMBEDR_HAS_NCCL)
+void resident_tsne_cuda_check(int status) {
+  if (status != 0) Rcpp::stop(std::string(
+    "Resident multi-GPU t-SNE failed: ") +
+    fastembedr_cuda_embedding_last_error());
+}
+
+void resident_tsne_attract(void* context,
+                           const SparseProbabilitiesF& graph,
+                           int rank, int begin, int end,
+                           int capacity, float exaggeration) {
+  std::vector<int> heads;
+  std::vector<int> tails;
+  std::vector<float> weights;
+  heads.reserve(capacity);
+  tails.reserve(capacity);
+  weights.reserve(capacity);
+  const auto flush = [&]() {
+    if (heads.empty()) return;
+    const int status = fastembedr_massive_tsne_multigpu_attract(
+      context, rank, heads.data(), tails.data(), weights.data(),
+      static_cast<int>(heads.size()), exaggeration);
+    if (status != 0) throw std::runtime_error(
+      fastembedr_cuda_embedding_last_error());
+    heads.clear();
+    tails.clear();
+    weights.clear();
+  };
+  for (int row = begin; row < end; ++row) {
+    const int first = graph.row_ptr[static_cast<std::size_t>(row)];
+    const int last = graph.row_ptr[static_cast<std::size_t>(row + 1)];
+    for (int edge = first; edge < last; ++edge) {
+      heads.push_back(row);
+      tails.push_back(graph.col[static_cast<std::size_t>(edge)]);
+      weights.push_back(graph.val[static_cast<std::size_t>(edge)]);
+      if (static_cast<int>(heads.size()) == capacity) flush();
+    }
+  }
+  flush();
+}
+#endif
+
+// [[Rcpp::export]]
+List knn_tsne_opentsne_cuda_multigpu_cpp(
+    IntegerMatrix indices, SEXP distances, SEXP y_init,
+    int n_components, double perplexity, int early_iter,
+    int normal_iter, double early_exag, double exag,
+    double learning_rate, bool learning_rate_auto,
+    double initial_momentum, double final_momentum,
+    double min_gain, double max_step_norm, int n_threads,
+    IntegerVector devices) {
+#if defined(FASTEMBEDR_HAS_CUDA) && defined(FASTEMBEDR_HAS_NCCL)
+  const int n = indices.nrow();
+  const int k = indices.ncol();
+  const auto dims = distance_sexp_dims(distances);
+  const auto init_dims = distance_sexp_dims(y_init);
+  if (n < 2 || k < 1 || dims.first != n || dims.second != k ||
+      init_dims.first != n || init_dims.second != n_components ||
+      (n_components != 2 && n_components != 3) ||
+      devices.size() < 2 || devices.size() > 4 ||
+      static_cast<std::size_t>(n) * k > INT_MAX / 2 ||
+      early_iter < 0 || normal_iter < 0 ||
+      early_iter + normal_iter < 1 || perplexity <= 0 ||
+      early_exag <= 0 || exag <= 0 || min_gain <= 0 ||
+      (!learning_rate_auto && learning_rate <= 0)) {
+    Rcpp::stop("Invalid resident multi-GPU t-SNE request.");
+  }
+  const int threads = resolve_threads(n_threads, n);
+  const auto started = std::chrono::steady_clock::now();
+  auto values = copy_distances_float_sexp(distances, threads);
+  auto graph = build_tsne_probabilities_float(
+    indices, values, perplexity, threads);
+  std::vector<float>().swap(values);
+  const auto affinity_end = std::chrono::steady_clock::now();
+  auto layout = copy_distances_float_sexp(y_init, threads);
+  if (std::any_of(layout.begin(), layout.end(),
+      [](float value) { return !std::isfinite(value); })) {
+    Rcpp::stop("Initial t-SNE coordinates must be finite.");
+  }
+  const int capacity = static_cast<int>(
+    std::min<std::size_t>(1000000u, graph.col.size()));
+  void* raw = fastembedr_massive_tsne_multigpu_create(
+    n, n_components, capacity, devices.begin(), devices.size());
+  if (raw == nullptr) resident_tsne_cuda_check(1);
+  std::unique_ptr<void, decltype(&fastembedr_massive_tsne_multigpu_destroy)>
+    context(raw, fastembedr_massive_tsne_multigpu_destroy);
+  constexpr int transfer_rows = 1000000;
+  for (int first = 0; first < n; first += transfer_rows) {
+    const int rows = std::min(transfer_rows, n - first);
+    resident_tsne_cuda_check(
+      fastembedr_massive_tsne_multigpu_upload(context.get(), 0,
+        first, rows, layout.data() +
+          static_cast<std::size_t>(first) * n_components));
+  }
+  double fft_seconds = 0.0;
+  const int total = early_iter + normal_iter;
+  const int block_rows = (n - 1) / devices.size() + 1;
+  IntegerVector attraction_edges(devices.size());
+  for (int rank = 0; rank < devices.size(); ++rank) {
+    const int first = rank * block_rows;
+    const int last = std::min(n, first + block_rows);
+    attraction_edges[rank] = graph.row_ptr[last] - graph.row_ptr[first];
+  }
+  for (int iter = 0; iter < total; ++iter) {
+    const bool early = iter < early_iter;
+    const float phase_exag = static_cast<float>(
+      early ? early_exag : exag);
+    const float phase_lr = static_cast<float>(
+      learning_rate_auto ? n / phase_exag : learning_rate);
+    const float momentum = static_cast<float>(
+      early ? initial_momentum : final_momentum);
+    resident_tsne_cuda_check(
+      fastembedr_massive_tsne_multigpu_begin(context.get()));
+    std::vector<std::future<void>> pending;
+    for (int rank = 0; rank < devices.size(); ++rank) {
+      const int first = rank * block_rows;
+      const int last = std::min(n, first + block_rows);
+      pending.emplace_back(std::async(std::launch::async,
+        [&, rank, first, last, phase_exag]() {
+          resident_tsne_attract(context.get(), graph, rank,
+            first, last, capacity, phase_exag);
+        }));
+    }
+    for (auto& task : pending) task.get();
+    resident_tsne_cuda_check(
+      fastembedr_massive_tsne_multigpu_finish(context.get(),
+        phase_lr, momentum, static_cast<float>(min_gain),
+        static_cast<float>(max_step_norm)));
+    float fft_ms = 0.0f;
+    resident_tsne_cuda_check(
+      fastembedr_massive_tsne_multigpu_repulsion_ms(
+        context.get(), &fft_ms));
+    fft_seconds += fft_ms / 1000.0;
+    Rcpp::checkUserInterrupt();
+  }
+  const auto optimization_end = std::chrono::steady_clock::now();
+  for (int first = 0; first < n; first += transfer_rows) {
+    const int rows = std::min(transfer_rows, n - first);
+    resident_tsne_cuda_check(
+      fastembedr_massive_tsne_multigpu_download(context.get(), 0,
+        first, rows, layout.data() +
+          static_cast<std::size_t>(first) * n_components));
+  }
+  NumericMatrix output(n, n_components);
+  for (int row = 0; row < n; ++row) {
+    for (int axis = 0; axis < n_components; ++axis) {
+      output(row, axis) = layout[
+        static_cast<std::size_t>(row) * n_components + axis];
+    }
+  }
+  const auto finished = std::chrono::steady_clock::now();
+  const auto seconds = [](auto first, auto last) {
+    return std::chrono::duration<double>(last - first).count();
+  };
+  return List::create(
+    Rcpp::Named("Y") = output,
+    Rcpp::Named("optimizer") = "cuda_resident_coordinated_nccl",
+    Rcpp::Named("repulsion") = n_components == 3 ?
+      "fft_grid_3d" : "fft_grid",
+    Rcpp::Named("precision") = "float32",
+    Rcpp::Named("probabilities") = "symmetric_sparse_knn_host",
+    Rcpp::Named("n_threads") = threads,
+    Rcpp::Named("learning_rate_early") = learning_rate_auto ?
+      n / early_exag : learning_rate,
+    Rcpp::Named("learning_rate_normal") = learning_rate_auto ?
+      n / exag : learning_rate,
+    Rcpp::Named("fft_elapsed_sec") = fft_seconds,
+    Rcpp::Named("affinity_elapsed_sec") = seconds(started, affinity_end),
+    Rcpp::Named("optimization_elapsed_sec") =
+      seconds(affinity_end, optimization_end),
+    Rcpp::Named("native_total_elapsed_sec") = seconds(started, finished),
+    Rcpp::Named("gpu_devices") = devices,
+    Rcpp::Named("per_device_attraction_edges") = attraction_edges);
+#else
+  Rcpp::stop("Resident multi-GPU t-SNE requires CUDA and NCCL.");
+#endif
+}
 
 // Exact post-fit KL diagnostic. This is intentionally separate from the
 // production optimizer timing because evaluating the dense low-dimensional

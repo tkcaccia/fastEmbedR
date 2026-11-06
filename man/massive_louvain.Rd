@@ -10,12 +10,13 @@ massive_louvain(
   max_passes = 10L,
   resolution = 1,
   seed = 1L,
-  chunk_rows = 8192L,
+  chunk_rows = NULL,
   memory_limit = "1GB",
   backend = "cpu",
   checkpoint = FALSE,
   resume = FALSE,
-  initial = NULL
+  initial = NULL,
+  n.cores = 1L
 )
 }
 \arguments{
@@ -29,11 +30,14 @@ massive_louvain(
 
 \item{seed}{Nonnegative random seed.}
 
-\item{chunk_rows}{Maximum consecutive graph rows per scan block.}
+\item{chunk_rows}{Maximum consecutive graph rows per scan block. The
+default is 8,192 on CPU/CUDA and 65,536 on Metal; the edge budget may
+shorten a block.}
 
 \item{memory_limit}{RAM budget for scan buffers and resident levels.}
 
-\item{backend}{Only \code{"cpu"} is implemented; other requests fail.}
+\item{backend}{\code{"cpu"}, \code{"cuda"}, or \code{"metal"}. GPU local moves use
+the selected device; graph contraction and modularity audits use CPU.}
 
 \item{checkpoint}{Save completed first-level and contraction stages.}
 
@@ -41,6 +45,9 @@ massive_louvain(
 
 \item{initial}{Optional \code{massive_cluster_landmarks()} result whose saved
 labels initialize local moves. Its row order must match \code{graph}.}
+
+\item{n.cores}{CPU workers for bounded row-candidate preparation.
+Local-move commits remain ordered. GPU routes require one coordinator.}
 }
 \value{
 Lightweight file-backed Louvain result with modularity.
@@ -49,10 +56,13 @@ Lightweight file-backed Louvain result with modularity.
 Runs a file-backed local-moving level, externally contracts its edges,
 and keeps higher contracted levels file-backed until a level passes a
 conservative resident-memory check. At that point it reuses
-\code{\link[=graph_cluster]{graph_cluster()}}. Original graph and final labels remain on disk.
+\code{\link[=graph_cluster]{graph_cluster()}}. Metal and CUDA local moves run on the GPU at every level;
+graph contraction and final modularity audits run on the CPU. Original
+graph and final labels remain on disk.
 With \code{checkpoint = TRUE}, completed first-level and contraction files
 can be reused by \code{resume = TRUE} after validating input, control, and
 native-library identities. An interrupted individual scan or higher
 level is not yet resumable; its partial files remain for inspection.
 Mapped label pages may contribute to RSS beyond scan buffers.
 }
+\keyword{internal}

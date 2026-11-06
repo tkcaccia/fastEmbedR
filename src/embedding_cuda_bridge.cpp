@@ -1,5 +1,16 @@
 #include <Rcpp.h>
 
+#include <algorithm>
+#include <cmath>
+#include <future>
+#include <limits>
+#include <memory>
+#include <stdexcept>
+#include <vector>
+
+#include "massive_umap_cuda.h"
+#include "umap_optimizer_common.h"
+
 using Rcpp::IntegerMatrix;
 using Rcpp::IntegerVector;
 using Rcpp::List;
@@ -187,6 +198,15 @@ List landmark_tsne_transform_cuda_gpu_impl(SEXP gpu_knn,
                                            int affine_neighbors,
                                            double affine_ridge,
                                            double max_extrapolation);
+List landmark_tsne_transform_cuda_devices_impl(
+    SEXP reference_data, SEXP query_data, SEXP reference_layout,
+    IntegerMatrix indices, NumericMatrix distances,
+    double perplexity, int n_iter, int early_exaggeration_iter,
+    double learning_rate, double early_exaggeration,
+    double exaggeration, double initial_momentum,
+    double final_momentum, double max_grad_norm,
+    double max_step_norm, int n_negatives,
+    int exact_repulsion_threshold, int seed, IntegerVector devices);
 List landmark_umap_project_refine_cuda_gpu_impl(SEXP gpu_knn,
                                                 SEXP reference_data,
                                                 SEXP query_data,
@@ -203,6 +223,12 @@ List landmark_umap_project_refine_cuda_gpu_impl(SEXP gpu_knn,
                                                 int affine_neighbors,
                                                 double affine_ridge,
                                                 double max_extrapolation);
+List landmark_umap_project_refine_cuda_devices_impl(
+    SEXP reference_data, SEXP query_data, SEXP reference_layout,
+    IntegerMatrix indices, NumericMatrix distances,
+    int n_epochs, double min_dist, int negative_sample_rate,
+    double learning_rate, double repulsion_strength, int seed,
+    IntegerVector devices);
 NumericVector knn_structure_score_cuda_impl(NumericMatrix layout,
                                             IntegerMatrix indices,
                                             IntegerVector keep,
@@ -438,6 +464,210 @@ NumericMatrix umap_cuda_optimize_csr_cpp(IntegerVector offsets,
     negative_sample_rate, learning_rate, min_dist, repulsion_strength,
     seed, optimizer_mode
   );
+}
+
+#if defined(FASTEMBEDR_HAS_CUDA) && defined(FASTEMBEDR_HAS_NCCL)
+namespace {
+
+void resident_umap_check(int status) {
+  if (status != 0) Rcpp::stop(std::string(
+    "Resident multi-GPU UMAP failed: ") +
+    fastembedr_cuda_embedding_last_error());
+}
+
+int resident_umap_rank_epoch(
+    void* context, const std::vector<int>& offsets,
+    const std::vector<int>& neighbors,
+    const std::vector<float>& weights, int rank,
+    int block_rows, int capacity, int epoch,
+    float min_weight, float max_weight) {
+  std::vector<int> heads, tails;
+  std::vector<float> active_weights, periods;
+  heads.reserve(capacity);
+  tails.reserve(capacity);
+  active_weights.reserve(capacity);
+  periods.reserve(capacity);
+  int visits = 0;
+  const auto flush = [&]() {
+    if (heads.empty()) return;
+    const int status = fastembedr_massive_umap_multigpu_step(
+      context, rank, heads.data(), tails.data(),
+      active_weights.data(), periods.data(),
+      static_cast<int>(heads.size()), epoch);
+    if (status != 0) throw std::runtime_error(
+      fastembedr_cuda_embedding_last_error());
+    visits += static_cast<int>(heads.size());
+    heads.clear();
+    tails.clear();
+    active_weights.clear();
+    periods.clear();
+  };
+  const int n = static_cast<int>(offsets.size()) - 1;
+  const int first = rank * block_rows;
+  const int last = std::min(n, first + block_rows);
+  for (int row = first; row < last; ++row) {
+    for (int edge = offsets[row]; edge < offsets[row + 1]; ++edge) {
+      const float weight = weights[edge];
+      if (weight < min_weight) continue;
+      heads.push_back(row);
+      tails.push_back(neighbors[edge]);
+      active_weights.push_back(weight);
+      periods.push_back(max_weight /
+        std::max(weight, 1.0e-6f));
+      if (static_cast<int>(heads.size()) == capacity) flush();
+    }
+  }
+  flush();
+  return visits;
+}
+
+}  // namespace
+#endif
+
+// [[Rcpp::export]]
+List umap_cuda_optimize_csr_multigpu_cpp(
+    IntegerVector offsets, IntegerVector neighbors,
+    NumericVector weights, NumericMatrix init,
+    int n_epochs, int negative_sample_rate,
+    double learning_rate, double min_dist,
+    double repulsion_strength, int seed,
+    IntegerVector devices) {
+#if defined(FASTEMBEDR_HAS_CUDA) && defined(FASTEMBEDR_HAS_NCCL)
+  const int n = init.nrow();
+  const int dimensions = init.ncol();
+  const int nnz = neighbors.size();
+  if (n < 2 || (dimensions != 2 && dimensions != 3) ||
+      offsets.size() != n + 1 || weights.size() != nnz ||
+      nnz < 1 || devices.size() < 2 || devices.size() > 4 ||
+      n_epochs < 1 || negative_sample_rate < 0 ||
+      !std::isfinite(learning_rate) || learning_rate <= 0 ||
+      !std::isfinite(min_dist) || min_dist < 0 ||
+      !std::isfinite(repulsion_strength) ||
+      repulsion_strength <= 0 || seed < 0) {
+    Rcpp::stop("Invalid resident multi-GPU UMAP request.");
+  }
+  if (offsets[0] != 0 || offsets[n] != nnz) {
+    Rcpp::stop("Resident UMAP CSR offsets are inconsistent.");
+  }
+  float max_weight = 0.0f;
+  std::vector<int> row_ptr(offsets.begin(), offsets.end());
+  std::vector<int> col(neighbors.begin(), neighbors.end());
+  std::vector<float> edge_weights(nnz);
+  for (int row = 0; row < n; ++row) {
+    if (row_ptr[row] < 0 || row_ptr[row + 1] < row_ptr[row] ||
+        row_ptr[row + 1] > nnz) {
+      Rcpp::stop("Resident UMAP CSR offsets are not monotone.");
+    }
+  }
+  for (int edge = 0; edge < nnz; ++edge) {
+    if (col[edge] < 0 || col[edge] >= n ||
+        !std::isfinite(weights[edge]) || weights[edge] < 0) {
+      Rcpp::stop("Resident UMAP graph has invalid edges.");
+    }
+    edge_weights[edge] = static_cast<float>(weights[edge]);
+    if (!std::isfinite(edge_weights[edge])) {
+      Rcpp::stop("Resident UMAP weights exceed float32 range.");
+    }
+    max_weight = std::max(max_weight, edge_weights[edge]);
+  }
+  if (max_weight <= 0) {
+    Rcpp::stop("Resident UMAP graph has no positive edges.");
+  }
+  const double contributions = static_cast<double>(nnz) *
+    (1.0 + static_cast<double>(n_epochs) *
+      negative_sample_rate);
+  const double scale_limit =
+    (std::ldexp(1.0, 62) / contributions - 0.5) /
+    (4.0 * learning_rate);
+  if (!std::isfinite(scale_limit) || scale_limit < 256.0) {
+    Rcpp::stop("Resident UMAP delta exceeds the precision budget.");
+  }
+  const double delta_scale = std::exp2(std::floor(std::log2(
+    std::min(scale_limit, std::ldexp(1.0, 24)))));
+  const auto curve = fastembedr_umap_curve(min_dist);
+  const int capacity = std::min(1000000, nnz);
+  void* raw = fastembedr_massive_umap_multigpu_create(
+    n, dimensions, capacity, n_epochs, negative_sample_rate,
+    static_cast<float>(learning_rate),
+    static_cast<float>(curve.first),
+    static_cast<float>(curve.second),
+    static_cast<float>(repulsion_strength), max_weight,
+    static_cast<unsigned int>(seed), devices.begin(),
+    devices.size(), delta_scale);
+  if (raw == nullptr) resident_umap_check(1);
+  std::unique_ptr<void, decltype(
+      &fastembedr_massive_umap_multigpu_destroy)> context(
+    raw, fastembedr_massive_umap_multigpu_destroy);
+  std::vector<float> layout(
+    static_cast<std::size_t>(n) * dimensions);
+  for (int row = 0; row < n; ++row) {
+    for (int axis = 0; axis < dimensions; ++axis) {
+      const double value = init(row, axis);
+      if (!std::isfinite(value)) {
+        Rcpp::stop("Resident UMAP initialization is non-finite.");
+      }
+      layout[static_cast<std::size_t>(row) * dimensions +
+        axis] = static_cast<float>(value);
+    }
+  }
+  constexpr int transfer_rows = 1000000;
+  for (int first = 0; first < n; first += transfer_rows) {
+    const int rows = std::min(transfer_rows, n - first);
+    resident_umap_check(fastembedr_massive_umap_multigpu_upload(
+      context.get(), first, rows, layout.data() +
+        static_cast<std::size_t>(first) * dimensions));
+  }
+  const int block_rows = (n - 1) / devices.size() + 1;
+  const float min_weight = max_weight / n_epochs;
+  NumericVector visits(devices.size());
+  for (int epoch = 0; epoch < n_epochs; ++epoch) {
+    resident_umap_check(
+      fastembedr_massive_umap_multigpu_start_epoch(
+        context.get()));
+    std::vector<std::future<int>> pending;
+    for (int rank = 0; rank < devices.size(); ++rank) {
+      pending.emplace_back(std::async(std::launch::async,
+        [&, rank, epoch]() {
+          return resident_umap_rank_epoch(context.get(),
+            row_ptr, col, edge_weights, rank, block_rows,
+            capacity, epoch, min_weight, max_weight);
+        }));
+    }
+    for (int rank = 0; rank < devices.size(); ++rank) {
+      visits[rank] += pending[rank].get();
+    }
+    resident_umap_check(
+      fastembedr_massive_umap_multigpu_finish_epoch(
+        context.get()));
+    Rcpp::checkUserInterrupt();
+  }
+  for (int first = 0; first < n; first += transfer_rows) {
+    const int rows = std::min(transfer_rows, n - first);
+    resident_umap_check(
+      fastembedr_massive_umap_multigpu_download(
+        context.get(), first, rows, layout.data() +
+          static_cast<std::size_t>(first) * dimensions));
+  }
+  NumericMatrix result(n, dimensions);
+  for (int row = 0; row < n; ++row) {
+    for (int axis = 0; axis < dimensions; ++axis) {
+      result(row, axis) = layout[
+        static_cast<std::size_t>(row) * dimensions + axis];
+    }
+  }
+  return List::create(
+    Rcpp::Named("Y") = result,
+    Rcpp::Named("optimizer") =
+      "cuda_resident_umap_coordinated_nccl",
+    Rcpp::Named("gpu_devices") = devices,
+    Rcpp::Named("per_device_edge_visits") = visits,
+    Rcpp::Named("delta_scale") = delta_scale,
+    Rcpp::Named("synchronization_seconds") =
+      fastembedr_massive_umap_multigpu_collective_seconds(
+        context.get()));
+#else
+  Rcpp::stop("Resident multi-GPU UMAP requires CUDA and NCCL.");
+#endif
 }
 
 // [[Rcpp::export]]
@@ -692,6 +922,24 @@ List landmark_tsne_transform_cuda_gpu_cpp(SEXP gpu_knn,
 }
 
 // [[Rcpp::export]]
+List landmark_tsne_transform_cuda_devices_cpp(
+    SEXP reference_data, SEXP query_data, SEXP reference_layout,
+    IntegerMatrix indices, NumericMatrix distances,
+    double perplexity, int n_iter, int early_exaggeration_iter,
+    double learning_rate, double early_exaggeration,
+    double exaggeration, double initial_momentum,
+    double final_momentum, double max_grad_norm,
+    double max_step_norm, int n_negatives,
+    int exact_repulsion_threshold, int seed, IntegerVector devices) {
+  return landmark_tsne_transform_cuda_devices_impl(
+    reference_data, query_data, reference_layout, indices, distances,
+    perplexity, n_iter, early_exaggeration_iter, learning_rate,
+    early_exaggeration, exaggeration, initial_momentum,
+    final_momentum, max_grad_norm, max_step_norm, n_negatives,
+    exact_repulsion_threshold, seed, devices);
+}
+
+// [[Rcpp::export]]
 List landmark_umap_project_refine_cuda_gpu_cpp(SEXP gpu_knn,
                                                SEXP reference_data,
                                                SEXP query_data,
@@ -714,6 +962,19 @@ List landmark_umap_project_refine_cuda_gpu_cpp(SEXP gpu_knn,
     negative_sample_rate, learning_rate, repulsion_strength, seed,
     affine_neighbors, affine_ridge, max_extrapolation
   );
+}
+
+// [[Rcpp::export]]
+List landmark_umap_project_refine_cuda_devices_cpp(
+    SEXP reference_data, SEXP query_data, SEXP reference_layout,
+    IntegerMatrix indices, NumericMatrix distances,
+    int n_epochs, double min_dist, int negative_sample_rate,
+    double learning_rate, double repulsion_strength, int seed,
+    IntegerVector devices) {
+  return landmark_umap_project_refine_cuda_devices_impl(
+    reference_data, query_data, reference_layout, indices, distances,
+    n_epochs, min_dist, negative_sample_rate, learning_rate,
+    repulsion_strength, seed, devices);
 }
 
 // [[Rcpp::export]]

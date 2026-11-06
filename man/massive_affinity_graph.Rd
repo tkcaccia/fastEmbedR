@@ -22,3 +22,4 @@ Validates every CSR row and checks file contents against the manifest
 written by \code{\link[=massive_tsne_affinities]{massive_tsne_affinities()}}. A generic external CSR graph
 cannot be treated as a package-built t-SNE affinity graph.
 }
+\keyword{internal}

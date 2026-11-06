@@ -66,6 +66,7 @@ massive_graph_import <- function(prefix, n_vertices, k, access, kind) {
 #' @return A lightweight `fastEmbedR_massive_graph` descriptor. The source
 #'   files are reused without copying them.
 #' @export
+#' @keywords internal
 massive_knn_graph <- function(prefix, n_vertices, k,
                                 access = c("stream", "mmap")) {
     massive_graph_import(prefix, n_vertices, k, match.arg(access),
@@ -88,6 +89,7 @@ massive_knn_graph <- function(prefix, n_vertices, k,
 #' @param n.cores CPU workers for independent per-row weights.
 #' @return A file-backed directed weighted-graph descriptor.
 #' @export
+#' @keywords internal
 massive_umap_memberships <- function(x, checkpoint = FALSE,
         resume = FALSE, checkpoint_every = 100L,
         backend = "cpu", n.cores = 1L) {
@@ -259,7 +261,7 @@ massive_umap_membership_check_state <- function(state, signature,
 #' @inheritParams massive_knn_graph
 #' @return A lightweight `fastEmbedR_massive_graph` descriptor with
 #'   `edge_value = "weight"`.
-#' @export
+#' @keywords internal
 massive_weighted_graph <- function(prefix, n_vertices, k,
                                     access = c("stream", "mmap")) {
     massive_graph_import(prefix, n_vertices, k, match.arg(access),
@@ -292,6 +294,7 @@ massive_weighted_graph <- function(prefix, n_vertices, k,
 #'   rebuilding it is required if later graph construction fails.
 #' @return An experimental symmetric `fastEmbedR_massive_graph` descriptor.
 #' @export
+#' @keywords internal
 massive_umap_fuzzy_graph <- function(x, output,
         memory_limit = "8GB", backend = "cpu", checkpoint = FALSE,
         resume = FALSE, checkpoint_every = 100L,
@@ -435,6 +438,7 @@ massive_graph_manifest_stage_peak <- function(manifest, graph) {
 #' @inheritParams massive_csr_graph
 #' @return A verified `fastEmbedR_massive_graph` descriptor.
 #' @export
+#' @keywords internal
 massive_fuzzy_graph <- function(prefix, n_vertices,
                                 access = c("stream", "mmap")) {
     graph <- massive_csr_graph(prefix, n_vertices, access)
@@ -506,6 +510,7 @@ massive_fuzzy_graph <- function(prefix, n_vertices,
 #'   bucket staging. Rebuilding KNN is required if construction fails.
 #' @return An experimental symmetric `fastEmbedR_massive_graph` descriptor.
 #' @export
+#' @keywords internal
 massive_tsne_affinities <- function(x, perplexity, output,
         memory_limit = "8GB", backend = "cpu", n.cores = 1L,
         checkpoint = FALSE, resume = FALSE,
@@ -820,6 +825,7 @@ massive_graph_sort_run <- function(x, plan, method, perplexity,
 #' @inheritParams massive_csr_graph
 #' @return A verified `fastEmbedR_massive_graph` descriptor.
 #' @export
+#' @keywords internal
 massive_affinity_graph <- function(prefix, n_vertices,
                                     access = c("stream", "mmap")) {
     graph <- massive_csr_graph(prefix, n_vertices, access)
@@ -887,6 +893,7 @@ massive_affinity_graph <- function(prefix, n_vertices,
 #'   bounded edge reads. Import validation always streams.
 #' @return A lightweight `fastEmbedR_massive_graph` descriptor.
 #' @export
+#' @keywords internal
 massive_csr_graph <- function(prefix, n_vertices,
                                 access = c("stream", "mmap")) {
     if (!is.character(prefix) || length(prefix) != 1L ||
@@ -1001,7 +1008,7 @@ massive_graph_owner_active_counts <- function(graph, devices,
 #' @param first First one-based source row.
 #' @param n Number of consecutive source rows. Output is capped at 128 MB.
 #' @return A list of `from`, `to`, and `distance` or `weight` vectors.
-#' @export
+#' @keywords internal
 massive_read_graph_edges <- function(x, first = 1, n = 6L) {
     if (!inherits(x, "fastEmbedR_massive_graph")) {
         stop("`x` must be an imported massive graph.",
@@ -1043,7 +1050,7 @@ massive_read_graph_edges <- function(x, first = 1, n = 6L) {
 #' @param max_bytes Maximum resident edge-list bytes per partition, up to
 #'   128 MB. One complete source row must fit.
 #' @return A constant-size `fastEmbedR_massive_graph_partitions` descriptor.
-#' @export
+#' @keywords internal
 massive_graph_partitions <- function(x, max_bytes = 64e6) {
     if (!inherits(x, "fastEmbedR_massive_graph")) {
         stop("`x` must be an imported massive graph.",
@@ -1071,7 +1078,7 @@ massive_graph_partitions <- function(x, max_bytes = 64e6) {
 #' @param x A `massive_graph_partitions()` result.
 #' @param partition One-based partition number.
 #' @return A directed edge list with `from`, `to`, and value vectors.
-#' @export
+#' @keywords internal
 massive_read_graph_partition <- function(x, partition) {
     if (!inherits(x, "fastEmbedR_massive_graph_partitions")) {
         stop("`x` must be a massive_graph_partitions() result.",

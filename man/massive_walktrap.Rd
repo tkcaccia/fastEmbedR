@@ -38,3 +38,4 @@ order. A graph that cannot contract
 fails explicitly, leaving partial labels for inspection. Only CPU is
 supported. Exact in-memory \code{graph_cluster()} is unchanged.
 }
+\keyword{internal}

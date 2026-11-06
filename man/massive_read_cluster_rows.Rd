@@ -19,3 +19,4 @@ A list with \code{membership} and \code{confidence} vectors.
 \description{
 Read bounded rows from an experimental clustering result
 }
+\keyword{internal}

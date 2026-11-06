@@ -740,6 +740,8 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #'   observations in rows.
 #' @param ncomp Number of principal components.
 #' @param xtest Optional test/query matrix with the same columns as `x`.
+#'   In out-of-core mode, supply a matching [massive_matrix()] descriptor;
+#'   projected scores are written beside `output` as `.test.f32`.
 #'   Projected coordinates are returned in `scores_test`.
 #' @param center If `TRUE`, mean-center columns before decomposition.
 #' @param scale If `TRUE`, scale centered columns to unit sample standard
@@ -756,9 +758,12 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' @param tsne_init If `TRUE`, add `tsne_init` to the returned PCA
 #'   object. This matrix is centered and rescaled so its largest component
 #'   standard deviation is `1e-4`, ready to pass as `Y_init` to [tsne()]
-#'   or [tsne_knn()].
-#' @param massive `"off"` (default) keeps the existing in-memory route.
-#'   `"auto"` estimates memory and selects the in-memory route when safe,
+#'   or [tsne_knn()]. In out-of-core mode, this is a file-backed 2D/3D
+#'   `.init.f32` matrix for [massive_tsne_optimize()]; its normalization
+#'   runs on CPU in bounded passes.
+#' @param massive `"off"` keeps the in-memory route. When omitted for a
+#'   file-backed input descriptor, `"auto"` is selected. `"auto"` estimates
+#'   memory and selects the in-memory route when safe,
 #'   otherwise streamed PCA. `"out_of_core"` explicitly activates
 #'   covariance PCA for a [massive_matrix()] source with at most 1024
 #'   columns on CPU or 2048 on CUDA. Wider matrices use randomized
@@ -776,16 +781,23 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #'   completed score batches beside `output` for recovery.
 #' @param resume Continue from a matching PCA checkpoint and partial score
 #'   file. Available when out-of-core processing is selected.
-#' @param devices Optional distinct CUDA device IDs for experimental
-#'   file-backed PCA score projection. The decomposition runs on the first
-#'   selected device; projection rows are sharded across devices. Optional
-#'   checkpointing saves the decomposition and completed shard blocks;
-#'   resume requires the same input, settings, and device list.
+#' @param devices Optional distinct CUDA device IDs. With resident matrix
+#'   input, two to four devices split covariance and score projection;
+#'   the small eigendecomposition runs on CPU. Out-of-core CUDA PCA shards
+#'   file-backed fitting and score projection across devices.
+#' @param landmarks `FALSE` fits all rows. For resident PCA, a count,
+#'   fraction, explicit row indices, or `TRUE` selects fitting rows and
+#'   projects every input row onto their principal components. File-backed
+#'   landmark PCA uses [massive_project_pca()] instead. Resident Metal
+#'   projects with its native matrix multiply; CPU and single-device CUDA
+#'   use CPU projection. Multi-GPU CUDA projects on the requested devices.
+#'   The route is recorded in `projection_backend`.
 #' @return A `fastEmbedR_pca` list with `scores`, `loadings`,
 #'   `singular_values`, centering/scaling vectors, backend metadata, and
 #'   decomposition metadata. When `tsne_init = TRUE`, the list also
 #'   contains `tsne_init`; when `xtest` is supplied, it also contains
-#'   `scores_test`. Metal and CUDA preserve `float::float32` scores, loadings,
+#'   `scores_test`. Out-of-core `scores_test` is file-backed. Metal and CUDA
+#'   preserve `float::float32` scores, loadings,
 #'   initialization, and compatible test projections when the input is
 #'   float32. CPU results also record the worker and BLAS limits.
 #' @examples
@@ -800,11 +812,8 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' plot(fit$tsne_init, pch = 21, bg = iris$Species)
 #' @export
 
-pca <- function(x,
-                ncomp = 2L,
-                xtest = NULL,
-                center = TRUE,
-                scale = FALSE,
+pca <- function(x, ncomp = 2L, xtest = NULL,
+                center = TRUE, scale = FALSE,
                 backend = NULL,
                 n.cores = NULL,
                 seed = 4L,
@@ -815,21 +824,25 @@ pca <- function(x,
                 memory_limit = "512MB",
                 checkpoint = FALSE,
                 resume = FALSE,
-                devices = NULL) {
-    massive <- match.arg(massive, c("off", "auto", "out_of_core"))
+                devices = NULL,
+                landmarks = FALSE) {
+    massive <- pca_resolve_massive(x, massive, missing(massive))
+    if (!identical(landmarks, FALSE) && !is.null(landmarks))
+        return(pca_resident_landmarks(x, ncomp, xtest, center,
+            scale, backend, n.cores, seed, tsne_init, devices,
+            landmarks, massive, checkpoint, resume))
     if (massive == "auto") return(run_massive_auto_pca(x, ncomp,
         xtest, center, scale, backend, n.cores, seed, tsne_init, output,
         chunk_rows, memory_limit, checkpoint, resume, devices))
     if (massive == "out_of_core") return(run_massive_pca(x, ncomp,
         xtest, center, scale, backend, n.cores, seed, tsne_init,
         output, chunk_rows, memory_limit, checkpoint, resume, devices))
-    if (!is.null(devices)) stop("`devices` requires experimental ",
-        "out-of-core PCA; no backend fallback was used.",
-        call. = FALSE)
     if (!identical(checkpoint, FALSE) || !identical(resume, FALSE)) {
         stop("PCA checkpoint controls require `massive = \"out_of_core\"`.",
             call. = FALSE)
     }
+    if (!is.null(devices)) return(pca_resident_cuda_fit(x, ncomp,
+        xtest, center, scale, backend, seed, tsne_init, devices))
     backend <- validate_pca_backend(resolve_embedding_backend(backend))
     request <- validate_pca_request(ncomp, tsne_init, n.cores)
     run_pca <- function() {

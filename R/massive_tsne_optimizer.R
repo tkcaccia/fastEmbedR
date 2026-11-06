@@ -1,13 +1,14 @@
 #' Optimize experimental disk-backed t-SNE affinities
 #'
-#' Streams a normalized symmetric CSR affinity graph on every iteration.
+#' Optimizes a normalized symmetric CSR affinity graph from disk.
 #' The CPU optimizer retains only its float32 coordinates and update state
 #' in RAM, reuses the package's 2D or 3D FFT repulsion, and writes the
-#' final coordinates to a file. The CUDA route streams the same affinities
-#' through its 2D FFT optimizer and retains coordinates on the GPU.
+#' final coordinates to a file. CUDA streams affinities through a 2D or 3D
+#' FFT optimizer. Metal maps the complete read-only graph into shared memory
+#' for its 2D or 3D FFT optimizer, or streams bounded graph chunks from SSD.
 #' This is a full-graph fit, not landmark projection. Optimization uses
 #' fixed iteration counts, without automatic KL stopping. Disk reads can
-#' be substantial. Both routes can checkpoint optimizer state.
+#' be substantial. All routes can checkpoint optimizer state.
 #'
 #' @param graph A result of [massive_tsne_affinities()].
 #' @param init File-backed `.f32` initial coordinates with two or three columns.
@@ -20,16 +21,20 @@
 #' @param max_step_norm Maximum update norm; `Inf` disables clipping.
 #' @param memory_limit Host RAM budget. Coordinated CUDA fits reserve one
 #'   bounded attraction-edge buffer per requested device.
-#' @param backend `"cpu"` or `"cuda"`; CUDA currently requires 2D output.
+#' @param backend `"cpu"`, `"cuda"`, or `"metal"`. CUDA supports
+#'   2D or 3D output on one to four devices with NCCL for multiple GPUs.
 #' @param n.cores CPU worker count for FFT, sparse attraction, and updates.
-#' @param devices CUDA device IDs. Two to four IDs run one coordinated 2D fit.
+#' @param devices CUDA device IDs. Two to four IDs run one coordinated fit.
+#' @param graph_access Metal graph access: `"auto"`, `"mmap"`, or
+#'   `"stream"`. Auto streams graphs larger than one edge chunk.
+#' @param edge_chunk_capacity Maximum attraction edges per Metal SSD chunk.
 #' @param checkpoint Save coordinates and optimizer state periodically.
 #' @param resume Continue a matching interrupted fit.
 #' @param checkpoint_every Iterations between state snapshots.
 #' @return An experimental file-backed `fastEmbedR_massive_matrix`.
 #'   CUDA results include host-call stage times. `attraction_sync`
 #'   can include previously queued FFT work.
-#' @export
+#' @keywords internal
 massive_tsne_optimize <- function(graph, init, output,
         early_exaggeration_iter = 250L, n_iter = 500L,
         early_exaggeration = 12, exaggeration = 1,
@@ -37,12 +42,14 @@ massive_tsne_optimize <- function(graph, init, output,
         final_momentum = 0.8, min_gain = 0.01,
         max_step_norm = Inf, memory_limit = "8GB",
         backend = "cpu", n.cores = 1L, checkpoint = FALSE,
-        resume = FALSE, checkpoint_every = 100L, devices = NULL) {
+        resume = FALSE, checkpoint_every = 100L, devices = NULL,
+        graph_access = "auto", edge_chunk_capacity = 8388608L) {
     plan <- massive_tsne_optimize_plan(graph, init, output,
         early_exaggeration_iter, n_iter, early_exaggeration,
         exaggeration, learning_rate, initial_momentum,
         final_momentum, min_gain, max_step_norm, memory_limit,
-        backend, n.cores, devices)
+        backend, n.cores, devices, graph_access,
+        edge_chunk_capacity)
     message("EXPERIMENTAL full-graph t-SNE: ", graph$n_vertices,
         " rows; ", graph$n_edges, " edges; backend=", backend)
     saved <- massive_tsne_checkpoint_prepare(plan, checkpoint,
@@ -53,21 +60,7 @@ massive_tsne_optimize <- function(graph, init, output,
         plan$early_iter, plan$normal_iter, early_exaggeration,
         exaggeration, plan$learning_rate, plan$learning_rate_auto,
         initial_momentum, final_momentum, min_gain, max_step_norm)
-    fit <- if (backend == "cuda") {
-        previous_grid <- Sys.getenv("FASTEMBEDR_TSNE_FFT_GRID", NA_character_)
-        on.exit(if (is.na(previous_grid))
-            Sys.unsetenv("FASTEMBEDR_TSNE_FFT_GRID") else
-            Sys.setenv(FASTEMBEDR_TSNE_FFT_GRID = previous_grid),
-            add = TRUE)
-        Sys.setenv(FASTEMBEDR_TSNE_FFT_GRID = as.character(plan$fft_grid_size))
-        do.call(massive_tsne_optimize_cuda_cpp, c(args,
-            list(saved$iteration, saved$state_path, saved$every,
-                saved$progress, plan$edge_capacity, plan$devices)))
-    } else {
-        do.call(massive_tsne_optimize_cpp, c(args,
-            list(plan$workers, saved$iteration, saved$state_path,
-                saved$every, saved$progress)))
-    }
+    fit <- massive_tsne_native_fit(args, plan, saved, backend)
     if (backend == "cuda" && !identical(
         as.integer(fit$fft_grid_size), plan$fft_grid_size)) stop(
         "CUDA t-SNE changed its planned FFT grid.", call. = FALSE)
@@ -79,6 +72,29 @@ massive_tsne_optimize <- function(graph, init, output,
     result <- massive_tsne_result(plan, graph, init, fit, saved)
     if (!is.null(saved$sidecar)) unlink(c(saved$latest(), saved$sidecar))
     result
+}
+
+massive_tsne_native_fit <- function(args, plan, saved, backend) {
+    if (backend == "cuda") {
+        previous_grid <- Sys.getenv("FASTEMBEDR_TSNE_FFT_GRID", NA_character_)
+        on.exit(if (is.na(previous_grid))
+            Sys.unsetenv("FASTEMBEDR_TSNE_FFT_GRID") else
+            Sys.setenv(FASTEMBEDR_TSNE_FFT_GRID = previous_grid),
+            add = TRUE)
+        Sys.setenv(FASTEMBEDR_TSNE_FFT_GRID = as.character(plan$fft_grid_size))
+        return(do.call(massive_tsne_optimize_cuda_cpp, c(args,
+            list(saved$iteration, saved$state_path, saved$every,
+                saved$progress, plan$edge_capacity, plan$devices))))
+    }
+    if (backend == "metal") {
+        return(do.call(massive_tsne_optimize_metal_cpp, c(args[-4L],
+            list(saved$iteration, saved$state_path, saved$every,
+                saved$progress, plan$graph_access,
+                plan$edge_chunk_capacity))))
+    }
+    do.call(massive_tsne_optimize_cpp, c(args,
+        list(plan$workers, saved$iteration, saved$state_path,
+            saved$every, saved$progress)))
 }
 
 massive_tsne_validate_cuda_fit <- function(plan, graph, fit, saved) {
@@ -130,29 +146,13 @@ massive_tsne_result <- function(plan, graph, init, fit, saved) {
     result$parameters <- plan$parameters
     result$parameters$checkpoint_every <- saved$every
     result$parameters$resumed_from_iteration <- saved$iteration
-    result$resources <- list(estimated_peak_ram_bytes = plan$peak_ram,
-        estimated_peak_vram_bytes = plan$peak_vram,
-        graph_bytes = graph$n_edges * 8 + (graph$n_vertices + 1) * 8,
-        checkpoint_disk_bytes = if (saved$every > 0L)
-            2 * plan$state_bytes else 0,
-        effective_cpu_workers = if (identical(plan$backend, "cpu"))
-            fit$n_threads else NULL)
-    if (identical(plan$backend, "cuda")) {
-        result$resources$graph_feeder <-
-            if (length(plan$devices) > 1L) "concurrent_owner" else "serial"
-        result$resources$edge_batch_capacity <- plan$edge_capacity
-    }
+    result$resources <- massive_tsne_result_resources(
+        plan, graph, fit, saved)
     result$elapsed_seconds_current_call <- fit$elapsed_seconds
     if (!is.null(fit$stage_seconds)) result$stage_seconds <- fit$stage_seconds
     if (!is.null(fit$repulsion_gpu_seconds))
         result$gpu_stage_seconds <- list(
             repulsion = fit$repulsion_gpu_seconds)
-    if (!is.null(fit$per_device_attraction_edges))
-        result$resources$per_device_attraction_edges <-
-            fit$per_device_attraction_edges
-    if (!is.null(fit$per_device_expected_edges))
-        result$resources$per_device_expected_edges <-
-            fit$per_device_expected_edges
     if (length(plan$devices) > 1L) {
         if (length(fit$owner_wall_seconds) != 1L ||
             !is.finite(fit$owner_wall_seconds) ||
@@ -166,6 +166,31 @@ massive_tsne_result <- function(plan, graph, init, fit, saved) {
         fit$elapsed_seconds
     result$source_identity <- plan$source_identity
     result
+}
+
+massive_tsne_result_resources <- function(plan, graph, fit, saved) {
+    resources <- list(estimated_peak_ram_bytes = plan$peak_ram,
+        estimated_peak_vram_bytes = plan$peak_vram,
+        graph_bytes = graph$n_edges * 8 + (graph$n_vertices + 1) * 8,
+        checkpoint_disk_bytes = if (saved$every > 0L)
+            2 * plan$state_bytes else 0,
+        effective_cpu_workers = if (identical(plan$backend, "cpu"))
+            fit$n_threads else NULL)
+    if (identical(plan$backend, "cuda")) {
+        resources$graph_feeder <-
+            if (length(plan$devices) > 1L) "concurrent_owner" else "serial"
+        resources$edge_batch_capacity <- plan$edge_capacity
+    }
+    if (identical(plan$backend, "metal"))
+        resources$graph_access <- if (plan$graph_access == "stream")
+            "bounded_stream" else "read_only_mmap"
+    if (!is.null(fit$per_device_attraction_edges))
+        resources$per_device_attraction_edges <-
+            fit$per_device_attraction_edges
+    if (!is.null(fit$per_device_expected_edges))
+        resources$per_device_expected_edges <-
+            fit$per_device_expected_edges
+    resources
 }
 
 massive_tsne_checkpoint_prepare <- function(plan, checkpoint,
@@ -306,8 +331,8 @@ massive_tsne_devices <- function(devices, backend, rows) {
 
 massive_tsne_validate_graph_init <- function(graph, init, backend) {
     if (length(backend) != 1L || is.na(backend) ||
-        !backend %in% c("cpu", "cuda"))
-        stop("Full-graph t-SNE requires CPU or CUDA; ",
+        !backend %in% c("cpu", "cuda", "metal"))
+        stop("Full-graph t-SNE requires CPU, CUDA or Metal; ",
             "no backend fallback was used.", call. = FALSE)
     if (!inherits(graph, "fastEmbedR_massive_graph") ||
         !identical(graph$weight_method, "tsne_compact_affinity") ||
@@ -319,22 +344,57 @@ massive_tsne_validate_graph_init <- function(graph, init, backend) {
         !init$ncol %in% c(2, 3)) stop(
         "`init` must be a matching file-backed 2D/3D `.f32` matrix.",
         call. = FALSE)
-    if (backend == "cuda" && init$ncol != 2L) stop(
-        "CUDA t-SNE requires 2D; no backend fallback.", call. = FALSE)
     if (backend == "cuda" &&
         !isTRUE(embedding_cuda_available_cpp())) stop(
         "Native CUDA t-SNE unavailable; no backend fallback.",
         call. = FALSE)
+    if (backend == "metal" &&
+        !isTRUE(embedding_metal_available_cpp())) stop(
+        "Native Metal t-SNE unavailable; no backend fallback.",
+        call. = FALSE)
+}
+
+massive_tsne_metal_access <- function(graph, backend,
+        graph_access, edge_chunk_capacity) {
+    if (backend != "metal") {
+        if (!identical(graph_access, "auto") ||
+            !is.numeric(edge_chunk_capacity) ||
+            length(edge_chunk_capacity) != 1L ||
+            is.na(edge_chunk_capacity) ||
+            edge_chunk_capacity != 8388608) stop(
+            "Metal graph controls require `backend = 'metal'`.",
+            call. = FALSE)
+        return(list(mode = "auto", capacity = NULL))
+    }
+    if (!is.character(graph_access) || length(graph_access) != 1L ||
+        is.na(graph_access) ||
+        !graph_access %in% c("auto", "mmap", "stream")) stop(
+        "Metal `graph_access` must be auto, mmap, or stream.",
+        call. = FALSE)
+    capacity <- integer_scalar(edge_chunk_capacity)
+    if (is.na(capacity) || capacity < 1L ||
+        !identical(as.double(capacity),
+            as.double(edge_chunk_capacity))) stop(
+        "`edge_chunk_capacity` must be a positive integer.",
+        call. = FALSE)
+    if (graph_access == "auto") graph_access <-
+        if (graph$n_edges > capacity) "stream" else "mmap"
+    list(mode = graph_access, capacity = capacity)
 }
 
 massive_tsne_optimize_plan <- function(graph, init, output,
         early_iter, normal_iter, early_exag, exag, learning_rate,
         momentum, final_momentum, min_gain, max_step,
-        memory_limit, backend, n.cores, devices = NULL) {
+        memory_limit, backend, n.cores, devices = NULL,
+        graph_access = "auto", edge_chunk_capacity = 8388608L) {
     massive_tsne_validate_graph_init(graph, init, backend)
+    access <- massive_tsne_metal_access(graph, backend,
+        graph_access, edge_chunk_capacity)
+    graph_access <- access$mode
+    capacity <- access$capacity
     selected <- massive_tsne_devices(devices, backend,
         graph$n_vertices)
-    identity <- if (length(selected) > 1L)
+    identity <- if (!is.null(devices))
         massive_cuda_device_uuids(selected) else NULL
     if (!is.character(output) || length(output) != 1L ||
         is.na(output) || !grepl("\\.f32$", output) ||
@@ -347,10 +407,17 @@ massive_tsne_optimize_plan <- function(graph, init, output,
     controls <- massive_tsne_validate_controls(early_iter,
         normal_iter, early_exag, exag, learning_rate, momentum,
         final_momentum, min_gain, max_step, n.cores)
+    if (backend == "metal" && controls$workers != 1L) stop(
+        "Metal t-SNE requires `n.cores = 1`; no backend fallback.",
+        call. = FALSE)
     controls$parameters$devices <- selected
     controls$parameters$gpu_identity <- identity
+    if (backend == "metal") {
+        controls$parameters$graph_access <- graph_access
+        controls$parameters$edge_chunk_capacity <- capacity
+    }
     resources <- massive_tsne_resource_plan(graph, init, path,
-        memory_limit, backend, selected)
+        memory_limit, backend, selected, graph_access, capacity)
     controls$parameters$fft_grid_size <- resources$fft_grid_size
     paths <- c(graph$offsets_path, graph$indices_path,
         graph$weights_path, init$path)
@@ -359,11 +426,13 @@ massive_tsne_optimize_plan <- function(graph, init, output,
         source_identity = massive_checkpoint_input_files_identity(paths),
         n_vertices = graph$n_vertices, dimensions = init$ncol,
         devices = selected, gpu_identity = identity,
-        backend = backend), resources, controls)
+        backend = backend, graph_access = graph_access,
+        edge_chunk_capacity = capacity), resources, controls)
 }
 
 massive_tsne_resource_plan <- function(graph, init, path,
-        memory_limit, backend, devices) {
+        memory_limit, backend, devices, graph_access = "auto",
+        edge_chunk_capacity = NULL) {
     limit <- massive_memory_bytes(memory_limit)
     coords <- graph$n_vertices * init$ncol
     feeders <- max(1L, length(devices))
@@ -376,6 +445,14 @@ massive_tsne_resource_plan <- function(graph, init, path,
     } else NULL
     peak <- if (backend == "cuda") {
         64 * 1024^2 + capacity * 12 * feeders
+    } else if (backend == "metal") {
+        graph_bytes <- if (graph_access == "stream")
+            min(graph$n_edges, edge_chunk_capacity) * 8 +
+                (min(graph$n_vertices, 262144) + 1) * 8 else
+            graph$n_edges * 8 + (graph$n_vertices + 1) * 8
+        graph_bytes +
+            coords * 24 + graph$n_vertices * 8 +
+            1024 * 1024^2
     } else {
         coords * 16 +
             as.integer(init$ncol == 3) * graph$n_vertices * 4 +
@@ -386,19 +463,12 @@ massive_tsne_resource_plan <- function(graph, init, path,
     if (coords * 4 >
         0.8 * massive_disk_available_cpp(path)) stop(
         "t-SNE output exceeds free disk space.", call. = FALSE)
-    grid <- if (backend == "cuda") {
-        requested <- suppressWarnings(as.integer(
-            Sys.getenv("FASTEMBEDR_TSNE_FFT_GRID", "")))
-        if (!is.na(requested) && requested %in%
-            c(32L, 64L, 128L, 256L, 512L, 1024L)) requested
-        else if (graph$n_vertices < 20000) 256L
-        else if (graph$n_vertices >= 100000) 1024L
-        else 512L
-    } else NULL
+    grid <- massive_tsne_fft_grid(graph, backend, init$ncol)
     vram <- if (backend == "cuda") {
+        fft_bytes <- if (init$ncol == 3L)
+            2 * (2 * grid)^3 * 8 else 9 * (2 * grid)^2 * 8
         coords * 16 + graph$n_vertices * 8 +
-            9 * (2 * grid)^2 * 8 + capacity * 12 +
-            64 * 1024^2
+            fft_bytes + capacity * 12 + 256 * 1024^2
     } else NA_real_
     if (backend == "cuda" &&
         vram > 0.8 * massive_auto_cuda_free(devices,
@@ -407,6 +477,30 @@ massive_tsne_resource_plan <- function(graph, init, path,
         call. = FALSE)
     list(peak_ram = peak, peak_vram = vram, fft_grid_size = grid,
         edge_capacity = capacity, state_bytes = coords * 12)
+}
+
+massive_tsne_fft_grid <- function(graph, backend, dimensions = 3L) {
+    if (backend == "cuda" && dimensions == 3L) {
+        if (graph$n_vertices < 5000) 16L else 64L
+    } else if (backend == "cuda") {
+        requested <- suppressWarnings(as.integer(
+            Sys.getenv("FASTEMBEDR_TSNE_FFT_GRID", "")))
+        if (!is.na(requested) && requested %in%
+            c(32L, 64L, 128L, 256L, 512L, 1024L)) requested
+        else if (graph$n_vertices < 20000) 256L
+        else if (graph$n_vertices >= 100000) 1024L
+        else 512L
+    } else if (backend == "metal" && dimensions == 2L) {
+        fallback <- if (graph$n_vertices >= 10000) 256L else 128L
+        requested <- suppressWarnings(as.integer(
+            Sys.getenv("FASTEMBEDR_TSNE_FFT_GRID", "")))
+        if (is.na(requested) || requested < 1L) requested <- fallback
+        grid <- 32L
+        while (grid < requested && grid < 512L) grid <- grid * 2L
+        grid
+    } else if (backend == "metal") {
+        if (graph$n_vertices < 5000) 16L else 64L
+    } else NULL
 }
 
 massive_tsne_validate_controls <- function(early_iter, normal_iter,

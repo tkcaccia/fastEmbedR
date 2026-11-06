@@ -331,3 +331,26 @@ test_that("3D CUDA one-call fit retains native PCA and FFT", {
     expect_match(fit$parameters$init_backend, "^cuda_")
     expect_identical(fit$parameters$repulsion, "fft_grid_3d_cuda_cufft")
 })
+
+test_that("3D Metal landmark t-SNE uses native fixed-reference transform", {
+    skip_if_not(embedding_metal_available_cpp())
+    x <- scale(as.matrix(iris[seq_len(60L), 1:4]))
+    fit <- tsne(
+        x, backend = "metal", n_components = 3L, landmarks = 0.5,
+        perplexity = 5, transform_perplexity = 5,
+        early_exaggeration_iter = 2L, n_iter = 3L,
+        transform_iter = 2L, seed = 19L
+    )
+    expect_identical(dim(fit$layout), c(60L, 3L))
+    expect_true(all(is.finite(as.matrix(fit$layout))))
+    expect_gt(stats::sd(as.matrix(fit$layout)[, 3L]), 0)
+    expect_identical(fit$parameters$transform_backend, "metal")
+    projected <- project_landmark_model(
+        fit$model, x[1:3, , drop = FALSE],
+        transform_perplexity = 5, transform_iter = 2L
+    )
+    expect_identical(dim(projected$layout), c(3L, 3L))
+    expect_true(all(is.finite(as.matrix(projected$layout))))
+    expect_identical(
+        projected$parameters$projection_backend, "metal")
+})

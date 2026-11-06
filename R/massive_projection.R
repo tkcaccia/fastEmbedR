@@ -385,9 +385,9 @@ massive_projection_controls <- function(fit, graph, backend,
     if (backend == "cuda")
         massive_projection_cuda_controls(fit, graph, epochs)
     if (backend == "metal" &&
-        (ncol(fit$layout) != 2L || graph$ncol > 128L ||
+        (!ncol(fit$layout) %in% c(2L, 3L) || graph$ncol > 128L ||
             (fit$method == "umap" && epochs != 0L))) stop(
-        "Metal landmark projection needs 2D, k <= 128, and ",
+        "Metal landmark projection needs 2D or 3D, k <= 128, and ",
         "zero UMAP refinement epochs.", call. = FALSE)
     list(epochs = epochs, iterations = iterations, seed = seed)
 }
@@ -462,6 +462,7 @@ massive_projection_complete <- function(result) {
 #' @param output The `.f32` path supplied to `massive_project_landmarks()`.
 #' @return A `fastEmbedR_massive_projection` with file-backed `layout`.
 #' @export
+#' @keywords internal
 massive_open_projection <- function(output) {
     if (!is.character(output) || length(output) != 1L ||
         is.na(output) || tolower(tools::file_ext(output)) != "f32") {
@@ -594,7 +595,7 @@ massive_projection_setup <- function(fit, graph, output,
 #' @return An experimental file-backed result with `layout` as a
 #'   `fastEmbedR_massive_matrix` descriptor. A `.manifest.rds` sidecar
 #'   supports `massive_open_projection()` on the same files.
-#' @export
+#' @keywords internal
 massive_project_landmarks <- function(
     fit, graph, output, selection = NULL,
     backend = "cpu", n.cores = 1L,

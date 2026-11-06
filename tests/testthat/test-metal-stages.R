@@ -208,6 +208,75 @@ test_that(paste(
     expect_equal(metal$fallback, cpu$fallback)
 })
 
+test_that("Metal 3D affine landmark projection matches CPU", {
+    skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
+
+    set.seed(93)
+    reference_data <- matrix(rnorm(50L * 6L), 50L, 6L)
+    query_data <- matrix(rnorm(12L * 6L), 12L, 6L)
+    reference_layout <- matrix(rnorm(50L * 3L), 50L, 3L)
+    projection <- test_exact_knn(
+        reference_data, query_data, k = 14L, backend = "cpu"
+    )
+    args <- list(
+        reference_data, query_data, reference_layout,
+        projection$indices, projection$distances, 12L, 1e-3, 2.5
+    )
+    cpu <- do.call(
+        fastEmbedR:::project_embedding_affine_parallel_cpp,
+        c(args, list(2L))
+    )
+    metal <- do.call(
+        fastEmbedR:::project_embedding_affine_metal_cpp, args
+    )
+    expect_identical(dim(metal$layout), c(12L, 3L))
+    expect_true(all(is.finite(metal$layout)))
+    expect_equal(
+        as.numeric(metal$layout),
+        as.numeric(cpu$layout), tolerance = 2e-4
+    )
+    expect_equal(metal$fallback, cpu$fallback)
+})
+
+test_that("Metal scheduled UMAP skips epoch zero like CPU", {
+    skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
+    offsets <- c(0L, 1L, 2L, 3L)
+    neighbors <- c(2L, 3L, 1L)
+    weights <- c(1, 1, 1)
+    init <- matrix(c(-1, 0.5, 1, -0.3, 0.4, 0.8), 3L, 2L)
+    metal <- fastEmbedR:::knn_embed_metal_csr_cpp(
+        offsets, neighbors, weights, init, 1L, 0L,
+        0.1, 0.01, 1, 1, 11L, 0L
+    )
+    expect_equal(as.numeric(metal), as.numeric(init), tolerance = 5e-5)
+})
+
+test_that("Metal snapshot UMAP repeats exactly in 2D and 3D", {
+    skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
+    offsets <- seq.int(0L, 12L, by = 2L)
+    neighbors <- c(
+        1L, 5L, 0L, 2L, 1L, 3L,
+        2L, 4L, 3L, 5L, 0L, 4L
+    )
+    weights <- rep(1, 12L)
+    for (dims in c(2L, 3L)) {
+        init <- matrix(seq_len(6L * dims) / 10, 6L, dims)
+        run <- function() fastEmbedR:::knn_embed_metal_csr_cpp(
+            offsets, neighbors, weights, init, 20L, 2L,
+            0.1, 0.01, 1, 1, 11L, 2L
+        )
+        first <- run()
+        second <- run()
+        expect_identical(dim(first), c(6L, dims))
+        expect_true(all(is.finite(first)))
+        expect_identical(as.numeric(first), as.numeric(second))
+        expect_identical(
+            attr(first, "metal_optimizer"),
+            "clean_snapshot_atomic_delta"
+        )
+    }
+})
+
 test_that(paste(
     "Metal preprocessing, projection, interpolation, and",
     "scoring match CPU"

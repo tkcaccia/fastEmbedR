@@ -5,9 +5,11 @@
 #include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <future>
 #include <limits>
 #include <random>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -62,6 +64,8 @@ int fastembedr_cuda_spectral_init_from_knn(const int* indices,
                                            const double* distances,
                                            int n,
                                            int k,
+                                           int graph_width,
+                                           int n_components,
                                            int spectral_n_iter,
                                            unsigned int seed,
                                            int index_offset,
@@ -263,6 +267,7 @@ int fastembedr_cuda_umap_optimize_coo(const int* heads,
                                       const float* epochs_per_sample,
                                       const float* init,
                                       int n,
+                                      int n_components,
                                       int n_edges_capacity,
                                       int n_epochs,
                                       int negative_sample_rate,
@@ -283,6 +288,7 @@ int fastembedr_cuda_landmark_tsne_from_device_knn(
   int n_reference,
   int n_query,
   int n_features,
+  int n_components,
   int k,
   float perplexity,
   int n_iter,
@@ -297,6 +303,7 @@ int fastembedr_cuda_landmark_tsne_from_device_knn(
   int n_negatives,
   int exact_repulsion_threshold,
   unsigned int seed,
+  int query_row_offset,
   int affine_neighbors,
   float affine_ridge,
   float max_extrapolation,
@@ -340,6 +347,7 @@ int fastembedr_cuda_landmark_umap_from_device_knn(
   int n_reference,
   int n_query,
   int n_features,
+  int n_components,
   int k,
   int n_epochs,
   int negative_sample_rate,
@@ -351,6 +359,9 @@ int fastembedr_cuda_landmark_umap_from_device_knn(
   int affine_neighbors,
   float affine_ridge,
   float max_extrapolation,
+  int negative_reference_only,
+  int query_seed_offset,
+  float global_mean_override,
   float* out
 );
 int fastembedr_cuda_standardize_matrix(const double* values,
@@ -1642,8 +1653,8 @@ NumericMatrix spectral_knn_init_cuda_impl(IntegerMatrix indices,
   if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
     Rcpp::stop("indices and distances must have the same dimensions");
   }
-  if (n_components != 2) {
-    Rcpp::stop("CUDA spectral initialization currently supports exactly two components.");
+  if (n_components != 2 && n_components != 3) {
+    Rcpp::stop("CUDA spectral initialization requires 2D or 3D output.");
   }
   if (indices.ncol() > kMaxCudaNeighbors) {
     Rcpp::stop("CUDA spectral initialization currently supports at most %d neighbors.", kMaxCudaNeighbors);
@@ -1652,25 +1663,50 @@ NumericMatrix spectral_knn_init_cuda_impl(IntegerMatrix indices,
   if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
 
   const int n = indices.nrow();
-  std::vector<float> out(static_cast<std::size_t>(n) * 2u);
+  const int k = indices.ncol();
+  const int offset = knn_index_offset(indices);
+  std::vector<int> outdegree(static_cast<std::size_t>(n), 0);
+  std::vector<int> indegree(static_cast<std::size_t>(n), 0);
+  for (int row = 0; row < n; ++row) {
+    for (int col = 0; col < k; ++col) {
+      const int nb = indices(row, col) - offset;
+      if (nb < 0 || nb >= n || nb == row) continue;
+      ++outdegree[static_cast<std::size_t>(row)];
+      ++indegree[static_cast<std::size_t>(nb)];
+    }
+  }
+  int graph_width = k;
+  for (int row = 0; row < n; ++row) {
+    graph_width = std::max(graph_width, std::min(
+      n, outdegree[static_cast<std::size_t>(row)] +
+         indegree[static_cast<std::size_t>(row)]));
+  }
+  if (graph_width > kMaxCudaNeighbors) {
+    Rcpp::stop("CUDA spectral initialization graph exceeds %d neighbors; use CPU initialization.", kMaxCudaNeighbors);
+  }
+  std::vector<float> out(static_cast<std::size_t>(n) * n_components);
   const int status = fastembedr_cuda_spectral_init_from_knn(
     indices.begin(),
     distances.begin(),
     n,
-    indices.ncol(),
+    k,
+    graph_width,
+    n_components,
     spectral_n_iter,
     static_cast<unsigned int>(seed),
-    knn_index_offset(indices),
+    offset,
     out.data()
   );
   if (status != 0) {
     Rcpp::stop("CUDA spectral initialization failed: %s", cuda_embedding_error_message());
   }
 
-  NumericMatrix result(n, 2);
+  NumericMatrix result(n, n_components);
   for (int i = 0; i < n; ++i) {
-    result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);
-    result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
+    for (int dim = 0; dim < n_components; ++dim) {
+      result(i, dim) = static_cast<double>(
+        out[static_cast<std::size_t>(i) * n_components + dim]);
+    }
   }
   return result;
 }
@@ -2082,7 +2118,13 @@ NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector heads,
       static_cast<std::size_t>(heads.size()) != eps.size()) {
     Rcpp::stop("COO heads, tails, weights, and epochs_per_sample must have the same length");
   }
-  if (init.ncol() != 2) Rcpp::stop("CUDA COO UMAP optimizer requires a two-dimensional initialization");
+  const int n_components = init.ncol();
+  if (n_components != 2 && n_components != 3) {
+    Rcpp::stop("CUDA COO UMAP optimizer requires 2D or 3D initialization");
+  }
+  if (n_components == 3 && optimizer_mode != 1) {
+    Rcpp::stop("CUDA 3D COO UMAP requires snapshot optimizer mode");
+  }
   if (n_epochs < 1) Rcpp::stop("n_epochs must be positive");
   if (negative_sample_rate < 0) Rcpp::stop("negative_sample_rate must be non-negative");
   if (learning_rate <= 0.0) Rcpp::stop("learning_rate must be positive");
@@ -2092,7 +2134,7 @@ NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector heads,
 
   const int n = init.nrow();
   const int n_edges = heads.size();
-  std::vector<float> init_float = init_to_float_2d(init);
+  std::vector<float> init_float = init_to_float_layout(init, n_components);
   std::vector<float> out(init_float.size());
   const auto ab = find_ab_params(1.0, min_dist);
   const int status = fastembedr_cuda_umap_optimize_coo(
@@ -2102,6 +2144,7 @@ NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector heads,
     eps.data(),
     init_float.data(),
     n,
+    n_components,
     n_edges,
     n_epochs,
     negative_sample_rate,
@@ -2116,10 +2159,12 @@ NumericMatrix umap_cuda_optimize_coo_impl(IntegerVector heads,
   if (status != 0) {
     Rcpp::stop("CUDA COO UMAP optimizer failed: %s", cuda_embedding_error_message());
   }
-  NumericMatrix result(n, 2);
+  NumericMatrix result(n, n_components);
   for (int i = 0; i < n; ++i) {
-    result(i, 0) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u]);
-    result(i, 1) = static_cast<double>(out[static_cast<std::size_t>(i) * 2u + 1u]);
+    for (int axis = 0; axis < n_components; ++axis) {
+      result(i, axis) = static_cast<double>(
+        out[static_cast<std::size_t>(i) * n_components + axis]);
+    }
   }
   return result;
 }
@@ -2886,11 +2931,13 @@ List landmark_tsne_transform_cuda_gpu_impl(SEXP gpu_knn,
   const std::pair<int, int> layout_dims = cuda_matrix_dims(reference_layout, "reference_layout");
   const int n_reference = reference_dims.first;
   const int n_features = reference_dims.second;
+  const int n_components = layout_dims.second;
   if (query_dims.first != n_query || query_dims.second != n_features) {
     Rcpp::stop("query_data dimensions do not match the GPU KNN object and reference_data.");
   }
-  if (layout_dims.first != n_reference || layout_dims.second != 2) {
-    Rcpp::stop("CUDA landmark t-SNE requires a two-dimensional reference layout.");
+  if (layout_dims.first != n_reference ||
+      (n_components != 2 && n_components != 3)) {
+    Rcpp::stop("CUDA landmark t-SNE requires a 2D or 3D reference layout.");
   }
   if (k < 1 || k > kMaxCudaProjectionNeighbors) {
     Rcpp::stop("CUDA landmark t-SNE supports at most %d projection neighbors.", kMaxCudaProjectionNeighbors);
@@ -2909,9 +2956,10 @@ List landmark_tsne_transform_cuda_gpu_impl(SEXP gpu_knn,
     query_data, n_query, n_features, "query_data"
   );
   std::vector<float> reference_layout_values = cuda_copy_matrix_float(
-    reference_layout, n_reference, 2, "reference_layout"
+    reference_layout, n_reference, n_components, "reference_layout"
   );
-  std::vector<float> output(static_cast<std::size_t>(n_query) * 2u);
+  std::vector<float> output(
+    static_cast<std::size_t>(n_query) * n_components);
   const int status = fastembedr_cuda_landmark_tsne_from_device_knn(
     device_indices,
     device_distances,
@@ -2922,6 +2970,7 @@ List landmark_tsne_transform_cuda_gpu_impl(SEXP gpu_knn,
     n_reference,
     n_query,
     n_features,
+    n_components,
     k,
     static_cast<float>(perplexity),
     n_iter,
@@ -2936,6 +2985,7 @@ List landmark_tsne_transform_cuda_gpu_impl(SEXP gpu_knn,
     n_negatives,
     exact_repulsion_threshold,
     static_cast<unsigned int>(seed),
+    0,
     affine_neighbors,
     static_cast<float>(affine_ridge),
     static_cast<float>(max_extrapolation),
@@ -2944,10 +2994,12 @@ List landmark_tsne_transform_cuda_gpu_impl(SEXP gpu_knn,
   if (status != 0) {
     Rcpp::stop("CUDA landmark t-SNE failed: %s", cuda_embedding_error_message());
   }
-  NumericMatrix layout(n_query, 2);
+  NumericMatrix layout(n_query, n_components);
   for (int row = 0; row < n_query; ++row) {
-    layout(row, 0) = static_cast<double>(output[static_cast<std::size_t>(row) * 2u]);
-    layout(row, 1) = static_cast<double>(output[static_cast<std::size_t>(row) * 2u + 1u]);
+    for (int axis = 0; axis < n_components; ++axis) {
+      layout(row, axis) = static_cast<double>(
+        output[static_cast<std::size_t>(row) * n_components + axis]);
+    }
   }
   List config = List::create(
     Rcpp::Named("optimizer") = n_iter + early_exaggeration_iter > 0 ?
@@ -2963,6 +3015,201 @@ List landmark_tsne_transform_cuda_gpu_impl(SEXP gpu_knn,
     Rcpp::Named("precision") = "float32"
   );
   return List::create(Rcpp::Named("Y") = layout, Rcpp::Named("config") = config);
+}
+
+struct LandmarkDeviceShard {
+  int device = -1;
+  int first = 0;
+  int count = 0;
+  std::vector<int> indices;
+  std::vector<float> distances;
+  std::vector<float> query;
+  std::vector<float> output;
+  std::string error;
+};
+
+List landmark_tsne_transform_cuda_devices_impl(
+    SEXP reference_data, SEXP query_data, SEXP reference_layout,
+    IntegerMatrix indices, NumericMatrix distances,
+    double perplexity, int n_iter, int early_exaggeration_iter,
+    double learning_rate, double early_exaggeration,
+    double exaggeration, double initial_momentum,
+    double final_momentum, double max_grad_norm,
+    double max_step_norm, int n_negatives,
+    int exact_repulsion_threshold, int seed, IntegerVector devices) {
+  const auto rd = cuda_matrix_dims(reference_data, "reference_data");
+  const auto qd = cuda_matrix_dims(query_data, "query_data");
+  const auto ld = cuda_matrix_dims(reference_layout, "reference_layout");
+  const int nr = rd.first, nq = qd.first, p = rd.second;
+  const int dims = ld.second, k = indices.ncol();
+  if (nr < 2 || nq < 2 || p < 1 || qd.second != p ||
+      ld.first != nr || (dims != 2 && dims != 3) ||
+      indices.nrow() != nq || distances.nrow() != nq ||
+      distances.ncol() != k || k < 3 ||
+      k > kMaxCudaProjectionNeighbors) {
+    Rcpp::stop("Multi-GPU landmark t-SNE input dimensions differ.");
+  }
+  const int nd = devices.size();
+  if (nd < 2 || nd > 4 || nd > nq || perplexity <= 0 ||
+      n_iter < 0 || early_exaggeration_iter < 0 ||
+      learning_rate <= 0 || early_exaggeration <= 0 ||
+      exaggeration <= 0 || initial_momentum < 0 ||
+      final_momentum < 0 || n_negatives < 1) {
+    Rcpp::stop("Invalid multi-GPU landmark t-SNE controls.");
+  }
+  int available = 0;
+  if (cudaGetDeviceCount(&available) != cudaSuccess) {
+    Rcpp::stop("Could not inspect CUDA devices.");
+  }
+  for (int rank = 0; rank < nd; ++rank) {
+    if (devices[rank] < 0 || devices[rank] >= available) {
+      Rcpp::stop("A requested CUDA device is unavailable.");
+    }
+    for (int prior = 0; prior < rank; ++prior) {
+      if (devices[prior] == devices[rank]) {
+        Rcpp::stop("CUDA device indices must be distinct.");
+      }
+    }
+  }
+  const int offset = transform_reference_index_offset(indices, nr);
+  const auto ref = cuda_copy_matrix_float(
+    reference_data, nr, p, "reference_data");
+  const auto query = cuda_copy_matrix_float(
+    query_data, nq, p, "query_data");
+  const auto layout = cuda_copy_matrix_float(
+    reference_layout, nr, dims, "reference_layout");
+  std::vector<LandmarkDeviceShard> shards(nd);
+  for (int rank = 0; rank < nd; ++rank) {
+    auto& shard = shards[rank];
+    shard.device = devices[rank];
+    shard.first = static_cast<int>(
+      static_cast<long long>(nq) * rank / nd);
+    const int end = static_cast<int>(
+      static_cast<long long>(nq) * (rank + 1) / nd);
+    shard.count = end - shard.first;
+    shard.indices.resize(static_cast<std::size_t>(shard.count) * k);
+    shard.distances.resize(shard.indices.size());
+    shard.query.resize(static_cast<std::size_t>(shard.count) * p);
+    shard.output.resize(static_cast<std::size_t>(shard.count) * dims);
+    for (int column = 0; column < k; ++column) {
+      for (int row = 0; row < shard.count; ++row) {
+        const auto source = static_cast<std::size_t>(column) * nq +
+          shard.first + row;
+        const auto target = static_cast<std::size_t>(column) *
+          shard.count + row;
+        shard.indices[target] = indices[source];
+        const double distance = distances[source];
+        if (!std::isfinite(distance) || distance < 0) {
+          Rcpp::stop("KNN distances must be finite and non-negative.");
+        }
+        shard.distances[target] = static_cast<float>(distance);
+      }
+    }
+    for (int column = 0; column < p; ++column) {
+      const auto source = query.begin() +
+        static_cast<std::size_t>(column) * nq + shard.first;
+      std::copy_n(source, shard.count,
+        shard.query.begin() +
+        static_cast<std::size_t>(column) * shard.count);
+    }
+  }
+  std::vector<std::future<void>> workers;
+  workers.reserve(nd);
+  for (int rank = 0; rank < nd; ++rank) {
+    workers.push_back(std::async(std::launch::async,
+      [&, rank]() {
+        auto& shard = shards[rank];
+        const auto fail = [&](const char* where, cudaError_t code) {
+          shard.error = std::string(where) + ": " +
+            cudaGetErrorString(code);
+        };
+        auto status = cudaSetDevice(shard.device);
+        if (status != cudaSuccess) {
+          fail("cudaSetDevice", status);
+          return;
+        }
+        int* device_indices = nullptr;
+        float* device_distances = nullptr;
+        do {
+          status = cudaMalloc(reinterpret_cast<void**>(&device_indices),
+            shard.indices.size() * sizeof(int));
+          if (status != cudaSuccess) {
+            fail("cudaMalloc(indices)", status);
+            break;
+          }
+          status = cudaMalloc(reinterpret_cast<void**>(&device_distances),
+            shard.distances.size() * sizeof(float));
+          if (status != cudaSuccess) {
+            fail("cudaMalloc(distances)", status);
+            break;
+          }
+          status = cudaMemcpy(device_indices, shard.indices.data(),
+            shard.indices.size() * sizeof(int), cudaMemcpyHostToDevice);
+          if (status != cudaSuccess) {
+            fail("cudaMemcpy(indices)", status);
+            break;
+          }
+          status = cudaMemcpy(device_distances, shard.distances.data(),
+            shard.distances.size() * sizeof(float),
+            cudaMemcpyHostToDevice);
+          if (status != cudaSuccess) {
+            fail("cudaMemcpy(distances)", status);
+            break;
+          }
+          const int code = fastembedr_cuda_landmark_tsne_from_device_knn(
+            device_indices, device_distances, offset,
+            ref.data(), shard.query.data(), layout.data(), nr,
+            shard.count, p, dims, k, static_cast<float>(perplexity),
+            n_iter, early_exaggeration_iter,
+            static_cast<float>(learning_rate),
+            static_cast<float>(early_exaggeration),
+            static_cast<float>(exaggeration),
+            static_cast<float>(initial_momentum),
+            static_cast<float>(final_momentum),
+            static_cast<float>(max_grad_norm),
+            static_cast<float>(max_step_norm), n_negatives,
+            exact_repulsion_threshold, static_cast<unsigned int>(seed),
+            shard.first, 12, 1e-3f, 2.5f, shard.output.data());
+          if (code != 0) {
+            shard.error = fastembedr_cuda_embedding_last_error();
+          }
+        } while (false);
+        if (device_distances != nullptr) cudaFree(device_distances);
+        if (device_indices != nullptr) cudaFree(device_indices);
+      }));
+  }
+  for (auto& worker : workers) worker.get();
+  NumericMatrix result(nq, dims);
+  IntegerVector rows(nd);
+  for (int rank = 0; rank < nd; ++rank) {
+    const auto& shard = shards[rank];
+    if (!shard.error.empty()) {
+      Rcpp::stop("CUDA landmark t-SNE device %d failed: %s",
+        shard.device, shard.error.c_str());
+    }
+    rows[rank] = shard.count;
+    for (int row = 0; row < shard.count; ++row) {
+      for (int axis = 0; axis < dims; ++axis) {
+        result(shard.first + row, axis) = shard.output[
+          static_cast<std::size_t>(row) * dims + axis];
+      }
+    }
+  }
+  List config = List::create(
+    Rcpp::Named("optimizer") =
+      "opentsne_fixed_reference_cuda_query_shards",
+    Rcpp::Named("initialization") =
+      "local_affine_knn_projection_cuda_resident",
+    Rcpp::Named("repulsion") =
+      (nr <= exact_repulsion_threshold || n_negatives >= nr) ?
+      "exact_reference_cuda" : "sampled_reference_cuda",
+    Rcpp::Named("gpu_devices") = devices,
+    Rcpp::Named("per_device_query_rows") = rows,
+    Rcpp::Named("knn_residency") = "cuda_to_host_then_device_shards",
+    Rcpp::Named("precision") = "float32",
+    Rcpp::Named("n_negatives") = n_negatives);
+  return List::create(Rcpp::Named("Y") = result,
+    Rcpp::Named("config") = config);
 }
 
 List landmark_umap_project_refine_cuda_gpu_impl(SEXP gpu_knn,
@@ -2995,8 +3242,10 @@ List landmark_umap_project_refine_cuda_gpu_impl(SEXP gpu_knn,
   const std::pair<int, int> layout_dims = cuda_matrix_dims(reference_layout, "reference_layout");
   const int n_reference = reference_dims.first;
   const int n_features = reference_dims.second;
+  const int n_components = layout_dims.second;
   if (query_dims.first != n_query || query_dims.second != n_features ||
-      layout_dims.first != n_reference || layout_dims.second != 2 ||
+      layout_dims.first != n_reference ||
+      (n_components != 2 && n_components != 3) ||
       landmark_rows.size() != n_reference || query_rows.size() != n_query) {
     Rcpp::stop("CUDA landmark UMAP inputs have incompatible dimensions.");
   }
@@ -3015,9 +3264,9 @@ List landmark_umap_project_refine_cuda_gpu_impl(SEXP gpu_knn,
     query_data, n_query, n_features, "query_data"
   );
   std::vector<float> reference_layout_values = cuda_copy_matrix_float(
-    reference_layout, n_reference, 2, "reference_layout"
+    reference_layout, n_reference, n_components, "reference_layout"
   );
-  std::vector<float> output(static_cast<std::size_t>(n_total) * 2u);
+  std::vector<float> output(static_cast<std::size_t>(n_total) * n_components);
   const std::pair<double, double> ab = find_ab_params(1.0, min_dist);
   const int status = fastembedr_cuda_landmark_umap_from_device_knn(
     device_indices,
@@ -3032,6 +3281,7 @@ List landmark_umap_project_refine_cuda_gpu_impl(SEXP gpu_knn,
     n_reference,
     n_query,
     n_features,
+    n_components,
     k,
     n_epochs,
     negative_sample_rate,
@@ -3043,15 +3293,20 @@ List landmark_umap_project_refine_cuda_gpu_impl(SEXP gpu_knn,
     affine_neighbors,
     static_cast<float>(affine_ridge),
     static_cast<float>(max_extrapolation),
+    0,
+    0,
+    -1.0f,
     output.data()
   );
   if (status != 0) {
     Rcpp::stop("CUDA landmark UMAP failed: %s", cuda_embedding_error_message());
   }
-  NumericMatrix layout(n_total, 2);
+  NumericMatrix layout(n_total, n_components);
   for (int row = 0; row < n_total; ++row) {
-    layout(row, 0) = static_cast<double>(output[static_cast<std::size_t>(row) * 2u]);
-    layout(row, 1) = static_cast<double>(output[static_cast<std::size_t>(row) * 2u + 1u]);
+    for (int dim = 0; dim < n_components; ++dim) {
+      layout(row, dim) = static_cast<double>(output[
+        static_cast<std::size_t>(row) * n_components + dim]);
+    }
   }
   return List::create(
     Rcpp::Named("layout") = layout,
@@ -3061,4 +3316,181 @@ List landmark_umap_project_refine_cuda_gpu_impl(SEXP gpu_knn,
     Rcpp::Named("knn_residency") = "cuda_device",
     Rcpp::Named("precision") = "float32"
   );
+}
+
+List landmark_umap_project_refine_cuda_devices_impl(
+    SEXP reference_data, SEXP query_data, SEXP reference_layout,
+    IntegerMatrix indices, NumericMatrix distances,
+    int n_epochs, double min_dist, int negative_sample_rate,
+    double learning_rate, double repulsion_strength, int seed,
+    IntegerVector devices) {
+  const auto rd = cuda_matrix_dims(reference_data, "reference_data");
+  const auto qd = cuda_matrix_dims(query_data, "query_data");
+  const auto ld = cuda_matrix_dims(reference_layout, "reference_layout");
+  const int nr = rd.first, nq = qd.first, p = rd.second;
+  const int dims = ld.second, k = indices.ncol();
+  const int nd = devices.size();
+  if (nr < 2 || nq < nd || p < 1 || qd.second != p ||
+      ld.first != nr || (dims != 2 && dims != 3) ||
+      indices.nrow() != nq || distances.nrow() != nq ||
+      distances.ncol() != k || k < 1 ||
+      k > kMaxCudaProjectionNeighbors || nd < 2 || nd > 4 ||
+      n_epochs < 0 || min_dist < 0 || negative_sample_rate < 0 ||
+      learning_rate <= 0 || repulsion_strength <= 0) {
+    Rcpp::stop("Invalid multi-GPU landmark UMAP inputs or controls.");
+  }
+  int available = 0;
+  if (cudaGetDeviceCount(&available) != cudaSuccess) {
+    Rcpp::stop("Could not inspect CUDA devices.");
+  }
+  for (int rank = 0; rank < nd; ++rank) {
+    if (devices[rank] < 0 || devices[rank] >= available) {
+      Rcpp::stop("A requested CUDA device is unavailable.");
+    }
+    for (int prior = 0; prior < rank; ++prior) {
+      if (devices[prior] == devices[rank]) {
+        Rcpp::stop("CUDA device indices must be distinct.");
+      }
+    }
+  }
+  const int offset = transform_reference_index_offset(indices, nr);
+  const auto ref = cuda_copy_matrix_float(
+    reference_data, nr, p, "reference_data");
+  const auto query = cuda_copy_matrix_float(
+    query_data, nq, p, "query_data");
+  const auto layout = cuda_copy_matrix_float(
+    reference_layout, nr, dims, "reference_layout");
+  double sum = 0.0;
+  std::size_t count = 0;
+  std::vector<LandmarkDeviceShard> shards(nd);
+  for (int rank = 0; rank < nd; ++rank) {
+    auto& shard = shards[rank];
+    shard.device = devices[rank];
+    shard.first = static_cast<int>(
+      static_cast<long long>(nq) * rank / nd);
+    const int end = static_cast<int>(
+      static_cast<long long>(nq) * (rank + 1) / nd);
+    shard.count = end - shard.first;
+    shard.indices.resize(static_cast<std::size_t>(shard.count) * k);
+    shard.distances.resize(shard.indices.size());
+    shard.query.resize(static_cast<std::size_t>(shard.count) * p);
+    shard.output.resize(static_cast<std::size_t>(nr + shard.count) * dims);
+    for (int column = 0; column < k; ++column) {
+      for (int row = 0; row < shard.count; ++row) {
+        const auto source = static_cast<std::size_t>(column) * nq +
+          shard.first + row;
+        const auto target = static_cast<std::size_t>(column) *
+          shard.count + row;
+        shard.indices[target] = indices[source];
+        const double distance = distances[source];
+        if (!std::isfinite(distance) || distance < 0) {
+          Rcpp::stop("KNN distances must be finite and non-negative.");
+        }
+        shard.distances[target] = static_cast<float>(distance);
+        sum += distance;
+        ++count;
+      }
+    }
+    for (int column = 0; column < p; ++column) {
+      const auto source = query.begin() +
+        static_cast<std::size_t>(column) * nq + shard.first;
+      std::copy_n(source, shard.count,
+        shard.query.begin() +
+        static_cast<std::size_t>(column) * shard.count);
+    }
+  }
+  const float global_mean = count > 0 ?
+    static_cast<float>(sum / count) : 1.0f;
+  const auto ab = find_ab_params(1.0, min_dist);
+  std::vector<std::future<void>> workers;
+  workers.reserve(nd);
+  for (int rank = 0; rank < nd; ++rank) {
+    workers.push_back(std::async(std::launch::async, [&, rank]() {
+      auto& shard = shards[rank];
+      const auto fail = [&](const char* where, cudaError_t code) {
+        shard.error = std::string(where) + ": " +
+          cudaGetErrorString(code);
+      };
+      auto status = cudaSetDevice(shard.device);
+      if (status != cudaSuccess) {
+        fail("cudaSetDevice", status);
+        return;
+      }
+      int* device_indices = nullptr;
+      float* device_distances = nullptr;
+      std::vector<int> landmark_rows(nr), query_rows(shard.count);
+      for (int row = 0; row < nr; ++row) landmark_rows[row] = row + 1;
+      for (int row = 0; row < shard.count; ++row) {
+        query_rows[row] = nr + row + 1;
+      }
+      do {
+        status = cudaMalloc(reinterpret_cast<void**>(&device_indices),
+          shard.indices.size() * sizeof(int));
+        if (status != cudaSuccess) {
+          fail("cudaMalloc(indices)", status);
+          break;
+        }
+        status = cudaMalloc(reinterpret_cast<void**>(&device_distances),
+          shard.distances.size() * sizeof(float));
+        if (status != cudaSuccess) {
+          fail("cudaMalloc(distances)", status);
+          break;
+        }
+        status = cudaMemcpy(device_indices, shard.indices.data(),
+          shard.indices.size() * sizeof(int), cudaMemcpyHostToDevice);
+        if (status != cudaSuccess) {
+          fail("cudaMemcpy(indices)", status);
+          break;
+        }
+        status = cudaMemcpy(device_distances, shard.distances.data(),
+          shard.distances.size() * sizeof(float), cudaMemcpyHostToDevice);
+        if (status != cudaSuccess) {
+          fail("cudaMemcpy(distances)", status);
+          break;
+        }
+        const int code = fastembedr_cuda_landmark_umap_from_device_knn(
+          device_indices, device_distances, offset,
+          ref.data(), shard.query.data(), layout.data(),
+          landmark_rows.data(), query_rows.data(),
+          nr + shard.count, nr, shard.count, p, dims, k,
+          n_epochs, negative_sample_rate,
+          static_cast<float>(learning_rate),
+          static_cast<float>(ab.first), static_cast<float>(ab.second),
+          static_cast<float>(repulsion_strength),
+          static_cast<unsigned int>(seed), 12, 1e-3f, 2.5f,
+          1, shard.first, global_mean, shard.output.data());
+        if (code != 0) {
+          shard.error = fastembedr_cuda_embedding_last_error();
+        }
+      } while (false);
+      if (device_distances != nullptr) cudaFree(device_distances);
+      if (device_indices != nullptr) cudaFree(device_indices);
+    }));
+  }
+  for (auto& worker : workers) worker.get();
+  NumericMatrix result(nq, dims);
+  IntegerVector rows(nd);
+  for (int rank = 0; rank < nd; ++rank) {
+    const auto& shard = shards[rank];
+    if (!shard.error.empty()) {
+      Rcpp::stop("CUDA landmark UMAP device %d failed: %s",
+        shard.device, shard.error.c_str());
+    }
+    rows[rank] = shard.count;
+    for (int row = 0; row < shard.count; ++row) {
+      for (int axis = 0; axis < dims; ++axis) {
+        result(shard.first + row, axis) = shard.output[
+          static_cast<std::size_t>(nr + row) * dims + axis];
+      }
+    }
+  }
+  const List config = List::create(
+    Rcpp::Named("optimizer") = "fixed_landmark_umap_cuda_query_shards",
+    Rcpp::Named("negative_pool") = "reference_only",
+    Rcpp::Named("gpu_devices") = devices,
+    Rcpp::Named("per_device_query_rows") = rows,
+    Rcpp::Named("knn_residency") = "cuda_to_host_then_device_shards",
+    Rcpp::Named("precision") = "float32");
+  return List::create(Rcpp::Named("query_layout") = result,
+    Rcpp::Named("config") = config);
 }

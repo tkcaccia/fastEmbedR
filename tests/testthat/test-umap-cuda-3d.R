@@ -69,32 +69,29 @@ test_that("CUDA 3D UMAP reports nonfinite optimizer coordinates", {
     )
 })
 
-test_that("CUDA 3D landmarks never use two-dimensional refinement", {
+test_that("CUDA landmark UMAP keeps fixed references in three dimensions", {
     skip_if_not(embedding_cuda_available_cpp())
+    skip_if_not(native_cuda_knn_available_cpp())
     x <- scale(as.matrix(iris[seq_len(45L), 1:4]))
-    expect_error(
-        umap(
+    for (mode in c("fuzzy", "binary")) {
+        fit <- umap(
             x, n_neighbors = 10L, n_components = 3L,
-            landmarks = 0.5, backend = "cuda", seed = 11L
-        ),
-        "CUDA 3D landmark refinement is not available"
-    )
-})
-
-test_that("CUDA 3D landmark rejection precedes projection", {
-    with_mocked_bindings(
-        prepare_landmark_umap = function(...) {
-            list(backend = "cuda", n_components = 3L,
-                all_landmarks = FALSE)
-        },
-        expect_error(
-            fastEmbedR:::run_landmark_umap(
-                NULL, 0.5, 10L, 3L, FALSE, NULL,
-                "euclidean", 11L, "cuda", NULL, 1L,
-                FALSE, "fuzzy", FALSE
-            ),
-            "CUDA 3D landmark refinement is not available"
-        ),
-        .package = "fastEmbedR"
-    )
+            landmarks = 0.5, backend = "cuda",
+            graph_mode = mode, seed = 11L
+        )
+        layout <- as.matrix(fit$layout)
+        expect_identical(dim(layout), c(45L, 3L))
+        expect_true(all(is.finite(layout)))
+        expect_gt(sd(layout[, 3L]), 0)
+        expect_equal(layout[fit$landmarks$indices, , drop = FALSE],
+            as.matrix(fit$landmarks$layout), tolerance = 1e-5)
+        expect_identical(fit$parameters$landmark_refinement_backend,
+            "cuda")
+        held_out <- project_landmark_model(
+            fit$model, x[1:3, , drop = FALSE], transform_k = 10L,
+            refinement_epochs = 5L
+        )
+        expect_identical(dim(held_out$layout), c(3L, 3L))
+        expect_true(all(is.finite(as.matrix(held_out$layout))))
+    }
 })

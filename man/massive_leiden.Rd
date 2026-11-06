@@ -10,12 +10,13 @@ massive_leiden(
   max_passes = 10L,
   resolution = 1,
   seed = 1L,
-  chunk_rows = 8192L,
+  chunk_rows = NULL,
   memory_limit = "1GB",
   backend = "cpu",
   checkpoint = FALSE,
   resume = FALSE,
-  initial = NULL
+  initial = NULL,
+  n.cores = 1L
 )
 }
 \arguments{
@@ -33,7 +34,7 @@ massive_leiden(
 
 \item{memory_limit}{RAM budget for graph scan buffers.}
 
-\item{backend}{Only \code{"cpu"} is implemented; no fallback is used.}
+\item{backend}{\code{"cpu"}, \code{"cuda"}, or \code{"metal"}; no fallback is used.}
 
 \item{checkpoint}{Save completed graph levels for later resumption.}
 
@@ -41,6 +42,9 @@ massive_leiden(
 
 \item{initial}{Optional \code{massive_cluster_landmarks()} result whose saved
 labels initialize local moves. Its row order must match \code{graph}.}
+
+\item{n.cores}{CPU workers for bounded row-candidate preparation.
+Local-move and refinement commits remain ordered.}
 }
 \value{
 Lightweight file-backed Leiden result with modularity.
@@ -48,10 +52,12 @@ Lightweight file-backed Leiden result with modularity.
 \description{
 Applies disk-backed modularity local moves and the existing Leiden
 refinement rule, then externally contracts each refined graph. Labels,
-graph edges, and intermediate mappings remain file-backed. Currently
-CPU-only and single-worker. With checkpoints, completed graph levels
-can resume after identity validation; interrupted levels retain partial
-files and require separate recovery. The memory budget does not cover
-mapped pages or the R process itself. One hierarchy is run per call;
-\code{max_passes} controls local moves within each level.
+graph edges, and intermediate mappings remain file-backed. Each call
+uses one CPU, CUDA, or Metal worker. Verified checkpoints resume
+completed graph levels; interrupted levels retain partial files for
+separate recovery. The memory budget excludes mapped pages and R.
+One hierarchy runs per call;
+\code{max_passes} controls local moves within each level. Metal final labels
+receive a CPU connectivity and modularity audit; CUDA does too.
 }
+\keyword{internal}

@@ -10,27 +10,33 @@
 [Reproducibility](reproducibility.md) |
 [References](references.md)
 
-This page gives the main KNN-first workflows and the public API.
+Start with `pca()`, `tsne()`, `umap()`, and `graph_cluster()`. The same
+embedding functions accept either a matrix or a precomputed KNN result.
+File-backed data enter through `massive_matrix()`; use
+`graph_cluster()` for resident or file-backed clustering. Graph preparation
+helpers remain available for full file-backed fits; optimization and
+clustering stages are internal.
 
 ## Which Function Should I Use?
 
 | Situation | Use |
 | --- | --- |
 | You want to precompute fastEmbedR's native neighbors | `precompute_knn()` |
-| You already computed nearest neighbors | `umap_knn()` or `tsne_knn()` |
+| You already computed nearest neighbors | `umap(knn)` or `tsne(knn)` |
 | You want one call from a data matrix | `umap()` or `tsne()` |
 | You want reusable PCA scores or t-SNE initialization | `pca()` |
 | You want to compare UMAP and t-SNE fairly | compute one host KNN list once, then reuse it |
 | You want Apple GPU | set `backend = "metal"` explicitly |
 | You want NVIDIA GPU | build with CUDA/cuVS, then set embedding `backend = "cuda"` |
 | You want a fast approximation for very large data | set `landmarks` in `umap()` or `tsne()` and report it as landmarking |
-| Your float32 input exceeds RAM | describe it with `massive_matrix()` and select an explicit mode |
+| Your float32 input exceeds RAM | describe it with `massive_matrix()`; choose `landmarks` when approximating |
 | You want quality metrics | `evaluate_embedding(x, layout)` |
-| You want a clustering graph | `knn_graph()` |
-| You want native graph communities | `graph_cluster(graph, method = "leiden")` |
+| You want native graph communities | `graph_cluster(knn_graph(x), method = "leiden")` |
+| You want landmark clustering | `graph_cluster(x, landmarks = 0.1)` |
+| You want to inspect a file-backed result | `massive_read_rows(result)` |
 
 
-The recommended workflow is KNN first:
+Precompute KNN only when methods must share exactly the same neighbors:
 
 ```r
 knn <- precompute_knn(
@@ -40,12 +46,21 @@ knn <- precompute_knn(
   backend = "cpu",
   n.cores = 4L
 )
-layout_umap <- umap_knn(knn, seed = 1)
-layout_tsne <- tsne_knn(knn, init_data = x, seed = 1)
+layout_umap <- umap(knn, seed = 1)
+layout_tsne <- tsne(knn, init_data = x, seed = 1)
 ```
 
 This keeps nearest-neighbor time separate from embedding time and makes
 benchmarks easier to interpret.
+
+### Updating older scripts
+
+Use `tsne(x, landmarks = 0.2)` and `umap(x, landmarks = 0.2)` in place of
+the removed landmark wrappers. For file-backed results, use
+`massive_read_rows(result, first, n)` in place of the four separate
+clustering-result readers. The same call returns a matrix for matrix
+sources, an integer label vector for full-graph clustering, or membership
+and confidence for landmark clustering.
 
 The one-call functions and `precompute_knn()` intentionally hide the KNN
 algorithm choice. Their `backend` accepts only `"cpu"`, `"metal"`, or
@@ -86,6 +101,13 @@ Current metric support is deliberately explicit:
 fastEmbedR is deliberately more configurable for t-SNE than for UMAP. The
 t-SNE API exposes perplexity and affinity support, initialization, iteration
 counts, early and normal exaggeration, learning rate, momentum, and clipping.
+Resident `tsne()` defaults to compact support with `ceiling(perplexity)`
+neighbors. Set `affinity_k = ceiling(3 * perplexity)` for a conventional-width
+comparison. `tsne_knn()` and `prepare_tsne_knn()` use `n_neighbors` for the
+same control when a precomputed graph has enough columns. Record the chosen
+width with benchmark results; changing it changes both KNN work and the
+affinity model. In resident landmark t-SNE, `affinity_k` controls the
+reference fit; the query projection keeps its separate `transform_k`.
 Repulsion uses FFT for both 2D and 3D output. Set `auto_config = FALSE` and
 supply explicit values when automatic iteration or stopping is not wanted.
 
@@ -158,8 +180,9 @@ plot(fit)
 
 ## t-SNE From The Same KNN
 
-The KNN must contain at least `ceiling(perplexity)` non-self columns. t-SNE
-uses exactly that compact support width and ignores additional KNN columns.
+The KNN must contain at least `ceiling(perplexity)` non-self columns. By
+default t-SNE uses that compact width. Set `n_neighbors` in `tsne_knn()`
+to use more supplied KNN columns.
 
 ```r
 pca_fit <- pca(x, ncomp = 2, seed = 1, tsne_init = TRUE)
@@ -221,6 +244,19 @@ performed.
 
 Supplying `xtest` adds projected test coordinates in
 `pca_fit$scores_test`. fastEmbedR intentionally omits an SVD method selector.
+With `massive = "out_of_core"`, supply `xtest` as a `massive_matrix()`
+descriptor with matching columns. The projection runs on the selected
+backend and writes a separate file beside `output`, replacing `.f32` with
+`.test.f32`. `massive_open_pca(output)` checks both score files. If the test
+projection is interrupted, reopen the completed fit and resume that stage
+with `massive_project_pca()` using the test score path.
+
+With out-of-core `tsne_init = TRUE` and two or three components, PCA writes
+`.init.f32` beside the score file. Its bounded CPU normalization matches the
+resident initialization scale, and the result can be passed to
+`tsne()` as `Y_init` with a prepared affinity graph. After interruption,
+rerun `pca(..., tsne_init = TRUE, resume = TRUE)` with the same input and
+output to regenerate the initialization from verified scores.
 
 `irlba` is not imported, suggested, linked, or called by fastEmbedR. It is
 used only by external benchmark scripts as a CPU reference.
@@ -262,12 +298,85 @@ graph <- knn_graph(fit, k = 20, weight = "snn", n.cores = 4)
 communities <- graph_cluster(graph, method = "leiden", seed = 1)
 ```
 
+For a resident landmark approximation, fit the graph on selected rows and
+assign every remaining row from its nearest reference labels:
+
+```r
+communities <- graph_cluster(x, landmarks = 0.1,
+                                 method = "leiden", k = 30,
+                                 vote_k = 30, backend = "cpu")
+table(communities$membership)
+```
+
+`graph_cluster(..., landmarks = ...)` keeps reference labels fixed and reports the reference
+fit, selection, all-row confidence, and stage times. Its graph assembly and
+distance-weighted label vote run on CPU even when KNN and graph fitting use
+Metal or CUDA. Use `parallel.mode = "fit"` for a shared multicore CPU fit.
+The accelerator routes still require device qualification.
+
 `knn_graph()` uses the selected backend only when it must compute neighbors.
 `graph_cluster()` runs native CPU, CUDA, or Metal Louvain/Leiden without
 calling igraph, cuGraph, Python, or another clustering routine. Walktrap is
 CPU-only. An unavailable or unsupported GPU backend fails explicitly.
 Walktrap is intended for small and moderate graphs because its transition
 matrix is quadratic; use Leiden or Louvain for large graphs.
+
+CPU Louvain and Leiden can run independent seeded restarts concurrently:
+
+```r
+communities <- graph_cluster(graph, method = "leiden", backend = "cpu",
+                             n_runs = 8, n.cores = 4, seed = 1)
+```
+
+The best modularity is selected in the same run order as `n.cores = 1`.
+The result records `effective_cpu_workers` and `parameters$n.cores`.
+In restart mode, `n.cores` must not exceed `n_runs`. This accelerates
+repeated restarts. Vector consensus, Walktrap, CUDA, and Metal reject
+`n.cores > 1`.
+
+For one shared CPU partition, request
+`graph_cluster(graph, method = "leiden", backend = "cpu",
+n_runs = 1, n.cores = 4, parallel.mode = "fit")`.
+This experimental mode parallelizes local-move proposals. Graph
+coarsening and Leiden refinement still run on one CPU core, and the
+result reports `parallel_mode = "fit"`. Measure its speed separately
+from independent restarts.
+`graph_cluster(x, landmarks = ..., parallel.mode = "fit")` applies the
+same shared CPU fit to the resident landmark graph. File-backed landmark
+query KNN and label voting remain separate stages.
+
+CUDA Louvain and Leiden have an experimental coordinated resident fit on
+two to four devices. For example, `graph_cluster(graph, method = "leiden",
+backend = "cuda", n_runs = 1, devices = c(0, 1))` splits graph rows
+across two GPUs and synchronizes one global partition through host RAM
+after each color phase. No SSD graph or optimizer files are used.
+Multi-GPU device validation and performance qualification are pending.
+Consensus, projection weighting, and small-group controls use the same
+coordinated fit for each clustering step; graph construction and
+postprocessing remain explicit host stages.
+`graph_cluster(x, landmarks = ..., devices = c(0, 1))`
+uses the selected devices for query KNN shards and the shared resident
+landmark-graph fit; voting still streams on the CPU. The `"auto"` route
+passes the devices to the resident graph fit when it fits in memory.
+
+For a symmetric file-backed fuzzy graph, the isolated experimental
+`gpu_storage = "stream"` route keeps CSR edges and partition state on
+host storage while two to four CUDA devices process bounded batches:
+
+```r
+fit <- graph_cluster(fuzzy_graph, method = "louvain", backend = "cuda",
+                       devices = c(0, 1), gpu_storage = "stream",
+                       output = "clusters.u32", memory_limit = "16GB")
+```
+
+This performs multilevel Louvain with GPU local moves and CPU graph
+contraction and modularity audits. `method = "leiden"` uses the same
+GPU local moves plus file-backed CPU Leiden refinement and connectivity
+audits. It requires CuPy. The option is
+designed for graphs larger than combined GPU memory, but its actual
+CUDA correctness, quality, and capacity still require device
+qualification. Do not run
+this file-backed route on the UCT HPC.
 
 ## Landmark Workflow
 
@@ -308,10 +417,15 @@ fit <- umap(
   n_neighbors = 30,
   graph_mode = "fuzzy",
   backend = "cpu",
+  refinement_epochs = 50L,
   seed = 1
 )
 plot(fit)
 ```
+
+Resident landmark UMAP defaults to 50 fixed-reference refinement epochs.
+Set `refinement_epochs = 0L` to use the initial projection alone, or vary the
+count to measure the quality and time tradeoff on each dataset.
 
 Both integrated landmark calls return a reusable fixed-reference model in
 `fit$model`. New observations are supplied in the original feature space; the
@@ -343,20 +457,56 @@ device resident for the projection and refinement stages.
 
 `massive_matrix()` describes a row-major `.f32` or `.fbin` file without
 loading it into R. Ordinary matrix calls remain unchanged. File-backed
-calls require a persistent output path and an explicit execution mode:
+calls require a persistent output path. The descriptor and an explicit
+`landmarks` value or prepared graph select the appropriate route:
 
 | Function | Mode | What is fitted |
 | --- | --- | --- |
 | `pca()` | `massive = "out_of_core"` | Streamed PCA on all rows. |
+| `massive_project_pca()` | File-backed projection | Apply a saved PCA fit to another file-backed source. |
 | `umap()`, `tsne()` | `massive = "landmark"` | Reference landmarks, then projection of other rows. |
 | `umap()`, `tsne()` | `massive = "out_of_core_graph"` | All rows of a prepared graph or affinity object. |
+
+Full-data file-backed PCA runs through `pca()`. State the storage mode when
+you require bounded reads even if the source could fit in memory:
+
+```r
+source <- massive_matrix("full.fbin")
+fit <- pca(source, ncomp = 2L, massive = "out_of_core",
+    output = "full-scores.f32", backend = "cpu", n.cores = 8L,
+    checkpoint = TRUE)
+```
+
+File-backed *landmark* PCA is not yet a one-call `pca()` route. A saved
+subset fit can be projected through `massive_project_pca()`, but subset
+selection is currently an internal stage. Do not pass `landmarks` with a
+file-backed source to `pca()` until this route is implemented. The resident
+`pca()` landmark route does accept a fraction, count, or row indices.
+
+For CPU full-graph UMAP, `cpu_update = "sgd"` uses ordered updates with one
+worker. Set `cpu_update = "synchronized"` with `n.cores > 1` to use the
+synchronized multicore optimizer. This changes the update rule; the result
+records `optimizer`, `parameters$cpu_update`, and
+`resources$effective_cpu_workers`. Other modes and backends reject
+`"synchronized"` rather than silently using another optimizer.
 
 The last mode requires a graph and file-backed initialization prepared
 before the embedding call. It does not build an entire graph from a file
 automatically. `massive_full_knn_graph()` uses the package's existing
 CPU exact/HNSW or CUDA cuVS exact/IVF search routes; approximate search
 remains approximate even when every row is optimized. The file-backed
-Metal route and a distributed full multi-GPU optimizer are unavailable.
+Metal full-graph UMAP supports 2D and 3D with streamed graph edges and a
+complete shared-memory layout.
+Experimental Metal full-graph t-SNE supports 2D and 3D.
+`graph_access = "mmap"`
+maps the complete read-only CSR graph into Metal buffers;
+`graph_access = "stream"` uploads bounded SSD graph chunks of at most
+`edge_chunk_capacity` edges. The default `"auto"` streams when the graph
+exceeds one chunk. The layout and optimizer state remain resident. A
+deterministic integer grid is used in the file-backed Metal FFT routes;
+large-data performance remains unqualified.
+The coordinated CUDA optimizer is multi-GPU but retains a full layout on
+each GPU.
 Requests for unsupported backends fail explicitly.
 
 UMAP and t-SNE reject `massive = "auto"`: memory pressure must not
@@ -386,19 +536,16 @@ work.
 distance profile in C++. This keeps the public API small while preserving the
 supplied neighbor graph.
 
-## Public API
+## Advanced API
+
+The direct `*_knn()` optimizers and `massive_*` stage functions below
+support controlled benchmarking and recovery. Most analyses need only
+the functions in the table above. The reference manual retains these
+advanced controls and their backend restrictions.
 
 | Function | Purpose |
 | --- | --- |
-| `precompute_knn()` | Package-native non-self KNN search with CPU, Metal, or CUDA backend. |
 | `umap_knn()` | UMAP from a supplied KNN object or matrices. |
-| `umap()` | One-call preprocessing, KNN, and UMAP embedding. |
-| `pca()` | Backend-native truncated PCA scores/loadings. |
 | `tsne_knn()` | Direct native interpolation-based t-SNE optimizer from KNN. |
-| `tsne()` | One-call preprocessing, KNN, and interpolation-based t-SNE embedding. |
 | `transform_tsne()` | Fixed-reference interpolation-based t-SNE transform for query points. |
-| `tsne(..., landmarks = ...)` | Embed landmarks, then transform remaining rows. |
-| `umap(..., landmarks = ...)` | Embed landmarks, then project/refine remaining rows. |
-| `evaluate_embedding()` | Embedding quality metrics. |
 | `knn_graph()` | Compact graph from data, an embedding, or supplied KNN. |
-| `graph_cluster()` | Native Louvain, Leiden, or Pons-Latapy Walktrap communities. |

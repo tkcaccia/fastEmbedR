@@ -33,3 +33,4 @@ still be expensive and does not certify unsampled rows or change the
 saved neighbor files. \code{observed_recall} is strict ID overlap;
 \code{distance_equivalent_recall} also accepts ties at the exact kth distance.
 }
+\keyword{internal}

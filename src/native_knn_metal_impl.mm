@@ -38,6 +38,7 @@
 #include <limits>
 #include <numeric>
 #include <random>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -1056,6 +1057,33 @@ double recall_at_k(const int* truth, const int* approx, int rows, int k) {
   return hits / static_cast<double>(rows * k);
 }
 
+std::pair<double, double> pilot_row_quality(
+    const int* truth, const float* truth_dist,
+    const int* approx, const float* approx_dist, int rows, int k) {
+  double min_recall = 1.0;
+  double max_distance_ratio = 1.0;
+  for (int i = 0; i < rows; ++i) {
+    const std::size_t base = static_cast<std::size_t>(i) * k;
+    int hits = 0;
+    for (int a = 0; a < k; ++a) {
+      for (int t = 0; t < k; ++t) {
+        if (approx[base + a] == truth[base + t]) {
+          ++hits;
+          break;
+        }
+      }
+    }
+    min_recall = std::min(min_recall, static_cast<double>(hits) / k);
+    const double exact_k = truth_dist[base + k - 1];
+    const double approx_k = approx_dist[base + k - 1];
+    const double ratio = exact_k > 0.0 ?
+      std::sqrt(std::max(0.0, approx_k / exact_k)) :
+      (approx_k == 0.0 ? 1.0 : std::numeric_limits<double>::infinity());
+    max_distance_ratio = std::max(max_distance_ratio, ratio);
+  }
+  return {min_recall, max_distance_ratio};
+}
+
 int projection_dim(int p) {
   int q = 1;
   while (q * 2 <= p && q * 2 <= kProjectionDim) q *= 2;
@@ -1435,6 +1463,14 @@ Rcpp::List native_metal_knn_impl(SEXP data_sexp,
       recall_trace.clear();
       tune_nprobe();
     }
+    // Re-evaluate the selected configuration because the final search of the
+    // tuning loop may have tested a different probe count.
+    measured = evaluate_probe(nprobe);
+    const auto pilot_quality = pilot_row_quality(
+      static_cast<const int*>([exact_id_buffer contents]),
+      static_cast<const float*>([exact_dist_buffer contents]),
+      static_cast<const int*>([pilot_id_buffer contents]),
+      static_cast<const float*>([pilot_dist_buffer contents]), pilot_n, k);
     const auto t_tune = Clock::now();
 
     SearchParamsHost full_params{
@@ -1532,6 +1568,8 @@ Rcpp::List native_metal_knn_impl(SEXP data_sexp,
       Rcpp::Named("shortlist_size") = use_projected_shortlist ? shortlist_size : 0,
       Rcpp::Named("shortlist_attempts") = shortlist_attempts,
       Rcpp::Named("pilot_recall") = measured,
+      Rcpp::Named("pilot_min_recall") = pilot_quality.first,
+      Rcpp::Named("pilot_max_k_distance_ratio") = pilot_quality.second,
       Rcpp::Named("target_met") = measured >= target,
       Rcpp::Named("probe_trace") = probe_trace,
       Rcpp::Named("recall_trace") = recall_trace,

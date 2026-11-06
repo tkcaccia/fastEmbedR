@@ -20,3 +20,4 @@ The plan stores only partition arithmetic, not a vector of all partition
 boundaries or graph edges. The byte limit includes the R edge-list output
 (one double source, one integer target, and one double value per edge).
 }
+\keyword{internal}

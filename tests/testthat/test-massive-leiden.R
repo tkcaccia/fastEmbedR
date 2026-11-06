@@ -8,6 +8,7 @@ test_that("file-backed Leiden refinement preserves parent groups", {
     parent_path <- file.path(directory, "parent.u32")
     first <- file.path(directory, "refined.u32")
     second <- file.path(directory, "repeat.u32")
+    parallel_path <- file.path(directory, "parallel.u32")
     neighbors <- t(vapply(seq_len(8L), function(row) {
         setdiff(if (row <= 4L) 1:4 else 5:8, row)
     }, integer(3L)))
@@ -22,12 +23,16 @@ test_that("file-backed Leiden refinement preserves parent groups", {
         massive_umap_memberships(knn), fuzzy, memory_limit = "64MB")
     parent <- massive_louvain_level(graph, parent_path, seed = 4L,
         chunk_rows = 2L, memory_limit = "128MB")
-    expect_error(massive_leiden_refine_level(graph, parent, first,
-        backend = "cuda"), "no fallback")
+    if (!fastEmbedR:::graph_clustering_cuda_available_cpp())
+        expect_error(massive_leiden_refine_level(graph, parent, first,
+            backend = "cuda"), "unavailable")
     fit <- massive_leiden_refine_level(graph, parent, first,
         seed = 4L, chunk_rows = 2L, memory_limit = "128MB")
     again <- massive_leiden_refine_level(graph, parent, second,
         seed = 4L, chunk_rows = 2L, memory_limit = "128MB")
+    parallel <- massive_leiden_refine_level(graph, parent,
+        parallel_path, seed = 4L, chunk_rows = 2L,
+        memory_limit = "128MB", n.cores = 2L)
     read_labels <- function(path, count) {
         readBin(path, integer(), n = count, size = 4L,
             endian = "little")
@@ -36,6 +41,12 @@ test_that("file-backed Leiden refinement preserves parent groups", {
     mapping <- read_labels(fit$parent_mapping_path, fit$n_refined)
     expect_identical(labels,
         read_labels(again$membership_path, 8L))
+    expect_identical(labels,
+        read_labels(parallel$membership_path, 8L))
+    expect_identical(parallel$cpu_workers, 2L)
+    expect_identical(parallel$cpu_workers_effective, 2L)
+    expect_identical(parallel$parallel_stage,
+        "row_candidate_preparation")
     expect_identical(mapping[labels],
         massive_read_louvain_rows(parent, 1L, 8L))
     expect_gte(fit$n_refined, parent$n_communities)
@@ -45,6 +56,117 @@ test_that("file-backed Leiden refinement preserves parent groups", {
     expect_false(file.exists(paste0(first, ".sizes.part")))
     expect_error(massive_leiden_refine_level(graph, parent, first),
         "already exists")
+})
+
+test_that("file-backed Metal Leiden refines and contracts on device", {
+    skip_if_not(fastEmbedR:::graph_clustering_metal_available_cpp())
+    directory <- tempfile()
+    dir.create(directory)
+    on.exit(unlink(directory, recursive = TRUE))
+    n <- 128L
+    k <- 6L
+    source <- file.path(directory, "knn")
+    rows <- seq_len(n) - 1L
+    neighbors <- outer(rows, seq_len(k), function(row, step) {
+        (row + step) %% n + 1L
+    })
+    writeBin(as.integer(t(neighbors)), paste0(source,
+        ".indices.u32"), size = 4L, endian = "little")
+    writeBin(rep(as.numeric(seq_len(k)), n), paste0(source,
+        ".distances.f32"), size = 4L, endian = "little")
+    graph <- massive_umap_fuzzy_graph(massive_umap_memberships(
+        massive_knn_graph(source, n, k)),
+        file.path(directory, "fuzzy"), memory_limit = "64MB")
+    parent <- massive_louvain_level(graph,
+        file.path(directory, "parent.u32"), seed = 4L,
+        chunk_rows = 16L, memory_limit = "128MB", backend = "metal")
+    refined <- massive_leiden_refine_level(graph, parent,
+        file.path(directory, "refined.u32"), seed = 4L,
+        chunk_rows = 16L, memory_limit = "128MB", backend = "metal")
+    labels <- readBin(refined$membership_path, integer(), n = n,
+        size = 4L, endian = "little")
+    repeated <- massive_leiden_refine_level(graph, parent,
+        file.path(directory, "repeat.u32"), seed = 4L,
+        chunk_rows = 16L, memory_limit = "128MB", backend = "metal")
+    expect_identical(labels, readBin(repeated$membership_path,
+        integer(), n = n, size = 4L, endian = "little"))
+    mapping <- readBin(refined$parent_mapping_path, integer(),
+        n = refined$n_refined, size = 4L, endian = "little")
+    expect_identical(refined$backend, "metal")
+    expect_identical(refined$scan_order,
+        "global_color_streamed_blocks")
+    expect_identical(mapping[labels],
+        massive_read_louvain_rows(parent, 1L, n))
+    expect_gte(refined$n_refined, parent$n_communities)
+    fit <- massive_cluster(graph, method = "leiden",
+        massive = "out_of_core_graph",
+        output = file.path(directory, "full.u32"),
+        seed = 4L, memory_limit = "128MB", backend = "metal")
+    expect_identical(fit$backend, "metal")
+    expect_gt(fit$modularity_final, 0.5)
+    expect_gt(length(fit$levels), 1L)
+    final <- massive_read_leiden_rows(fit, 1L, n)
+    expect_identical(sort(unique(final)),
+        seq_len(fit$n_communities))
+    edges <- massive_read_graph_edges(graph, 1L, n)
+    adjacency <- split(edges$to, edges$from)
+    for (group in split(seq_len(n), final)) {
+        seen <- rep(FALSE, n)
+        queue <- group[[1L]]
+        seen[queue] <- TRUE
+        position <- 1L
+        while (position <= length(queue)) {
+            nearby <- adjacency[[queue[[position]]]]
+            nearby <- nearby[final[nearby] == final[queue[[1L]]]]
+            nearby <- nearby[!seen[nearby]]
+            seen[nearby] <- TRUE
+            queue <- c(queue, nearby)
+            position <- position + 1L
+        }
+        expect_true(all(seen[group]))
+    }
+    resume_path <- file.path(directory, "resumed.u32")
+    controls <- fastEmbedR:::massive_louvain_controls(10L, 1, 4L)
+    controls$backend <- "metal"
+    resources <- fastEmbedR:::massive_leiden_output(
+        graph, resume_path, "128MB", FALSE)
+    signature <- fastEmbedR:::massive_leiden_signature(
+        graph, resume_path, controls, 16L, "128MB")
+    prefix <- paste0(resume_path, ".level0")
+    step <- fastEmbedR:::massive_leiden_run_level(graph, NULL,
+        prefix, 0L, 10L, 1, 4L, 16L, "128MB", "metal")
+    expect_false(is.null(step$refined))
+    part <- paste0(resume_path, ".part")
+    expect_true(file.copy(step$mapping, part))
+    contracted <- fastEmbedR:::massive_louvain_contract(
+        graph, step$refined, prefix, resources)
+    current <- fastEmbedR:::massive_louvain_coarse_csr(
+        contracted, paste0(prefix, ".csr"),
+        resources$memory_limit_bytes)
+    levels <- list(list(vertices = n,
+        parent = step$parent$n_communities,
+        parent_modularity = step$parent$modularity_final,
+        refined = step$refined$n_refined))
+    fastEmbedR:::massive_leiden_save(resume_path, signature,
+        "next", 1L, current, step$refined, part, levels,
+        step$parent$modularity_final)
+    expect_error(massive_leiden(graph, resume_path,
+        max_passes = 9L, seed = 4L, chunk_rows = 16L,
+        memory_limit = "128MB", backend = "metal",
+        checkpoint = TRUE, resume = TRUE), "checkpoint")
+    resumed <- massive_leiden(graph, resume_path, seed = 4L,
+        chunk_rows = 16L, memory_limit = "128MB",
+        backend = "metal", checkpoint = TRUE, resume = TRUE)
+    fresh <- massive_leiden(graph,
+        file.path(directory, "fresh.u32"), seed = 4L,
+        chunk_rows = 16L, memory_limit = "128MB",
+        backend = "metal")
+    expect_identical(massive_read_leiden_rows(resumed, 1L, n),
+        massive_read_leiden_rows(fresh, 1L, n))
+    expect_equal(resumed$modularity_final,
+        fresh$modularity_final)
+    expect_false(file.exists(paste0(resume_path,
+        ".checkpoint.rds")))
 })
 
 test_that("file-backed Leiden contracts and preserves original rows", {
@@ -70,7 +192,15 @@ test_that("file-backed Leiden contracts and preserves original rows", {
     output <- file.path(directory, "leiden.u32")
     fit <- massive_leiden(graph, output, seed = 4L,
         chunk_rows = 64L, memory_limit = "128MB")
+    parallel <- massive_leiden(graph,
+        file.path(directory, "leiden-parallel.u32"), seed = 4L,
+        chunk_rows = 64L, memory_limit = "128MB", n.cores = 4L)
     labels <- massive_read_leiden_rows(fit, 1L, n)
+    expect_identical(massive_read_leiden_rows(parallel, 1L, n),
+        labels)
+    expect_equal(parallel$modularity_final, fit$modularity_final)
+    expect_identical(parallel$cpu_workers, 4L)
+    expect_identical(parallel$cpu_workers_effective, 4L)
     expect_gt(length(fit$levels), 1L)
     expect_identical(length(labels), n)
     expect_identical(sort(unique(labels)),
@@ -109,8 +239,9 @@ test_that("file-backed Leiden contracts and preserves original rows", {
         }
         expect_true(all(seen[group]))
     }
-    expect_error(massive_leiden(graph, tempfile(),
-        backend = "cuda"), "no fallback")
+    if (!fastEmbedR:::graph_clustering_cuda_available_cpp())
+        expect_error(massive_leiden(graph, tempfile(),
+            backend = "cuda"), "unavailable")
     public_path <- file.path(directory, "public.u32")
     public <- massive_cluster(graph, method = "leiden",
         massive = "out_of_core_graph", output = public_path,

@@ -45,6 +45,7 @@ tsne(
   landmark_method = "reservoir",
   checkpoint = FALSE,
   resume = FALSE,
+  affinity_k = NULL,
   ...
 )
 }
@@ -89,8 +90,8 @@ uses native exact search below 5,000 rows, compiled FAISS HNSW for larger
 Euclidean searches, and native HNSW for other supported metrics.
 Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
 cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
-that threshold. Device pointers pass directly to the native CUDA t-SNE
-optimizer.
+that threshold. Single-GPU device pointers pass directly to the native
+CUDA optimizer; coordinated fits materialize KNN in host RAM.
 Unsupported GPU requests fail clearly and are not relabelled CPU runs.}
 
 \item{keep_knn}{If \code{TRUE}, retain KNN matrices in the returned object.}
@@ -138,7 +139,8 @@ prohibitively expensive. Explicit user-supplied values are respected.}
 \item{landmarks}{\code{FALSE} (the default) embeds all observations. A fraction
 in \verb{(0, 1)}, a positive landmark count, or explicit row indices enables
 landmark embedding followed by fixed-reference transformation of the
-remaining rows.}
+remaining rows. File-backed landmark mode currently accepts a count
+only; fractions and explicit row indices require resident input.}
 
 \item{transform_k}{Number of landmark neighbors used to place non-landmark
 observations. Used only when landmarking is enabled.}
@@ -158,8 +160,9 @@ large fixed-reference transforms.}
 \code{"weighted"}, or \code{"random"}.}
 
 \item{massive}{\code{"off"} (default), experimental \code{"landmark"}, or
-\code{"out_of_core_graph"} for a prepared t-SNE affinity graph.
-Landmarking is always explicit.}
+\code{"out_of_core_graph"} for a prepared t-SNE affinity graph. When
+omitted, a prepared file-backed graph selects full-graph mode; a
+file-backed matrix with explicit landmarks selects landmark mode.}
 
 \item{output}{New \code{.f32} path for experimental file-backed coordinates.}
 
@@ -167,18 +170,22 @@ Landmarking is always explicit.}
 
 \item{memory_limit}{Conservative experimental RAM budget.}
 
-\item{devices}{Optional CUDA device indices. With experimental
-full-graph 2D t-SNE, two devices coordinate one fit using NCCL.
-Landmark projection distributes query rows across devices while
-reference fitting and KNN use the first device.}
+\item{devices}{Optional CUDA device indices. In resident full-data mode,
+two to four devices coordinate one 2D or 3D fit with host KNN
+affinities and NCCL. The experimental file-backed full-graph route
+also accepts two to four CUDA devices.
+Resident landmark fits coordinate the reference optimizer across
+devices and shard the fixed-reference query transform across them.
+Query KNN is computed on one GPU and materialized in host RAM before
+its device shards; the scientific calculation uses no SSD files.}
 
 \item{landmark_method}{Sampling method for experimental landmark mode:
 \code{"reservoir"} (default) or \code{"random"} for fast random-access storage.
 Auto mode uses ordinary t-SNE when its conservative memory estimate fits;
 otherwise it reports and runs approximate landmark t-SNE. The landmark
 route requires a file-backed \code{\link[=massive_matrix]{massive_matrix()}} and a new \code{.f32} output.
-Full-graph mode streams affinities into the CPU FFT optimizer and
-currently has no CUDA route.}
+Full-graph mode streams affinities into the CPU, Metal, or CUDA FFT
+optimizer.}
 
 \item{checkpoint}{Save experimental workflow stages. Full-graph t-SNE
 also saves coordinates, momentum updates, and adaptive gains every
@@ -186,6 +193,12 @@ also saves coordinates, momentum updates, and adaptive gains every
 
 \item{resume}{Continue a matching interrupted experimental workflow.
 Changed input, backend, or fit controls fail without recomputation.}
+
+\item{affinity_k}{Optional number of non-self neighbors for resident
+t-SNE affinities. Defaults to \code{ceiling(perplexity)}; use
+\code{ceiling(3 * perplexity)} for conventional-width support. This setting
+also controls the reference fit in resident landmark mode. It is
+unavailable for file-backed fits.}
 
 \item{...}{Additional low-level parameters passed to \code{\link[=tsne_knn]{tsne_knn()}}.}
 }
@@ -213,7 +226,7 @@ deliberately does not expose a nearest-neighbor index type or tuning
 parameters: it uses the backend router with target recall 0.99. Supply an
 externally generated KNN object to \code{\link[=tsne_knn]{tsne_knn()}} when search policy must be
 controlled independently. The resolved settings are returned in
-\code{fit$parameters}. Affinity construction always uses compact support with
+\code{fit$parameters}. Affinities default to compact support with
 \code{k = ceiling(perplexity)} non-self neighbors. Landmark mode embeds the
 selected reference rows with the same t-SNE implementation and transforms
 all remaining rows while keeping the reference coordinates fixed.

@@ -120,3 +120,4 @@ executes the existing native Metal query kernel, and merges global IDs
 into the same file-backed graph. It re-uploads each reference shard for
 every query batch; this is a correctness route, not an ANN index.
 }
+\keyword{internal}

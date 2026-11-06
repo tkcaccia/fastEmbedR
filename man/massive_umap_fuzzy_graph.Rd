@@ -52,3 +52,4 @@ bounded vertex buckets; no directed weight file is written. The bucketed
 path does not yet support checkpoints. Both sorts are CPU-only.
 Use \code{\link[=massive_fuzzy_graph]{massive_fuzzy_graph()}} after a restart.
 }
+\keyword{internal}

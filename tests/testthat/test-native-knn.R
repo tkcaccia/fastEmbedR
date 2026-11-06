@@ -5,9 +5,9 @@ exact_knn_reference <- function(x, k) {
     indices <- t(vapply(seq_len(nrow(x)), function(i) {
         order(d2[i, ], method = "radix")[seq_len(k)]
     }, integer(k)))
-    list(indices = indices, distances = sqrt(pmax(0, matrix(d2[cbind(
+    list(indices = indices, distances = sqrt(pmax(matrix(d2[cbind(
         rep(seq_len(nrow(x)), each = k), as.vector(t(indices))
-    )], nrow(x), k, byrow = TRUE))))
+    )], nrow(x), k, byrow = TRUE), 0)))
 }
 
 knn_recall_test <- function(observed, expected) {
@@ -394,6 +394,21 @@ test_that("native Metal exact and IVF searches are recall checked", {
     ivf <- native_metal_knn_cpp(ivf_data, 10L, "ivf", "euclidean", 0.99)
     expect_true(isTRUE(ivf$target_met))
     expect_gte(knn_recall_test(ivf, ivf_truth), 0.99)
+    pilot_starts <- round((0:3) * (nrow(ivf_data) - 64L) / 3L)
+    pilot_rows <- unlist(lapply(pilot_starts, function(start) {
+        seq.int(start + 1L, start + 64L)
+    }))
+    row_recall <- vapply(pilot_rows, function(i) {
+        mean(ivf$indices[i, ] %in% ivf_truth$indices[i, ])
+    }, numeric(1L))
+    distance_ratio <- vapply(pilot_rows, function(i) {
+        max(ivf$distances[i, ]) / max(ivf_truth$distances[i, ])
+    }, numeric(1L))
+    expect_equal(ivf$pilot_min_recall, min(row_recall))
+    expect_equal(
+        ivf$pilot_max_k_distance_ratio, max(1, distance_ratio),
+        tolerance = 1e-4
+    )
     expect_identical(attr(ivf, "backend"), "metal")
 })
 
@@ -550,6 +565,22 @@ test_that("one-call routing uses native CPU and Metal KNN", {
     )
     expect_identical(
         fastembedr_embedding_nn_policy("metal", 1000L)$method, "exact"
+    )
+    expect_identical(
+        fastembedr_embedding_nn_policy("metal", 44808L, 50L)$method,
+        "exact"
+    )
+    expect_identical(
+        fastembedr_embedding_nn_policy("metal", 5000L, 784L)$method,
+        "exact"
+    )
+    expect_identical(
+        fastembedr_embedding_nn_policy("metal", 15000L, 784L)$method,
+        "ivf"
+    )
+    expect_identical(
+        fastembedr_embedding_nn_policy("metal", 70000L, 784L)$method,
+        "ivf"
     )
     expect_identical(
         fastembedr_embedding_nn_policy("cuda", 70000L)$method, "exact"

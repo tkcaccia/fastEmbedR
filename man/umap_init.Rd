@@ -56,10 +56,16 @@ and available. Binary initialization is computed from the same unit-weight
 CSR graph used by the optimizer, so its mathematical input is unchanged.
 Explicit GPU requests fail when the corresponding native backend is
 unavailable.
+CUDA and Metal compute three-dimensional initializations. The prepared
+CUDA graph optimizer also reuses a three-dimensional initialization with
+its snapshot update mode.
 
 CUDA KNN input is materialized on the host only for this standalone
-diagnostic API. The ordinary one-call CUDA UMAP path remains device
-resident.
+diagnostic API. The CUDA initializer reserves the union graph's row
+capacity from the fixed KNN input, sorts its device graph rows, and errors
+if any row requires more than 256 neighbors. Repeated fixed KNN input
+produces the same initialization; approximate KNN computed afresh may
+differ. The ordinary one-call CUDA UMAP path remains device resident.
 }
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))
@@ -73,3 +79,4 @@ initialization <- umap_init(
 layout <- umap_knn(initialization, backend = "cpu", seed = 1)
 plot(layout, pch = 21, bg = iris$Species)
 }
+\keyword{internal}

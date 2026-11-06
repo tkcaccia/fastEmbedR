@@ -40,7 +40,7 @@ massive_landmark_resources <- function(x, count, chunk_rows,
 #' @param landmark_method `"reservoir"` or `"random"`.
 #' @return A list with `data`, a file-backed landmark matrix descriptor;
 #'   `indices`, sorted one-based source rows; and resource metadata.
-#' @export
+#' @keywords internal
 massive_select_landmarks <- function(x, landmarks, output, seed = 42L,
                                         chunk_rows = NULL,
                                         memory_limit = "512MB",

@@ -186,6 +186,27 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// umap_cuda_optimize_csr_multigpu_cpp
+List umap_cuda_optimize_csr_multigpu_cpp(IntegerVector offsets, IntegerVector neighbors, NumericVector weights, NumericMatrix init, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, IntegerVector devices);
+RcppExport SEXP _fastEmbedR_umap_cuda_optimize_csr_multigpu_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP initSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP devicesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type init(initSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type devices(devicesSEXP);
+    rcpp_result_gen = Rcpp::wrap(umap_cuda_optimize_csr_multigpu_cpp(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, devices));
+    return rcpp_result_gen;
+END_RCPP
+}
 // knn_tsne_opentsne_cuda_cpp
 List knn_tsne_opentsne_cuda_cpp(IntegerMatrix indices, NumericMatrix distances, NumericMatrix y_init, bool init, int n_components, double perplexity, int early_exaggeration_iter, int n_iter, double early_exaggeration, double exaggeration, double learning_rate, bool learning_rate_auto, double initial_momentum, double final_momentum, double min_gain, double max_step_norm, std::string negative_gradient_method, int seed, bool record_costs);
 RcppExport SEXP _fastEmbedR_knn_tsne_opentsne_cuda_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP initSEXP, SEXP n_componentsSEXP, SEXP perplexitySEXP, SEXP early_exaggeration_iterSEXP, SEXP n_iterSEXP, SEXP early_exaggerationSEXP, SEXP exaggerationSEXP, SEXP learning_rateSEXP, SEXP learning_rate_autoSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP min_gainSEXP, SEXP max_step_normSEXP, SEXP negative_gradient_methodSEXP, SEXP seedSEXP, SEXP record_costsSEXP) {
@@ -423,6 +444,35 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// landmark_tsne_transform_cuda_devices_cpp
+List landmark_tsne_transform_cuda_devices_cpp(SEXP reference_data, SEXP query_data, SEXP reference_layout, IntegerMatrix indices, NumericMatrix distances, double perplexity, int n_iter, int early_exaggeration_iter, double learning_rate, double early_exaggeration, double exaggeration, double initial_momentum, double final_momentum, double max_grad_norm, double max_step_norm, int n_negatives, int exact_repulsion_threshold, int seed, IntegerVector devices);
+RcppExport SEXP _fastEmbedR_landmark_tsne_transform_cuda_devices_cpp(SEXP reference_dataSEXP, SEXP query_dataSEXP, SEXP reference_layoutSEXP, SEXP indicesSEXP, SEXP distancesSEXP, SEXP perplexitySEXP, SEXP n_iterSEXP, SEXP early_exaggeration_iterSEXP, SEXP learning_rateSEXP, SEXP early_exaggerationSEXP, SEXP exaggerationSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP max_grad_normSEXP, SEXP max_step_normSEXP, SEXP n_negativesSEXP, SEXP exact_repulsion_thresholdSEXP, SEXP seedSEXP, SEXP devicesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type reference_data(reference_dataSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type query_data(query_dataSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type reference_layout(reference_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< double >::type perplexity(perplexitySEXP);
+    Rcpp::traits::input_parameter< int >::type n_iter(n_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type early_exaggeration_iter(early_exaggeration_iterSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type early_exaggeration(early_exaggerationSEXP);
+    Rcpp::traits::input_parameter< double >::type exaggeration(exaggerationSEXP);
+    Rcpp::traits::input_parameter< double >::type initial_momentum(initial_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type final_momentum(final_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type max_grad_norm(max_grad_normSEXP);
+    Rcpp::traits::input_parameter< double >::type max_step_norm(max_step_normSEXP);
+    Rcpp::traits::input_parameter< int >::type n_negatives(n_negativesSEXP);
+    Rcpp::traits::input_parameter< int >::type exact_repulsion_threshold(exact_repulsion_thresholdSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type devices(devicesSEXP);
+    rcpp_result_gen = Rcpp::wrap(landmark_tsne_transform_cuda_devices_cpp(reference_data, query_data, reference_layout, indices, distances, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, seed, devices));
+    return rcpp_result_gen;
+END_RCPP
+}
 // landmark_umap_project_refine_cuda_gpu_cpp
 List landmark_umap_project_refine_cuda_gpu_cpp(SEXP gpu_knn, SEXP reference_data, SEXP query_data, SEXP reference_layout, IntegerVector landmark_rows, IntegerVector query_rows, int n_total, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int seed, int affine_neighbors, double affine_ridge, double max_extrapolation);
 RcppExport SEXP _fastEmbedR_landmark_umap_project_refine_cuda_gpu_cpp(SEXP gpu_knnSEXP, SEXP reference_dataSEXP, SEXP query_dataSEXP, SEXP reference_layoutSEXP, SEXP landmark_rowsSEXP, SEXP query_rowsSEXP, SEXP n_totalSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP affine_neighborsSEXP, SEXP affine_ridgeSEXP, SEXP max_extrapolationSEXP) {
@@ -446,6 +496,28 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type affine_ridge(affine_ridgeSEXP);
     Rcpp::traits::input_parameter< double >::type max_extrapolation(max_extrapolationSEXP);
     rcpp_result_gen = Rcpp::wrap(landmark_umap_project_refine_cuda_gpu_cpp(gpu_knn, reference_data, query_data, reference_layout, landmark_rows, query_rows, n_total, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, seed, affine_neighbors, affine_ridge, max_extrapolation));
+    return rcpp_result_gen;
+END_RCPP
+}
+// landmark_umap_project_refine_cuda_devices_cpp
+List landmark_umap_project_refine_cuda_devices_cpp(SEXP reference_data, SEXP query_data, SEXP reference_layout, IntegerMatrix indices, NumericMatrix distances, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int seed, IntegerVector devices);
+RcppExport SEXP _fastEmbedR_landmark_umap_project_refine_cuda_devices_cpp(SEXP reference_dataSEXP, SEXP query_dataSEXP, SEXP reference_layoutSEXP, SEXP indicesSEXP, SEXP distancesSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP devicesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type reference_data(reference_dataSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type query_data(query_dataSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type reference_layout(reference_layoutSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type devices(devicesSEXP);
+    rcpp_result_gen = Rcpp::wrap(landmark_umap_project_refine_cuda_devices_cpp(reference_data, query_data, reference_layout, indices, distances, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, seed, devices));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -670,8 +742,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // knn_embed_metal_csr_cpp
-NumericMatrix knn_embed_metal_csr_cpp(IntegerVector offsets, IntegerVector neighbors, SEXP weights, NumericMatrix init, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double max_weight, double repulsion_strength, int seed, int sampler_mode);
-RcppExport SEXP _fastEmbedR_knn_embed_metal_csr_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP initSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP max_weightSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP sampler_modeSEXP) {
+NumericMatrix knn_embed_metal_csr_cpp(IntegerVector offsets, IntegerVector neighbors, SEXP weights, NumericMatrix init, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double max_weight, double repulsion_strength, int seed, int sampler_mode, int start_epoch, int total_epochs);
+RcppExport SEXP _fastEmbedR_knn_embed_metal_csr_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP initSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP max_weightSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP sampler_modeSEXP, SEXP start_epochSEXP, SEXP total_epochsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -687,7 +759,9 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< int >::type sampler_mode(sampler_modeSEXP);
-    rcpp_result_gen = Rcpp::wrap(knn_embed_metal_csr_cpp(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, repulsion_strength, seed, sampler_mode));
+    Rcpp::traits::input_parameter< int >::type start_epoch(start_epochSEXP);
+    Rcpp::traits::input_parameter< int >::type total_epochs(total_epochsSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_embed_metal_csr_cpp(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, repulsion_strength, seed, sampler_mode, start_epoch, total_epochs));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -798,6 +872,39 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type auto_config(auto_configSEXP);
     Rcpp::traits::input_parameter< double >::type auto_iter_end(auto_iter_endSEXP);
     rcpp_result_gen = Rcpp::wrap(knn_tsne_opentsne_metal_cpp(indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs, auto_config, auto_iter_end));
+    return rcpp_result_gen;
+END_RCPP
+}
+// massive_tsne_optimize_metal_cpp
+List massive_tsne_optimize_metal_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, std::string init_path, std::string output_path, int n, int dims, int early_iter, int normal_iter, double early_exaggeration, double exaggeration, double learning_rate, bool learning_rate_auto, double initial_momentum, double final_momentum, double min_gain, double max_step_norm, int start_iter, std::string state_path, int checkpoint_every, SEXP checkpoint_callback, std::string graph_access, int edge_chunk_capacity);
+RcppExport SEXP _fastEmbedR_massive_tsne_optimize_metal_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP init_pathSEXP, SEXP output_pathSEXP, SEXP nSEXP, SEXP dimsSEXP, SEXP early_iterSEXP, SEXP normal_iterSEXP, SEXP early_exaggerationSEXP, SEXP exaggerationSEXP, SEXP learning_rateSEXP, SEXP learning_rate_autoSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP min_gainSEXP, SEXP max_step_normSEXP, SEXP start_iterSEXP, SEXP state_pathSEXP, SEXP checkpoint_everySEXP, SEXP checkpoint_callbackSEXP, SEXP graph_accessSEXP, SEXP edge_chunk_capacitySEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type offsets_path(offsets_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type indices_path(indices_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type weights_path(weights_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type init_path(init_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type output_path(output_pathSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< int >::type dims(dimsSEXP);
+    Rcpp::traits::input_parameter< int >::type early_iter(early_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type normal_iter(normal_iterSEXP);
+    Rcpp::traits::input_parameter< double >::type early_exaggeration(early_exaggerationSEXP);
+    Rcpp::traits::input_parameter< double >::type exaggeration(exaggerationSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< bool >::type learning_rate_auto(learning_rate_autoSEXP);
+    Rcpp::traits::input_parameter< double >::type initial_momentum(initial_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type final_momentum(final_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type min_gain(min_gainSEXP);
+    Rcpp::traits::input_parameter< double >::type max_step_norm(max_step_normSEXP);
+    Rcpp::traits::input_parameter< int >::type start_iter(start_iterSEXP);
+    Rcpp::traits::input_parameter< std::string >::type state_path(state_pathSEXP);
+    Rcpp::traits::input_parameter< int >::type checkpoint_every(checkpoint_everySEXP);
+    Rcpp::traits::input_parameter< SEXP >::type checkpoint_callback(checkpoint_callbackSEXP);
+    Rcpp::traits::input_parameter< std::string >::type graph_access(graph_accessSEXP);
+    Rcpp::traits::input_parameter< int >::type edge_chunk_capacity(edge_chunk_capacitySEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_tsne_optimize_metal_cpp(offsets_path, indices_path, weights_path, init_path, output_path, n, dims, early_iter, normal_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, start_iter, state_path, checkpoint_every, checkpoint_callback, graph_access, edge_chunk_capacity));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1352,8 +1459,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // fast_knn_umap_csr_clean_atomic_cpp
-NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets, IntegerVector neighbors, SEXP weights, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, int decay_mode, bool verbose);
-RcppExport SEXP _fastEmbedR_fast_knn_umap_csr_clean_atomic_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP init_embeddingSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP decay_modeSEXP, SEXP verboseSEXP) {
+NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets, IntegerVector neighbors, SEXP weights, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, int decay_mode, bool verbose, int start_epoch, int total_epochs);
+RcppExport SEXP _fastEmbedR_fast_knn_umap_csr_clean_atomic_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP init_embeddingSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP decay_modeSEXP, SEXP verboseSEXP, SEXP start_epochSEXP, SEXP total_epochsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1370,7 +1477,9 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< int >::type decay_mode(decay_modeSEXP);
     Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
-    rcpp_result_gen = Rcpp::wrap(fast_knn_umap_csr_clean_atomic_cpp(offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, decay_mode, verbose));
+    Rcpp::traits::input_parameter< int >::type start_epoch(start_epochSEXP);
+    Rcpp::traits::input_parameter< int >::type total_epochs(total_epochsSEXP);
+    rcpp_result_gen = Rcpp::wrap(fast_knn_umap_csr_clean_atomic_cpp(offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, decay_mode, verbose, start_epoch, total_epochs));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1539,9 +1648,55 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// fastembedr_graph_canonical_cpp
+Rcpp::List fastembedr_graph_canonical_cpp(Rcpp::IntegerVector from, Rcpp::IntegerVector to, Rcpp::NumericVector weight, int n_vertices);
+RcppExport SEXP _fastEmbedR_fastembedr_graph_canonical_cpp(SEXP fromSEXP, SEXP toSEXP, SEXP weightSEXP, SEXP n_verticesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type from(fromSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type to(toSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type weight(weightSEXP);
+    Rcpp::traits::input_parameter< int >::type n_vertices(n_verticesSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastembedr_graph_canonical_cpp(from, to, weight, n_vertices));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fastembedr_graph_projection_cpp
+Rcpp::List fastembedr_graph_projection_cpp(Rcpp::IntegerVector from, Rcpp::IntegerVector to, Rcpp::NumericVector weight, int n_vertices, SEXP projection);
+RcppExport SEXP _fastEmbedR_fastembedr_graph_projection_cpp(SEXP fromSEXP, SEXP toSEXP, SEXP weightSEXP, SEXP n_verticesSEXP, SEXP projectionSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type from(fromSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type to(toSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type weight(weightSEXP);
+    Rcpp::traits::input_parameter< int >::type n_vertices(n_verticesSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type projection(projectionSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastembedr_graph_projection_cpp(from, to, weight, n_vertices, projection));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fastembedr_graph_small_groups_cpp
+Rcpp::List fastembedr_graph_small_groups_cpp(Rcpp::IntegerVector from, Rcpp::IntegerVector to, Rcpp::NumericVector weight, int n_vertices, Rcpp::IntegerVector membership, double resolution, SEXP small_groups);
+RcppExport SEXP _fastEmbedR_fastembedr_graph_small_groups_cpp(SEXP fromSEXP, SEXP toSEXP, SEXP weightSEXP, SEXP n_verticesSEXP, SEXP membershipSEXP, SEXP resolutionSEXP, SEXP small_groupsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type from(fromSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type to(toSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type weight(weightSEXP);
+    Rcpp::traits::input_parameter< int >::type n_vertices(n_verticesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type membership(membershipSEXP);
+    Rcpp::traits::input_parameter< double >::type resolution(resolutionSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type small_groups(small_groupsSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastembedr_graph_small_groups_cpp(from, to, weight, n_vertices, membership, resolution, small_groups));
+    return rcpp_result_gen;
+END_RCPP
+}
 // fastembedr_graph_cluster_cpp
-Rcpp::List fastembedr_graph_cluster_cpp(Rcpp::IntegerVector from, Rcpp::IntegerVector to, Rcpp::NumericVector weight, int n_vertices, std::string method, Rcpp::NumericVector resolution, int n_iterations, int n_runs, Rcpp::NumericVector seed, SEXP projection, SEXP small_groups);
-RcppExport SEXP _fastEmbedR_fastembedr_graph_cluster_cpp(SEXP fromSEXP, SEXP toSEXP, SEXP weightSEXP, SEXP n_verticesSEXP, SEXP methodSEXP, SEXP resolutionSEXP, SEXP n_iterationsSEXP, SEXP n_runsSEXP, SEXP seedSEXP, SEXP projectionSEXP, SEXP small_groupsSEXP) {
+Rcpp::List fastembedr_graph_cluster_cpp(Rcpp::IntegerVector from, Rcpp::IntegerVector to, Rcpp::NumericVector weight, int n_vertices, std::string method, Rcpp::NumericVector resolution, int n_iterations, int n_runs, Rcpp::NumericVector seed, SEXP projection, SEXP small_groups, int n_threads, bool parallel_fit);
+RcppExport SEXP _fastEmbedR_fastembedr_graph_cluster_cpp(SEXP fromSEXP, SEXP toSEXP, SEXP weightSEXP, SEXP n_verticesSEXP, SEXP methodSEXP, SEXP resolutionSEXP, SEXP n_iterationsSEXP, SEXP n_runsSEXP, SEXP seedSEXP, SEXP projectionSEXP, SEXP small_groupsSEXP, SEXP n_threadsSEXP, SEXP parallel_fitSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1556,7 +1711,9 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< SEXP >::type projection(projectionSEXP);
     Rcpp::traits::input_parameter< SEXP >::type small_groups(small_groupsSEXP);
-    rcpp_result_gen = Rcpp::wrap(fastembedr_graph_cluster_cpp(from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, projection, small_groups));
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< bool >::type parallel_fit(parallel_fitSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastembedr_graph_cluster_cpp(from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, projection, small_groups, n_threads, parallel_fit));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1602,6 +1759,26 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type n_runs(n_runsSEXP);
     Rcpp::traits::input_parameter< double >::type seed(seedSEXP);
     rcpp_result_gen = Rcpp::wrap(fastembedr_graph_cluster_cuda_cpp(from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fastembedr_graph_cluster_cuda_devices_cpp
+Rcpp::List fastembedr_graph_cluster_cuda_devices_cpp(Rcpp::IntegerVector from, Rcpp::IntegerVector to, Rcpp::NumericVector weight, int n_vertices, std::string method, double resolution, int n_iterations, int n_runs, double seed, Rcpp::IntegerVector devices);
+RcppExport SEXP _fastEmbedR_fastembedr_graph_cluster_cuda_devices_cpp(SEXP fromSEXP, SEXP toSEXP, SEXP weightSEXP, SEXP n_verticesSEXP, SEXP methodSEXP, SEXP resolutionSEXP, SEXP n_iterationsSEXP, SEXP n_runsSEXP, SEXP seedSEXP, SEXP devicesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type from(fromSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type to(toSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type weight(weightSEXP);
+    Rcpp::traits::input_parameter< int >::type n_vertices(n_verticesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
+    Rcpp::traits::input_parameter< double >::type resolution(resolutionSEXP);
+    Rcpp::traits::input_parameter< int >::type n_iterations(n_iterationsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_runs(n_runsSEXP);
+    Rcpp::traits::input_parameter< double >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type devices(devicesSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastembedr_graph_cluster_cuda_devices_cpp(from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, devices));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1684,6 +1861,34 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
+// pca_cuda_resident_covariance_cpp
+Rcpp::List pca_cuda_resident_covariance_cpp(Rcpp::NumericMatrix input, Rcpp::IntegerVector devices, bool centered);
+RcppExport SEXP _fastEmbedR_pca_cuda_resident_covariance_cpp(SEXP inputSEXP, SEXP devicesSEXP, SEXP centeredSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type input(inputSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type devices(devicesSEXP);
+    Rcpp::traits::input_parameter< bool >::type centered(centeredSEXP);
+    rcpp_result_gen = Rcpp::wrap(pca_cuda_resident_covariance_cpp(input, devices, centered));
+    return rcpp_result_gen;
+END_RCPP
+}
+// pca_cuda_resident_project_cpp
+Rcpp::NumericMatrix pca_cuda_resident_project_cpp(Rcpp::NumericMatrix input, Rcpp::IntegerVector devices, Rcpp::NumericVector center, Rcpp::NumericVector scale, Rcpp::NumericMatrix loadings);
+RcppExport SEXP _fastEmbedR_pca_cuda_resident_project_cpp(SEXP inputSEXP, SEXP devicesSEXP, SEXP centerSEXP, SEXP scaleSEXP, SEXP loadingsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type input(inputSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type devices(devicesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type center(centerSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type scale(scaleSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type loadings(loadingsSEXP);
+    rcpp_result_gen = Rcpp::wrap(pca_cuda_resident_project_cpp(input, devices, center, scale, loadings));
+    return rcpp_result_gen;
+END_RCPP
+}
 // massive_file_info_cpp
 List massive_file_info_cpp(std::string path, std::string format, double rows, double columns);
 RcppExport SEXP _fastEmbedR_massive_file_info_cpp(SEXP pathSEXP, SEXP formatSEXP, SEXP rowsSEXP, SEXP columnsSEXP) {
@@ -1710,8 +1915,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // massive_graph_modularity_cpp
-List massive_graph_modularity_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, std::string membership_path, double n_vertices, int n_communities, double resolution, int chunk_rows, double edge_budget, bool connectivity);
-RcppExport SEXP _fastEmbedR_massive_graph_modularity_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP membership_pathSEXP, SEXP n_verticesSEXP, SEXP n_communitiesSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP, SEXP connectivitySEXP) {
+List massive_graph_modularity_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, std::string membership_path, double n_vertices, int n_communities, double resolution, int chunk_rows, double edge_budget, bool connectivity, bool contracted);
+RcppExport SEXP _fastEmbedR_massive_graph_modularity_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP membership_pathSEXP, SEXP n_verticesSEXP, SEXP n_communitiesSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP, SEXP connectivitySEXP, SEXP contractedSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1725,13 +1930,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type chunk_rows(chunk_rowsSEXP);
     Rcpp::traits::input_parameter< double >::type edge_budget(edge_budgetSEXP);
     Rcpp::traits::input_parameter< bool >::type connectivity(connectivitySEXP);
-    rcpp_result_gen = Rcpp::wrap(massive_graph_modularity_cpp(offsets_path, indices_path, weights_path, membership_path, n_vertices, n_communities, resolution, chunk_rows, edge_budget, connectivity));
+    Rcpp::traits::input_parameter< bool >::type contracted(contractedSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_graph_modularity_cpp(offsets_path, indices_path, weights_path, membership_path, n_vertices, n_communities, resolution, chunk_rows, edge_budget, connectivity, contracted));
     return rcpp_result_gen;
 END_RCPP
 }
 // massive_louvain_level_cpp
-List massive_louvain_level_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string output, int max_passes, double resolution, int chunk_rows, double edge_budget, int seed, bool contracted, std::string initial_path, int initial_count);
-RcppExport SEXP _fastEmbedR_massive_louvain_level_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP outputSEXP, SEXP max_passesSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP, SEXP seedSEXP, SEXP contractedSEXP, SEXP initial_pathSEXP, SEXP initial_countSEXP) {
+List massive_louvain_level_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string output, int max_passes, double resolution, int chunk_rows, double edge_budget, int seed, bool contracted, std::string initial_path, int initial_count, int n_threads);
+RcppExport SEXP _fastEmbedR_massive_louvain_level_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP outputSEXP, SEXP max_passesSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP, SEXP seedSEXP, SEXP contractedSEXP, SEXP initial_pathSEXP, SEXP initial_countSEXP, SEXP n_threadsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1748,13 +1954,60 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type contracted(contractedSEXP);
     Rcpp::traits::input_parameter< std::string >::type initial_path(initial_pathSEXP);
     Rcpp::traits::input_parameter< int >::type initial_count(initial_countSEXP);
-    rcpp_result_gen = Rcpp::wrap(massive_louvain_level_cpp(offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted, initial_path, initial_count));
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_louvain_level_cpp(offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted, initial_path, initial_count, n_threads));
     return rcpp_result_gen;
 END_RCPP
 }
-// massive_leiden_refine_cpp
-List massive_leiden_refine_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, std::string parent_path, double n_vertices, int n_parent, std::string output, double resolution, int chunk_rows, double edge_budget, int seed, bool contracted);
-RcppExport SEXP _fastEmbedR_massive_leiden_refine_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP parent_pathSEXP, SEXP n_verticesSEXP, SEXP n_parentSEXP, SEXP outputSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP, SEXP seedSEXP, SEXP contractedSEXP) {
+// massive_louvain_metal_level_cpp
+List massive_louvain_metal_level_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string output, int max_passes, double resolution, int chunk_rows, double edge_budget, int seed, bool contracted, std::string initial_path, int initial_count);
+RcppExport SEXP _fastEmbedR_massive_louvain_metal_level_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP outputSEXP, SEXP max_passesSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP, SEXP seedSEXP, SEXP contractedSEXP, SEXP initial_pathSEXP, SEXP initial_countSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type offsets_path(offsets_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type indices_path(indices_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type weights_path(weights_pathSEXP);
+    Rcpp::traits::input_parameter< double >::type n_vertices(n_verticesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type output(outputSEXP);
+    Rcpp::traits::input_parameter< int >::type max_passes(max_passesSEXP);
+    Rcpp::traits::input_parameter< double >::type resolution(resolutionSEXP);
+    Rcpp::traits::input_parameter< int >::type chunk_rows(chunk_rowsSEXP);
+    Rcpp::traits::input_parameter< double >::type edge_budget(edge_budgetSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type contracted(contractedSEXP);
+    Rcpp::traits::input_parameter< std::string >::type initial_path(initial_pathSEXP);
+    Rcpp::traits::input_parameter< int >::type initial_count(initial_countSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_louvain_metal_level_cpp(offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted, initial_path, initial_count));
+    return rcpp_result_gen;
+END_RCPP
+}
+// massive_louvain_cuda_level_cpp
+List massive_louvain_cuda_level_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string output, int max_passes, double resolution, int chunk_rows, double edge_budget, int seed, bool contracted, std::string initial_path, int initial_count);
+RcppExport SEXP _fastEmbedR_massive_louvain_cuda_level_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP outputSEXP, SEXP max_passesSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP, SEXP seedSEXP, SEXP contractedSEXP, SEXP initial_pathSEXP, SEXP initial_countSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type offsets_path(offsets_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type indices_path(indices_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type weights_path(weights_pathSEXP);
+    Rcpp::traits::input_parameter< double >::type n_vertices(n_verticesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type output(outputSEXP);
+    Rcpp::traits::input_parameter< int >::type max_passes(max_passesSEXP);
+    Rcpp::traits::input_parameter< double >::type resolution(resolutionSEXP);
+    Rcpp::traits::input_parameter< int >::type chunk_rows(chunk_rowsSEXP);
+    Rcpp::traits::input_parameter< double >::type edge_budget(edge_budgetSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type contracted(contractedSEXP);
+    Rcpp::traits::input_parameter< std::string >::type initial_path(initial_pathSEXP);
+    Rcpp::traits::input_parameter< int >::type initial_count(initial_countSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_louvain_cuda_level_cpp(offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted, initial_path, initial_count));
+    return rcpp_result_gen;
+END_RCPP
+}
+// massive_leiden_metal_refine_cpp
+List massive_leiden_metal_refine_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, std::string parent_path, double n_vertices, int n_parent, std::string output, double resolution, int chunk_rows, double edge_budget, int seed, bool contracted);
+RcppExport SEXP _fastEmbedR_massive_leiden_metal_refine_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP parent_pathSEXP, SEXP n_verticesSEXP, SEXP n_parentSEXP, SEXP outputSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP, SEXP seedSEXP, SEXP contractedSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1770,7 +2023,52 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type edge_budget(edge_budgetSEXP);
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< bool >::type contracted(contractedSEXP);
-    rcpp_result_gen = Rcpp::wrap(massive_leiden_refine_cpp(offsets_path, indices_path, weights_path, parent_path, n_vertices, n_parent, output, resolution, chunk_rows, edge_budget, seed, contracted));
+    rcpp_result_gen = Rcpp::wrap(massive_leiden_metal_refine_cpp(offsets_path, indices_path, weights_path, parent_path, n_vertices, n_parent, output, resolution, chunk_rows, edge_budget, seed, contracted));
+    return rcpp_result_gen;
+END_RCPP
+}
+// massive_leiden_cuda_refine_cpp
+List massive_leiden_cuda_refine_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, std::string parent_path, double n_vertices, int n_parent, std::string output, double resolution, int chunk_rows, double edge_budget, int seed, bool contracted);
+RcppExport SEXP _fastEmbedR_massive_leiden_cuda_refine_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP parent_pathSEXP, SEXP n_verticesSEXP, SEXP n_parentSEXP, SEXP outputSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP, SEXP seedSEXP, SEXP contractedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type offsets_path(offsets_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type indices_path(indices_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type weights_path(weights_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type parent_path(parent_pathSEXP);
+    Rcpp::traits::input_parameter< double >::type n_vertices(n_verticesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_parent(n_parentSEXP);
+    Rcpp::traits::input_parameter< std::string >::type output(outputSEXP);
+    Rcpp::traits::input_parameter< double >::type resolution(resolutionSEXP);
+    Rcpp::traits::input_parameter< int >::type chunk_rows(chunk_rowsSEXP);
+    Rcpp::traits::input_parameter< double >::type edge_budget(edge_budgetSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type contracted(contractedSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_leiden_cuda_refine_cpp(offsets_path, indices_path, weights_path, parent_path, n_vertices, n_parent, output, resolution, chunk_rows, edge_budget, seed, contracted));
+    return rcpp_result_gen;
+END_RCPP
+}
+// massive_leiden_refine_cpp
+List massive_leiden_refine_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, std::string parent_path, double n_vertices, int n_parent, std::string output, double resolution, int chunk_rows, double edge_budget, int seed, bool contracted, int n_threads);
+RcppExport SEXP _fastEmbedR_massive_leiden_refine_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP parent_pathSEXP, SEXP n_verticesSEXP, SEXP n_parentSEXP, SEXP outputSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP, SEXP seedSEXP, SEXP contractedSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type offsets_path(offsets_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type indices_path(indices_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type weights_path(weights_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type parent_path(parent_pathSEXP);
+    Rcpp::traits::input_parameter< double >::type n_vertices(n_verticesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_parent(n_parentSEXP);
+    Rcpp::traits::input_parameter< std::string >::type output(outputSEXP);
+    Rcpp::traits::input_parameter< double >::type resolution(resolutionSEXP);
+    Rcpp::traits::input_parameter< int >::type chunk_rows(chunk_rowsSEXP);
+    Rcpp::traits::input_parameter< double >::type edge_budget(edge_budgetSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type contracted(contractedSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_leiden_refine_cpp(offsets_path, indices_path, weights_path, parent_path, n_vertices, n_parent, output, resolution, chunk_rows, edge_budget, seed, contracted, n_threads));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -2022,8 +2320,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // massive_umap_optimize_metal_cpp
-List massive_umap_optimize_metal_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string init_path, std::string init_format, std::string output, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, int chunk_rows, int edge_capacity, double memory_limit_bytes, int start_epoch, double positive_done, double negative_done, int checkpoint_every, SEXP checkpoint_callback, std::string layout_storage);
-RcppExport SEXP _fastEmbedR_massive_umap_optimize_metal_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP init_pathSEXP, SEXP init_formatSEXP, SEXP outputSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP chunk_rowsSEXP, SEXP edge_capacitySEXP, SEXP memory_limit_bytesSEXP, SEXP start_epochSEXP, SEXP positive_doneSEXP, SEXP negative_doneSEXP, SEXP checkpoint_everySEXP, SEXP checkpoint_callbackSEXP, SEXP layout_storageSEXP) {
+List massive_umap_optimize_metal_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string init_path, std::string init_format, int n_components, std::string output, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, int chunk_rows, int edge_capacity, double memory_limit_bytes, int start_epoch, double positive_done, double negative_done, int checkpoint_every, SEXP checkpoint_callback, std::string layout_storage);
+RcppExport SEXP _fastEmbedR_massive_umap_optimize_metal_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP init_pathSEXP, SEXP init_formatSEXP, SEXP n_componentsSEXP, SEXP outputSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP chunk_rowsSEXP, SEXP edge_capacitySEXP, SEXP memory_limit_bytesSEXP, SEXP start_epochSEXP, SEXP positive_doneSEXP, SEXP negative_doneSEXP, SEXP checkpoint_everySEXP, SEXP checkpoint_callbackSEXP, SEXP layout_storageSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2033,6 +2331,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type n_vertices(n_verticesSEXP);
     Rcpp::traits::input_parameter< std::string >::type init_path(init_pathSEXP);
     Rcpp::traits::input_parameter< std::string >::type init_format(init_formatSEXP);
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
     Rcpp::traits::input_parameter< std::string >::type output(outputSEXP);
     Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
     Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
@@ -2049,7 +2348,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type checkpoint_every(checkpoint_everySEXP);
     Rcpp::traits::input_parameter< SEXP >::type checkpoint_callback(checkpoint_callbackSEXP);
     Rcpp::traits::input_parameter< std::string >::type layout_storage(layout_storageSEXP);
-    rcpp_result_gen = Rcpp::wrap(massive_umap_optimize_metal_cpp(offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, edge_capacity, memory_limit_bytes, start_epoch, positive_done, negative_done, checkpoint_every, checkpoint_callback, layout_storage));
+    rcpp_result_gen = Rcpp::wrap(massive_umap_optimize_metal_cpp(offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, n_components, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, edge_capacity, memory_limit_bytes, start_epoch, positive_done, negative_done, checkpoint_every, checkpoint_callback, layout_storage));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -2779,6 +3078,33 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// knn_tsne_opentsne_cuda_multigpu_cpp
+List knn_tsne_opentsne_cuda_multigpu_cpp(IntegerMatrix indices, SEXP distances, SEXP y_init, int n_components, double perplexity, int early_iter, int normal_iter, double early_exag, double exag, double learning_rate, bool learning_rate_auto, double initial_momentum, double final_momentum, double min_gain, double max_step_norm, int n_threads, IntegerVector devices);
+RcppExport SEXP _fastEmbedR_knn_tsne_opentsne_cuda_multigpu_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP n_componentsSEXP, SEXP perplexitySEXP, SEXP early_iterSEXP, SEXP normal_iterSEXP, SEXP early_exagSEXP, SEXP exagSEXP, SEXP learning_rateSEXP, SEXP learning_rate_autoSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP min_gainSEXP, SEXP max_step_normSEXP, SEXP n_threadsSEXP, SEXP devicesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type distances(distancesSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type y_init(y_initSEXP);
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    Rcpp::traits::input_parameter< double >::type perplexity(perplexitySEXP);
+    Rcpp::traits::input_parameter< int >::type early_iter(early_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type normal_iter(normal_iterSEXP);
+    Rcpp::traits::input_parameter< double >::type early_exag(early_exagSEXP);
+    Rcpp::traits::input_parameter< double >::type exag(exagSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< bool >::type learning_rate_auto(learning_rate_autoSEXP);
+    Rcpp::traits::input_parameter< double >::type initial_momentum(initial_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type final_momentum(final_momentumSEXP);
+    Rcpp::traits::input_parameter< double >::type min_gain(min_gainSEXP);
+    Rcpp::traits::input_parameter< double >::type max_step_norm(max_step_normSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type devices(devicesSEXP);
+    rcpp_result_gen = Rcpp::wrap(knn_tsne_opentsne_cuda_multigpu_cpp(indices, distances, y_init, n_components, perplexity, early_iter, normal_iter, early_exag, exag, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, n_threads, devices));
+    return rcpp_result_gen;
+END_RCPP
+}
 // opentsne_kl_diagnostic_cpp
 double opentsne_kl_diagnostic_cpp(IntegerMatrix indices, SEXP distances, SEXP layout, double perplexity, int n_threads);
 RcppExport SEXP _fastEmbedR_opentsne_kl_diagnostic_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP layoutSEXP, SEXP perplexitySEXP, SEXP n_threadsSEXP) {
@@ -2969,6 +3295,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_umap_cuda_graph_dump_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_graph_dump_cpp, 2},
     {"_fastEmbedR_umap_cuda_optimize_coo_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_optimize_coo_cpp, 12},
     {"_fastEmbedR_umap_cuda_optimize_csr_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_optimize_csr_cpp, 12},
+    {"_fastEmbedR_umap_cuda_optimize_csr_multigpu_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_optimize_csr_multigpu_cpp, 11},
     {"_fastEmbedR_knn_tsne_opentsne_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cuda_cpp, 19},
     {"_fastEmbedR_knn_tsne_opentsne_cuda_float_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cuda_float_cpp, 19},
     {"_fastEmbedR_knn_tsne_opentsne_cuda_gpu_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cuda_gpu_cpp, 20},
@@ -2981,7 +3308,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_landmark_project_interpolate_knn_confidence_cuda_cpp", (DL_FUNC) &_fastEmbedR_landmark_project_interpolate_knn_confidence_cuda_cpp, 5},
     {"_fastEmbedR_transform_tsne_cuda_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_cuda_cpp, 19},
     {"_fastEmbedR_landmark_tsne_transform_cuda_gpu_cpp", (DL_FUNC) &_fastEmbedR_landmark_tsne_transform_cuda_gpu_cpp, 20},
+    {"_fastEmbedR_landmark_tsne_transform_cuda_devices_cpp", (DL_FUNC) &_fastEmbedR_landmark_tsne_transform_cuda_devices_cpp, 19},
     {"_fastEmbedR_landmark_umap_project_refine_cuda_gpu_cpp", (DL_FUNC) &_fastEmbedR_landmark_umap_project_refine_cuda_gpu_cpp, 16},
+    {"_fastEmbedR_landmark_umap_project_refine_cuda_devices_cpp", (DL_FUNC) &_fastEmbedR_landmark_umap_project_refine_cuda_devices_cpp, 12},
     {"_fastEmbedR_knn_structure_score_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_structure_score_cuda_cpp, 6},
     {"_fastEmbedR_silhouette_score_cuda_cpp", (DL_FUNC) &_fastEmbedR_silhouette_score_cuda_cpp, 3},
     {"_fastEmbedR_rsvd_multiply_cuda_cpp", (DL_FUNC) &_fastEmbedR_rsvd_multiply_cuda_cpp, 3},
@@ -2997,12 +3326,13 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_knn_structure_score_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_structure_score_metal_cpp, 6},
     {"_fastEmbedR_silhouette_score_metal_cpp", (DL_FUNC) &_fastEmbedR_silhouette_score_metal_cpp, 3},
     {"_fastEmbedR_knn_embed_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_metal_cpp, 9},
-    {"_fastEmbedR_knn_embed_metal_csr_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_metal_csr_cpp, 12},
+    {"_fastEmbedR_knn_embed_metal_csr_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_metal_csr_cpp, 14},
     {"_fastEmbedR_knn_umap_refine_rows_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_rows_metal_cpp, 10},
     {"_fastEmbedR_rsvd_multiply_metal_cpp", (DL_FUNC) &_fastEmbedR_rsvd_multiply_metal_cpp, 3},
     {"_fastEmbedR_pca_tsvd_metal_cpp", (DL_FUNC) &_fastEmbedR_pca_tsvd_metal_cpp, 7},
     {"_fastEmbedR_transform_tsne_metal_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_metal_cpp, 19},
     {"_fastEmbedR_knn_tsne_opentsne_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_metal_cpp, 21},
+    {"_fastEmbedR_massive_tsne_optimize_metal_cpp", (DL_FUNC) &_fastEmbedR_massive_tsne_optimize_metal_cpp, 23},
     {"_fastEmbedR_pca_rsvd_cpu_cpp", (DL_FUNC) &_fastEmbedR_pca_rsvd_cpu_cpp, 7},
     {"_fastEmbedR_float32_all_finite_cpp", (DL_FUNC) &_fastEmbedR_float32_all_finite_cpp, 2},
     {"_fastEmbedR_standardize_cpu_cpp", (DL_FUNC) &_fastEmbedR_standardize_cpu_cpp, 1},
@@ -3039,7 +3369,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_umap_cuda_diffusion_init_csr_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_diffusion_init_csr_cpp, 6},
     {"_fastEmbedR_fast_knn_umap_csr_init_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_csr_init_cpp, 12},
     {"_fastEmbedR_fast_knn_umap_csr_atomic_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_csr_atomic_cpp, 12},
-    {"_fastEmbedR_fast_knn_umap_csr_clean_atomic_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_csr_clean_atomic_cpp, 13},
+    {"_fastEmbedR_fast_knn_umap_csr_clean_atomic_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_csr_clean_atomic_cpp, 15},
     {"_fastEmbedR_fast_knn_umap_coo_replay_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_coo_replay_cpp, 14},
     {"_fastEmbedR_knn_umap_refine_range_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_range_cpp, 13},
     {"_fastEmbedR_knn_umap_refine_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_cpp, 11},
@@ -3048,20 +3378,30 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_fast_knn_umap_csr_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_csr_cpp, 14},
     {"_fastEmbedR_umap_auto_parameters_cpp", (DL_FUNC) &_fastEmbedR_umap_auto_parameters_cpp, 3},
     {"_fastEmbedR_fastembedr_graph_from_knn_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_from_knn_cpp, 6},
-    {"_fastEmbedR_fastembedr_graph_cluster_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_cluster_cpp, 11},
+    {"_fastEmbedR_fastembedr_graph_canonical_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_canonical_cpp, 4},
+    {"_fastEmbedR_fastembedr_graph_projection_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_projection_cpp, 5},
+    {"_fastEmbedR_fastembedr_graph_small_groups_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_small_groups_cpp, 7},
+    {"_fastEmbedR_fastembedr_graph_cluster_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_cluster_cpp, 13},
     {"_fastEmbedR_fastembedr_graph_modularity_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_modularity_cpp, 6},
     {"_fastEmbedR_graph_clustering_cuda_available_cpp", (DL_FUNC) &_fastEmbedR_graph_clustering_cuda_available_cpp, 0},
     {"_fastEmbedR_fastembedr_graph_cluster_cuda_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_cluster_cuda_cpp, 9},
+    {"_fastEmbedR_fastembedr_graph_cluster_cuda_devices_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_cluster_cuda_devices_cpp, 10},
     {"_fastEmbedR_graph_clustering_metal_available_cpp", (DL_FUNC) &_fastEmbedR_graph_clustering_metal_available_cpp, 0},
     {"_fastEmbedR_graph_clustering_metal_error_cpp", (DL_FUNC) &_fastEmbedR_graph_clustering_metal_error_cpp, 0},
     {"_fastEmbedR_fastembedr_graph_cluster_metal_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_cluster_metal_cpp, 9},
     {"_fastEmbedR_massive_merge_knn_shard_cpp", (DL_FUNC) &_fastEmbedR_massive_merge_knn_shard_cpp, 12},
     {"_fastEmbedR_massive_reorder_posting_graph_cpp", (DL_FUNC) &_fastEmbedR_massive_reorder_posting_graph_cpp, 10},
+    {"_fastEmbedR_pca_cuda_resident_covariance_cpp", (DL_FUNC) &_fastEmbedR_pca_cuda_resident_covariance_cpp, 3},
+    {"_fastEmbedR_pca_cuda_resident_project_cpp", (DL_FUNC) &_fastEmbedR_pca_cuda_resident_project_cpp, 5},
     {"_fastEmbedR_massive_file_info_cpp", (DL_FUNC) &_fastEmbedR_massive_file_info_cpp, 4},
     {"_fastEmbedR_massive_disk_available_cpp", (DL_FUNC) &_fastEmbedR_massive_disk_available_cpp, 1},
-    {"_fastEmbedR_massive_graph_modularity_cpp", (DL_FUNC) &_fastEmbedR_massive_graph_modularity_cpp, 10},
-    {"_fastEmbedR_massive_louvain_level_cpp", (DL_FUNC) &_fastEmbedR_massive_louvain_level_cpp, 13},
-    {"_fastEmbedR_massive_leiden_refine_cpp", (DL_FUNC) &_fastEmbedR_massive_leiden_refine_cpp, 12},
+    {"_fastEmbedR_massive_graph_modularity_cpp", (DL_FUNC) &_fastEmbedR_massive_graph_modularity_cpp, 11},
+    {"_fastEmbedR_massive_louvain_level_cpp", (DL_FUNC) &_fastEmbedR_massive_louvain_level_cpp, 14},
+    {"_fastEmbedR_massive_louvain_metal_level_cpp", (DL_FUNC) &_fastEmbedR_massive_louvain_metal_level_cpp, 13},
+    {"_fastEmbedR_massive_louvain_cuda_level_cpp", (DL_FUNC) &_fastEmbedR_massive_louvain_cuda_level_cpp, 13},
+    {"_fastEmbedR_massive_leiden_metal_refine_cpp", (DL_FUNC) &_fastEmbedR_massive_leiden_metal_refine_cpp, 12},
+    {"_fastEmbedR_massive_leiden_cuda_refine_cpp", (DL_FUNC) &_fastEmbedR_massive_leiden_cuda_refine_cpp, 12},
+    {"_fastEmbedR_massive_leiden_refine_cpp", (DL_FUNC) &_fastEmbedR_massive_leiden_refine_cpp, 13},
     {"_fastEmbedR_massive_reference_buffer_cpp", (DL_FUNC) &_fastEmbedR_massive_reference_buffer_cpp, 1},
     {"_fastEmbedR_massive_read_rows_cpp", (DL_FUNC) &_fastEmbedR_massive_read_rows_cpp, 5},
     {"_fastEmbedR_massive_read_knn_rows_cpp", (DL_FUNC) &_fastEmbedR_massive_read_knn_rows_cpp, 8},
@@ -3076,7 +3416,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_remap_louvain_cpp", (DL_FUNC) &_fastEmbedR_massive_remap_louvain_cpp, 4},
     {"_fastEmbedR_massive_read_contracted_cpp", (DL_FUNC) &_fastEmbedR_massive_read_contracted_cpp, 3},
     {"_fastEmbedR_massive_umap_optimize_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_optimize_cpp, 24},
-    {"_fastEmbedR_massive_umap_optimize_metal_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_optimize_metal_cpp, 22},
+    {"_fastEmbedR_massive_umap_optimize_metal_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_optimize_metal_cpp, 23},
     {"_fastEmbedR_massive_nccl_available_cpp", (DL_FUNC) &_fastEmbedR_massive_nccl_available_cpp, 0},
     {"_fastEmbedR_massive_umap_optimize_cuda_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_optimize_cuda_cpp, 23},
     {"_fastEmbedR_massive_tsne_optimize_cuda_cpp", (DL_FUNC) &_fastEmbedR_massive_tsne_optimize_cuda_cpp, 24},
@@ -3123,6 +3463,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_native_cuda_knn_to_host_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_to_host_cpp, 1},
     {"_fastEmbedR_native_cuda_index_build_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_index_build_cpp, 4},
     {"_fastEmbedR_native_cuda_index_search_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_index_search_cpp, 3},
+    {"_fastEmbedR_knn_tsne_opentsne_cuda_multigpu_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cuda_multigpu_cpp, 17},
     {"_fastEmbedR_opentsne_kl_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_opentsne_kl_diagnostic_cpp, 5},
     {"_fastEmbedR_opentsne_force_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_opentsne_force_diagnostic_cpp, 7},
     {"_fastEmbedR_tsne_fft_3d_force_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_tsne_fft_3d_force_diagnostic_cpp, 7},

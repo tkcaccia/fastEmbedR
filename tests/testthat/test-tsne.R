@@ -285,6 +285,58 @@ test_that("t-SNE defaults to compact support for precomputed KNN", {
     )
 })
 
+test_that("resident t-SNE uses an explicit wider affinity support", {
+    set.seed(324)
+    x <- matrix(rnorm(60L * 5L), 60L, 5L)
+    knn <- test_exact_knn(x, k = 12L, backend = "cpu")
+    init <- matrix(rnorm(60L * 2L), 60L, 2L) * 1e-4
+    args <- list(perplexity = 3, Y_init = init, seed = 324L,
+        early_exaggeration_iter = 2L, n_iter = 3L)
+
+    compact <- do.call(tsne_knn, c(list(indices = knn), args))
+    wide <- do.call(tsne_knn, c(list(indices = knn,
+        n_neighbors = 9L), args))
+    cfg <- attr(wide, "fastEmbedR_config")
+    expect_equal(cfg$n_neighbors, 9L)
+    expect_equal(cfg$affinity_support, "conventional")
+    expect_equal(cfg$affinity_support_multiplier, 3)
+    expect_false(cfg$compact_affinity_support)
+    expect_true(all(is.finite(wide)))
+    expect_gt(max(abs(wide - compact)), 1e-8)
+
+    prep <- prepare_tsne_knn(knn, n_neighbors = 9L,
+        perplexity = 3)
+    expect_equal(prep$affinity_support, "conventional")
+    prepared <- do.call(tsne_knn, c(list(indices = prep), args))
+    expect_equal(unclass(prepared), unclass(wide),
+        ignore_attr = TRUE)
+    expect_error(tsne_knn(prep, n_neighbors = 3L),
+        "cannot change its affinity width")
+    expect_error(tsne_knn(prep, n_neighbors = 9.5),
+        "cannot change its affinity width")
+
+    fit <- do.call(tsne, c(list(data = knn, affinity_k = 9L), args))
+    expect_equal(fit$metrics$n_neighbors, 9L)
+    expect_equal(fit$parameters$affinity_support, "conventional")
+    expect_equal(unclass(fit$layout), unclass(wide),
+        ignore_attr = TRUE)
+    matrix_fit <- do.call(tsne, c(list(data = x, affinity_k = 9L,
+        keep_knn = TRUE), args))
+    expect_equal(matrix_fit$metrics$n_neighbors, 9L)
+    expect_equal(ncol(matrix_fit$knn$indices), 9L)
+    expect_error(tsne(x, perplexity = 3, affinity_k = 2L),
+        "affinity_k")
+    expect_error(tsne(knn, perplexity = 3, affinity_k = 13L),
+        "fewer non-self columns")
+
+    auto <- prepare_tsne_knn(knn, n_neighbors = 9L)
+    expect_equal(auto$perplexity, 9)
+    auto_layout <- tsne_knn(knn, n_neighbors = 9L,
+        Y_init = init, seed = 324L,
+        early_exaggeration_iter = 1L, n_iter = 2L)
+    expect_equal(attr(auto_layout, "fastEmbedR_config")$perplexity, 9)
+})
+
 test_that("post-fit KL diagnostic matches the optimizer's exact final KL", {
     set.seed(325)
     x <- matrix(rnorm(80L * 6L), 80L, 6L)

@@ -99,17 +99,29 @@ massive_matrix_rows <- function(x, first, n) {
     result
 }
 
-#' Read a bounded range from an experimental massive matrix
+#' Read bounded rows from a file-backed result
 #'
-#' @param x A `fastEmbedR_massive_matrix`.
+#' @param x A `fastEmbedR_massive_matrix`, file-backed Leiden,
+#'   Louvain, Walktrap, or landmark-clustering result.
 #' @param first First one-based row to read.
-#' @param n Number of consecutive rows; the returned R matrix is limited
-#'   to 128 MB.
-#' @return A double-precision R matrix for inspection.
+#' @param n Number of consecutive rows. Matrix reads are limited to
+#'   128 MB; cluster labels are capped at one million rows.
+#' @return A double matrix for a matrix source; integer labels for
+#'   full-graph clustering; membership and confidence for landmark
+#'   clustering.
 #' @export
 massive_read_rows <- function(x, first = 1, n = 6L) {
+    if (inherits(x, "fastEmbedR_massive_clusters"))
+        return(massive_read_cluster_rows(x, first, n))
+    if (inherits(x, "fastEmbedR_massive_leiden"))
+        return(massive_read_leiden_rows(x, first, n))
+    if (inherits(x, "fastEmbedR_massive_louvain_level"))
+        return(massive_read_louvain_rows(x, first, n))
+    if (inherits(x, "fastEmbedR_massive_walktrap"))
+        return(massive_read_walktrap_rows(x, first, n))
     if (!inherits(x, "fastEmbedR_massive_matrix")) {
-        stop("`x` must be a massive_matrix() descriptor.", call. = FALSE)
+        stop("`x` must be a supported file-backed result.",
+            call. = FALSE)
     }
     first <- as.numeric(first)
     if (length(first) != 1L || !is.numeric(n) || length(n) != 1L ||

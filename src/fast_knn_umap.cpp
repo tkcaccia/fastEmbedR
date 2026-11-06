@@ -4700,7 +4700,9 @@ NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets,
                                                  int n_threads,
                                                  int seed,
                                                  int decay_mode,
-                                                 bool verbose) {
+                                                 bool verbose,
+                                                 int start_epoch = 0,
+                                                 int total_epochs = -1) {
   if (offsets.size() < 2) Rcpp::stop("CSR offsets must have length at least two");
   std::vector<float> weights_f = copy_float_vector_sexp(weights, "CSR weights");
   if (static_cast<std::size_t>(neighbors.size()) != weights_f.size()) {
@@ -4710,6 +4712,11 @@ NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets,
     Rcpp::stop("Clean CPU atomic UMAP currently requires a two-dimensional initialization");
   }
   if (n_epochs < 1) Rcpp::stop("n_epochs must be positive");
+  if (total_epochs < 0) total_epochs = n_epochs;
+  if (start_epoch < 0 || total_epochs < n_epochs ||
+      start_epoch > total_epochs - n_epochs) {
+    Rcpp::stop("Invalid resumed UMAP epoch range");
+  }
   if (min_dist < 0.0) Rcpp::stop("min_dist must be non-negative");
   if (negative_sample_rate < 0) Rcpp::stop("negative_sample_rate must be non-negative");
   if (learning_rate <= 0.0) Rcpp::stop("learning_rate must be positive");
@@ -4766,8 +4773,9 @@ NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets,
     const int begin_row = n * thread_id / threads;
     const int end_row = n * (thread_id + 1) / threads;
 
-    for (int epoch = 0; epoch < n_epochs; ++epoch) {
-      const float progress = static_cast<float>(epoch) / std::max(1.0f, static_cast<float>(n_epochs - 1));
+    for (int epoch = start_epoch; epoch < start_epoch + n_epochs; ++epoch) {
+      const float progress = static_cast<float>(epoch) /
+        std::max(1.0f, static_cast<float>(total_epochs - 1));
       float decay = 1.0f - progress;
       if (decay_mode == 1) {
         constexpr float pi_f = 3.14159265358979323846f;

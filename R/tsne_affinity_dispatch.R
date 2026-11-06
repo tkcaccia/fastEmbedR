@@ -57,6 +57,17 @@ prepare_opentsne_materialized_run <- function(request) {
     } else {
         ncol(request$indices)
     }
+    if (!is.null(request$devices)) {
+        request$devices <- massive_validate_devices(request$devices,
+            request$optimizer_backend, request$n)
+        if (length(request$devices) < 2L ||
+            length(request$devices) > 4L ||
+            request$gpu_resident_knn || isTRUE(request$record_costs)) {
+            stop("Resident multi-GPU t-SNE requires two to four CUDA ",
+                "devices, host KNN, and `record_costs = FALSE`.",
+                call. = FALSE)
+        }
+    }
     request$Y_init <- resolve_opentsne_y_init(
         request$Y_init,
         request$n,
@@ -106,7 +117,8 @@ run_opentsne_materialized_request <- function(request) {
         request$gpu_knn, request$gpu_resident_knn, request$cuda_init_data,
         request$k, prepared$controls, request$iterations$early,
         request$iterations$normal, request$gradient_method,
-        request$auto_params, request$n_threads, request$seed
+        request$auto_params, request$n_threads, request$seed,
+        request$devices
     )
     finalize_opentsne_native_result(
         out, request$optimizer_backend, request$gpu_resident_knn,
@@ -126,7 +138,7 @@ fast_knn_opentsne_materialized <- function(
     record_costs = FALSE, n_threads = NULL, seed = 42L, verbose = FALSE,
     backend = NULL, auto_config = TRUE, input_had_self = FALSE,
     input_backend = NA_character_, gpu_knn = NULL, gpu_n = NULL,
-    gpu_k = NULL, cuda_init_data = NULL
+    gpu_k = NULL, cuda_init_data = NULL, devices = NULL
 ) {
     request <- list(
         indices = indices, distances = distances,
@@ -142,7 +154,7 @@ fast_knn_opentsne_materialized <- function(
         verbose = verbose, backend = backend, auto_config = auto_config,
         input_had_self = input_had_self, input_backend = input_backend,
         gpu_knn = gpu_knn, gpu_n = gpu_n, gpu_k = gpu_k,
-        cuda_init_data = cuda_init_data
+        cuda_init_data = cuda_init_data, devices = devices
     )
     run_opentsne_materialized_request(request)
 }
@@ -201,7 +213,7 @@ fast_knn_opentsne_core <- function(
 #' Precompute reusable t-SNE KNN state
 #'
 #' `prepare_tsne_knn()` strips self-neighbors, trims to the requested
-#' non-self width, and stores compact KNN matrices once. Pass the returned
+#' non-self width, and stores the selected KNN matrices once. Pass the returned
 #' object to [tsne_knn()] for repeated seeds or backend comparisons without
 #' repeating KNN normalization/materialization.
 #'
@@ -220,6 +232,7 @@ fast_knn_opentsne_core <- function(
 #' y1 <- tsne_knn(prep, seed = 1, early_exaggeration_iter = 5, n_iter = 10)
 #' y2 <- tsne_knn(prep, seed = 2, early_exaggeration_iter = 5, n_iter = 10)
 #' @export
+#' @keywords internal
 prepare_tsne_knn <- function(indices,
                                 distances = NULL,
                                 n_neighbors = NULL,
@@ -232,21 +245,25 @@ prepare_tsne_knn <- function(indices,
     )
     if (is.null(n_neighbors)) {
         n_neighbors <- policy$n_neighbors
+    } else {
+        n_neighbors <- integer_scalar(n_neighbors)
+        if (is.na(n_neighbors) || n_neighbors < 1L) stop(
+            "`n_neighbors` must be a positive integer.",
+            call. = FALSE)
     }
-    required_k <- opentsne_support_width(policy$perplexity)
-    if (n_neighbors != required_k) {
-        stop(
-            "Compact t-SNE affinity support requires `n_neighbors = ",
-            required_k, "` for this perplexity.",
-            call. = FALSE
-        )
+    selected_perplexity <- if (is.null(perplexity)) {
+        min(policy$perplexity, n_neighbors)
+    } else {
+        policy$perplexity
     }
+    validate_tsne_support_width(n_neighbors, selected_perplexity)
     knn <- normalize_opentsne_knn_input(indices, distances, n_neighbors)
     out <- list(
         knn = knn,
-        perplexity = policy$perplexity,
+        perplexity = selected_perplexity,
         n_neighbors = as.integer(n_neighbors),
-        affinity_support = "compact",
+        affinity_support = classify_opentsne_affinity_support(
+            n_neighbors, selected_perplexity),
         affinity_state = "knn_materialized_affinity_builder_internal"
     )
     class(out) <- c("fastEmbedR_tsne_prepared", "list")

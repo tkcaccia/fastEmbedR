@@ -88,6 +88,13 @@ landmark_embedding_requested <- function(landmarks) {
     TRUE
 }
 
+resident_partial_landmarks_known <- function(data, landmarks) {
+    if (!is.numeric(landmarks) || length(landmarks) != 1L ||
+        !is.finite(landmarks) || landmarks <= 0) return(FALSE)
+    n <- nrow(data)
+    !is.null(n) && landmarks < n
+}
+
 landmark_selection_parts <- function(selection, n) {
     if (inherits(selection, "fastEmbedR_landmark_selection")) {
         if (!identical(as.integer(selection$n), as.integer(n))) {
@@ -156,7 +163,8 @@ new_landmark_projection_model <- function(
         p = as.integer(ncol(reference_data)),
         n_components = as.integer(ncol(fit$layout)),
         n_neighbors = as.integer(n_neighbors), perplexity = perplexity,
-        affinity_support = if (method == "tsne") "compact" else NA_character_,
+        affinity_support = if (method == "tsne")
+            fit$parameters$affinity_support else NA_character_,
         metric = metric,
         graph_mode = if (method == "umap") graph_mode else NA_character_,
         backend = backend, seed = as.integer(seed),
@@ -262,8 +270,14 @@ landmark_model_projection_k <- function(model,
 }
 
 project_landmark_umap <- function(model, query, projection_knn,
-                                    refinement_epochs, n_threads, verbose) {
+                                    refinement_epochs, n_threads, verbose,
+                                    devices = NULL) {
     params <- landmark_umap_optimizer_parameters(model$fit)
+    if (length(devices) > 1L) {
+        return(project_landmark_umap_cuda_devices(
+            model, query, projection_knn, refinement_epochs,
+            params, devices))
+    }
     if (identical(model$backend, "cuda") &&
         fastembedr_is_gpu_knn(projection_knn)) {
         return(project_landmark_umap_cuda(
@@ -280,6 +294,20 @@ project_landmark_umap <- function(model, query, projection_knn,
         model, query, projection_knn, initialized$layout,
         refinement_epochs, params, n_threads, verbose
     )
+}
+
+project_landmark_umap_cuda_devices <- function(
+    model, query, knn, epochs, params, devices
+) {
+    result <- landmark_umap_project_refine_cuda_devices_cpp(
+        model$reference_data, query, model$fit$layout,
+        knn$indices, knn$distances, as.integer(epochs),
+        params$min_dist, params$negative_rate,
+        params$learning_rate, params$repulsion,
+        as.integer(model$seed + 2003L), as.integer(devices)
+    )
+    list(layout = result$query_layout, backend = "cuda",
+        config = result$config)
 }
 
 project_landmark_umap_cuda <- function(model, query, knn,
@@ -371,10 +399,17 @@ project_landmark_model_tsne <- function(model, query, projection_knn,
                                         transform_perplexity, transform_iter,
                                         transform_early_exaggeration_iter,
                                         transform_n_negatives, initialization,
-                                        n_threads, verbose, dots) {
+                                        n_threads, verbose, dots,
+                                        devices = NULL) {
     controls <- landmark_model_tsne_controls(
         model, transform_n_negatives, dots
     )
+    if (length(devices) > 1L) {
+        return(project_landmark_model_tsne_cuda_devices(
+            model, query, projection_knn, transform_perplexity,
+            transform_iter, transform_early_exaggeration_iter,
+            controls, devices))
+    }
     if (identical(model$backend, "cuda") &&
         fastembedr_is_gpu_knn(projection_knn)) {
         return(project_landmark_model_tsne_cuda(
@@ -387,6 +422,24 @@ project_landmark_model_tsne <- function(model, query, projection_knn,
         transform_iter, transform_early_exaggeration_iter,
         initialization, n_threads, verbose, controls
     )
+}
+
+project_landmark_model_tsne_cuda_devices <- function(
+    model, query, knn, perplexity, n_iter, exaggeration_iter,
+    controls, devices
+) {
+    result <- landmark_tsne_transform_cuda_devices_cpp(
+        model$reference_data, query, model$fit$layout,
+        knn$indices, knn$distances, as.numeric(perplexity),
+        as.integer(n_iter), as.integer(exaggeration_iter),
+        controls$learning_rate, controls$early_exaggeration,
+        controls$exaggeration, controls$initial_momentum,
+        controls$final_momentum, controls$max_grad_norm,
+        controls$max_step_norm, controls$n_negatives,
+        controls$exact_threshold,
+        as.integer(model$seed + 1009L), as.integer(devices)
+    )
+    list(layout = result$Y, backend = "cuda", config = result$config)
 }
 
 landmark_model_tsne_controls <- function(model, n_negatives, dots) {
@@ -523,6 +576,9 @@ project_landmark_model_tsne_host <- function(model, query, knn, perplexity,
 #' @param keep_knn Retain query-to-reference KNN output.
 #' @param n.cores Number of CPU cores.
 #' @param verbose Print optimizer progress.
+#' @param devices Optional two to four CUDA devices for held-out query
+#'   projection. Query KNN is materialized in host RAM, then the fixed
+#'   reference layout and query rows are sharded across the devices.
 #' @param ... Low-level t-SNE transform controls.
 #' @return A `fastEmbedR_embedding`. Explicit original-query indices reassemble
 #'   `layout` in training row order; otherwise it contains only query rows. The
@@ -548,10 +604,10 @@ project_landmark_model <- function(model, data, query_indices = NULL,
                                         "median", "weighted", "random"
                                     ),
                                     keep_knn = FALSE, n.cores = NULL,
-                                    verbose = FALSE, ...) {
+                                    verbose = FALSE, devices = NULL, ...) {
     request <- prepare_landmark_projection(
         model, data, query_indices, transform_k,
-        transform_perplexity, initialization, n.cores
+        transform_perplexity, initialization, n.cores, devices
     )
     if (nrow(request$query) < 1L) {
         return(model$fit)
@@ -570,7 +626,8 @@ project_landmark_model <- function(model, data, query_indices = NULL,
 prepare_landmark_projection <- function(model, data, query_indices,
                                         transform_k,
                                         transform_perplexity,
-                                        initialization, n.cores) {
+                                        initialization, n.cores,
+                                        devices = NULL) {
     if (!inherits(model, "fastEmbedR_landmark_model")) {
         stop("`model` must inherit from `fastEmbedR_landmark_model`.",
             call. = FALSE
@@ -581,6 +638,19 @@ prepare_landmark_projection <- function(model, data, query_indices,
     )
     n_threads <- normalize_nn_threads(n.cores %||% model$n.cores)
     query_info <- landmark_query_data(model, data, query_indices)
+    if (!is.null(devices)) {
+        devices <- massive_validate_devices(
+            devices, model$backend, nrow(query_info$data))
+        if (length(devices) < 2L || length(devices) > 4L ||
+            !isTRUE(massive_nccl_available_cpp())) stop(
+            "Held-out multi-GPU projection requires two to four ",
+            "CUDA devices and NCCL.", call. = FALSE)
+    }
+    gpu_identity <- if (length(devices) > 1L) {
+        massive_cuda_device_uuids(devices)
+    } else {
+        NULL
+    }
     transform_k <- landmark_model_projection_k(
         model, transform_k,
         transform_perplexity = transform_perplexity
@@ -588,7 +658,8 @@ prepare_landmark_projection <- function(model, data, query_indices,
     list(
         model = model, query_info = query_info,
         query = query_info$data, transform_k = transform_k,
-        initialization = initialization, n_threads = n_threads
+        initialization = initialization, n_threads = n_threads,
+        devices = devices, gpu_identity = gpu_identity
     )
 }
 
@@ -632,7 +703,7 @@ run_landmark_projection_method <- function(request, knn,
         epochs <- validate_landmark_refinement_epochs(refinement_epochs)
         result <- project_landmark_umap(
             model, request$query, knn, epochs,
-            request$n_threads, verbose
+            request$n_threads, verbose, request$devices
         )
         return(list(result = result, refinement_epochs = epochs))
     }
@@ -643,9 +714,24 @@ run_landmark_projection_method <- function(request, knn,
         model, request$query, knn, transform_perplexity,
         iterations$iterations, iterations$exaggeration,
         transform_n_negatives, request$initialization,
-        request$n_threads, verbose, dots
+        request$n_threads, verbose, dots, request$devices
     )
     list(result = result, refinement_epochs = NA_integer_)
+}
+
+materialize_landmark_devices_knn <- function(knn_timed) {
+    if (!fastembedr_is_gpu_knn(knn_timed$value)) stop(
+        "Held-out multi-GPU projection requires native CUDA KNN.",
+        call. = FALSE)
+    gpu_knn <- knn_timed$value
+    host <- timed_do_call(fastembedr_gpu_knn_to_host, list(gpu_knn))
+    knn_timed$value <- host$value
+    knn_timed$time <- knn_timed$time + host$time
+    attr(knn_timed$value, "approximation") <-
+        attr(gpu_knn, "approximation", exact = TRUE)
+    rm(gpu_knn)
+    invisible(gc())
+    knn_timed
 }
 
 compute_landmark_projection <- function(request, refinement_epochs,
@@ -655,11 +741,19 @@ compute_landmark_projection <- function(request, refinement_epochs,
                                         transform_n_negatives,
                                         verbose, dots) {
     model <- request$model
+    if (length(request$devices) > 1L) {
+        previous <- massive_cuda_memory_cpp()$device
+        on.exit(massive_cuda_select_cpp(previous), add = TRUE)
+        massive_cuda_select_cpp(request$devices[[1L]])
+    }
     knn_timed <- timed_do_call(precompute_query_knn, list(
         reference = model$reference_data, query = request$query,
         k = request$transform_k, metric = model$metric,
         backend = model$backend, n.cores = request$n_threads
     ))
+    if (length(request$devices) > 1L) {
+        knn_timed <- materialize_landmark_devices_knn(knn_timed)
+    }
     projection_timed <- timed_do_call(
         run_landmark_projection_method,
         list(
@@ -722,6 +816,9 @@ landmark_projection_parameters <- function(request, projected,
             projected$knn$engine %||% projected$knn$method %||%
             attr(projected$knn, "method"),
         projection_backend = projected$projection$backend,
+        projection_gpu_devices = request$devices,
+        projection_gpu_identity = request$gpu_identity,
+        projection_config = projected$projection$config,
         projection_scope = if (request$query_info$full_input) {
             "original_reconstruction"
         } else {

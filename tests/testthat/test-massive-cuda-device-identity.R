@@ -47,18 +47,20 @@ test_that("optimizer checkpoints bind physical CUDA device identity", {
         weights_path = graph_paths[[3L]], symmetrized = TRUE),
         class = "fastEmbedR_massive_graph")
     selected <- c("GPU-A", "GPU-B")
+    requested <- c(0L, 1L)
     with_mocked_bindings({
         umap <- function() fastEmbedR:::massive_umap_optimize_plan(
             graph, init, file.path(directory, "umap.f32"),
             2L, 0L, 0.1, 0.1, 1, 1L, 2L, "256MB", "cuda", 1L,
-            devices = c(0L, 1L))
+            devices = requested)
         graph$weight_method <- "umap_fuzzy_union"
         first_umap <- umap()
         graph$weight_method <- "tsne_compact_affinity"
-        tsne <- function() fastEmbedR:::massive_tsne_optimize_plan(
+        tsne <- function(devices = requested)
+            fastEmbedR:::massive_tsne_optimize_plan(
             graph, init, file.path(directory, "tsne.f32"),
             2L, 2L, 12, 1, 1, 0.8, 0.8, 0.01,
-            Inf, "1GB", "cuda", 1L, c(0L, 1L))
+            Inf, "1GB", "cuda", 1L, devices)
         first_tsne <- tsne()
         selected <- rev(selected)
         graph$weight_method <- "umap_fuzzy_union"
@@ -112,17 +114,81 @@ test_that("optimizer checkpoints bind physical CUDA device identity", {
         expect_error(fastEmbedR:::massive_tsne_checkpoint_load(
             second_tsne, sidecar, signatures[[2L]]),
             "does not match")
+        requested <- 0L
+        selected <- "GPU-A"
+        graph$weight_method <- "umap_fuzzy_union"
+        single_umap <- umap()
+        graph$weight_method <- "tsne_compact_affinity"
+        single_tsne <- tsne()
+        for (plan in list(single_umap, single_tsne)) {
+            expect_identical(plan$devices, 0L)
+            expect_identical(plan$gpu_identity, "GPU-A")
+            expect_identical(plan$parameters$gpu_identity, "GPU-A")
+        }
+        default_tsne <- tsne(NULL)
+        expect_identical(default_tsne$devices, 0L)
+        expect_null(default_tsne$gpu_identity)
+        expect_null(default_tsne$parameters$gpu_identity)
+        selected <- "GPU-B"
+        graph$weight_method <- "umap_fuzzy_union"
+        remapped_umap <- umap()
+        graph$weight_method <- "tsne_compact_affinity"
+        remapped_tsne <- tsne()
+        for (plans in list(list(single_umap, remapped_umap),
+                list(single_tsne, remapped_tsne))) {
+            expect_identical(plans[[1L]]$devices, plans[[2L]]$devices)
+            expect_false(identical(
+                fastEmbedR:::massive_checkpoint_signature(
+                    plans[[1L]]$parameters),
+                fastEmbedR:::massive_checkpoint_signature(
+                    plans[[2L]]$parameters)))
+        }
     },
     massive_umap_validate_inputs = function(...) NULL,
-    massive_umap_plan_storage = function(...) c(0L, 1L),
+    massive_umap_plan_storage = function(...) requested,
     massive_umap_cuda_capacity = function(...) 16L,
-    massive_tsne_devices = function(...) c(0L, 1L),
+    massive_tsne_devices = function(...) requested,
     massive_tsne_resource_plan = function(...) list(
         state_bytes = 100, peak_ram = 0, peak_vram = 0,
         edge_capacity = 16L),
     embedding_cuda_available_cpp = function() TRUE,
     massive_checkpoint_validated_graph_identity = function(...) NULL,
     massive_cuda_device_uuids = function(devices) selected,
+    .package = "fastEmbedR")
+})
+
+test_that("3D t-SNE planner retains coordinated CUDA device identity", {
+    directory <- tempfile()
+    dir.create(directory)
+    on.exit(unlink(directory, recursive = TRUE))
+    files <- file.path(directory, c("offsets", "indices", "weights"))
+    for (path in files) writeBin(1, path, size = 4L)
+    init_path <- file.path(directory, "init.f32")
+    writeBin(rep(0.1, 24L), init_path, size = 4L)
+    graph <- structure(list(n_vertices = 8L, n_edges = 16L,
+        max_degree = 2L, offsets_path = files[[1L]],
+        indices_path = files[[2L]], weights_path = files[[3L]],
+        weight_method = "tsne_compact_affinity", symmetrized = TRUE),
+        class = "fastEmbedR_massive_graph")
+    init <- massive_matrix(init_path, 8L, 3L)
+    with_mocked_bindings({
+        plan <- fastEmbedR:::massive_tsne_optimize_plan(
+            graph, init, file.path(directory, "output.f32"),
+            2L, 3L, 12, 1, 1, 0.8, 0.8, 0.01,
+            Inf, "1GB", "cuda", 1L, devices = c(0L, 1L))
+        expect_equal(plan$dimensions, 3L)
+        expect_identical(plan$devices, c(0L, 1L))
+        expect_identical(plan$gpu_identity, c("GPU-A", "GPU-B"))
+        expect_identical(plan$parameters$gpu_identity,
+            c("GPU-A", "GPU-B"))
+    },
+    massive_tsne_devices = function(...) c(0L, 1L),
+    massive_tsne_resource_plan = function(...) list(
+        fft_grid_size = 16L, state_bytes = 288,
+        peak_ram = 0, peak_vram = 0, edge_capacity = 16L),
+    massive_cuda_device_uuids = function(...) c("GPU-A", "GPU-B"),
+    embedding_cuda_available_cpp = function() TRUE,
+    massive_checkpoint_validated_graph_identity = function(...) NULL,
     .package = "fastEmbedR")
 })
 

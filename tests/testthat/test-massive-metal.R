@@ -241,7 +241,7 @@ test_that("Metal landmark communities retain every source row", {
     expect_error(massive_cluster(source, method = "leiden",
         massive = "out_of_core_graph", backend = "metal",
         output = file.path(directory, "full.clusters.u32")),
-        "Full-graph clustering needs CPU or explicit CUDA")
+        "symmetric massive UMAP fuzzy graph")
 })
 
 test_that("full-graph Metal UMAP streams a prepared fuzzy graph", {
@@ -289,7 +289,7 @@ test_that("full-graph Metal UMAP streams a prepared fuzzy graph", {
     batched <- file.path(directory, "batched.f32")
     native <- fastEmbedR:::massive_umap_optimize_metal_cpp(
         graph$offsets_path, graph$indices_path, graph$weights_path,
-        rows, init_path, "f32", batched, 16L, 1L, 1, 0.1, 1, 1L,
+        rows, init_path, "f32", 2L, batched, 16L, 1L, 1, 0.1, 1, 1L,
         5L, as.integer(graph$max_degree), 256 * 1024^2)
     expect_equal(native$n_vertices, rows)
     expect_equal(file.info(batched)$size, rows * 2L * 4L)
@@ -341,13 +341,6 @@ test_that("full-graph Metal UMAP streams a prepared fuzzy graph", {
     expect_error(massive_umap_optimize(graph, source,
         file.path(directory, "small.f32"), backend = "metal",
         memory_limit = "128MB"), "memory_limit")
-    init_3d <- file.path(directory, "init3d.f32")
-    writeBin(as.numeric(t(cbind(initial, 0))), init_3d,
-        size = 4L, endian = "little")
-    expect_error(massive_umap_optimize(graph,
-        massive_matrix(init_3d, rows, 3L),
-        file.path(directory, "three.f32"), backend = "metal"),
-        "2D output")
     restart_path <- file.path(directory, "restart.f32")
     commit <- fastEmbedR:::massive_umap_checkpoint_commit
     with_mocked_bindings(
@@ -391,4 +384,68 @@ test_that("full-graph Metal UMAP streams a prepared fuzzy graph", {
     expect_identical(mapped_resumed$parameters$resumed_from_epoch, 4L)
     expect_equal(file.info(mapped_restart)$size, rows * 8L)
     expect_false(file.exists(paste0(mapped_restart, ".part")))
+})
+
+test_that("full-graph Metal UMAP streams three-dimensional layouts", {
+    skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
+    directory <- tempfile()
+    dir.create(directory)
+    on.exit(unlink(directory, recursive = TRUE))
+    prefix <- file.path(directory, "knn")
+    rows <- 32L
+    ids <- outer(seq_len(rows), seq_len(4L), function(i, j)
+        (i + j - 1L) %% rows + 1L)
+    writeBin(as.integer(t(ids)), paste0(prefix, ".indices.u32"),
+        size = 4L, endian = "little")
+    writeBin(rep(c(0.1, 0.3, 0.6, 1), rows),
+        paste0(prefix, ".distances.f32"), size = 4L,
+        endian = "little")
+    knn <- massive_knn_graph(prefix, rows, 4L)
+    directed <- massive_umap_memberships(knn)
+    graph <- massive_umap_fuzzy_graph(directed,
+        file.path(directory, "fuzzy"), memory_limit = "64MB")
+    set.seed(1947)
+    initial <- matrix(stats::rnorm(rows * 3L, sd = 0.2), ncol = 3L)
+    init_path <- file.path(directory, "init.f32")
+    writeBin(as.numeric(t(initial)), init_path, size = 4L,
+        endian = "little")
+    source <- massive_matrix(init_path, rows, 3L)
+    for (storage in c("memory", "mmap")) {
+        path <- file.path(directory, paste0(storage, ".f32"))
+        fit <- with_mocked_bindings(
+            massive_umap_optimize_cpp = function(...) stop("CPU fallback"),
+            massive_umap_optimize(graph, source, path,
+                backend = "metal", layout_storage = storage,
+                n_epochs = 16L, negative_sample_rate = 1L,
+                chunk_rows = 5L, memory_limit = "256MB"),
+            .package = "fastEmbedR")
+        observed <- massive_read_rows(fit, 1L, rows)
+        expect_identical(fit$backend, "metal")
+        expect_equal(dim(observed), c(rows, 3L))
+        expect_true(all(is.finite(observed)))
+        expect_gt(sum(abs(observed - initial)), 0)
+        expect_equal(file.info(path)$size, rows * 12L)
+        expect_false(file.exists(paste0(path, ".part")))
+    }
+    restart <- file.path(directory, "restart.f32")
+    commit <- fastEmbedR:::massive_umap_checkpoint_commit
+    with_mocked_bindings(
+        massive_umap_checkpoint_commit = function(...) {
+            commit(...)
+            stop("interrupted after checkpoint")
+        },
+        expect_error(massive_umap_optimize(graph, source,
+            restart, backend = "metal", n_epochs = 16L,
+            negative_sample_rate = 1L, memory_limit = "256MB",
+            checkpoint = TRUE, checkpoint_every = 4L),
+            "interrupted after checkpoint"),
+        .package = "fastEmbedR")
+    resumed <- massive_umap_optimize(graph, source, restart,
+        backend = "metal", n_epochs = 16L,
+        negative_sample_rate = 1L, memory_limit = "256MB",
+        checkpoint = TRUE, resume = TRUE, checkpoint_every = 4L)
+    expect_identical(resumed$parameters$resumed_from_epoch, 4L)
+    expect_equal(dim(massive_read_rows(resumed, 1L, rows)),
+        c(rows, 3L))
+    expect_equal(file.info(restart)$size, rows * 12L)
 })

@@ -49,7 +49,7 @@ compute_graph_input_knn <- function(x, source, settings) {
     }
     policy <- fastembedr_embedding_nn_policy(
         settings$backend,
-        nrow(x)
+        nrow(x), ncol(x)
     )
     found <- graph_data_knn(x, settings, policy)
     list(
@@ -190,7 +190,7 @@ knn_graph <- function(x,
 # Validate and normalize graph-clustering controls.
 graph_cluster_settings <- function(method, backend, resolution,
                                     n_iterations, n_runs, steps, seed,
-                                    vectors = FALSE) {
+                                    vectors = FALSE, n.cores = 1L) {
     method <- match.arg(method, c("leiden", "louvain", "walktrap"))
     backend <- resolve_embedding_backend(backend)
     resolution <- as.numeric(resolution)
@@ -216,6 +216,7 @@ graph_cluster_settings <- function(method, backend, resolution,
             n_iterations, "n_iterations"
         ),
         n_runs = graph_positive_integer(n_runs, "n_runs"),
+        n.cores = graph_positive_integer(n.cores, "n.cores"),
         steps = graph_positive_integer(steps, "steps"),
         seed = as.integer(seed),
         consensus = length(resolution) > 1L || length(seed) > 1L
@@ -255,12 +256,40 @@ graph_cluster_call_args <- function(graph, settings) {
     )
 }
 
+run_graph_cluster_multigpu <- function(graph, settings, options) {
+    if (settings$n.cores != 1L)
+        stop("Resident multi-GPU clustering cannot use CPU workers.",
+            call. = FALSE)
+    graph_cluster_require_gpu("cuda")
+    identity <- massive_cuda_device_uuids(settings$devices)
+    if (settings$consensus || options) {
+        result <- graph_cluster_gpu_enhanced(graph, settings)
+    } else {
+        args <- c(graph_cluster_call_args(graph, settings),
+            list(devices = settings$devices))
+        result <- do.call(fastembedr_graph_cluster_cuda_devices_cpp,
+            args)
+    }
+    result$gpu_identity <- identity
+    result
+}
+
 run_graph_cluster_backend <- function(graph, settings) {
-    enhanced <- settings$consensus || any(!vapply(settings$options, is.null,
-        FALSE))
-    if (enhanced && (settings$backend != "cpu" ||
-        settings$method == "walktrap")) {
-        stop("Graph options require CPU Louvain or Leiden.", call. = FALSE)
+    options <- any(!vapply(settings$options, is.null, FALSE))
+    if (!is.null(settings$devices)) return(
+        run_graph_cluster_multigpu(graph, settings, options))
+    if (settings$n.cores > 1L && (settings$backend != "cpu" ||
+        settings$method == "walktrap" || settings$consensus ||
+        (!settings$parallel.fit &&
+        settings$n_runs < settings$n.cores))) stop(
+        "CPU restart workers or fit workers require scalar ",
+        "Louvain/Leiden controls and ",
+        "`backend = \"cpu\"`; restart mode also needs ",
+        "`n_runs >= n.cores`.", call. = FALSE)
+    if ((settings$consensus || options) &&
+        settings$method == "walktrap") {
+        stop("Graph options require Louvain or Leiden.",
+            call. = FALSE)
     }
     if (settings$consensus && settings$n_runs != 1L) {
         stop("With vector controls use n_runs = 1; seed defines repeats.",
@@ -275,14 +304,122 @@ run_graph_cluster_backend <- function(graph, settings) {
             steps = settings$steps
         ))
     }
+    if ((settings$consensus || options) &&
+        settings$backend %in% c("cuda", "metal")) {
+        graph_cluster_require_gpu(settings$backend)
+        return(graph_cluster_gpu_enhanced(graph, settings))
+    }
     fun <- switch(settings$backend,
         cpu = fastembedr_graph_cluster_cpp,
         cuda = fastembedr_graph_cluster_cuda_cpp,
         metal = fastembedr_graph_cluster_metal_cpp
     )
     args <- graph_cluster_call_args(graph, settings)
-    if (settings$backend == "cpu") args <- c(args, settings$options)
+    if (settings$backend == "cpu") {
+        args <- c(args, settings$options,
+            list(n_threads = settings$n.cores,
+                parallel_fit = settings$parallel.fit))
+    }
     do.call(fun, args)
+}
+
+graph_cluster_gpu_consensus <- function(edges, settings, cluster_fun) {
+    agreement <- numeric(length(edges$weight))
+    count <- length(settings$resolution) * length(settings$seed)
+    for (resolution in settings$resolution) for (seed in settings$seed) {
+        partition <- cluster_fun(
+            edges$from, edges$to, edges$weight, edges$n_vertices,
+            settings$method, resolution, settings$n_iterations, 1L, seed)
+        labels <- partition$membership
+        agreement <- agreement +
+            (labels[edges$from] == labels[edges$to])
+    }
+    edges$weight <- edges$weight * (agreement / count)^2
+    keep <- edges$weight > 0
+    edges[c("from", "to", "weight")] <- lapply(
+        edges[c("from", "to", "weight")], `[`, keep)
+    edges$n_edges <- length(edges$weight)
+    list(graph = edges, metadata = list(
+        method = settings$method, resolutions = settings$resolution,
+        seeds = settings$seed, partitions = count, agreement_power = 2L,
+        implementation = paste0(
+            settings$backend, "_partitions_host_sparse_edge_consensus"
+        ),
+        weighted_edges = edges$n_edges))
+}
+
+graph_cluster_gpu_enhanced <- function(graph, settings) {
+    cluster_fun <- graph_cluster_accel_function(settings)
+    edges <- fastembedr_graph_canonical_cpp(
+        graph$from, graph$to, graph$weight, graph$n_vertices)
+    metadata <- list(consensus = NULL, projection = NULL,
+        small_groups = NULL)
+    order <- character()
+    if (settings$consensus) {
+        step <- graph_cluster_gpu_consensus(edges, settings, cluster_fun)
+        edges <- step$graph
+        metadata$consensus <- step$metadata
+        order <- c(order, "consensus")
+    }
+    if (!is.null(settings$options$projection)) {
+        step <- fastembedr_graph_projection_cpp(
+            edges$from, edges$to, edges$weight, edges$n_vertices,
+            settings$options$projection)
+        edges <- step$graph
+        metadata$projection <- c(step$metadata,
+            execution = "host_native_cpp")
+        order <- c(order, "projection")
+    }
+    if (!edges$n_edges) stop("Reweighting removed all graph edges.",
+        call. = FALSE)
+    result <- cluster_fun(
+        edges$from, edges$to, edges$weight, edges$n_vertices,
+        settings$method, settings$resolution[1L], settings$n_iterations,
+        settings$n_runs, settings$seed[1L])
+    order <- c(order, "clustering")
+    if (settings$consensus || !is.null(settings$options$projection)) {
+        result$reweighted_graph <- edges
+    }
+    if (!is.null(settings$options$small_groups)) {
+        post <- fastembedr_graph_small_groups_cpp(
+            edges$from, edges$to, edges$weight, edges$n_vertices,
+            result$membership, settings$resolution[1L],
+            settings$options$small_groups)
+        metadata$small_groups <- c(post$metadata,
+            execution = "host_native_cpp")
+        post$metadata <- NULL
+        result[names(post)] <- post
+        order <- c(order, "small_groups")
+    }
+    result$parameters <- c(metadata, list(weighted_edges = edges$n_edges,
+        final_resolution = settings$resolution[1L],
+        final_seed = settings$seed[1L], processing_order = order))
+    result
+}
+
+graph_cluster_accel_function <- function(settings) {
+    if (!is.null(settings$devices)) {
+        return(function(from, to, weight, n_vertices, method,
+                resolution, n_iterations, n_runs, seed) {
+            fastembedr_graph_cluster_cuda_devices_cpp(
+                from, to, weight, n_vertices, method,
+                resolution, n_iterations, n_runs, seed,
+                settings$devices)
+        })
+    }
+    switch(settings$backend,
+        cuda = fastembedr_graph_cluster_cuda_cpp,
+        metal = fastembedr_graph_cluster_metal_cpp)
+}
+
+graph_cluster_require_gpu <- function(backend) {
+    ready <- switch(backend,
+        cuda = graph_clustering_cuda_available_cpp(),
+        metal = graph_clustering_metal_available_cpp())
+    label <- if (identical(backend, "cuda")) "CUDA" else "Metal"
+    if (!isTRUE(ready)) stop(
+        label, " graph clustering unavailable; no fallback.",
+        call. = FALSE)
 }
 
 graph_cluster_parameters <- function(graph, settings, started) {
@@ -295,6 +432,8 @@ graph_cluster_parameters <- function(graph, settings, started) {
             settings$n_iterations
         },
         n_runs = if (walktrap) 1L else settings$n_runs,
+        n.cores = settings$n.cores,
+        parallel.mode = settings$parallel.mode,
         steps = if (walktrap) settings$steps else NA_integer_,
         seed = if (walktrap) NA_integer_ else settings$seed,
         n_vertices = graph$n_vertices,
@@ -315,7 +454,8 @@ finish_graph_cluster <- function(result, graph, settings, started) {
 
 #' Native graph community detection
 #'
-#' `graph_cluster()` clusters a compact `fastEmbedR_graph` with a native
+#' `graph_cluster()` clusters a matrix, compact graph, or file-backed input
+#' with a native
 #' multilevel Louvain implementation, a Leiden local-move/refine/aggregate
 #' implementation, or the Pons-Latapy Walktrap algorithm. Louvain and Leiden
 #' have CPU, CUDA, and Metal implementations. Walktrap is CPU-only. No Python,
@@ -336,6 +476,21 @@ finish_graph_cluster <- function(result, graph, settings, started) {
 #' @param n_runs Independent seeded Louvain/Leiden runs; the highest-modularity
 #'   result is returned for scalar controls. Must be 1 with vector controls;
 #'   use `seed` to specify consensus repeats.
+#' @param n.cores CPU workers for Louvain/Leiden. With
+#'   `parallel.mode = "restarts"`, requires scalar controls and
+#'   `n_runs >= n.cores`. With `parallel.mode = "fit"`, workers
+#'   propose moves for one shared partition; coarsening and Leiden
+#'   refinement remain serial.
+#' @param parallel.mode `"restarts"` preserves parallel independent
+#'   runs; `"fit"` parallelizes local moves within one CPU fit.
+#' @param massive Optional data mode: `"auto"`, `"landmark"`, or
+#'   `"out_of_core_graph"`. A file-backed graph selects full-graph mode;
+#'   a matrix selects auto mode. Resident graphs reject it.
+#' @param ... For a matrix with explicit `landmarks`, resident landmark
+#'   controls such as `k` and `vote_k`. For file-backed data, storage
+#'   controls such as `output`, an integer landmark count, `chunk_rows`,
+#'   `memory_limit`, `checkpoint`, `resume`, and `gpu_storage`.
+#'   These are rejected for a resident graph.
 #' @param steps Random-walk length for Walktrap.
 #' @param seed Finite integer seed(s). A vector automatically enables
 #'   consensus; each seed is tested once per supplied resolution. The first
@@ -372,10 +527,18 @@ finish_graph_cluster <- function(result, graph, settings, started) {
 #'   Final clustering uses `resolution[1]` and `seed[1]`; no additional
 #'   resolution or seed is inferred. `n_iterations` applies to every partition.
 #'   `small_groups`, when supplied, is applied last.
+#'   With `devices`, CUDA partitions graph rows over two to four GPUs.
+#'   Every device updates the same partition, with labels synchronized
+#'   through host RAM after each color phase. Separate `n_runs` remain
+#'   independent repeats. Consensus and graph reweighting apply to
+#'   coordinated partitions and are recorded as host stages.
+#'   This experimental route requires device qualification.
 #'
-#'   Vector controls, `projection`, and `small_groups` currently require CPU
-#'   Louvain or Leiden and cannot be combined with `layout_merge`.
-#'   Accelerator requests fail explicitly. These procedures do not request
+#'   CUDA and Metal run Louvain/Leiden partitions on their devices; consensus
+#'   edge agreement, exact projection weighting, and small-group assignment
+#'   run on the host and are recorded as such. Enhanced options cannot be
+#'   combined with `layout_merge`. Unsupported requests fail explicitly.
+#'   These procedures do not request
 #'   a fixed group count. Scalar controls with `projection = NULL` and no
 #'   small-group postprocessing retain the ordinary clustering workflow.
 #' @section Methodological inspiration:
@@ -404,6 +567,12 @@ finish_graph_cluster <- function(result, graph, settings, started) {
 #'   graph when reweighting is enabled.
 #'   Enhanced workflows record `final_resolution`, `final_seed` and
 #'   `processing_order`; consensus metadata records the exact ensemble size.
+#'   CUDA returns `repeatability = "not_bitwise_deterministic"`: parallel
+#'   community updates can yield different partitions for the same seed.
+#'   Matrix input with explicit `landmarks` returns a
+#'   `fastEmbedR_landmark_clusters` result with all-row labels.
+#' @param devices Optional vector of two to four distinct CUDA device IDs
+#'   for a coordinated resident fit. Requires `backend = "cuda"`.
 #' @references
 #' Blondel VD, Guillaume JL, Lambiotte R, Lefebvre E. Fast unfolding of
 #' communities in large networks. J Stat Mech. 2008;2008:P10008.
@@ -450,12 +619,90 @@ graph_cluster <- function(graph,
                             seed = 1L,
                             layout_merge = NULL,
                             projection = NULL,
-                            small_groups = NULL) {
+                            small_groups = NULL,
+                            n.cores = 1L,
+                            devices = NULL,
+                            parallel.mode = c("restarts", "fit"),
+                            massive = NULL, ...) {
+    if (is.matrix(graph) || is_float32_matrix(graph)) {
+        dots <- list(...)
+        if (!is.null(dots$landmarks)) return(
+            graph_cluster_resident_landmarks(graph, method, backend,
+                resolution, n_iterations, n_runs, steps, seed,
+                layout_merge, projection, small_groups, n.cores,
+                devices, parallel.mode, massive, dots))
+    }
+    if (is.matrix(graph) || is_float32_matrix(graph) ||
+        inherits(graph, c("fastEmbedR_massive_matrix",
+            "fastEmbedR_massive_graph"))) {
+        if (!is.null(layout_merge) || !is.null(projection) ||
+            !is.null(small_groups)) stop(
+            "These graph options need a resident graph.",
+            call. = FALSE)
+        return(graph_cluster_data_input(graph, method, backend,
+            resolution, n_iterations, n_runs, steps, seed,
+            n.cores, devices, parallel.mode, massive, ...))
+    }
+    if (!is.null(massive) || length(list(...))) stop(
+        "File-backed controls require a file-backed input.",
+        call. = FALSE)
+    graph_cluster_resident(graph, method, backend, resolution,
+        n_iterations, n_runs, steps, seed, layout_merge, projection,
+        small_groups, n.cores, devices, parallel.mode)
+}
+
+graph_cluster_resident_landmarks <- function(graph, method, backend,
+        resolution, n_iterations, n_runs, steps, seed,
+        layout_merge, projection, small_groups, n.cores,
+        devices, parallel.mode, massive, dots) {
+    method <- match.arg(method, c("leiden", "louvain", "walktrap"))
+    if (method == "walktrap") stop(
+        "Resident landmark clustering supports Leiden or Louvain.",
+        call. = FALSE)
+    if (!is.null(massive) || !is.null(layout_merge) ||
+        !is.null(projection) || !is.null(small_groups)) stop(
+        "Resident landmark clustering cannot use file-backed or ",
+        "graph postprocessing controls.", call. = FALSE)
+    if (!identical(steps, 4L) || length(seed) != 1L) stop(
+        "Resident landmark clustering needs scalar seed and ",
+        "default Walktrap steps.", call. = FALSE)
+    if (any(!nzchar(names(dots)))) stop(
+        "Resident landmark controls must be named.",
+        call. = FALSE)
+    args <- list(data = graph, landmarks = dots$landmarks,
+        method = method, backend = backend,
+        resolution = resolution, n_iterations = n_iterations,
+        n_runs = n_runs, seed = seed, n.cores = n.cores,
+        devices = devices, parallel.mode = parallel.mode)
+    do.call(cluster_landmarks,
+        c(args, dots[setdiff(names(dots), "landmarks")]))
+}
+
+graph_cluster_resident <- function(graph, method, backend,
+        resolution, n_iterations, n_runs, steps, seed,
+        layout_merge, projection, small_groups, n.cores,
+        devices, parallel.mode) {
     graph <- validate_fastembedr_graph(graph)
     settings <- graph_cluster_settings(
         method, backend, resolution, n_iterations, n_runs, steps, seed,
-        vectors = TRUE
+        vectors = TRUE, n.cores = n.cores
     )
+    settings$parallel.mode <- match.arg(parallel.mode,
+        c("restarts", "fit"))
+    settings$parallel.fit <- settings$parallel.mode == "fit"
+    if (settings$parallel.fit && (settings$backend != "cpu" ||
+        settings$method == "walktrap")) stop(
+        "`parallel.mode = \"fit\"` requires CPU Louvain or Leiden.",
+        call. = FALSE)
+    if (settings$parallel.fit && settings$n.cores > 32L) stop(
+        "CPU fit mode supports at most 32 workers.", call. = FALSE)
+    if (!is.null(devices)) {
+        if (length(devices) < 2L || length(devices) > 4L) stop(
+            "Resident multi-GPU clustering needs two to four devices.",
+            call. = FALSE)
+        settings$devices <- massive_validate_devices(devices,
+            settings$backend, graph$n_vertices)
+    }
     options <- list(projection = projection, small_groups = small_groups)
     if (!is.null(layout_merge) && (settings$consensus ||
         any(!vapply(options, is.null, FALSE)))) {
@@ -470,6 +717,30 @@ graph_cluster <- function(graph,
         result <- graph_cluster_layout_merge(result, graph, layout_merge)
     }
     result
+}
+
+graph_cluster_data_input <- function(graph, method, backend,
+        resolution, n_iterations, n_runs, steps, seed, n.cores,
+        devices, parallel.mode, massive, ...) {
+    if (is.null(massive)) massive <- if (
+        inherits(graph, "fastEmbedR_massive_graph")) {
+        "out_of_core_graph"
+    } else "auto"
+    method <- match.arg(method, c("leiden", "louvain", "walktrap"))
+    default_mode <- length(parallel.mode) > 1L
+    parallel.mode <- match.arg(parallel.mode,
+        c("restarts", "fit"))
+    if (massive == "out_of_core_graph" && default_mode &&
+        n.cores > 1L) parallel.mode <- "fit"
+    args <- list(x = graph, method = method, massive = massive,
+        backend = backend %||% "cpu", resolution = resolution,
+        n_iterations = n_iterations, seed = seed, n.cores = n.cores,
+        devices = devices, parallel.mode = parallel.mode)
+    if (massive != "out_of_core_graph") {
+        args$n_runs <- n_runs
+        args$steps <- steps
+    } else if (method == "walktrap") args$steps <- steps
+    do.call(massive_cluster, c(args, list(...)))
 }
 
 graph_cluster_options <- function(options, graph) {
@@ -551,7 +822,7 @@ graph_positive_integer <- function(x, name) {
     numeric_value <- numeric_scalar(x)
     value <- integer_scalar(numeric_value)
     if (length(numeric_value) != 1L || !is.finite(numeric_value) ||
-        numeric_value != value || value < 1L) {
+        is.na(value) || numeric_value != value || value < 1L) {
         stop("`", name, "` must be one positive integer.", call. = FALSE)
     }
     value

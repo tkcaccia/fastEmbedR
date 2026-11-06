@@ -26,3 +26,4 @@ validated by a
 bounded sequential scan. Import does not construct or certify a symmetric
 fuzzy UMAP graph. At least one edge is required.
 }
+\keyword{internal}

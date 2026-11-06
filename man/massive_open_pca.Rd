@@ -16,3 +16,4 @@ The lightweight PCA fit with file-backed \code{scores}.
 Reuses a saved streamed PCA fit and float32 scores without reloading the
 input matrix. The saved score file must still match its completion record.
 }
+\keyword{internal}

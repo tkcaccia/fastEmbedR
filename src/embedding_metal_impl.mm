@@ -17,6 +17,9 @@
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
 
 #include <Rcpp.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -24,7 +27,10 @@
 #include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <random>
 #include <string>
@@ -167,11 +173,15 @@ struct MetalEmbeddingState {
   id<MTLComputePipelineState> embed_pipeline;
   id<MTLComputePipelineState> embed_atomic_inplace_pipeline;
   id<MTLComputePipelineState> embed_clean_atomic_inplace_pipeline;
+  id<MTLComputePipelineState> embed_clean_snapshot_pipeline;
+  id<MTLComputePipelineState> embed_apply_delta_pipeline;
   id<MTLComputePipelineState> massive_umap_batch_pipeline;
+  id<MTLComputePipelineState> massive_umap_batch_3d_pipeline;
   id<MTLComputePipelineState> embed_atomic_3d_pipeline;
   id<MTLComputePipelineState> embed_clean_atomic_3d_pipeline;
   id<MTLComputePipelineState> refine_prepare_pipeline;
   id<MTLComputePipelineState> refine_rows_pipeline;
+  id<MTLComputePipelineState> refine_rows_3d_pipeline;
   id<MTLComputePipelineState> standardize_stats_pipeline;
   id<MTLComputePipelineState> standardize_apply_pipeline;
   id<MTLComputePipelineState> project_pipeline;
@@ -187,7 +197,12 @@ struct MetalEmbeddingState {
   id<MTLComputePipelineState> spectral_diffuse_pipeline;
   id<MTLComputePipelineState> spectral_stats_pipeline;
   id<MTLComputePipelineState> spectral_normalize_pipeline;
+  id<MTLComputePipelineState> spectral_random_3d_pipeline;
+  id<MTLComputePipelineState> spectral_diffuse_3d_pipeline;
+  id<MTLComputePipelineState> spectral_stats_3d_pipeline;
+  id<MTLComputePipelineState> spectral_normalize_3d_pipeline;
   id<MTLComputePipelineState> tsne_transform_pipeline;
+  id<MTLComputePipelineState> tsne_transform_3d_pipeline;
   id<MTLComputePipelineState> opentsne_center_pipeline;
   id<MTLComputePipelineState> opentsne_fft_clear_pipeline;
   id<MTLComputePipelineState> opentsne_fft_scatter_pipeline;
@@ -368,11 +383,19 @@ MetalEmbeddingState& metal_embedding_state() {
   if (state.device != nil && state.embed_pipeline != nil &&
       state.embed_atomic_inplace_pipeline != nil &&
       state.embed_clean_atomic_inplace_pipeline != nil &&
+      state.embed_clean_snapshot_pipeline != nil &&
+      state.embed_apply_delta_pipeline != nil &&
       state.massive_umap_batch_pipeline != nil &&
+      state.massive_umap_batch_3d_pipeline != nil &&
       state.embed_atomic_3d_pipeline != nil &&
       state.embed_clean_atomic_3d_pipeline != nil &&
       state.refine_prepare_pipeline != nil &&
       state.refine_rows_pipeline != nil &&
+      state.refine_rows_3d_pipeline != nil &&
+      state.spectral_random_3d_pipeline != nil &&
+      state.spectral_diffuse_3d_pipeline != nil &&
+      state.spectral_stats_3d_pipeline != nil &&
+      state.spectral_normalize_3d_pipeline != nil &&
       state.affine_project_pipeline != nil &&
       state.pca_center_scale_pipeline != nil &&
       state.opentsne_center_pipeline != nil &&
@@ -396,6 +419,7 @@ MetalEmbeddingState& metal_embedding_state() {
       state.opentsne_fft_finalize_layout_stats_pipeline != nil &&
       state.opentsne_fft_epoch_pipeline != nil &&
       state.opentsne_fft_epoch_debug_pipeline != nil &&
+      state.tsne_transform_3d_pipeline != nil &&
       state.queue != nil) {
     return state;
   }
@@ -417,14 +441,22 @@ MetalEmbeddingState& metal_embedding_state() {
   state.embed_pipeline = make_pipeline(state, "embed_epoch");
   state.embed_atomic_inplace_pipeline = make_pipeline(state, "embed_epoch_atomic_inplace");
   state.embed_clean_atomic_inplace_pipeline = make_pipeline(state, "embed_epoch_clean_atomic_inplace");
+  state.embed_clean_snapshot_pipeline = make_pipeline(
+    state, "embed_epoch_clean_snapshot");
+  state.embed_apply_delta_pipeline = make_pipeline(
+    state, "embed_apply_snapshot_delta");
   state.massive_umap_batch_pipeline = make_pipeline(
     state, "massive_umap_batch");
+  state.massive_umap_batch_3d_pipeline = make_pipeline(
+    state, "massive_umap_batch_3d");
   state.embed_atomic_3d_pipeline =
     make_pipeline(state, "embed_epoch_atomic_3d");
   state.embed_clean_atomic_3d_pipeline =
     make_pipeline(state, "embed_epoch_clean_atomic_3d");
   state.refine_prepare_pipeline = make_pipeline(state, "umap_refine_prepare_rows");
   state.refine_rows_pipeline = make_pipeline(state, "umap_refine_rows_atomic_inplace");
+  state.refine_rows_3d_pipeline = make_pipeline(
+    state, "umap_refine_rows_atomic_inplace_3d");
   state.standardize_stats_pipeline = make_pipeline(state, "standardize_stats");
   state.standardize_apply_pipeline = make_pipeline(state, "standardize_apply");
   state.project_pipeline = make_pipeline(state, "project_membership");
@@ -441,7 +473,17 @@ MetalEmbeddingState& metal_embedding_state() {
   state.spectral_diffuse_pipeline = make_pipeline(state, "spectral_diffuse");
   state.spectral_stats_pipeline = make_pipeline(state, "spectral_init_stats");
   state.spectral_normalize_pipeline = make_pipeline(state, "spectral_normalize");
+  state.spectral_random_3d_pipeline = make_pipeline(
+    state, "spectral_random_init_3d");
+  state.spectral_diffuse_3d_pipeline = make_pipeline(
+    state, "spectral_diffuse_3d");
+  state.spectral_stats_3d_pipeline = make_pipeline(
+    state, "spectral_init_stats_3d");
+  state.spectral_normalize_3d_pipeline = make_pipeline(
+    state, "spectral_normalize_3d");
   state.tsne_transform_pipeline = make_pipeline(state, "tsne_transform_epoch");
+  state.tsne_transform_3d_pipeline = make_pipeline(
+    state, "tsne_transform_epoch_3d");
   state.opentsne_center_pipeline = make_pipeline(state, "opentsne_apply_center");
   state.opentsne_fft_clear_pipeline = make_pipeline(state, "opentsne_fft_clear_grids");
   state.opentsne_fft_scatter_pipeline = make_pipeline(state, "opentsne_fft_scatter_bilinear");
@@ -831,7 +873,7 @@ std::vector<float> init_to_float_2d(const NumericMatrix& init) {
 }
 
 struct TsneSparseMetalGraph {
-  std::vector<std::int32_t> row_ptr;
+  std::vector<std::uint64_t> row_ptr;
   std::vector<std::int32_t> col;
   std::vector<float> val;
 };
@@ -1007,12 +1049,12 @@ TsneSparseMetalGraph build_tsne_sparse_graph_metal(const IntegerMatrix& indices,
   }
   graph.col.assign(static_cast<std::size_t>(graph.row_ptr[static_cast<std::size_t>(n)]), 0);
   graph.val.assign(graph.col.size(), 0.0f);
-  std::vector<std::int32_t> fill = graph.row_ptr;
+  std::vector<std::uint64_t> fill = graph.row_ptr;
   for (const auto& edge : edges) {
     const int a = key_head(edge.key);
     const int b = key_tail(edge.key);
     const float value = static_cast<float>(0.5 * edge.value / total_directed_mass);
-    int pos = fill[static_cast<std::size_t>(a)]++;
+    std::uint64_t pos = fill[static_cast<std::size_t>(a)]++;
     graph.col[static_cast<std::size_t>(pos)] = b;
     graph.val[static_cast<std::size_t>(pos)] = value;
     pos = fill[static_cast<std::size_t>(b)]++;
@@ -1060,9 +1102,9 @@ double evaluate_kl_metal_graph(const TsneSparseMetalGraph& graph,
   metal_parallel_for(n, n_threads, [&](const int begin, const int end, const int thread_id) {
     double local = 0.0;
     for (int i = begin; i < end; ++i) {
-      const int row_begin = graph.row_ptr[static_cast<std::size_t>(i)];
-      const int row_end = graph.row_ptr[static_cast<std::size_t>(i + 1)];
-      for (int pos = row_begin; pos < row_end; ++pos) {
+      const auto row_begin = graph.row_ptr[static_cast<std::size_t>(i)];
+      const auto row_end = graph.row_ptr[static_cast<std::size_t>(i + 1)];
+      for (std::uint64_t pos = row_begin; pos < row_end; ++pos) {
         const int j = graph.col[static_cast<std::size_t>(pos)];
         const double p_ij = static_cast<double>(graph.val[static_cast<std::size_t>(pos)]);
         const double q_ij =
@@ -1332,9 +1374,9 @@ int negative_samples_this_epoch(float weight, constant EmbedParams& p, uint epoc
 
 int positive_samples_this_epoch_period(float period, constant EmbedParams& p, uint epoch) {
   if (p.objective != 0u) return 1;
-  if (period <= 0.0f || !isfinite(period)) return 0;
-  float now = float(epoch + 1u);
-  float previous = float(epoch);
+  if (period <= 0.0f || !isfinite(period) || epoch == 0u) return 0;
+  float now = float(epoch);
+  float previous = float(epoch - 1u);
   int current_sample = int(floor(now / period));
   int previous_sample = int(floor(previous / period));
   int samples = current_sample - previous_sample;
@@ -1343,19 +1385,23 @@ int positive_samples_this_epoch_period(float period, constant EmbedParams& p, ui
 
 int negative_samples_this_epoch_period(float period, constant EmbedParams& p, uint epoch) {
   if (p.objective != 0u) return int(p.negative_sample_rate);
-  if (period <= 0.0f || !isfinite(period) || p.negative_sample_rate == 0u) return 0;
-  float now = float(epoch + 1u);
-  float previous = float(epoch);
+  if (period <= 0.0f || !isfinite(period) ||
+      p.negative_sample_rate == 0u || epoch == 0u) return 0;
+  float now = float(epoch);
+  float previous = float(epoch - 1u);
   int current_sample = int(floor(now / period));
   int previous_sample = int(floor(previous / period));
   if (current_sample <= previous_sample) return 0;
 
   float negative_period = period / float(p.negative_sample_rate);
-  int current_total = cumulative_umap_negative_samples(now, negative_period);
+  if (negative_period <= 0.0f || !isfinite(negative_period)) return 0;
+  int current_total = int(floor(
+    (now - negative_period) / negative_period));
   int previous_total = 0;
-  if (previous_sample > 0) {
-    float previous_active_epoch = ceil(float(previous_sample) * period);
-    previous_total = cumulative_umap_negative_samples(previous_active_epoch, negative_period);
+  if (current_sample > 1) {
+    float previous_active_epoch = ceil(float(current_sample - 1) * period);
+    previous_total = int(floor(
+      (previous_active_epoch - negative_period) / negative_period));
   }
   int samples = current_total - previous_total;
   return samples > 0 ? samples : 0;
@@ -1562,6 +1608,88 @@ kernel void embed_epoch_clean_atomic_inplace(
   }
 }
 
+kernel void embed_epoch_clean_snapshot(
+  device const int* layout [[buffer(0)]],
+  device atomic_int* delta [[buffer(1)]],
+  device const int* neighbors [[buffer(2)]],
+  device const float* weights [[buffer(3)]],
+  constant EmbedParams& p [[buffer(4)]],
+  constant uint& epoch [[buffer(5)]],
+  constant uint& n_components [[buffer(6)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= p.n) return;
+  constexpr float inv_scale = 1.0f / 65536.0f;
+  float alpha = p.learning_rate *
+    (1.0f - float(epoch) / max(1.0f, float(p.n_epochs - 1u)));
+  uint head_base = gid * n_components;
+  float head[3];
+  for (uint axis = 0u; axis < n_components; ++axis) {
+    head[axis] = float(layout[head_base + axis]) * inv_scale;
+  }
+  for (uint e = 0u; e < p.k; ++e) {
+    uint pos = gid * p.k + e;
+    int nb_i = neighbors[pos];
+    if (nb_i < 0 || uint(nb_i) >= p.n || uint(nb_i) == gid) continue;
+    uint nb = uint(nb_i);
+    float w = weights[pos];
+    float probability = clamp(w / max(p.max_weight, 1.0e-6f),
+                              0.0f, 1.0f);
+    if (probability < 1.0f && clean_metal_uniform01(
+          p.seed, epoch, gid, nb, e, 0u, 3u) >= probability) continue;
+
+    uint tail_base = nb * n_components;
+    float diff[3];
+    float d2 = 0.0f;
+    for (uint axis = 0u; axis < n_components; ++axis) {
+      diff[axis] = head[axis] -
+        float(layout[tail_base + axis]) * inv_scale;
+      d2 += diff[axis] * diff[axis];
+    }
+    float coeff = attractive_coeff(
+      max(1.1920928955078125e-7f, d2), w, p);
+    for (uint axis = 0u; axis < n_components; ++axis) {
+      int update = fixed_delta(alpha * clip4(coeff * diff[axis]));
+      atomic_fetch_add_explicit(&delta[head_base + axis],
+                                update, memory_order_relaxed);
+      atomic_fetch_add_explicit(&delta[tail_base + axis],
+                                -update, memory_order_relaxed);
+    }
+
+    for (uint s = 0u; s < p.negative_sample_rate; ++s) {
+      uint neg = clean_metal_hash(
+        p.seed, epoch, gid, nb, e, s, 17u) % p.n;
+      if (neg == gid || neg == nb) continue;
+      uint neg_base = neg * n_components;
+      float ndiff[3];
+      float nd2 = 0.0f;
+      for (uint axis = 0u; axis < n_components; ++axis) {
+        ndiff[axis] = head[axis] -
+          float(layout[neg_base + axis]) * inv_scale;
+        nd2 += ndiff[axis] * ndiff[axis];
+      }
+      float rcoeff = repulsive_coeff(
+        max(1.1920928955078125e-7f, nd2), p);
+      for (uint axis = 0u; axis < n_components; ++axis) {
+        int update = fixed_delta(alpha * clip4(rcoeff * ndiff[axis]));
+        atomic_fetch_add_explicit(&delta[head_base + axis],
+                                  update, memory_order_relaxed);
+      }
+    }
+  }
+}
+
+kernel void embed_apply_snapshot_delta(
+  device int* layout [[buffer(0)]],
+  device const atomic_int* delta [[buffer(1)]],
+  constant uint& n_values [[buffer(2)]],
+  uint pos [[thread_position_in_grid]]
+) {
+  if (pos >= n_values) return;
+  layout[pos] += atomic_load_explicit(&delta[pos],
+                                     memory_order_relaxed);
+}
+
 kernel void massive_umap_batch(
   device atomic_int* layout [[buffer(0)]],
   device const int* heads [[buffer(1)]],
@@ -1659,6 +1787,49 @@ void add_layout_3d(device atomic_int* layout, uint row, float3 delta) {
                             memory_order_relaxed);
   atomic_fetch_add_explicit(&layout[base + 2u], fixed_delta(delta.z),
                             memory_order_relaxed);
+}
+
+kernel void massive_umap_batch_3d(
+  device atomic_int* layout [[buffer(0)]],
+  device const int* heads [[buffer(1)]],
+  device const int* tails [[buffer(2)]],
+  device const int* negative_counts [[buffer(3)]],
+  device uint* completed [[buffer(4)]],
+  constant EmbedParams& p [[buffer(5)]],
+  constant uint& epoch [[buffer(6)]],
+  constant uint& count [[buffer(7)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= count) return;
+  const uint head = uint(heads[gid]);
+  const uint tail = uint(tails[gid]);
+  const float alpha = p.learning_rate *
+    (1.0f - float(epoch) / float(p.n_epochs));
+  float3 diff = load_layout_3d(layout, head) -
+    load_layout_3d(layout, tail);
+  float d2 = dot(diff, diff);
+  if (d2 > 0.0f) {
+    float coeff = attractive_coeff(d2, 1.0f, p);
+    float3 delta = alpha * clamp(coeff * diff, -4.0f, 4.0f);
+    add_layout_3d(layout, head, delta);
+    add_layout_3d(layout, tail, -delta);
+  }
+  uint done = 0u;
+  for (int s = 0; s < negative_counts[gid]; ++s) {
+    const uint neg = deterministic_vertex(p.n, p.seed,
+      epoch, head, tail, uint(s));
+    if (neg == head) continue;
+    diff = load_layout_3d(layout, head) -
+      load_layout_3d(layout, neg);
+    d2 = dot(diff, diff);
+    if (d2 > 0.0f) {
+      float coeff = repulsive_coeff(d2, p);
+      add_layout_3d(layout, head,
+        alpha * clamp(coeff * diff, -4.0f, 4.0f));
+    }
+    ++done;
+  }
+  completed[gid] = done;
 }
 
 void embed_epoch_atomic_3d_impl(
@@ -1881,6 +2052,88 @@ kernel void umap_refine_rows_atomic_inplace(
   }
 }
 
+float3 load_refine_position_3d(device atomic_int* layout, uint base) {
+  constexpr float inv_scale = 1.0f / 65536.0f;
+  return float3(
+    float(atomic_load_explicit(&layout[base], memory_order_relaxed)) *
+      inv_scale,
+    float(atomic_load_explicit(&layout[base + 1u], memory_order_relaxed)) *
+      inv_scale,
+    float(atomic_load_explicit(&layout[base + 2u], memory_order_relaxed)) *
+      inv_scale);
+}
+
+void add_refine_position_3d(device atomic_int* layout, uint base,
+                            float3 delta) {
+  atomic_fetch_add_explicit(
+    &layout[base], fixed_delta(delta.x), memory_order_relaxed);
+  atomic_fetch_add_explicit(
+    &layout[base + 1u], fixed_delta(delta.y), memory_order_relaxed);
+  atomic_fetch_add_explicit(
+    &layout[base + 2u], fixed_delta(delta.z), memory_order_relaxed);
+}
+
+kernel void umap_refine_rows_atomic_inplace_3d(
+  device atomic_int* layout [[buffer(0)]],
+  device const int* row_ids [[buffer(1)]],
+  device const int* neighbors [[buffer(2)]],
+  device const float* weights [[buffer(3)]],
+  device const float* epochs_per_sample [[buffer(4)]],
+  constant EmbedParams& p [[buffer(5)]],
+  constant uint& n_rows [[buffer(6)]],
+  constant uint& epoch [[buffer(7)]],
+  device const uchar* update_mask [[buffer(8)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= n_rows) return;
+  uint row = uint(row_ids[gid]);
+  if (row >= p.n) return;
+  uint head_base = row * 3u;
+  float alpha = p.learning_rate *
+    (1.0f - float(epoch) / max(1.0f, float(p.n_epochs)));
+
+  for (uint e = 0u; e < p.k; ++e) {
+    uint pos = gid * p.k + e;
+    int nb_i = neighbors[pos];
+    if (nb_i < 0 || uint(nb_i) >= p.n || uint(nb_i) == row) continue;
+    float period = epochs_per_sample[pos];
+    int positive_samples = positive_samples_this_epoch_period(
+      period, p, epoch);
+    if (positive_samples <= 0) continue;
+
+    uint nb = uint(nb_i);
+    uint tail_base = nb * 3u;
+    for (int sample = 0; sample < positive_samples; ++sample) {
+      float3 diff = load_refine_position_3d(layout, head_base) -
+        load_refine_position_3d(layout, tail_base);
+      float d2 = max(1.1920928955078125e-7f, dot(diff, diff));
+      float coeff = attractive_coeff(d2, weights[pos], p);
+      float3 attractive = alpha * float3(
+        clip4(coeff * diff.x), clip4(coeff * diff.y),
+        clip4(coeff * diff.z));
+      add_refine_position_3d(layout, head_base, attractive);
+      if (update_mask[nb] != uchar(0)) {
+        add_refine_position_3d(layout, tail_base, -attractive);
+      }
+    }
+
+    uint neg_samples = uint(negative_samples_this_epoch_period(
+      period, p, epoch));
+    for (uint sample = 0u; sample < neg_samples; ++sample) {
+      uint neg = deterministic_vertex(p.n, p.seed, epoch, row, e, sample);
+      if (neg == row || neg == nb) continue;
+      float3 diff = load_refine_position_3d(layout, head_base) -
+        load_refine_position_3d(layout, neg * 3u);
+      float d2 = max(1.1920928955078125e-7f, dot(diff, diff));
+      float coeff = repulsive_coeff(d2, p);
+      float3 repulsive = alpha * float3(
+        clip4(coeff * diff.x), clip4(coeff * diff.y),
+        clip4(coeff * diff.z));
+      add_refine_position_3d(layout, head_base, repulsive);
+    }
+  }
+}
+
 kernel void matrix_multiply(
   device const float* left [[buffer(0)]],
   device const float* right [[buffer(1)]],
@@ -2085,6 +2338,120 @@ kernel void spectral_normalize(
   float y_centered = v.y - stats[1];
   float y = (y_centered - stats[3] * x) * stats[4];
   values[row] = float2(x, y);
+}
+
+kernel void spectral_random_init_3d(
+  device float* values [[buffer(0)]],
+  constant uint& n [[buffer(1)]],
+  constant uint& seed [[buffer(2)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= n) return;
+  uint base = row * 3u;
+  for (uint axis = 0u; axis < 3u; ++axis) {
+    values[base + axis] = deterministic_unit_signed(seed, row, axis);
+  }
+}
+
+kernel void spectral_diffuse_3d(
+  device const int* neighbors [[buffer(0)]],
+  device const float* weights [[buffer(1)]],
+  device const float* current [[buffer(2)]],
+  device float* next [[buffer(3)]],
+  constant uint& n [[buffer(4)]],
+  constant uint& width [[buffer(5)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= n) return;
+  float sum[3] = {0.0f, 0.0f, 0.0f};
+  float weight_sum = 0.0f;
+  for (uint j = 0u; j < width; ++j) {
+    uint pos = row * width + j;
+    int nb = neighbors[pos];
+    float w = weights[pos];
+    if (nb < 0 || uint(nb) >= n || uint(nb) == row || w <= 0.0f) continue;
+    uint base = uint(nb) * 3u;
+    for (uint axis = 0u; axis < 3u; ++axis) {
+      sum[axis] += w * current[base + axis];
+    }
+    weight_sum += w;
+  }
+  uint base = row * 3u;
+  for (uint axis = 0u; axis < 3u; ++axis) {
+    next[base + axis] = weight_sum > 0.0f ?
+      sum[axis] / weight_sum : current[base + axis];
+  }
+}
+
+kernel void spectral_init_stats_3d(
+  device const float* values [[buffer(0)]],
+  device float* stats [[buffer(1)]],
+  constant uint& n [[buffer(2)]],
+  constant uint& threads [[buffer(3)]],
+  uint tid [[thread_index_in_threadgroup]]
+) {
+  threadgroup float shared[9][256];
+  float moments[9] = {};
+  for (uint row = tid; row < n; row += threads) {
+    uint base = row * 3u;
+    float x = values[base];
+    float y = values[base + 1u];
+    float z = values[base + 2u];
+    moments[0] += x; moments[1] += y; moments[2] += z;
+    moments[3] += x * x; moments[4] += x * y;
+    moments[5] += x * z; moments[6] += y * y;
+    moments[7] += y * z; moments[8] += z * z;
+  }
+  for (uint j = 0u; j < 9u; ++j) shared[j][tid] = moments[j];
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint stride = threads >> 1; stride > 0u; stride >>= 1) {
+    if (tid < stride) {
+      for (uint j = 0u; j < 9u; ++j) {
+        shared[j][tid] += shared[j][tid + stride];
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  if (tid != 0u) return;
+  float inv_n = 1.0f / max(float(n), 1.0f);
+  float sx = shared[0][0];
+  float sy = shared[1][0];
+  float sz = shared[2][0];
+  float xx = max(shared[3][0] - sx * sx * inv_n, 1.0e-24f);
+  float xy = shared[4][0] - sx * sy * inv_n;
+  float xz = shared[5][0] - sx * sz * inv_n;
+  float yy = shared[6][0] - sy * sy * inv_n;
+  float yz = shared[7][0] - sy * sz * inv_n;
+  float zz = shared[8][0] - sz * sz * inv_n;
+  float nx = sqrt(xx);
+  float yx = xy / nx;
+  float ny = sqrt(max(yy - yx * yx, 1.0e-24f));
+  float zx = xz / nx;
+  float zy = (yz - yx * zx) / ny;
+  float nz = sqrt(max(zz - zx * zx - zy * zy, 1.0e-24f));
+  stats[0] = sx * inv_n; stats[1] = sy * inv_n;
+  stats[2] = sz * inv_n; stats[3] = 1.0f / nx;
+  stats[4] = yx; stats[5] = 1.0f / ny;
+  stats[6] = zx; stats[7] = zy;
+  stats[8] = 1.0f / nz;
+}
+
+kernel void spectral_normalize_3d(
+  device float* values [[buffer(0)]],
+  device const float* stats [[buffer(1)]],
+  constant uint& n [[buffer(2)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= n) return;
+  uint base = row * 3u;
+  float x = (values[base] - stats[0]) * stats[3];
+  float y = ((values[base + 1u] - stats[1]) - stats[4] * x) *
+    stats[5];
+  float z = ((values[base + 2u] - stats[2]) - stats[6] * x -
+             stats[7] * y) * stats[8];
+  values[base] = x;
+  values[base + 1u] = y;
+  values[base + 2u] = z;
 }
 
 #define FASTEMBEDR_METAL_PROJECTION_MAX_K 128
@@ -2410,6 +2777,101 @@ kernel void tsne_transform_epoch(
   updates[row] = update;
 }
 
+kernel void tsne_transform_epoch_3d(
+  device const float* reference_layout [[buffer(0)]],
+  device const int* indices [[buffer(1)]],
+  device const float* probabilities [[buffer(2)]],
+  device float* current [[buffer(3)]],
+  device float* gains [[buffer(4)]],
+  device float* updates [[buffer(5)]],
+  constant TsneTransformParams& p [[buffer(6)]],
+  constant uint& epoch [[buffer(7)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= p.n_query) return;
+
+  constexpr float eps = 1.0e-12f;
+  uint base = row * 3u;
+  float3 yi = float3(current[base], current[base + 1u],
+                     current[base + 2u]);
+  float3 grad = float3(0.0f);
+  float sum_q = eps;
+  bool exact = p.exact_repulsion != 0u ||
+    p.n_negatives >= p.n_reference;
+  uint n_samples = exact ? p.n_reference : p.n_negatives;
+
+  for (uint sample = 0u; sample < n_samples; ++sample) {
+    uint ref = exact ? sample : deterministic_reference(
+      p.n_reference, p.seed, epoch, row, sample);
+    float3 yr = float3(reference_layout[ref],
+      reference_layout[p.n_reference + ref],
+      reference_layout[2u * p.n_reference + ref]);
+    float3 diff = yi - yr;
+    sum_q += 1.0f / (1.0f + dot(diff, diff));
+  }
+  for (uint sample = 0u; sample < n_samples; ++sample) {
+    uint ref = exact ? sample : deterministic_reference(
+      p.n_reference, p.seed, epoch, row, sample);
+    float3 yr = float3(reference_layout[ref],
+      reference_layout[p.n_reference + ref],
+      reference_layout[2u * p.n_reference + ref]);
+    float3 diff = yi - yr;
+    float q = 1.0f / (1.0f + dot(diff, diff));
+    grad -= (q * q / sum_q) * diff;
+  }
+
+  for (uint j = 0u; j < p.k; ++j) {
+    uint pos = j * p.n_query + row;
+    int ref_i = indices[pos];
+    if (ref_i < 0 || uint(ref_i) >= p.n_reference) continue;
+    uint ref = uint(ref_i);
+    float3 yr = float3(reference_layout[ref],
+      reference_layout[p.n_reference + ref],
+      reference_layout[2u * p.n_reference + ref]);
+    float3 diff = yi - yr;
+    float q = 1.0f / (1.0f + dot(diff, diff));
+    grad += (p.exaggeration * probabilities[pos] * q) * diff;
+  }
+
+  float grad_norm2 = dot(grad, grad);
+  float max_grad2 = p.max_grad_norm * p.max_grad_norm;
+  if (isfinite(max_grad2) && max_grad2 > 0.0f &&
+      grad_norm2 > max_grad2) {
+    grad *= p.max_grad_norm / (sqrt(grad_norm2) + eps);
+  }
+
+  float3 gain = float3(gains[base], gains[base + 1u],
+                       gains[base + 2u]);
+  float3 update = float3(updates[base], updates[base + 1u],
+                         updates[base + 2u]);
+  gain.x = sign_component(update.x) != sign_component(grad.x) ?
+    gain.x + 0.2f : gain.x * 0.8f + 0.01f;
+  gain.y = sign_component(update.y) != sign_component(grad.y) ?
+    gain.y + 0.2f : gain.y * 0.8f + 0.01f;
+  gain.z = sign_component(update.z) != sign_component(grad.z) ?
+    gain.z + 0.2f : gain.z * 0.8f + 0.01f;
+  gain = max(gain, float3(0.01f));
+
+  update = p.momentum * update - p.learning_rate * gain * grad;
+  float step_norm2 = dot(update, update);
+  float max_step2 = p.max_step_norm * p.max_step_norm;
+  if (isfinite(max_step2) && max_step2 > 0.0f &&
+      step_norm2 > max_step2) {
+    update *= p.max_step_norm / (sqrt(step_norm2) + eps);
+  }
+
+  float3 next = yi + update;
+  current[base] = next.x;
+  current[base + 1u] = next.y;
+  current[base + 2u] = next.z;
+  gains[base] = gain.x;
+  gains[base + 1u] = gain.y;
+  gains[base + 2u] = gain.z;
+  updates[base] = update.x;
+  updates[base + 1u] = update.y;
+  updates[base + 2u] = update.z;
+}
+
 kernel void opentsne_apply_center(
   device float2* current [[buffer(0)]],
   constant float2& center [[buffer(1)]],
@@ -2539,6 +3001,149 @@ kernel void opentsne_fft_load_inputs(
 }
 )METAL"
 R"METAL(
+
+void opentsne_fixed_add(device atomic_uint* low,
+                        device atomic_uint* high,
+                        uint pos, float value) {
+  long fixed = long(rint(value * 262144.0f));
+  ulong bits = as_type<ulong>(fixed);
+  uint lo = uint(bits);
+  uint hi = uint(bits >> 32u);
+  uint previous = atomic_fetch_add_explicit(
+    &low[pos], lo, memory_order_relaxed);
+  uint carry = previous + lo < previous ? 1u : 0u;
+  atomic_fetch_add_explicit(&high[pos], hi + carry,
+                            memory_order_relaxed);
+}
+
+kernel void opentsne_fft_clear_fixed(
+  device atomic_uint* mass_lo [[buffer(0)]],
+  device atomic_uint* mass_hi [[buffer(1)]],
+  device atomic_uint* x_lo [[buffer(2)]],
+  device atomic_uint* x_hi [[buffer(3)]],
+  device atomic_uint* y_lo [[buffer(4)]],
+  device atomic_uint* y_hi [[buffer(5)]],
+  constant OpenTsneFFTGridParams& g [[buffer(6)]],
+  uint cell [[thread_position_in_grid]]
+) {
+  if (cell >= g.grid_size * g.grid_size) return;
+  atomic_store_explicit(&mass_lo[cell], 0u, memory_order_relaxed);
+  atomic_store_explicit(&mass_hi[cell], 0u, memory_order_relaxed);
+  atomic_store_explicit(&x_lo[cell], 0u, memory_order_relaxed);
+  atomic_store_explicit(&x_hi[cell], 0u, memory_order_relaxed);
+  atomic_store_explicit(&y_lo[cell], 0u, memory_order_relaxed);
+  atomic_store_explicit(&y_hi[cell], 0u, memory_order_relaxed);
+}
+
+kernel void opentsne_fft_scatter_fixed(
+  device const float2* current [[buffer(0)]],
+  device atomic_uint* mass_lo [[buffer(1)]],
+  device atomic_uint* mass_hi [[buffer(2)]],
+  device atomic_uint* x_lo [[buffer(3)]],
+  device atomic_uint* x_hi [[buffer(4)]],
+  device atomic_uint* y_lo [[buffer(5)]],
+  device atomic_uint* y_hi [[buffer(6)]],
+  constant OpenTsneFFTGridParams& g [[buffer(7)]],
+  uint row [[thread_position_in_grid]]
+) {
+  if (row >= g.n) return;
+  float2 yi = current[row];
+  if (!isfinite(yi.x)) yi.x = 0.0f;
+  if (!isfinite(yi.y)) yi.y = 0.0f;
+  float2 raw = clamp((yi - float2(g.lower_x, g.lower_y)) *
+                     g.inv_spacing, 0.0f,
+                     float(g.grid_size - 1u));
+  uint x0 = min(uint(floor(raw.x)), g.grid_size - 2u);
+  uint y0 = min(uint(floor(raw.y)), g.grid_size - 2u);
+  float tx = raw.x - float(x0);
+  float ty = raw.y - float(y0);
+  float w[4] = {(1.0f - tx) * (1.0f - ty),
+                tx * (1.0f - ty),
+                (1.0f - tx) * ty, tx * ty};
+  uint pos[4] = {y0 * g.grid_size + x0,
+                 y0 * g.grid_size + x0 + 1u,
+                 (y0 + 1u) * g.grid_size + x0,
+                 (y0 + 1u) * g.grid_size + x0 + 1u};
+  for (uint k = 0u; k < 4u; ++k) {
+    opentsne_fixed_add(mass_lo, mass_hi, pos[k], w[k]);
+    opentsne_fixed_add(x_lo, x_hi, pos[k], w[k] * yi.x);
+    opentsne_fixed_add(y_lo, y_hi, pos[k], w[k] * yi.y);
+  }
+}
+
+float opentsne_fixed_value(device const atomic_uint* low,
+                           device const atomic_uint* high,
+                           uint pos) {
+  ulong bits = (ulong(atomic_load_explicit(
+    &high[pos], memory_order_relaxed)) << 32u) |
+    ulong(atomic_load_explicit(&low[pos],
+                               memory_order_relaxed));
+  return float(as_type<long>(bits)) * (1.0f / 262144.0f);
+}
+
+kernel void opentsne_fft_convert_fixed(
+  device const atomic_uint* mass_lo [[buffer(0)]],
+  device const atomic_uint* mass_hi [[buffer(1)]],
+  device const atomic_uint* x_lo [[buffer(2)]],
+  device const atomic_uint* x_hi [[buffer(3)]],
+  device const atomic_uint* y_lo [[buffer(4)]],
+  device const atomic_uint* y_hi [[buffer(5)]],
+  device float* mass [[buffer(6)]],
+  device float* mass_x [[buffer(7)]],
+  device float* mass_y [[buffer(8)]],
+  constant OpenTsneFFTGridParams& g [[buffer(9)]],
+  uint cell [[thread_position_in_grid]]
+) {
+  if (cell >= g.grid_size * g.grid_size) return;
+  mass[cell] = opentsne_fixed_value(mass_lo, mass_hi, cell);
+  mass_x[cell] = opentsne_fixed_value(x_lo, x_hi, cell);
+  mass_y[cell] = opentsne_fixed_value(y_lo, y_hi, cell);
+}
+
+kernel void opentsne_fft_load_fixed(
+  device const float* mass [[buffer(0)]],
+  device const float* mass_x [[buffer(1)]],
+  device const float* mass_y [[buffer(2)]],
+  device float2* mass_fft [[buffer(3)]],
+  device float2* mass_x_fft [[buffer(4)]],
+  device float2* mass_y_fft [[buffer(5)]],
+  device float2* kernel_q [[buffer(6)]],
+  device float2* kernel_q2 [[buffer(7)]],
+  constant OpenTsneFFTGridParams& g [[buffer(8)]],
+  uint2 gid [[thread_position_in_grid]]
+) {
+  if (gid.x >= g.fft_size || gid.y >= g.fft_size) return;
+  uint fft_pos = gid.y * g.fft_size + gid.x;
+  float m = 0.0f, mx = 0.0f, my = 0.0f;
+  if (gid.x < g.grid_size && gid.y < g.grid_size) {
+    uint grid_pos = gid.y * g.grid_size + gid.x;
+    m = mass[grid_pos];
+    mx = mass_x[grid_pos];
+    my = mass_y[grid_pos];
+  }
+  mass_fft[fft_pos] = float2(m, 0.0f);
+  mass_x_fft[fft_pos] = float2(mx, 0.0f);
+  mass_y_fft[fft_pos] = float2(my, 0.0f);
+  bool x_ok = gid.x < g.grid_size || gid.x > g.grid_size;
+  bool y_ok = gid.y < g.grid_size || gid.y > g.grid_size;
+  float q = 0.0f, q2 = 0.0f;
+  if (x_ok && y_ok) {
+    int dx = gid.x < g.grid_size ? int(gid.x) :
+      int(gid.x) - int(g.fft_size);
+    int dy = gid.y < g.grid_size ? int(gid.y) :
+      int(gid.y) - int(g.fft_size);
+    if (abs(dx) < int(g.grid_size) &&
+        abs(dy) < int(g.grid_size)) {
+      float x_offset = float(dx) * g.spacing;
+      float y_offset = float(dy) * g.spacing;
+      float d2 = x_offset * x_offset + y_offset * y_offset;
+      q = 1.0f / (1.0f + d2);
+      q2 = q * q;
+    }
+  }
+  kernel_q[fft_pos] = float2(q, 0.0f);
+  kernel_q2[fft_pos] = float2(q2, 0.0f);
+}
 
 kernel void opentsne_mpsgraph_load_real_inputs(
   device const atomic_float* mass [[buffer(0)]],
@@ -3025,7 +3630,7 @@ kernel void opentsne_fft_finalize_layout_stats(
 }
 
 kernel void opentsne_epoch_fft_grid(
-  device const int* row_ptr [[buffer(0)]],
+  device const ulong* row_ptr [[buffer(0)]],
   device const int* col_idx [[buffer(1)]],
   device const float* p_val [[buffer(2)]],
   device const float2* current [[buffer(3)]],
@@ -3038,8 +3643,12 @@ kernel void opentsne_epoch_fft_grid(
   constant OpenTsneMetalParams& p [[buffer(10)]],
   constant OpenTsneFFTGridParams& g [[buffer(11)]],
   device const float* inv_sum_q_device [[buffer(12)]],
-  uint row [[thread_position_in_grid]]
+  constant uint& first_row [[buffer(18)]],
+  constant ulong& edge_base [[buffer(19)]],
+  constant uint& index_base [[buffer(20)]],
+  uint local_row [[thread_position_in_grid]]
 ) {
+  uint row = first_row + local_row;
   if (row >= p.n) return;
   constexpr float eps = 1.0e-12f;
   float2 yi = current[row];
@@ -3054,10 +3663,10 @@ kernel void opentsne_epoch_fft_grid(
     -(yi.y * q2_value - yq2_value) * inv_sum_q
   );
 
-  int begin = row_ptr[row];
-  int end = row_ptr[row + 1u];
-  for (int pos = begin; pos < end; ++pos) {
-    int j = col_idx[pos];
+  ulong begin = row_ptr[local_row] - edge_base;
+  ulong end = row_ptr[local_row + 1u] - edge_base;
+  for (ulong pos = begin; pos < end; ++pos) {
+    int j = col_idx[pos] - int(index_base);
     if (j < 0 || uint(j) >= p.n || uint(j) == row) continue;
     float2 diff = yi - current[uint(j)];
     float d2 = dot(diff, diff);
@@ -3088,7 +3697,7 @@ kernel void opentsne_epoch_fft_grid(
 }
 
 kernel void opentsne_epoch_fft_grid_debug(
-  device const int* row_ptr [[buffer(0)]],
+  device const ulong* row_ptr [[buffer(0)]],
   device const int* col_idx [[buffer(1)]],
   device const float* p_val [[buffer(2)]],
   device const float2* current [[buffer(3)]],
@@ -3106,8 +3715,12 @@ kernel void opentsne_epoch_fft_grid_debug(
   device float* gradient_norm2 [[buffer(15)]],
   device float* update_norm2 [[buffer(16)]],
   device float* layout_norm2 [[buffer(17)]],
-  uint row [[thread_position_in_grid]]
+  constant uint& first_row [[buffer(18)]],
+  constant ulong& edge_base [[buffer(19)]],
+  constant uint& index_base [[buffer(20)]],
+  uint local_row [[thread_position_in_grid]]
 ) {
+  uint row = first_row + local_row;
   if (row >= p.n) return;
   constexpr float eps = 1.0e-12f;
   float2 yi = current[row];
@@ -3124,10 +3737,10 @@ kernel void opentsne_epoch_fft_grid_debug(
   );
   float2 attractive = float2(0.0f, 0.0f);
 
-  int begin = row_ptr[row];
-  int end = row_ptr[row + 1u];
-  for (int pos = begin; pos < end; ++pos) {
-    int j = col_idx[pos];
+  ulong begin = row_ptr[local_row] - edge_base;
+  ulong end = row_ptr[local_row + 1u] - edge_base;
+  for (ulong pos = begin; pos < end; ++pos) {
+    int j = col_idx[pos] - int(index_base);
     if (j < 0 || uint(j) >= p.n || uint(j) == row) continue;
     float2 diff = yi - current[uint(j)];
     float d2 = dot(diff, diff);
@@ -3178,13 +3791,13 @@ void affine_weighted_fallback(
   uint n_query,
   uint projection_k,
   uint used_neighbors,
+  uint n_components,
   uint row,
   float rho,
   float sigma
 ) {
   float all_weight_sum = 0.0f;
-  float y0 = 0.0f;
-  float y1 = 0.0f;
+  float y[3] = {0.0f, 0.0f, 0.0f};
   for (uint j = 0u; j < projection_k; ++j) {
     int idx = projection_indices[j * n_query + row] - 1;
     if (idx < 0 || uint(idx) >= n_reference) continue;
@@ -3194,14 +3807,16 @@ void affine_weighted_fallback(
     float w = exp(-adjusted / max(sigma, 1.4901161193847656e-8f));
     if (!isfinite(w) || w <= 0.0f) continue;
     all_weight_sum += w;
-    y0 += w * reference_layout[uint(idx)];
-    y1 += w * reference_layout[n_reference + uint(idx)];
+    for (uint dim = 0u; dim < n_components; ++dim) {
+      y[dim] += w * reference_layout[dim * n_reference + uint(idx)];
+    }
   }
   if (!isfinite(all_weight_sum) || all_weight_sum <= 0.0f) {
     all_weight_sum = 1.0f;
   }
-  out[row] = y0 / all_weight_sum;
-  out[n_query + row] = y1 / all_weight_sum;
+  for (uint dim = 0u; dim < n_components; ++dim) {
+    out[dim * n_query + row] = y[dim] / all_weight_sum;
+  }
   confidence_out[row] = 0.0f;
   used_neighbors_out[row] = int(used_neighbors);
   fallback_out[row] = 1;
@@ -3224,6 +3839,7 @@ kernel void project_embedding_affine_rows(
   constant uint& max_neighbors [[buffer(13)]],
   constant float& ridge [[buffer(14)]],
   constant float& max_extrapolation [[buffer(15)]],
+  constant uint& n_components [[buffer(16)]],
   uint row [[thread_position_in_grid]]
 ) {
   if (row >= n_query) return;
@@ -3238,9 +3854,9 @@ kernel void project_embedding_affine_rows(
   int refs[FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS];
   float centered[FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS];
   float row_norm[FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS];
-  float y_center[2];
+  float y_center[3];
   float gram[FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS * FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS];
-  float rhs[FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS * 2];
+  float rhs[FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS * 3];
   float q[FASTEMBEDR_METAL_AFFINE_MAX_NEIGHBORS];
 
   int zero_col = -1;
@@ -3258,8 +3874,10 @@ kernel void project_embedding_affine_rows(
 
   if (zero_col >= 0) {
     int ref = projection_indices[uint(zero_col) * n_query + row] - 1;
-    out[row] = reference_layout[uint(ref)];
-    out[n_query + row] = reference_layout[n_reference + uint(ref)];
+    for (uint dim = 0u; dim < n_components; ++dim) {
+      out[dim * n_query + row] =
+        reference_layout[dim * n_reference + uint(ref)];
+    }
     confidence_out[row] = 1.0f;
     used_neighbors_out[row] = 1;
     fallback_out[row] = 0;
@@ -3290,35 +3908,38 @@ kernel void project_embedding_affine_rows(
     affine_weighted_fallback(
       reference_layout, projection_indices, projection_distances, out,
       confidence_out, used_neighbors_out, fallback_out, n_reference, n_query,
-      projection_k, m, row, rho, sigma
+      projection_k, m, n_components, row, rho, sigma
     );
     return;
   }
   for (uint j = 0u; j < m; ++j) weights[j] /= weight_sum;
 
-  y_center[0] = 0.0f;
-  y_center[1] = 0.0f;
+  for (uint dim = 0u; dim < n_components; ++dim) {
+    y_center[dim] = 0.0f;
+  }
   for (uint j = 0u; j < m; ++j) {
     int ref = refs[j];
     if (ref < 0 || uint(ref) >= n_reference) continue;
     float w = weights[j];
-    y_center[0] += w * reference_layout[uint(ref)];
-    y_center[1] += w * reference_layout[n_reference + uint(ref)];
+    for (uint dim = 0u; dim < n_components; ++dim) {
+      y_center[dim] +=
+        w * reference_layout[dim * n_reference + uint(ref)];
+    }
   }
 
   float layout_radius_sq = 0.0f;
   for (uint a = 0u; a < m; ++a) {
     int ref_a = refs[a];
     float sqrt_wa = sqrt(max(weights[a], 0.0f));
-    float yc0 = (ref_a >= 0 && uint(ref_a) < n_reference) ?
-      reference_layout[uint(ref_a)] - y_center[0] :
-      0.0f;
-    float yc1 = (ref_a >= 0 && uint(ref_a) < n_reference) ?
-      reference_layout[n_reference + uint(ref_a)] - y_center[1] :
-      0.0f;
-    rhs[a * 2u] = sqrt_wa * yc0;
-    rhs[a * 2u + 1u] = sqrt_wa * yc1;
-    layout_radius_sq = max(layout_radius_sq, yc0 * yc0 + yc1 * yc1);
+    float radius_sq = 0.0f;
+    for (uint dim = 0u; dim < n_components; ++dim) {
+      float yc = (ref_a >= 0 && uint(ref_a) < n_reference) ?
+        reference_layout[dim * n_reference + uint(ref_a)] -
+          y_center[dim] : 0.0f;
+      rhs[a * n_components + dim] = sqrt_wa * yc;
+      radius_sq += yc * yc;
+    }
+    layout_radius_sq = max(layout_radius_sq, radius_sq);
     row_norm[a] = 0.0f;
     q[a] = 0.0f;
   }
@@ -3387,53 +4008,59 @@ kernel void project_embedding_affine_rows(
     affine_weighted_fallback(
       reference_layout, projection_indices, projection_distances, out,
       confidence_out, used_neighbors_out, fallback_out, n_reference, n_query,
-      projection_k, m, row, rho, sigma
+      projection_k, m, n_components, row, rho, sigma
     );
     return;
   }
 
-  for (uint c = 0u; c < 2u; ++c) {
+  for (uint c = 0u; c < n_components; ++c) {
     for (uint i = 0u; i < m; ++i) {
-      float s = rhs[i * 2u + c];
-      for (uint kk = 0u; kk < i; ++kk) s -= gram[i * m + kk] * rhs[kk * 2u + c];
-      rhs[i * 2u + c] = s / gram[i * m + i];
+      float s = rhs[i * n_components + c];
+      for (uint kk = 0u; kk < i; ++kk) {
+        s -= gram[i * m + kk] * rhs[kk * n_components + c];
+      }
+      rhs[i * n_components + c] = s / gram[i * m + i];
     }
     for (int ii = int(m) - 1; ii >= 0; --ii) {
       uint i = uint(ii);
-      float s = rhs[i * 2u + c];
-      for (uint kk = i + 1u; kk < m; ++kk) s -= gram[kk * m + i] * rhs[kk * 2u + c];
-      rhs[i * 2u + c] = s / gram[i * m + i];
+      float s = rhs[i * n_components + c];
+      for (uint kk = i + 1u; kk < m; ++kk) {
+        s -= gram[kk * m + i] * rhs[kk * n_components + c];
+      }
+      rhs[i * n_components + c] = s / gram[i * m + i];
     }
   }
 
-  float displacement0 = 0.0f;
-  float displacement1 = 0.0f;
+  float displacement[3] = {0.0f, 0.0f, 0.0f};
   for (uint a = 0u; a < m; ++a) {
-    displacement0 += q[a] * rhs[a * 2u];
-    displacement1 += q[a] * rhs[a * 2u + 1u];
+    for (uint dim = 0u; dim < n_components; ++dim) {
+      displacement[dim] += q[a] * rhs[a * n_components + dim];
+    }
   }
-  float y0 = y_center[0] + displacement0;
-  float y1 = y_center[1] + displacement1;
-
-  float disp_sq = displacement0 * displacement0 + displacement1 * displacement1;
+  float disp_sq = 0.0f;
+  for (uint dim = 0u; dim < n_components; ++dim) {
+    disp_sq += displacement[dim] * displacement[dim];
+  }
   float max_disp = max_extrapolation * sqrt(max(layout_radius_sq, eps));
   if (disp_sq > max_disp * max_disp) {
     float scale = max_disp / (sqrt(disp_sq) + eps);
-    y0 = y_center[0] + displacement0 * scale;
-    y1 = y_center[1] + displacement1 * scale;
+    for (uint dim = 0u; dim < n_components; ++dim) {
+      displacement[dim] *= scale;
+    }
   }
 
-  if (!isfinite(y0) || !isfinite(y1)) {
-    affine_weighted_fallback(
-      reference_layout, projection_indices, projection_distances, out,
-      confidence_out, used_neighbors_out, fallback_out, n_reference, n_query,
-      projection_k, m, row, rho, sigma
-    );
-    return;
+  for (uint dim = 0u; dim < n_components; ++dim) {
+    float value = y_center[dim] + displacement[dim];
+    if (!isfinite(value)) {
+      affine_weighted_fallback(
+        reference_layout, projection_indices, projection_distances, out,
+        confidence_out, used_neighbors_out, fallback_out, n_reference,
+        n_query, projection_k, m, n_components, row, rho, sigma
+      );
+      return;
+    }
+    out[dim * n_query + row] = value;
   }
-
-  out[row] = y0;
-  out[n_query + row] = y1;
   float effective_n = weight_sq_sum > 0.0f ? (weight_sum * weight_sum) / weight_sq_sum : 1.0f;
   confidence_out[row] = clamp(effective_n / float(m), 0.0f, 1.0f);
   used_neighbors_out[row] = int(m);
@@ -5045,12 +5672,17 @@ void encode_spectral_normalize(MetalEmbeddingState& state,
                                id<MTLCommandBuffer> command_buffer,
                                id<MTLBuffer> value_buffer,
                                id<MTLBuffer> stats_buffer,
-                               const std::uint32_t n_u) {
-  const NSUInteger stats_threads = bounded_threads(state.spectral_stats_pipeline);
+                               const std::uint32_t n_u,
+                               const int n_components) {
+  id<MTLComputePipelineState> stats_pipeline = n_components == 3 ?
+    state.spectral_stats_3d_pipeline : state.spectral_stats_pipeline;
+  id<MTLComputePipelineState> normalize_pipeline = n_components == 3 ?
+    state.spectral_normalize_3d_pipeline : state.spectral_normalize_pipeline;
+  const NSUInteger stats_threads = bounded_threads(stats_pipeline);
   const std::uint32_t stats_threads_u = static_cast<std::uint32_t>(stats_threads);
 
   id<MTLComputeCommandEncoder> stats_encoder = [command_buffer computeCommandEncoder];
-  [stats_encoder setComputePipelineState:state.spectral_stats_pipeline];
+  [stats_encoder setComputePipelineState:stats_pipeline];
   [stats_encoder setBuffer:value_buffer offset:0 atIndex:0];
   [stats_encoder setBuffer:stats_buffer offset:0 atIndex:1];
   [stats_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
@@ -5060,11 +5692,11 @@ void encode_spectral_normalize(MetalEmbeddingState& state,
   [stats_encoder endEncoding];
 
   id<MTLComputeCommandEncoder> normalize_encoder = [command_buffer computeCommandEncoder];
-  [normalize_encoder setComputePipelineState:state.spectral_normalize_pipeline];
+  [normalize_encoder setComputePipelineState:normalize_pipeline];
   [normalize_encoder setBuffer:value_buffer offset:0 atIndex:0];
   [normalize_encoder setBuffer:stats_buffer offset:0 atIndex:1];
   [normalize_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:2];
-  dispatch_rows(normalize_encoder, state.spectral_normalize_pipeline, static_cast<int>(n_u));
+  dispatch_rows(normalize_encoder, normalize_pipeline, static_cast<int>(n_u));
   [normalize_encoder endEncoding];
 }
 
@@ -5162,14 +5794,18 @@ std::vector<float> initialize_tsne_transform_metal(const NumericMatrix& referenc
   const int n_reference = reference_layout.nrow();
   const int n_query = distances.nrow();
   const int k = distances.ncol();
-  std::vector<float> out(static_cast<std::size_t>(n_query) * 2u, 0.0f);
+  const int n_components = reference_layout.ncol();
+  std::vector<float> out(
+    static_cast<std::size_t>(n_query) * n_components, 0.0f);
   if (init) {
-    if (y_init.nrow() != n_query || y_init.ncol() != 2) {
-      Rcpp::stop("`Y_init` must have one row per query and two columns for Metal transform.");
+    if (y_init.nrow() != n_query || y_init.ncol() != n_components) {
+      Rcpp::stop("`Y_init` must match the Metal transform dimensions.");
     }
     for (int i = 0; i < n_query; ++i) {
-      out[static_cast<std::size_t>(i) * 2u] = static_cast<float>(y_init(i, 0));
-      out[static_cast<std::size_t>(i) * 2u + 1u] = static_cast<float>(y_init(i, 1));
+      for (int dim = 0; dim < n_components; ++dim) {
+        out[static_cast<std::size_t>(i) * n_components + dim] =
+          static_cast<float>(y_init(i, dim));
+      }
     }
     return out;
   }
@@ -5186,7 +5822,7 @@ std::vector<float> initialize_tsne_transform_metal(const NumericMatrix& referenc
 
   std::vector<float> values(static_cast<std::size_t>(k), 0.0f);
   for (int i = 0; i < n_query; ++i) {
-    for (int dim = 0; dim < 2; ++dim) {
+    for (int dim = 0; dim < n_components; ++dim) {
       if (initialization == "weighted") {
         double numerator = 0.0;
         double denominator = std::numeric_limits<double>::min();
@@ -5197,7 +5833,8 @@ std::vector<float> initialize_tsne_transform_metal(const NumericMatrix& referenc
           numerator += w * reference_layout(ref, dim);
           denominator += w;
         }
-        out[static_cast<std::size_t>(i) * 2u + dim] = static_cast<float>(numerator / denominator);
+        out[static_cast<std::size_t>(i) * n_components + dim] =
+          static_cast<float>(numerator / denominator);
       } else {
         for (int j = 0; j < k; ++j) {
           const int ref = indices[static_cast<std::size_t>(j) * n_query + i];
@@ -5211,7 +5848,7 @@ std::vector<float> initialize_tsne_transform_metal(const NumericMatrix& referenc
           std::nth_element(values.begin(), values.begin() + mid - 1, values.begin() + mid);
           median = 0.5f * (median + values[static_cast<std::size_t>(mid - 1)]);
         }
-        out[static_cast<std::size_t>(i) * 2u + dim] = median;
+        out[static_cast<std::size_t>(i) * n_components + dim] = median;
       }
     }
   }
@@ -5228,8 +5865,8 @@ NumericMatrix spectral_knn_init_metal_impl(IntegerMatrix indices,
   if (indices.nrow() != distances.nrow() || indices.ncol() != distances.ncol()) {
     Rcpp::stop("indices and distances must have the same dimensions");
   }
-  if (n_components != 2) {
-    Rcpp::stop("Metal spectral initialization currently supports exactly two components.");
+  if (n_components != 2 && n_components != 3) {
+    Rcpp::stop("Metal spectral initialization supports two or three components.");
   }
   if (indices.ncol() > kMaxMetalNeighbors) {
     Rcpp::stop("Metal spectral initialization currently supports at most %d neighbors.", kMaxMetalNeighbors);
@@ -5245,7 +5882,8 @@ NumericMatrix spectral_knn_init_metal_impl(IntegerMatrix indices,
     const int width = static_cast<int>(neighbors.size() / static_cast<std::size_t>(n));
     if (width < 1) Rcpp::stop("Metal spectral initialization produced an empty graph.");
 
-    std::vector<float> current(static_cast<std::size_t>(n) * 2u, 0.0f);
+    std::vector<float> current(
+      static_cast<std::size_t>(n) * n_components, 0.0f);
     const std::uint32_t n_u = static_cast<std::uint32_t>(n);
     const std::uint32_t width_u = static_cast<std::uint32_t>(width);
     const std::uint32_t seed_u = static_cast<std::uint32_t>(seed);
@@ -5260,7 +5898,8 @@ NumericMatrix spectral_knn_init_metal_impl(IntegerMatrix indices,
                                                              options:MTLResourceStorageModeShared];
     id<MTLBuffer> next_buffer = [state.device newBufferWithLength:current.size() * sizeof(float)
                                                           options:MTLResourceStorageModeShared];
-    id<MTLBuffer> stats_buffer = [state.device newBufferWithLength:5u * sizeof(float)
+    id<MTLBuffer> stats_buffer = [state.device newBufferWithLength:
+      (n_components == 3 ? 9u : 5u) * sizeof(float)
                                                            options:MTLResourceStorageModeShared];
     if (neighbor_buffer == nil || weight_buffer == nil || current_buffer == nil ||
         next_buffer == nil || stats_buffer == nil) {
@@ -5270,36 +5909,44 @@ NumericMatrix spectral_knn_init_metal_impl(IntegerMatrix indices,
     id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
 
     id<MTLComputeCommandEncoder> random_encoder = [command_buffer computeCommandEncoder];
-    [random_encoder setComputePipelineState:state.spectral_random_pipeline];
+    id<MTLComputePipelineState> random_pipeline = n_components == 3 ?
+      state.spectral_random_3d_pipeline : state.spectral_random_pipeline;
+    id<MTLComputePipelineState> diffuse_pipeline = n_components == 3 ?
+      state.spectral_diffuse_3d_pipeline : state.spectral_diffuse_pipeline;
+    [random_encoder setComputePipelineState:random_pipeline];
     [random_encoder setBuffer:current_buffer offset:0 atIndex:0];
     [random_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:1];
     [random_encoder setBytes:&seed_u length:sizeof(std::uint32_t) atIndex:2];
-    dispatch_rows(random_encoder, state.spectral_random_pipeline, n);
+    dispatch_rows(random_encoder, random_pipeline, n);
     [random_encoder endEncoding];
-    encode_spectral_normalize(state, command_buffer, current_buffer, stats_buffer, n_u);
+    encode_spectral_normalize(state, command_buffer, current_buffer,
+                              stats_buffer, n_u, n_components);
 
     for (int iter = 0; iter < spectral_n_iter; ++iter) {
       id<MTLComputeCommandEncoder> diffuse_encoder = [command_buffer computeCommandEncoder];
-      [diffuse_encoder setComputePipelineState:state.spectral_diffuse_pipeline];
+      [diffuse_encoder setComputePipelineState:diffuse_pipeline];
       [diffuse_encoder setBuffer:neighbor_buffer offset:0 atIndex:0];
       [diffuse_encoder setBuffer:weight_buffer offset:0 atIndex:1];
       [diffuse_encoder setBuffer:current_buffer offset:0 atIndex:2];
       [diffuse_encoder setBuffer:next_buffer offset:0 atIndex:3];
       [diffuse_encoder setBytes:&n_u length:sizeof(std::uint32_t) atIndex:4];
       [diffuse_encoder setBytes:&width_u length:sizeof(std::uint32_t) atIndex:5];
-      dispatch_rows(diffuse_encoder, state.spectral_diffuse_pipeline, n);
+      dispatch_rows(diffuse_encoder, diffuse_pipeline, n);
       [diffuse_encoder endEncoding];
-      encode_spectral_normalize(state, command_buffer, next_buffer, stats_buffer, n_u);
+      encode_spectral_normalize(state, command_buffer, next_buffer,
+                                stats_buffer, n_u, n_components);
       std::swap(current_buffer, next_buffer);
     }
 
     wait_for_command(command_buffer, "spectral initialization");
     std::memcpy(current.data(), [current_buffer contents], current.size() * sizeof(float));
 
-    NumericMatrix out(n, 2);
+    NumericMatrix out(n, n_components);
     for (int i = 0; i < n; ++i) {
-      out(i, 0) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u]);
-      out(i, 1) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u + 1u]);
+      for (int axis = 0; axis < n_components; ++axis) {
+        out(i, axis) = static_cast<double>(
+          current[static_cast<std::size_t>(i) * n_components + axis]);
+      }
     }
     [neighbor_buffer release];
     [weight_buffer release];
@@ -5430,8 +6077,10 @@ List transform_tsne_metal_impl(NumericMatrix reference_layout,
   const int n_reference = reference_layout.nrow();
   const int n_query = indices.nrow();
   const int k = indices.ncol();
-  if (n_reference < 1 || reference_layout.ncol() != 2) {
-    Rcpp::stop("Metal t-SNE transform requires a two-dimensional non-empty reference layout.");
+  const int n_components = reference_layout.ncol();
+  if (n_reference < 1 ||
+      (n_components != 2 && n_components != 3)) {
+    Rcpp::stop("Metal t-SNE transform requires a non-empty 2D or 3D reference layout.");
   }
   if (n_query < 1 || k < 1) {
     Rcpp::stop("KNN input must have at least one query row and one neighbor column.");
@@ -5515,7 +6164,11 @@ List transform_tsne_metal_impl(NumericMatrix reference_layout,
 
     const bool exact_repulsion = n_reference <= exact_repulsion_threshold ||
       n_negatives >= n_reference;
-    const NSUInteger threads_per_group = bounded_threads(state.tsne_transform_pipeline);
+    id<MTLComputePipelineState> transform_pipeline =
+      n_components == 3 ? state.tsne_transform_3d_pipeline :
+      state.tsne_transform_pipeline;
+    const NSUInteger threads_per_group = bounded_threads(
+      transform_pipeline);
     const MTLSize grid_size = MTLSizeMake(static_cast<NSUInteger>(n_query), 1, 1);
     const MTLSize threadgroup_size = MTLSizeMake(threads_per_group, 1, 1);
     const std::uint32_t epochs_per_command = kMetalEmbeddingEpochsPerCommand;
@@ -5550,7 +6203,7 @@ List transform_tsne_metal_impl(NumericMatrix reference_layout,
         };
 
         id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
-        [encoder setComputePipelineState:state.tsne_transform_pipeline];
+        [encoder setComputePipelineState:transform_pipeline];
         [encoder setBuffer:reference_buffer offset:0 atIndex:0];
         [encoder setBuffer:index_buffer offset:0 atIndex:1];
         [encoder setBuffer:probability_buffer offset:0 atIndex:2];
@@ -5570,10 +6223,12 @@ List transform_tsne_metal_impl(NumericMatrix reference_layout,
     }
 
     std::memcpy(current.data(), [current_buffer contents], current.size() * sizeof(float));
-    NumericMatrix layout(n_query, 2);
+    NumericMatrix layout(n_query, n_components);
     for (int i = 0; i < n_query; ++i) {
-      layout(i, 0) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u]);
-      layout(i, 1) = static_cast<double>(current[static_cast<std::size_t>(i) * 2u + 1u]);
+      for (int dim = 0; dim < n_components; ++dim) {
+        layout(i, dim) = static_cast<double>(
+          current[static_cast<std::size_t>(i) * n_components + dim]);
+      }
     }
 
     [reference_buffer release];
@@ -5660,7 +6315,7 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
     );
     if (n_components == 3) {
       return run_metal_tsne_3d(
-        state, graph, current, n, early_exaggeration_iter,
+        state, &graph, current, n, early_exaggeration_iter,
         n_iter, early_exaggeration, exaggeration,
         learning_rate, learning_rate_auto,
         initial_momentum, final_momentum, min_gain,
@@ -5689,7 +6344,7 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
 
     id<MTLBuffer> row_ptr_buffer = input_buffer(
       graph.row_ptr.data(),
-      graph.row_ptr.size() * sizeof(std::int32_t),
+      graph.row_ptr.size() * sizeof(std::uint64_t),
       "openTSNE row pointers"
     );
     id<MTLBuffer> col_buffer = input_buffer(
@@ -5737,6 +6392,9 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
 
     const int total_iter = early_exaggeration_iter + n_iter;
     const std::uint32_t n_u = static_cast<std::uint32_t>(n);
+    const std::uint32_t first_row = 0u;
+    const std::uint64_t edge_base = 0u;
+    const std::uint32_t index_base = 0u;
     const float max_step = (max_step_norm > 0.0 && std::isfinite(max_step_norm)) ?
       static_cast<float>(max_step_norm) :
       std::numeric_limits<float>::max();
@@ -6195,6 +6853,12 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
             [encoder setBytes:&params length:sizeof(OpenTsneMetalParams) atIndex:10];
             [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:11];
             [encoder setBuffer:inv_sum_q_buffer offset:0 atIndex:12];
+            [encoder setBytes:&first_row length:sizeof(first_row)
+              atIndex:18];
+            [encoder setBytes:&edge_base length:sizeof(edge_base)
+              atIndex:19];
+            [encoder setBytes:&index_base length:sizeof(index_base)
+              atIndex:20];
             [encoder dispatchThreads:point_grid
                threadsPerThreadgroup:MTLSizeMake(threads_epoch, 1, 1)];
             [encoder endEncoding];
@@ -6376,6 +7040,12 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
             [encoder setBytes:&params length:sizeof(OpenTsneMetalParams) atIndex:10];
             [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:11];
             [encoder setBuffer:inv_sum_q_buffer offset:0 atIndex:12];
+            [encoder setBytes:&first_row length:sizeof(first_row)
+              atIndex:18];
+            [encoder setBytes:&edge_base length:sizeof(edge_base)
+              atIndex:19];
+            [encoder setBytes:&index_base length:sizeof(index_base)
+              atIndex:20];
             [encoder dispatchThreads:point_grid
                threadsPerThreadgroup:MTLSizeMake(threads_epoch, 1, 1)];
             [encoder endEncoding];
@@ -6552,6 +7222,12 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
           [encoder setBytes:&params length:sizeof(OpenTsneMetalParams) atIndex:10];
           [encoder setBuffer:fft_grid_params_buffer offset:0 atIndex:11];
           [encoder setBuffer:inv_sum_q_buffer offset:0 atIndex:12];
+          [encoder setBytes:&first_row length:sizeof(first_row)
+            atIndex:18];
+          [encoder setBytes:&edge_base length:sizeof(edge_base)
+            atIndex:19];
+          [encoder setBytes:&index_base length:sizeof(index_base)
+            atIndex:20];
           if (record_costs) {
             [encoder setBuffer:repulsive_norm_buffer offset:0 atIndex:13];
             [encoder setBuffer:attractive_norm_buffer offset:0 atIndex:14];
@@ -6855,8 +7531,8 @@ List project_embedding_affine_metal_impl(SEXP reference_data,
   if (query_data_dims.second != n_features) {
     Rcpp::stop("reference_data and query_data must have the same number of columns");
   }
-  if (n_components != 2) {
-    Rcpp::stop("Metal affine landmark projection currently supports two-dimensional layouts.");
+  if (n_components != 2 && n_components != 3) {
+    Rcpp::stop("Metal affine landmark projection requires a 2D or 3D layout.");
   }
   if (n_query < 1) Rcpp::stop("projection_indices must have at least one row");
   if (projection_k < 1) Rcpp::stop("projection_indices must have at least one column");
@@ -6900,7 +7576,8 @@ List project_embedding_affine_metal_impl(SEXP reference_data,
     std::vector<float> layout_values = metal_copy_float_vector(
       reference_layout, "reference_layout"
     );
-    std::vector<float> out(static_cast<std::size_t>(n_query) * 2u, 0.0f);
+    std::vector<float> out(
+      static_cast<std::size_t>(n_query) * n_components, 0.0f);
     std::vector<float> confidence(static_cast<std::size_t>(n_query), 0.0f);
     std::vector<std::int32_t> used(static_cast<std::size_t>(n_query), 0);
     std::vector<std::int32_t> fallback(static_cast<std::size_t>(n_query), 0);
@@ -6910,6 +7587,8 @@ List project_embedding_affine_metal_impl(SEXP reference_data,
     const std::uint32_t n_features_u = static_cast<std::uint32_t>(n_features);
     const std::uint32_t projection_k_u = static_cast<std::uint32_t>(projection_k);
     const std::uint32_t max_neighbors_u = static_cast<std::uint32_t>(max_neighbors);
+    const std::uint32_t n_components_u =
+      static_cast<std::uint32_t>(n_components);
     const float ridge_f = static_cast<float>(ridge);
     const float max_extrapolation_f = static_cast<float>(max_extrapolation);
 
@@ -6965,6 +7644,7 @@ List project_embedding_affine_metal_impl(SEXP reference_data,
     [encoder setBytes:&max_neighbors_u length:sizeof(std::uint32_t) atIndex:13];
     [encoder setBytes:&ridge_f length:sizeof(float) atIndex:14];
     [encoder setBytes:&max_extrapolation_f length:sizeof(float) atIndex:15];
+    [encoder setBytes:&n_components_u length:sizeof(std::uint32_t) atIndex:16];
     dispatch_rows(encoder, state.affine_project_pipeline, n_query);
     [encoder endEncoding];
     wait_for_command(command_buffer, "Metal affine landmark projection");
@@ -6974,7 +7654,8 @@ List project_embedding_affine_metal_impl(SEXP reference_data,
     std::memcpy(used.data(), [used_buffer contents], used.size() * sizeof(std::int32_t));
     std::memcpy(fallback.data(), [fallback_buffer contents], fallback.size() * sizeof(std::int32_t));
 
-    NumericMatrix layout = float_to_numeric_matrix(out, n_query, 2);
+    NumericMatrix layout = float_to_numeric_matrix(
+      out, n_query, n_components);
     NumericVector confidence_out(n_query);
     IntegerVector used_out(n_query);
     IntegerVector fallback_out(n_query);
@@ -7681,13 +8362,20 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
                                        double max_weight_input,
                                        double repulsion_strength,
                                        int seed,
-                                       int sampler_mode) {
+                                       int sampler_mode,
+                                       int start_epoch,
+                                       int total_epochs) {
   const int n = init.nrow();
   const int n_components = init.ncol();
   if (n < 1 || (n_components != 2 && n_components != 3)) {
     Rcpp::stop("Metal CSR embedding requires a 2D or 3D initialization.");
   }
   if (n_epochs < 1) Rcpp::stop("n_epochs must be positive");
+  if (total_epochs < 0) total_epochs = n_epochs;
+  if (start_epoch < 0 || total_epochs < n_epochs ||
+      start_epoch > total_epochs - n_epochs) {
+    Rcpp::stop("Invalid resumed Metal UMAP epoch range.");
+  }
   if (negative_sample_rate < 0) Rcpp::stop("negative_sample_rate must be non-negative");
   if (learning_rate <= 0.0) Rcpp::stop("learning_rate must be positive");
   if (min_dist < 0.0) Rcpp::stop("min_dist must be non-negative");
@@ -7696,7 +8384,11 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
   @autoreleasepool {
     MetalEmbeddingState& state = metal_embedding_state();
 
-    const bool clean_sampler = sampler_mode == 1;
+    if (sampler_mode < 0 || sampler_mode > 2) {
+      Rcpp::stop("Metal UMAP sampler mode must be 0, 1, or 2.");
+    }
+    const bool snapshot_sampler = sampler_mode == 2;
+    const bool clean_sampler = sampler_mode != 0;
     std::vector<std::int32_t> neighbors;
     std::vector<float> csr_weight_values = metal_copy_float_vector(csr_weights, "CSR weights");
     std::vector<float> weights;
@@ -7707,7 +8399,7 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
       csr_neighbors,
       csr_weight_values,
       n,
-      n_epochs,
+      total_epochs,
       max_weight_input,
       neighbors,
       weights,
@@ -7731,7 +8423,7 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
     EmbedParams params{
       static_cast<std::uint32_t>(n),
       static_cast<std::uint32_t>(k),
-      static_cast<std::uint32_t>(n_epochs),
+      static_cast<std::uint32_t>(total_epochs),
       static_cast<std::uint32_t>(negative_sample_rate),
       kObjectiveUmap,
       static_cast<std::uint32_t>(seed),
@@ -7752,6 +8444,9 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
     id<MTLBuffer> fixed_layout_buffer = [state.device newBufferWithBytes:fixed_layout.data()
                                                                   length:fixed_layout.size() * sizeof(std::int32_t)
                                                                  options:MTLResourceStorageModeShared];
+    id<MTLBuffer> delta_buffer = snapshot_sampler ?
+      [state.device newBufferWithLength:fixed_layout.size() * sizeof(std::int32_t)
+                                options:MTLResourceStorageModeShared] : nil;
     id<MTLBuffer> neighbors_buffer = [state.device newBufferWithBytes:neighbors.data()
                                                                length:neighbors.size() * sizeof(std::int32_t)
                                                               options:MTLResourceStorageModeShared];
@@ -7767,15 +8462,19 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
                                                             length:sizeof(EmbedParams)
                                                            options:MTLResourceStorageModeShared];
     if (fixed_layout_buffer == nil || neighbors_buffer == nil ||
-        weights_buffer == nil || schedule_buffer == nil || params_buffer == nil) {
+        weights_buffer == nil || schedule_buffer == nil || params_buffer == nil ||
+        (snapshot_sampler && delta_buffer == nil)) {
       Rcpp::stop("Failed to allocate Metal CSR embedding buffers.");
     }
 
-    const char* metal_optimizer = clean_sampler ? "clean_atomic_inplace" : "atomic_inplace";
+    const char* metal_optimizer = snapshot_sampler ?
+      "clean_snapshot_atomic_delta" :
+      (clean_sampler ? "clean_atomic_inplace" : "atomic_inplace");
     const MTLSize grid_size = MTLSizeMake(static_cast<NSUInteger>(n), 1, 1);
     const std::uint32_t epochs_per_command = kMetalEmbeddingEpochsPerCommand;
 
     id<MTLComputePipelineState> selected_pipeline =
+      snapshot_sampler ? state.embed_clean_snapshot_pipeline :
       n_components == 3 ?
         (clean_sampler ? state.embed_clean_atomic_3d_pipeline :
                          state.embed_atomic_3d_pipeline) :
@@ -7783,23 +8482,54 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
                          state.embed_atomic_inplace_pipeline);
     const NSUInteger embed_threads = bounded_threads(selected_pipeline);
     const MTLSize embed_threadgroup_size = MTLSizeMake(embed_threads, 1, 1);
-    for (std::uint32_t epoch0 = 0; epoch0 < static_cast<std::uint32_t>(n_epochs); epoch0 += epochs_per_command) {
+    const std::uint32_t final_epoch =
+      static_cast<std::uint32_t>(start_epoch + n_epochs);
+    for (std::uint32_t epoch0 = start_epoch;
+         epoch0 < final_epoch; epoch0 += epochs_per_command) {
       id<MTLCommandBuffer> command_buffer = [state.queue commandBuffer];
       const std::uint32_t epoch_end = std::min<std::uint32_t>(
-        static_cast<std::uint32_t>(n_epochs),
+        final_epoch,
         epoch0 + epochs_per_command
       );
       for (std::uint32_t epoch = epoch0; epoch < epoch_end; ++epoch) {
+        if (snapshot_sampler) {
+          id<MTLBlitCommandEncoder> clear = [command_buffer blitCommandEncoder];
+          [clear fillBuffer:delta_buffer
+                    range:NSMakeRange(0, fixed_layout.size() * sizeof(std::int32_t))
+                    value:0];
+          [clear endEncoding];
+        }
         id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
         [encoder setComputePipelineState:selected_pipeline];
         [encoder setBuffer:fixed_layout_buffer offset:0 atIndex:0];
-        [encoder setBuffer:neighbors_buffer offset:0 atIndex:1];
-        [encoder setBuffer:weights_buffer offset:0 atIndex:2];
-        [encoder setBuffer:schedule_buffer offset:0 atIndex:3];
+        [encoder setBuffer:snapshot_sampler ? delta_buffer : neighbors_buffer
+                    offset:0 atIndex:1];
+        [encoder setBuffer:snapshot_sampler ? neighbors_buffer : weights_buffer
+                    offset:0 atIndex:2];
+        [encoder setBuffer:snapshot_sampler ? weights_buffer : schedule_buffer
+                    offset:0 atIndex:3];
         [encoder setBuffer:params_buffer offset:0 atIndex:4];
         [encoder setBytes:&epoch length:sizeof(std::uint32_t) atIndex:5];
+        if (snapshot_sampler) {
+          const std::uint32_t components_u =
+            static_cast<std::uint32_t>(n_components);
+          [encoder setBytes:&components_u length:sizeof(std::uint32_t) atIndex:6];
+        }
         [encoder dispatchThreads:grid_size threadsPerThreadgroup:embed_threadgroup_size];
         [encoder endEncoding];
+        if (snapshot_sampler) {
+          const std::uint32_t n_values =
+            static_cast<std::uint32_t>(fixed_layout.size());
+          id<MTLComputeCommandEncoder> apply =
+            [command_buffer computeCommandEncoder];
+          [apply setComputePipelineState:state.embed_apply_delta_pipeline];
+          [apply setBuffer:fixed_layout_buffer offset:0 atIndex:0];
+          [apply setBuffer:delta_buffer offset:0 atIndex:1];
+          [apply setBytes:&n_values length:sizeof(std::uint32_t) atIndex:2];
+          dispatch_rows(apply, state.embed_apply_delta_pipeline,
+                        static_cast<int>(n_values));
+          [apply endEncoding];
+        }
       }
       [command_buffer commit];
       [command_buffer waitUntilCompleted];
@@ -7829,6 +8559,7 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
     out.attr("metal_csr_width") = k;
     out.attr("metal_truncated_edges") = truncated_edges;
     [fixed_layout_buffer release];
+    if (delta_buffer != nil) [delta_buffer release];
     [neighbors_buffer release];
     [weights_buffer release];
     if (epochs_buffer != nil) [epochs_buffer release];
@@ -7856,8 +8587,9 @@ NumericMatrix knn_umap_refine_rows_metal_impl(IntegerMatrix indices,
   if (row_ids.size() != indices.nrow()) {
     Rcpp::stop("row_ids length must match the number of KNN rows");
   }
-  if (init_embedding.ncol() != 2) {
-    Rcpp::stop("Metal UMAP landmark refinement currently requires a two-dimensional layout.");
+  const int n_components = init_embedding.ncol();
+  if (n_components != 2 && n_components != 3) {
+    Rcpp::stop("Metal UMAP landmark refinement requires a 2D or 3D layout.");
   }
   if (n_epochs < 1) Rcpp::stop("n_epochs must be positive");
   if (min_dist < 0.0) Rcpp::stop("min_dist must be non-negative");
@@ -7928,7 +8660,8 @@ NumericMatrix knn_umap_refine_rows_metal_impl(IntegerMatrix indices,
   @autoreleasepool {
     MetalEmbeddingState& state = metal_embedding_state();
 
-    std::vector<float> current = init_to_float_2d(init_embedding);
+    std::vector<float> current = metal_copy_float_matrix_row_major(
+      init_embedding, "initialization");
     std::vector<std::int32_t> fixed_layout(current.size());
     constexpr float fixed_scale = 65536.0f;
     for (std::size_t i = 0; i < current.size(); ++i) {
@@ -8009,7 +8742,10 @@ NumericMatrix knn_umap_refine_rows_metal_impl(IntegerMatrix indices,
       wait_for_command(command_buffer, "Metal UMAP landmark refinement preparation");
     }
 
-    const NSUInteger refine_threads = bounded_threads(state.refine_rows_pipeline);
+    id<MTLComputePipelineState> refine_pipeline =
+      n_components == 3 ? state.refine_rows_3d_pipeline :
+      state.refine_rows_pipeline;
+    const NSUInteger refine_threads = bounded_threads(refine_pipeline);
     const MTLSize refine_grid = MTLSizeMake(static_cast<NSUInteger>(m), 1, 1);
     const MTLSize refine_threadgroup = MTLSizeMake(refine_threads, 1, 1);
     const std::uint32_t epochs_per_command = kMetalEmbeddingEpochsPerCommand;
@@ -8021,7 +8757,7 @@ NumericMatrix knn_umap_refine_rows_metal_impl(IntegerMatrix indices,
       );
       for (std::uint32_t epoch = epoch0; epoch < epoch_end; ++epoch) {
         id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
-        [encoder setComputePipelineState:state.refine_rows_pipeline];
+        [encoder setComputePipelineState:refine_pipeline];
         [encoder setBuffer:layout_buffer offset:0 atIndex:0];
         [encoder setBuffer:row_buffer offset:0 atIndex:1];
         [encoder setBuffer:neighbor_buffer offset:0 atIndex:2];
@@ -8046,11 +8782,14 @@ NumericMatrix knn_umap_refine_rows_metal_impl(IntegerMatrix indices,
 
     std::memcpy(fixed_layout.data(), [layout_buffer contents], fixed_layout.size() * sizeof(std::int32_t));
     constexpr float inv_fixed_scale = 1.0f / 65536.0f;
-    NumericMatrix out(n, 2);
+    NumericMatrix out(n, n_components);
     for (int i = 0; i < n; ++i) {
-      const std::size_t base = static_cast<std::size_t>(i) * 2u;
-      out(i, 0) = static_cast<double>(fixed_layout[base]) * inv_fixed_scale;
-      out(i, 1) = static_cast<double>(fixed_layout[base + 1u]) * inv_fixed_scale;
+      const std::size_t base =
+        static_cast<std::size_t>(i) * n_components;
+      for (int dim = 0; dim < n_components; ++dim) {
+        out(i, dim) = static_cast<double>(
+          fixed_layout[base + dim]) * inv_fixed_scale;
+      }
     }
     out.attr("metal_refinement") = "landmark_rows_atomic_inplace";
     out.attr("metal_refinement_weight_prep") = "smooth_knn_dist_rows";
@@ -8227,12 +8966,14 @@ extern "C" void* fastembedr_massive_umap_metal_create(
     const float* init, int vertices, int dimensions, int epochs,
     int negatives, double learning_rate, double a, double b,
     double repulsion, int seed) {
-  if (dimensions != 2 || vertices < 2 || init == nullptr) {
-    Rcpp::stop("Full-graph Metal UMAP needs a 2D layout.");
+  if ((dimensions != 2 && dimensions != 3) ||
+      vertices < 2 || init == nullptr) {
+    Rcpp::stop("Full-graph Metal UMAP needs a 2D or 3D layout.");
   }
   @autoreleasepool {
     MetalEmbeddingState& state = metal_embedding_state();
-    const auto elements = static_cast<std::size_t>(vertices) * 2u;
+    const auto elements = static_cast<std::size_t>(vertices) *
+      static_cast<std::size_t>(dimensions);
     const auto bytes = elements * sizeof(std::int32_t);
     const auto working_set = state.device.recommendedMaxWorkingSetSize;
     if (bytes > state.device.maxBufferLength ||
@@ -8295,7 +9036,10 @@ extern "C" std::uint64_t fastembedr_massive_umap_metal_step(
     id<MTLCommandBuffer> command = [state.queue commandBuffer];
     id<MTLComputeCommandEncoder> encoder =
       [command computeCommandEncoder];
-    [encoder setComputePipelineState:state.massive_umap_batch_pipeline];
+    id<MTLComputePipelineState> pipeline = context->dimensions == 3 ?
+      state.massive_umap_batch_3d_pipeline :
+      state.massive_umap_batch_pipeline;
+    [encoder setComputePipelineState:pipeline];
     [encoder setBuffer:context->layout offset:0 atIndex:0];
     [encoder setBuffer:h offset:0 atIndex:1];
     [encoder setBuffer:t offset:0 atIndex:2];
@@ -8305,7 +9049,7 @@ extern "C" std::uint64_t fastembedr_massive_umap_metal_step(
       atIndex:5];
     [encoder setBytes:&epoch_u length:sizeof(epoch_u) atIndex:6];
     [encoder setBytes:&count_u length:sizeof(count_u) atIndex:7];
-    dispatch_rows(encoder, state.massive_umap_batch_pipeline, count);
+    dispatch_rows(encoder, pipeline, count);
     [encoder endEncoding];
     wait_for_command(command, "full-graph UMAP edge batch");
     const auto* values = static_cast<const std::uint32_t*>(
@@ -8337,4 +9081,214 @@ extern "C" void fastembedr_massive_umap_metal_destroy(void* raw) {
   auto* context = static_cast<MassiveMetalUmapContext*>(raw);
   [context->layout release];
   delete context;
+}
+
+namespace {
+
+class MetalTsneMappedFile {
+ public:
+  MetalTsneMappedFile(const std::string& path, std::size_t bytes,
+                      id<MTLDevice> device, bool metal_buffer) {
+    const auto page = static_cast<std::size_t>(getpagesize());
+    if (bytes > SIZE_MAX - (page - 1)) {
+      Rcpp::stop("Metal t-SNE graph mapping is too large.");
+    }
+    bytes_ = ((bytes + page - 1) / page) * page;
+    std::error_code error;
+    const auto actual = std::filesystem::file_size(path, error);
+    if (error || actual != bytes || bytes == 0 ||
+        (metal_buffer && bytes_ > device.maxBufferLength)) {
+      Rcpp::stop("Metal t-SNE graph file size or buffer limit is invalid.");
+    }
+    fd_ = open(path.c_str(), O_RDONLY);
+    if (fd_ < 0) Rcpp::stop("Cannot open Metal t-SNE graph file.");
+    data_ = mmap(nullptr, bytes_, PROT_READ, MAP_SHARED, fd_, 0);
+    if (data_ == MAP_FAILED) {
+      data_ = nullptr;
+      close(fd_);
+      fd_ = -1;
+      Rcpp::stop("Cannot map Metal t-SNE graph file read-only.");
+    }
+    if (metal_buffer) buffer_ = [device newBufferWithBytesNoCopy:data_
+      length:bytes_ options:MTLResourceStorageModeShared
+      deallocator:nil];
+    if (metal_buffer && buffer_ == nil) {
+      munmap(data_, bytes_);
+      close(fd_);
+      data_ = nullptr;
+      fd_ = -1;
+      Rcpp::stop("Metal rejected a read-only t-SNE graph mapping.");
+    }
+  }
+
+  ~MetalTsneMappedFile() {
+    if (buffer_ != nil) [buffer_ release];
+    if (data_ != nullptr) munmap(data_, bytes_);
+    if (fd_ >= 0) close(fd_);
+  }
+  MetalTsneMappedFile(const MetalTsneMappedFile&) = delete;
+  MetalTsneMappedFile& operator=(const MetalTsneMappedFile&) = delete;
+  id<MTLBuffer> buffer() const { return buffer_; }
+  const void* data() const { return data_; }
+
+ private:
+  int fd_ = -1;
+  void* data_ = nullptr;
+  std::size_t bytes_ = 0;
+  id<MTLBuffer> buffer_ = nil;
+};
+
+std::size_t metal_tsne_graph_edges(const std::string& path) {
+  std::error_code error;
+  const auto bytes = std::filesystem::file_size(path, error);
+  if (error || bytes < sizeof(std::uint32_t) ||
+      bytes % sizeof(std::uint32_t) != 0) {
+    Rcpp::stop("Metal t-SNE CSR indices have invalid size.");
+  }
+  return bytes / sizeof(std::uint32_t);
+}
+
+void metal_tsne_validate_mapped_graph(
+    const MetalTsneMappedFile& offsets,
+    const MetalTsneMappedFile& indices,
+    const MetalTsneMappedFile& weights,
+    int n, std::size_t edges) {
+  const auto* row_ptr = static_cast<const std::uint64_t*>(
+    offsets.data());
+  const auto* col = static_cast<const std::uint32_t*>(
+    indices.data());
+  const auto* prob = static_cast<const float*>(weights.data());
+  if (row_ptr[0] != 0 || row_ptr[n] != edges) {
+    Rcpp::stop("Metal t-SNE CSR offsets do not span the graph.");
+  }
+  for (int row = 0; row < n; ++row) {
+    if (row_ptr[row] > row_ptr[row + 1] ||
+        row_ptr[row + 1] > edges) {
+      Rcpp::stop("Metal t-SNE CSR offsets are not monotone.");
+    }
+  }
+  for (std::size_t edge = 0; edge < edges; ++edge) {
+    if (col[edge] < 1 || col[edge] > static_cast<std::uint32_t>(n) ||
+        !std::isfinite(prob[edge]) || prob[edge] < 0.0f ||
+        prob[edge] > 1.0f) {
+      Rcpp::stop("Metal t-SNE CSR target or affinity is invalid.");
+    }
+  }
+}
+
+std::vector<float> metal_tsne_read_initial(
+    const std::string& path, int n, int dims) {
+  const auto elements = static_cast<std::size_t>(n) * dims;
+  const auto bytes = elements * sizeof(float);
+  std::error_code error;
+  if (std::filesystem::file_size(path, error) != bytes || error) {
+    Rcpp::stop("Metal t-SNE initialization has invalid size.");
+  }
+  std::vector<float> initial(elements);
+  std::ifstream input(path, std::ios::binary);
+  input.read(reinterpret_cast<char*>(initial.data()),
+             static_cast<std::streamsize>(bytes));
+  if (!input || !std::all_of(initial.begin(), initial.end(),
+                            [](float x) { return std::isfinite(x); })) {
+    Rcpp::stop("Metal t-SNE initialization is invalid.");
+  }
+  double center[3] = {};
+  for (int row = 0; row < n; ++row) {
+    for (int axis = 0; axis < dims; ++axis) {
+      center[axis] += initial[static_cast<std::size_t>(row) * dims + axis];
+    }
+  }
+  for (int axis = 0; axis < dims; ++axis) center[axis] /= n;
+  for (int row = 0; row < n; ++row) {
+    for (int axis = 0; axis < dims; ++axis) {
+      initial[static_cast<std::size_t>(row) * dims + axis] -=
+        static_cast<float>(center[axis]);
+    }
+  }
+  return initial;
+}
+
+}  // namespace
+
+#include "tsne_fft_2d_file_metal.h"
+
+List massive_tsne_optimize_metal_impl(
+    const std::string& offsets_path,
+    const std::string& indices_path,
+    const std::string& weights_path,
+    const std::string& init_path,
+    const std::string& output_path,
+    int n, int dims, int early_iter, int normal_iter,
+    double early_exaggeration, double exaggeration,
+    double learning_rate, bool learning_rate_auto,
+    double initial_momentum, double final_momentum,
+    double min_gain, double max_step_norm,
+    int start_iter, const std::string& state_path,
+    int checkpoint_every, SEXP checkpoint_callback,
+    const std::string& graph_access, int edge_chunk_capacity) {
+  if (n < 2 || (dims != 2 && dims != 3) ||
+      early_iter < 0 || normal_iter < 0 ||
+      static_cast<double>(early_iter) + normal_iter < 1 ||
+      static_cast<double>(early_iter) + normal_iter > INT_MAX ||
+      !std::isfinite(early_exaggeration) ||
+      early_exaggeration <= 0.0 ||
+      !std::isfinite(exaggeration) || exaggeration <= 0.0 ||
+      (!learning_rate_auto &&
+       (!std::isfinite(learning_rate) || learning_rate <= 0.0)) ||
+      !std::isfinite(initial_momentum) || initial_momentum < 0.0 ||
+      !std::isfinite(final_momentum) || final_momentum < 0.0 ||
+      !std::isfinite(min_gain) || min_gain <= 0.0 ||
+      max_step_norm <= 0.0 || start_iter < 0 ||
+      start_iter > early_iter + normal_iter ||
+      checkpoint_every < 0 ||
+      (start_iter > 0 && (state_path.empty() ||
+        checkpoint_every == 0)) ||
+      (start_iter == 0 && !state_path.empty()) ||
+      (checkpoint_every > 0 && checkpoint_callback == R_NilValue) ||
+      (graph_access != "mmap" && graph_access != "stream") ||
+      edge_chunk_capacity < 1) {
+    Rcpp::stop("Invalid file-backed Metal t-SNE controls.");
+  }
+  if (std::filesystem::exists(output_path) ||
+      std::filesystem::exists(output_path + ".part")) {
+    Rcpp::stop("Metal t-SNE output already exists.");
+  }
+  @autoreleasepool {
+    MetalEmbeddingState& state = metal_embedding_state();
+    const auto edges = metal_tsne_graph_edges(indices_path);
+    const bool stream = graph_access == "stream";
+    MetalTsneMappedFile offsets(offsets_path,
+      (static_cast<std::size_t>(n) + 1) * sizeof(std::uint64_t),
+      state.device, !stream);
+    MetalTsneMappedFile indices(indices_path,
+      edges * sizeof(std::uint32_t), state.device, !stream);
+    MetalTsneMappedFile weights(weights_path,
+      edges * sizeof(float), state.device, !stream);
+    metal_tsne_validate_mapped_graph(offsets, indices, weights,
+                                     n, edges);
+    std::vector<float> initial = metal_tsne_read_initial(init_path,
+                                                         n, dims);
+    const MetalTsne3dStream tiles = {
+      static_cast<const std::uint64_t*>(offsets.data()),
+      static_cast<const std::uint32_t*>(indices.data()),
+      static_cast<const float*>(weights.data()),
+      static_cast<std::uint32_t>(edge_chunk_capacity)
+    };
+    if (dims == 2) return run_metal_tsne_2d_file(
+      state, initial, n, early_iter, normal_iter,
+      early_exaggeration, exaggeration, learning_rate,
+      learning_rate_auto, initial_momentum, final_momentum,
+      min_gain, max_step_norm, offsets.buffer(), indices.buffer(),
+      weights.buffer(), stream ? &tiles : nullptr,
+      output_path, start_iter, state_path, checkpoint_every,
+      checkpoint_callback);
+    return run_metal_tsne_3d(state, nullptr, initial, n,
+      early_iter, normal_iter, early_exaggeration, exaggeration,
+      learning_rate, learning_rate_auto, initial_momentum,
+      final_momentum, min_gain, max_step_norm, false,
+      offsets.buffer(), indices.buffer(), weights.buffer(),
+      output_path, start_iter, state_path,
+      checkpoint_every, checkpoint_callback,
+      stream ? &tiles : nullptr);
+  }
 }

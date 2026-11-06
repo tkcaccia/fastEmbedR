@@ -57,3 +57,4 @@ ref <- x[1:100, , drop = FALSE]
 qry <- x[101:150, , drop = FALSE]
 knn <- precompute_query_knn(ref, qry, k = 10, backend = "cpu")
 }
+\keyword{internal}

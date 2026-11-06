@@ -94,3 +94,4 @@ construct \code{graph}. Only the query coordinates are written; reference
 coordinates are not moved. Query batches are independent, so changing
 \code{chunk_rows} can change stochastic refinement results.
 }
+\keyword{internal}

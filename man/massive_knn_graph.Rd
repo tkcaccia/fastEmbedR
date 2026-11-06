@@ -28,3 +28,4 @@ every edge with bounded sequential reads. \code{access = "mmap"} applies to
 later bounded edge reads, not the full validation scan. Import does not
 compute neighbors, symmetrize edges, construct UMAP weights, or cluster.
 }
+\keyword{internal}

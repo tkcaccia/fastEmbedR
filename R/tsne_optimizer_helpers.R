@@ -216,6 +216,18 @@ run_opentsne_cuda_host_optimizer <- function(state, controls) {
     args <- controls$args
     lr <- controls$learning_rate
     ex <- controls$exaggeration
+    if (length(state$devices) > 1L) {
+        identity <- massive_cuda_device_uuids(state$devices)
+        out <- knn_tsne_opentsne_cuda_multigpu_cpp(
+            state$indices, state$distances, args$Y_init,
+            args$n_components, args$perplexity, state$early_iter,
+            state$normal_iter, ex$early, ex$normal, lr$value,
+            lr$auto, args$momentum, args$final_momentum,
+            controls$min_gain, controls$max_step_norm,
+            as.integer(state$n_threads), state$devices)
+        out$gpu_identity <- identity
+        return(out)
+    }
     optimizer <- if (is_float32_matrix(state$distances)) {
         knn_tsne_opentsne_cuda_float_cpp
     } else {
@@ -250,13 +262,14 @@ run_opentsne_cpu_optimizer <- function(state, controls, auto_params) {
 run_opentsne_native_optimizer <- function(
     optimizer_backend, indices, distances, gpu_knn, gpu_resident_knn,
     cuda_init_data, k, controls, early_iter, normal_iter,
-    negative_gradient_method, auto_params, n_threads, seed
+    negative_gradient_method, auto_params, n_threads, seed,
+    devices = NULL
 ) {
     state <- list(
         indices = indices, distances = distances, gpu_knn = gpu_knn,
         cuda_init_data = cuda_init_data, k = k, early_iter = early_iter,
         normal_iter = normal_iter, gradient_method = negative_gradient_method,
-        n_threads = n_threads, seed = seed
+        n_threads = n_threads, seed = seed, devices = devices
     )
     if (optimizer_backend == "metal") {
         return(run_opentsne_metal_optimizer(state, controls, auto_params))
@@ -336,7 +349,7 @@ opentsne_result_runtime <- function(
     out, controls, auto_params, return_float32, gpu_resident_knn,
     input_had_self, input_backend, optimizer_backend
 ) {
-    list(
+    c(list(
         fft_grid_size = out$fft_grid_size %||% NA_integer_,
         fft_elapsed_sec = out$fft_elapsed_sec %||% NA_real_,
         correction_elapsed_sec =
@@ -376,7 +389,16 @@ opentsne_result_runtime <- function(
         cuda_graph_capture = out$cuda_graph_capture %||% NA,
         cuda_graph_scope = out$cuda_graph_scope %||% NA_character_,
         provenance = opentsne_provenance(optimizer_backend)
-    )
+    ), opentsne_result_cuda_coordination(out))
+}
+
+opentsne_result_cuda_coordination <- function(out) {
+    if (is.null(out$gpu_devices)) return(list())
+    list(gpu_devices = out$gpu_devices,
+        gpu_identity = out$gpu_identity,
+        per_device_attraction_edges = out$per_device_attraction_edges,
+        input_storage = "resident_knn",
+        layout_storage = "resident")
 }
 
 finalize_opentsne_native_result <- function(

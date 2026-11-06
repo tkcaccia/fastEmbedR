@@ -21,7 +21,7 @@
 
 \item{labels}{Optional labels used to color plotted observations.}
 
-\item{pch}{Plotting symbol passed to \code{\link[graphics:plot]{graphics::plot()}}.}
+\item{pch}{Plotting symbol passed to \code{\link[graphics:plot.default]{graphics::plot()}}.}
 
 \item{bg}{Point background colors. When \code{NULL}, integer colors are derived
 from \code{labels}, or white is used when labels are absent.}
@@ -32,7 +32,7 @@ from \code{labels}, or white is used when labels are absent.}
 
 \item{main}{Plot title. \code{NULL} derives a title from the fitted method.}
 
-\item{...}{Additional arguments passed to \code{\link[graphics:plot]{graphics::plot()}}.}
+\item{...}{Additional arguments passed to \code{\link[graphics:plot.default]{graphics::plot()}}.}
 }
 \value{
 The input object, invisibly.

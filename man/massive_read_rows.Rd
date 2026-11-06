@@ -2,21 +2,24 @@
 % Please edit documentation in R/massive_matrix.R
 \name{massive_read_rows}
 \alias{massive_read_rows}
-\title{Read a bounded range from an experimental massive matrix}
+\title{Read bounded rows from a file-backed result}
 \usage{
 massive_read_rows(x, first = 1, n = 6L)
 }
 \arguments{
-\item{x}{A \code{fastEmbedR_massive_matrix}.}
+\item{x}{A \code{fastEmbedR_massive_matrix}, file-backed Leiden,
+Louvain, Walktrap, or landmark-clustering result.}
 
 \item{first}{First one-based row to read.}
 
-\item{n}{Number of consecutive rows; the returned R matrix is limited
-to 128 MB.}
+\item{n}{Number of consecutive rows. Matrix reads are limited to
+128 MB; cluster labels are capped at one million rows.}
 }
 \value{
-A double-precision R matrix for inspection.
+A double matrix for a matrix source; integer labels for
+full-graph clustering; membership and confidence for landmark
+clustering.
 }
 \description{
-Read a bounded range from an experimental massive matrix
+Read bounded rows from a file-backed result
 }

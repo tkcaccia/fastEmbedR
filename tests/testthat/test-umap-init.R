@@ -127,3 +127,53 @@ test_that("Metal can optimize a reusable CPU UMAP initialization", {
     expect_identical(cfg$optimizer_backend, "metal")
     expect_true(isTRUE(cfg$initialization_reuse_hit))
 })
+
+test_that("CUDA computes a native 3D UMAP initialization", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    set.seed(705)
+    x <- matrix(rnorm(48L * 6L), 48L, 6L)
+    knn <- test_exact_knn(x, k = 10L, backend = "cpu")
+    first <- umap_init(
+        knn, backend = "cuda", n_components = 3L, seed = 705L
+    )
+    second <- umap_init(
+        knn, backend = "cuda", n_components = 3L, seed = 705L
+    )
+    expect_identical(dim(first$layout), c(48L, 3L))
+    expect_true(all(is.finite(first$layout)))
+    expect_gt(stats::sd(first$layout[, 3L]), 0)
+    expect_equal(
+        as.numeric(first$layout), as.numeric(second$layout),
+        tolerance = 1e-6
+    )
+    expect_identical(first$parameters$init_backend, "cuda")
+
+    layout <- umap_knn(
+        first, backend = "cuda", n_components = 3L, seed = 705L
+    )
+    expect_identical(dim(layout), c(48L, 3L))
+    expect_true(all(is.finite(layout)))
+    expect_gt(stats::sd(layout[, 3L]), 0)
+    cfg <- attr(layout, "fastEmbedR_config")
+    expect_true(isTRUE(cfg$initialization_reuse_hit))
+    expect_identical(cfg$optimizer_backend, "cuda")
+    expect_identical(cfg$sgd_loop, "coo_float32_snapshot_delta")
+})
+
+test_that("Metal computes a native 3D UMAP initialization", {
+    skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
+    set.seed(706L)
+    x <- matrix(rnorm(48L * 6L), 48L, 6L)
+    knn <- test_exact_knn(x, k = 10L, backend = "cpu")
+    first <- umap_init(
+        knn, backend = "metal", n_components = 3L, seed = 706L
+    )
+    second <- umap_init(
+        knn, backend = "metal", n_components = 3L, seed = 706L
+    )
+    expect_identical(dim(first$layout), c(48L, 3L))
+    expect_true(all(is.finite(first$layout)))
+    expect_gt(stats::sd(first$layout[, 3L]), 0)
+    expect_equal(first$layout, second$layout, tolerance = 1e-6)
+    expect_identical(first$parameters$init_backend, "metal")
+})

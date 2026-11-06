@@ -3,6 +3,10 @@ test_that("file-backed Louvain moves agree with resident communities", {
     source <- tempfile()
     fuzzy_prefix <- tempfile()
     output <- tempfile(fileext = ".clusters.u32")
+    metal_output <- tempfile(fileext = ".clusters.u32")
+    metal_dir <- tempfile()
+    dir.create(metal_dir)
+    on.exit(unlink(metal_dir, recursive = TRUE), add = TRUE)
     repeated <- tempfile(fileext = ".clusters.u32")
     complete <- tempfile(fileext = ".clusters.u32")
     resident_complete <- tempfile(fileext = ".clusters.u32")
@@ -12,9 +16,9 @@ test_that("file-backed Louvain moves agree with resident communities", {
         c(".indices.u32", ".distances.f32", ".weights.f32")),
         paste0(fuzzy_prefix,
             c(".offsets.u64", ".indices.u32", ".weights.f32")),
-        output, repeated, complete, resident_complete, facade,
+        output, metal_output, repeated, complete, resident_complete, facade,
         leiden,
-        paste0(c(output, repeated), ".part"),
+        paste0(c(output, metal_output, repeated), ".part"),
         paste0(c(output, repeated), ".counts.part"),
         paste0(c(output, repeated), ".volumes.part"),
         paste0(complete, c(".part", ".level0.clusters.u32",
@@ -39,8 +43,9 @@ test_that("file-backed Louvain moves agree with resident communities", {
     directed <- massive_umap_memberships(knn)
     graph <- massive_umap_fuzzy_graph(directed, fuzzy_prefix,
         memory_limit = "64MB")
-    expect_error(massive_louvain_level(graph, output,
-        backend = "cuda"), "no fallback")
+    if (!isTRUE(graph_clustering_cuda_available_cpp()))
+        expect_error(massive_louvain_level(graph, output,
+            backend = "cuda"), "unavailable")
     expect_false(file.exists(output))
     fit <- massive_louvain_level(graph, output, seed = 4L,
         chunk_rows = 2L, memory_limit = "128MB")
@@ -59,6 +64,45 @@ test_that("file-backed Louvain moves agree with resident communities", {
     expect_identical(fit$n_communities, 2L)
     expect_identical(fit$scan_order,
         "cyclic_blocks_shuffled_rows")
+    if (isTRUE(graph_clustering_metal_available_cpp())) {
+        metal_fit <- massive_louvain_level(
+            graph, metal_output, seed = 4L,
+            chunk_rows = 2L, memory_limit = "128MB",
+            backend = "metal")
+        metal_labels <- massive_read_louvain_rows(
+            metal_fit, 1L, 8L)
+        expect_identical(metal_fit$backend, "metal")
+        expect_identical(metal_fit$scan_order,
+            "metal_streamed_blocks_color_phases")
+        expect_identical(outer(metal_labels, metal_labels, "=="),
+            outer(labels, labels, "=="))
+        expect_gte(metal_fit$modularity_final,
+            metal_fit$modularity_initial - 1e-7)
+        metal_full <- massive_louvain(graph,
+            file.path(metal_dir, "full.u32"), seed = 4L,
+            chunk_rows = 2L, memory_limit = "128MB",
+            backend = "metal")
+        expect_identical(metal_full$backend, "metal")
+        expect_identical(metal_full$optimization_backend, "metal")
+        expect_identical(metal_full$contraction_backend, "cpu")
+        expect_identical(metal_full$objective_audit_backend, "cpu")
+        expect_identical(outer(
+            massive_read_louvain_rows(metal_full, 1L, 8L),
+            massive_read_louvain_rows(metal_full, 1L, 8L), "=="),
+            outer(labels, labels, "=="))
+        metal_facade <- massive_cluster(graph,
+            method = "louvain", massive = "out_of_core_graph",
+            output = file.path(metal_dir, "facade.u32"),
+            backend = "metal", seed = 4L,
+            memory_limit = "128MB")
+        expect_identical(metal_facade$backend, "metal")
+        expect_identical(metal_facade$mode, "out_of_core_graph")
+        expect_identical(metal_facade$resources$chunk_rows, 65536L)
+    } else {
+        expect_error(massive_louvain_level(
+            graph, metal_output, backend = "metal"),
+            "unavailable")
+    }
     expect_gt(fit$modularity_final, fit$modularity_initial)
     expect_equal(fit$modularity_final,
         massive_graph_modularity(graph, output, 2L,
@@ -100,6 +144,14 @@ test_that("file-backed Louvain moves agree with resident communities", {
         outer(resident_leiden$membership,
             resident_leiden$membership, "=="))
     expect_identical(leiden_fit$backend, "cpu")
+    leiden_parallel <- massive_cluster(graph, method = "leiden",
+        massive = "out_of_core_graph",
+        output = file.path(metal_dir, "leiden-parallel.u32"),
+        chunk_rows = 2L, memory_limit = "128MB", seed = 4L,
+        n.cores = 2L, parallel.mode = "fit")
+    expect_identical(massive_read_leiden_rows(leiden_parallel, 1L, 8L),
+        massive_read_leiden_rows(leiden_fit, 1L, 8L))
+    expect_identical(leiden_parallel$cpu_workers_effective, 2L)
     seeded_dir <- tempfile()
     dir.create(seeded_dir)
     on.exit(unlink(seeded_dir, recursive = TRUE), add = TRUE)
@@ -121,6 +173,18 @@ test_that("file-backed Louvain moves agree with resident communities", {
     expect_gte(seeded_louvain$modularity_final, initial_score - 1e-7)
     expect_identical(seeded_louvain$initial_partition_path,
         initial_path)
+    if (isTRUE(graph_clustering_metal_available_cpp())) {
+        metal_seeded <- massive_louvain(graph,
+            file.path(seeded_dir, "metal-seeded.u32"),
+            initial = initial, backend = "metal", seed = 4L,
+            chunk_rows = 2L, memory_limit = "128MB")
+        expect_equal(metal_seeded$modularity_initial,
+            initial_score, tolerance = 1e-6)
+        expect_gte(metal_seeded$modularity_final,
+            initial_score - 1e-7)
+        expect_identical(metal_seeded$initial_partition_path,
+            initial_path)
+    }
     seeded_facade <- massive_cluster(graph, method = "louvain",
         massive = "out_of_core_graph",
         output = file.path(seeded_dir, "facade.u32"),
@@ -152,15 +216,27 @@ test_that("file-backed Louvain moves agree with resident communities", {
     expect_error(massive_leiden(graph,
         file.path(seeded_dir, "changed.u32"), initial = initial),
         "changed or has wrong size")
-    expect_error(massive_cluster(graph, method = "louvain",
-        massive = "out_of_core_graph", output = tempfile(),
-        backend = "cuda"), "no fallback")
+    if (!fastEmbedR:::graph_clustering_cuda_available_cpp())
+        expect_error(massive_cluster(graph, method = "louvain",
+            massive = "out_of_core_graph", output = tempfile(),
+            backend = "cuda"), "unavailable")
     expect_error(massive_cluster(graph, method = "louvain",
         massive = "out_of_core_graph", output = tempfile(), k = 3L),
         "do not apply")
+    parallel_path <- file.path(seeded_dir, "parallel.u32")
+    parallel <- massive_cluster(graph, method = "louvain",
+        massive = "out_of_core_graph", output = parallel_path,
+        n.cores = 2L, seed = 4L, chunk_rows = 2L,
+        memory_limit = "128MB", parallel.mode = "fit")
+    expect_identical(parallel$cpu_workers, 2L)
+    expect_identical(parallel$cpu_workers_effective, 2L)
+    expect_identical(parallel$parallel_stage,
+        "row_candidate_preparation")
+    expect_identical(massive_read_louvain_rows(parallel, 1L, 8L),
+        massive_read_louvain_rows(full, 1L, 8L))
     expect_error(massive_cluster(graph, method = "louvain",
         massive = "out_of_core_graph", output = tempfile(),
-        n.cores = 2L), "one coordinator")
+        n.cores = 2L), "parallel.mode")
     expect_false(file.exists(paste0(output, ".counts.part")))
     expect_false(file.exists(paste0(output, ".volumes.part")))
     expect_error(massive_louvain_level(graph, output),
@@ -219,8 +295,9 @@ test_that("shuffled file-backed moves do not collapse a ring", {
         method = "louvain", seed = 4L)
     expect_gte(full$modularity_final,
         resident$modularity - 0.05)
-    expect_error(massive_louvain(graph, tempfile(),
-        backend = "cuda"), "no fallback")
+    if (!fastEmbedR:::graph_clustering_cuda_available_cpp())
+        expect_error(massive_louvain(graph, tempfile(),
+            backend = "cuda"), "unavailable")
     expect_error(fastEmbedR:::massive_louvain_coarse_graph(
         list(n_vertices = 1e6, n_edges = 1e7), 128 * 1024^2),
         "No fallback")
@@ -271,6 +348,25 @@ test_that("file-backed Louvain resumes verified completed stages", {
         ".checkpoint.rds")))
     expect_identical(massive_read_louvain_rows(resumed_level,
         1L, 8L), massive_read_louvain_rows(baseline, 1L, 8L))
+    if (isTRUE(graph_clustering_metal_available_cpp())) {
+        metal_path <- file.path(directory, "metal-resume.u32")
+        metal_level <- massive_louvain_level(graph,
+            paste0(metal_path, ".level0.clusters.u32"),
+            seed = 4L, chunk_rows = 2L,
+            memory_limit = "256MB", backend = "metal")
+        metal_controls <- controls
+        metal_controls$backend <- "metal"
+        metal_signature <- fastEmbedR:::massive_louvain_signature(
+            graph, metal_path, metal_controls, 2L, "256MB")
+        fastEmbedR:::massive_louvain_save_stage(
+            metal_path, metal_signature, "level0", metal_level)
+        metal_resumed <- massive_louvain(graph, metal_path,
+            seed = 4L, chunk_rows = 2L,
+            memory_limit = "256MB", backend = "metal",
+            checkpoint = TRUE, resume = TRUE)
+        expect_identical(metal_resumed$backend, "metal")
+        expect_identical(metal_resumed$n_communities, 2L)
+    }
 
     after_contract <- file.path(directory, "after_contract.u32")
     prepared <- fastEmbedR:::massive_louvain_prepare(graph,

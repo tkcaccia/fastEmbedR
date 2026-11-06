@@ -147,13 +147,18 @@ routing is approximate; every returned neighbor and distance is based on
 full-dimensional exact reranking. This fused list-scan/top-k organization was
 informed by FAISS [8] and MLXPorts/Faiss-mlx. Their exact commits and
 permissive licenses are retained under `inst/LICENSES/`.
+The native result reports mean and minimum identity recall across the pilot
+rows and the largest approximate-to-exact kth-distance ratio. The requested
+recall target applies to the pilot mean; it does not certify every row.
 
 For reproducibility, the one-call API fixes only the requested KNN device class
 and a small/large data policy:
 
 - CPU one-call embeddings use native exact KNN below 5,000 observations and
-  faissR HNSW otherwise. Metal uses native exact KNN below 4,096 observations and
-  recall-tuned IVF-Flat for larger inputs.
+  faissR HNSW otherwise. Metal uses native exact KNN below 4,096 observations,
+  or up to 50,000 rows and 16,384 columns when the exhaustive work is
+  at most 125 billion row-pair feature operations. It uses recall-tuned
+  IVF-Flat otherwise.
 - CUDA one-call embeddings use cuVS brute force below 100,000 samples and
   recall-tuned cuVS IVF-Flat at or above 100,000 samples. Input is converted
   once to the row-major float32 layout expected by cuVS. IVF starts from a
@@ -331,10 +336,16 @@ separately from fuzzy UMAP.
 
 The Metal backend is implemented in Objective-C++/Metal and uses the validated
 atomic in-place edge-update kernel. It does not call Python, Torch, MLX, or
-`reticulate`. The Metal optimizer consumes the same prepared graph as the CPU
-path and supports two- and three-dimensional full embeddings. Three-dimensional
-landmark refinement remains unavailable and fails explicitly. Only the final
-layout and metadata return to R. The package-native
+`reticulate`. For resident 2D UMAP, one CPU thread performs the first half of
+the scheduled epochs and Metal performs the second half. Both stages use the
+same prepared graph and global epoch decay. The returned parameters record
+the CPU and Metal epoch counts and the pipeline name. This staged optimizer
+passed the fixed-graph Fashion-MNIST and MNIST development quality gates on
+Silvano's Mac; its larger-scale quality and speed are still under study.
+Resident 3D UMAP uses the Metal optimizer for all epochs. File-backed Metal
+UMAP has a separate route and has not inherited this quality qualification.
+Three-dimensional landmark refinement remains unavailable and fails
+explicitly. Only the final layout and metadata return to R. The package-native
 Metal FFT work used by t-SNE was informed by permissive Apple GPU FFT
 engineering references [12].
 
@@ -351,9 +362,9 @@ cuVS C API, its KNN buffers remain on the selected CUDA device, and graph or
 affinity construction consumes those pointers directly. The owning R object
 contains external pointers with a finalizer; copying to ordinary R matrices is
 an explicit diagnostic operation. No CPU or companion-package fallback is
-used for a CUDA request. Full CUDA UMAP supports two- and three-dimensional
-output; prepared graph reuse and landmark refinement remain limited to two
-dimensions.
+used for a CUDA request. Full CUDA UMAP, prepared graph reuse, and landmark
+refinement support two- and three-dimensional output. Prepared 3D CUDA
+optimization uses snapshot updates.
 
 ## Interpolation-Based t-SNE From KNN
 
@@ -380,11 +391,11 @@ published interpolation-based t-SNE workflows [3-4]:
    rate, update clipping, and recentering.
 6. Return the layout with parameters, timing, and backend metadata.
 
-The production matrix-input policy uses compact support and supplies
+The default matrix-input policy uses compact support and supplies
 `ceiling(perplexity)` non-self candidate neighbors to the bandwidth search.
-This is the package's defined sparse-affinity policy across CPU, Metal, and
-CUDA. `tsne_knn()` records the exact support width and
-support-to-perplexity ratio.
+`affinity_k` can request wider resident support, including a resident
+landmark reference fit, on CPU, Metal, or CUDA. `tsne_knn()` records the
+exact support width and support-to-perplexity ratio.
 
 The public `tsne()` function is now only a convenience wrapper around this
 KNN implementation. If a KNN object is supplied through `nn`, then
@@ -423,6 +434,15 @@ two cells, respectively.
 The 3D Metal path uses Metal Performance Shaders Graph for the convolution
 FFT and native Metal kernels for grid interpolation, short-range correction,
 and coordinate updates. The 3D CUDA path uses cuFFT and native CUDA kernels.
+The experimental 2D and 3D file-backed Metal routes can map complete
+read-only CSR files into Metal buffers or upload bounded graph chunks
+from SSD. Their layouts and optimizer states remain resident. The 3D
+route accumulates scaled 64-bit grid mass through supported 32-bit
+atomics, and nearby-pair corrections use signed integer row sums. The
+2D route uses scaled integer grid mass and moments for deterministic
+FFT scatter. FashionMNIST
+5,000 and 70,000-row mapped and streamed 2D fits gave identical layouts;
+larger-data performance is unqualified.
 
 For 2D FFT, CPU and Metal use a minimum 128-cell grid. A matched long-run
 diagnostic showed that the former 64-cell setting could pass first-step force

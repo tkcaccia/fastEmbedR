@@ -15,7 +15,12 @@ graph_cluster(
   seed = 1L,
   layout_merge = NULL,
   projection = NULL,
-  small_groups = NULL
+  small_groups = NULL,
+  n.cores = 1L,
+  devices = NULL,
+  parallel.mode = c("restarts", "fit"),
+  massive = NULL,
+  ...
 )
 }
 \arguments{
@@ -72,6 +77,28 @@ Distance ties use neighbor-column order. Groups are renumbered by size.
 Rows without a core neighbor receive label 0 and are reported separately;
 modularity and connectivity are then NA. \code{min_size = 1} preserves all
 communities. No original feature matrix is used by these options.}
+
+\item{n.cores}{CPU workers for Louvain/Leiden. With
+\code{parallel.mode = "restarts"}, requires scalar controls and
+\code{n_runs >= n.cores}. With \code{parallel.mode = "fit"}, workers
+propose moves for one shared partition; coarsening and Leiden
+refinement remain serial.}
+
+\item{devices}{Optional vector of two to four distinct CUDA device IDs
+for a coordinated resident fit. Requires \code{backend = "cuda"}.}
+
+\item{parallel.mode}{\code{"restarts"} preserves parallel independent
+runs; \code{"fit"} parallelizes local moves within one CPU fit.}
+
+\item{massive}{Optional data mode: \code{"auto"}, \code{"landmark"}, or
+\code{"out_of_core_graph"}. A file-backed graph selects full-graph mode;
+a matrix selects auto mode. Resident graphs reject it.}
+
+\item{...}{For a matrix with explicit \code{landmarks}, resident landmark
+controls such as \code{k} and \code{vote_k}. For file-backed data, storage
+controls such as \code{output}, an integer landmark count, \code{chunk_rows},
+\code{memory_limit}, \code{checkpoint}, \code{resume}, and \code{gpu_storage}.
+These are rejected for a resident graph.}
 }
 \value{
 A \code{fastEmbedR_graph_cluster} containing one-based \code{membership},
@@ -85,9 +112,14 @@ and weighted edge count in \code{parameters}. \code{small_groups} adds
 graph when reweighting is enabled.
 Enhanced workflows record \code{final_resolution}, \code{final_seed} and
 \code{processing_order}; consensus metadata records the exact ensemble size.
+CUDA returns \code{repeatability = "not_bitwise_deterministic"}: parallel
+community updates can yield different partitions for the same seed.
+Matrix input with explicit \code{landmarks} returns a
+\code{fastEmbedR_landmark_clusters} result with all-row labels.
 }
 \description{
-\code{graph_cluster()} clusters a compact \code{fastEmbedR_graph} with a native
+\code{graph_cluster()} clusters a matrix, compact graph, or file-backed input
+with a native
 multilevel Louvain implementation, a Leiden local-move/refine/aggregate
 implementation, or the Pons-Latapy Walktrap algorithm. Louvain and Leiden
 have CPU, CUDA, and Metal implementations. Walktrap is CPU-only. No Python,
@@ -101,10 +133,18 @@ squared coassignment frequencies. Optional projection weighting follows.
 Final clustering uses \code{resolution[1]} and \code{seed[1]}; no additional
 resolution or seed is inferred. \code{n_iterations} applies to every partition.
 \code{small_groups}, when supplied, is applied last.
+With \code{devices}, CUDA partitions graph rows over two to four GPUs.
+Every device updates the same partition, with labels synchronized
+through host RAM after each color phase. Separate \code{n_runs} remain
+independent repeats. Consensus and graph reweighting apply to
+coordinated partitions and are recorded as host stages.
+This experimental route requires device qualification.
 
-Vector controls, \code{projection}, and \code{small_groups} currently require CPU
-Louvain or Leiden and cannot be combined with \code{layout_merge}.
-Accelerator requests fail explicitly. These procedures do not request
+CUDA and Metal run Louvain/Leiden partitions on their devices; consensus
+edge agreement, exact projection weighting, and small-group assignment
+run on the host and are recorded as such. Enhanced options cannot be
+combined with \code{layout_merge}. Unsupported requests fail explicitly.
+These procedures do not request
 a fixed group count. Scalar controls with \code{projection = NULL} and no
 small-group postprocessing retain the ordinary clustering workflow.
 }

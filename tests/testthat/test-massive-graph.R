@@ -168,6 +168,7 @@ test_that("KNN audits report distance-equivalent ties separately", {
         reference_chunk_rows = 5L), workers = 1L)
     audited <- fastEmbedR:::massive_full_knn_audit(
         graph, source, 5L, setup)
+    expect_identical(audited$audit_reference_chunk_rows, 5L)
     expect_lt(audited$observed_recall, 1)
     expect_equal(audited$distance_equivalent_recall, 1)
     expect_equal(audited$distance_equivalent_row_recall,
@@ -1868,7 +1869,7 @@ test_that("disk-backed modularity matches the resident native score", {
     expect_error(massive_graph_modularity(fuzzy, descriptor),
         "vertex counts differ")
     expect_error(massive_graph_modularity(fuzzy, label_path, 2L,
-        backend = "cuda"), "no backend fallback")
+        backend = "cuda"), "requires CPU; no fallback")
     expect_error(massive_graph_modularity(knn, label_path, 2L),
         "symmetric massive UMAP")
     expect_error(massive_graph_modularity(fuzzy, label_path, 2L,
@@ -2082,13 +2083,35 @@ test_that("full-graph t-SNE streams affinities without changing FFT steps", {
             checkpoint = TRUE)
         expect_equal(massive_read_rows(public, 1L, 16L),
             reference$Y, tolerance = 1e-4)
+        implicit_path <- tempfile(fileext = ".f32")
+        layouts <- c(layouts, implicit_path)
+        implicit <- tsne(graph, perplexity = 3,
+            n_components = dims, Y_init = start,
+            early_exaggeration_iter = 2L, n_iter = 3L,
+            learning_rate = 1, max_step_norm = Inf,
+            backend = "cpu", output = implicit_path,
+            memory_limit = "1GB")
+        expect_equal(massive_read_rows(implicit, 1L, 16L),
+            massive_read_rows(public, 1L, 16L), tolerance = 0)
         expect_false(file.exists(paste0(public_path,
             ".checkpoint.rds")))
-        if (dims == 3L ||
-            !fastEmbedR:::embedding_cuda_available_cpp())
+        if (!fastEmbedR:::embedding_cuda_available_cpp()) {
             expect_error(massive_tsne_optimize(graph, start,
                 tempfile(fileext = ".f32"), backend = "cuda"),
                 "no backend fallback")
+        } else {
+            cuda_path <- tempfile(fileext = ".f32")
+            layouts <- c(layouts, cuda_path)
+            cuda <- massive_tsne_optimize(graph, start, cuda_path,
+                early_exaggeration_iter = 2L, n_iter = 3L,
+                learning_rate = 1, memory_limit = "1GB",
+                backend = "cuda")
+            expect_identical(cuda$backend,
+                "native_cuda_fft_graph_stream")
+            expect_equal(massive_read_rows(cuda, 1L, 16L),
+                massive_read_rows(actual, 1L, 16L),
+                tolerance = 1e-3)
+        }
         expect_error(massive_tsne_optimize(graph, start,
             tempfile(fileext = ".f32"), memory_limit = "64MB"),
             "memory_limit")
@@ -2292,6 +2315,66 @@ test_that("two GPUs coordinate one odd-row t-SNE fit and resume", {
         c(settings, list(output = resume_path,
             devices = c(0L, 1L), checkpoint = TRUE,
             resume = TRUE, checkpoint_every = 2L)))
+    expect_equal(massive_read_rows(resumed, 1L, n),
+        massive_read_rows(two, 1L, n), tolerance = 1e-3)
+})
+
+test_that("two CUDA devices coordinate 3D t-SNE and checkpoint state", {
+    if (!isTRUE(fastEmbedR:::embedding_cuda_available_cpp()) ||
+        fastEmbedR:::massive_cuda_device_count_cpp() < 2L ||
+        !isTRUE(fastEmbedR:::massive_nccl_available_cpp()))
+        skip("Two CUDA devices with NCCL are unavailable")
+    n <- 17L
+    source <- tempfile()
+    prefix <- tempfile()
+    init_path <- write_massive_matrix_fixture(
+        matrix(seq_len(n * 3L) / 10000, nrow = n))
+    outputs <- vapply(1:3, function(i) tempfile(fileext = ".f32"), "")
+    on.exit(unlink(c(Sys.glob(paste0(source, ".*")),
+        Sys.glob(paste0(prefix, ".*")), init_path, outputs,
+        paste0(outputs[3L], ".checkpoint.rds"),
+        Sys.glob(paste0(outputs[3L], ".iter_*.state.f32*")))))
+    ids <- outer(seq_len(n), 1:3,
+        function(i, j) (i + j - 1L) %% n + 1L)
+    distances <- matrix(rep(c(0.2, 0.5, 0.9), n),
+        nrow = n, byrow = TRUE)
+    write_massive_graph_fixture(source, ids, distances)
+    graph <- massive_tsne_affinities(
+        massive_knn_graph(source, n, 3L), 3, prefix,
+        memory_limit = "64MB")
+    init <- massive_matrix(init_path, n, 3L)
+    args <- list(graph, init, early_exaggeration_iter = 2L,
+        n_iter = 3L, learning_rate = 1,
+        memory_limit = "1GB", backend = "cuda")
+    fit <- function(path, devices, ...) do.call(
+        massive_tsne_optimize, c(args,
+            list(output = path, devices = devices), list(...)))
+    one <- fit(outputs[1L], 0L)
+    two <- fit(outputs[2L], c(0L, 1L))
+    expect_identical(two$backend,
+        "native_cuda_fft_graph_coordinated_nccl")
+    expect_identical(two$gpu_devices, c(0L, 1L))
+    expect_true(all(is.finite(massive_read_rows(two, 1L, n))))
+    expect_equal(massive_read_rows(two, 1L, n),
+        massive_read_rows(one, 1L, n), tolerance = 1e-3)
+    plan <- fastEmbedR:::massive_tsne_optimize_plan(graph, init,
+        outputs[3L], 2L, 3L, 12, 1, 1, 0.8, 0.8, 0.01,
+        Inf, "1GB", "cuda", 1L, c(0L, 1L))
+    saved <- fastEmbedR:::massive_tsne_checkpoint_prepare(plan,
+        TRUE, FALSE, 2L)
+    interrupt <- function(iteration, snapshot, elapsed) {
+        saved$progress(iteration, snapshot, elapsed)
+        stop("forced 3D interruption")
+    }
+    expect_error(fastEmbedR:::massive_tsne_optimize_cuda_cpp(
+        graph$offsets_path, graph$indices_path,
+        graph$weights_path, graph$access, init$path,
+        plan$output, n, 3L, 2L, 3L, 12, 1, 1,
+        FALSE, 0.8, 0.8, 0.01, Inf, 0L, "", 2L,
+        interrupt, plan$edge_capacity, c(0L, 1L)),
+        "forced 3D interruption")
+    resumed <- fit(outputs[3L], c(0L, 1L), checkpoint = TRUE,
+        resume = TRUE, checkpoint_every = 2L)
     expect_equal(massive_read_rows(resumed, 1L, n),
         massive_read_rows(two, 1L, n), tolerance = 1e-3)
 })
@@ -2886,11 +2969,13 @@ test_that("public UMAP runs the prepared full graph without fallback", {
     output <- tempfile(fileext = ".f32")
     mapped_path <- tempfile(fileext = ".f32")
     reference_path <- tempfile(fileext = ".f32")
+    synced_path <- tempfile(fileext = ".f32")
+    synced_reference <- tempfile(fileext = ".f32")
     on.exit(unlink(c(paste0(source, c(".indices.u32",
         ".distances.f32", ".weights.f32")),
         paste0(prefix, c(".offsets.u64", ".indices.u32",
             ".weights.f32")), init_path, output, mapped_path,
-        reference_path,
+        reference_path, synced_path, synced_reference,
         paste0(prefix, ".work")), recursive = TRUE))
     indices <- outer(1:12, 1:4,
         function(i, j) (i + j - 1L) %% 12L + 1L)
@@ -2915,6 +3000,24 @@ test_that("public UMAP runs the prepared full graph without fallback", {
     expect_false(file.exists(paste0(output, ".checkpoint.rds")))
     expect_equal(massive_read_rows(public, 1L, 12L),
         massive_read_rows(reference, 1L, 12L), tolerance = 0)
+    implicit_path <- tempfile(fileext = ".f32")
+    on.exit(unlink(implicit_path), add = TRUE)
+    implicit <- umap(graph, n_components = 3L, init = init,
+        output = implicit_path, memory_limit = "256MB")
+    expect_equal(massive_read_rows(implicit, 1L, 12L),
+        massive_read_rows(public, 1L, 12L), tolerance = 0)
+    synced <- umap(graph, n_components = 3L,
+        massive = "out_of_core_graph", init = init,
+        output = synced_path, memory_limit = "256MB",
+        n.cores = 2L, cpu_update = "synchronized")
+    expected <- massive_umap_optimize(graph, init,
+        synced_reference, seed = 4L, memory_limit = "256MB",
+        n.cores = 2L, cpu_update = "synchronized")
+    expect_identical(synced$optimizer, "synchronized_cpu_fixed_point")
+    expect_identical(synced$parameters$cpu_update, "synchronized")
+    expect_identical(synced$resources$effective_cpu_workers, 2L)
+    expect_identical(massive_read_rows(synced, 1L, 12L),
+        massive_read_rows(expected, 1L, 12L))
     if (.Platform$OS.type != "windows") {
         mapped <- umap(graph, n_components = 3L,
             massive = "out_of_core_graph", init = init,
@@ -2933,12 +3036,19 @@ test_that("public UMAP runs the prepared full graph without fallback", {
     expect_error(umap(graph, n_components = 3L, n.cores = 2L,
         massive = "out_of_core_graph", init = init,
         output = tempfile(fileext = ".f32")), "one worker")
+    expect_error(umap(graph, cpu_update = "synchronized"),
+        "Full-graph UMAP requires")
+    expect_error(umap(graph, massive = "out_of_core_graph",
+        cpu_update = NULL), "cpu_update")
+    expect_error(umap(graph, massive = "out_of_core_graph",
+        cpu_update = "invalid"), "cpu_update")
     expect_error(umap(graph, n_components = 3L, n_neighbors = 4L,
         massive = "out_of_core_graph", init = init,
         output = tempfile(fileext = ".f32")), "prepared fuzzy graph")
-    expect_error(umap(graph, init = init), "full-graph UMAP")
+    expect_error(umap(graph, init = init),
+        "Full-graph UMAP requires")
     expect_error(umap(graph, layout_storage = "mmap"),
-        "full-graph UMAP")
+        "Full-graph UMAP requires")
     expect_error(umap(graph, massive = "landmark",
         layout_storage = "mmap"), "full-graph UMAP")
     cuda_error <- if (fastEmbedR:::embedding_cuda_available_cpp()) {

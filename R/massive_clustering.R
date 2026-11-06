@@ -1,18 +1,42 @@
-massive_cluster_cuda_resources <- function(reference_graph) {
+massive_cluster_cuda_resources <- function(reference_graph,
+        devices = NULL) {
     info <- massive_cuda_memory_cpp()
+    free <- if (length(devices) > 1L)
+        massive_auto_cuda_free(devices,
+            reference_graph$n_vertices) else info$free_bytes
     required <- 128 * 1024^2 +
         128 * length(reference_graph$weight) +
         256 * reference_graph$n_vertices
-    if (required > 0.65 * info$free_bytes) {
+    if (required > 0.65 * free) {
         stop("CUDA landmark graph exceeds the free-VRAM budget.",
             call. = FALSE)
     }
     list(peak_vram_bytes = required,
-        free_vram_bytes = info$free_bytes, gpu_device = info$device)
+        free_vram_bytes = free, gpu_device = info$device,
+        gpu_devices = devices)
+}
+
+massive_cluster_fit_workers <- function(method, backend, workers, n_runs,
+        parallel.mode = "restarts") {
+    if (backend != "cpu" || method == "walktrap") return(1L)
+    if (identical(parallel.mode, "fit")) return(workers)
+    min(workers, graph_positive_integer(n_runs, "n_runs"))
+}
+
+massive_cluster_graph_bytes <- function(reference_graph, fit_workers,
+        parallel.mode) {
+    copies <- if (parallel.mode == "fit") 1L else fit_workers
+    bytes <- copies * (128 * length(reference_graph$weight) +
+        256 * reference_graph$n_vertices)
+    if (parallel.mode == "fit")
+        bytes <- bytes + 24 * reference_graph$n_vertices
+    bytes
 }
 
 massive_cluster_resources <- function(graph, reference_graph, workers,
-        chunk_rows, memory_limit, backend = "cpu", method = "leiden") {
+        chunk_rows, memory_limit, backend = "cpu", method = "leiden",
+        n_runs = 1L, devices = NULL,
+        parallel.mode = "restarts") {
     limit <- massive_memory_bytes(memory_limit)
     if (method == "walktrap" &&
         reference_graph$n_vertices > 4000L) {
@@ -20,14 +44,15 @@ massive_cluster_resources <- function(graph, reference_graph, workers,
             call. = FALSE)
     }
     # Include R edges and native sorting, adjacency, and contraction buffers.
-    graph_bytes <- 128 * length(reference_graph$weight) +
-        256 * reference_graph$n_vertices
+    fit_workers <- massive_cluster_fit_workers(method, backend,
+        workers, n_runs, parallel.mode)
+    graph_bytes <- massive_cluster_graph_bytes(reference_graph,
+        fit_workers, parallel.mode)
     vote_worker_bytes <- max(8 * min(graph$n_reference, 65536),
         64 * graph$ncol) * workers
     fixed <- 64 * 1024^2 + graph_bytes + vote_worker_bytes
-    if (method == "walktrap") {
+    if (method == "walktrap")
         fixed <- fixed + 16 * reference_graph$n_vertices^2
-    }
     per_row <- 20 * graph$ncol + 24
     maximum <- floor((0.7 * limit - fixed) / per_row)
     maximum <- min(maximum, floor(128e6 / (20 * graph$ncol)))
@@ -45,11 +70,12 @@ massive_cluster_resources <- function(graph, reference_graph, workers,
     result <- list(chunk_rows = rows,
         peak_ram_bytes = fixed + rows * per_row,
         reference_graph_estimate_bytes = graph_bytes,
+        fitting_cpu_workers_budgeted = fit_workers * (backend == "cpu"),
         vote_worker_bytes = vote_worker_bytes,
         memory_limit_bytes = limit, output_bytes = graph$nrow * 8)
     if (backend == "cuda") {
         result <- c(result, massive_cluster_cuda_resources(
-            reference_graph))
+            reference_graph, devices))
     }
     if (backend == "metal") result <- c(result, list(
         peak_vram_bytes = NA_real_,
@@ -153,7 +179,12 @@ massive_cluster_fit <- function(graph, controls, checkpoint, resume) {
         resolution = controls$resolution,
         n_iterations = controls$n_iterations,
         n_runs = controls$n_runs, steps = controls$steps,
-        seed = controls$seed)
+        seed = controls$seed, n.cores = massive_cluster_fit_workers(
+            controls$method, controls$backend, controls$workers,
+            controls$n_runs, controls$parallel.mode),
+        devices = if (length(controls$devices) > 1L)
+            controls$devices else NULL,
+        parallel.mode = controls$parallel.mode)
 }
 
 massive_cluster_result <- function(knn, clustered, paths, controls,
@@ -169,9 +200,12 @@ massive_cluster_result <- function(knn, clustered, paths, controls,
         method = controls$method, backend = controls$backend,
         assignment_backend = "cpu",
         graph_backend = knn$backend,
+        gpu_devices = controls$devices,
         n.cores = controls$workers,
+        parallel.mode = controls$parallel.mode,
         assignment_workers = controls$workers,
-        fitting_cpu_workers = if (controls$backend == "cpu") 1L else 0L,
+        fitting_cpu_workers = if (controls$backend == "cpu")
+            clustered$effective_cpu_workers %||% 1L else 0L,
         input_storage = "file_backed_knn",
         reference_rows_preserved = !is.null(reference_rows),
         resources = resources, checkpoint = checkpoint,
@@ -320,6 +354,61 @@ massive_cluster_backend <- function(method, backend) {
     backend
 }
 
+massive_cluster_landmark_validate <- function(reference_graph, knn,
+        method, backend, parallel.mode, checkpoint, resume,
+        checkpoint_every) {
+    massive_checkpoint_validate_controls(checkpoint, resume)
+    checkpoint_every <- integer_scalar(checkpoint_every)
+    if (is.na(checkpoint_every) || checkpoint_every < 1L) stop(
+        "`checkpoint_every` must be a positive integer.",
+        call. = FALSE)
+    if (!inherits(knn, "fastEmbedR_massive_knn") ||
+        !knn$backend %in% c("cpu", "cuda", "metal")) stop(
+        "Clustering requires a saved CPU, CUDA, or Metal KNN.",
+        call. = FALSE)
+    reference_graph <- validate_fastembedr_graph(reference_graph)
+    if (reference_graph$n_vertices != knn$n_reference) stop(
+        "Landmark graph and KNN reference sizes differ.",
+        call. = FALSE)
+    method <- match.arg(method, c("leiden", "louvain", "walktrap"))
+    backend <- massive_cluster_backend(method, backend)
+    parallel.mode <- match.arg(parallel.mode, c("restarts", "fit"))
+    if (parallel.mode == "fit" &&
+        (backend != "cpu" || method == "walktrap")) stop(
+        "`parallel.mode = \"fit\"` requires CPU Louvain or Leiden.",
+        call. = FALSE)
+    list(graph = reference_graph, method = method, backend = backend,
+        parallel.mode = parallel.mode,
+        checkpoint_every = checkpoint_every)
+}
+
+massive_cluster_landmark_controls <- function(method, backend, workers,
+        resources, resolution, n_iterations, n_runs, steps, seed,
+        devices, parallel.mode) {
+    list(method = method, backend = backend, workers = workers,
+        chunk_rows = resources$chunk_rows, resolution = resolution,
+        n_iterations = n_iterations, n_runs = n_runs,
+        steps = steps, seed = seed, devices = devices,
+        parallel.mode = parallel.mode,
+        gpu_identity = if (length(devices) > 1L)
+            massive_cuda_device_uuids(devices) else NULL)
+}
+
+massive_cluster_landmark_devices <- function(devices, backend, rows) {
+    selected <- massive_validate_devices(devices, backend, rows)
+    if (length(selected) > 4L) stop(
+        "Landmark clustering supports at most four CUDA devices.",
+        call. = FALSE)
+    selected
+}
+
+massive_cluster_landmark_workers <- function(n.cores, parallel.mode) {
+    workers <- normalize_nn_threads(n.cores)
+    if (parallel.mode == "fit" && workers > 32L) stop(
+        "CPU fit mode supports at most 32 workers.", call. = FALSE)
+    workers
+}
+
 #' EXPERIMENTAL file-backed landmark graph clustering
 #'
 #' Runs the existing native Leiden, Louvain, or Walktrap implementation on
@@ -337,7 +426,13 @@ massive_cluster_backend <- function(method, backend) {
 #' @param backend `"cpu"` for all methods, or `"cuda"` or `"metal"` for
 #'   landmark-graph Louvain and Leiden. Streamed community voting remains
 #'   on CPU. GPU requests fail explicitly if unavailable.
-#' @param n.cores CPU workers used for weighted community voting.
+#' @param devices Optional one to four distinct CUDA devices. Two to four
+#'   devices coordinate one resident landmark-graph fit; label voting remains
+#'   CPU-streamed.
+#' @param n.cores CPU workers for community voting and, when `n_runs > 1`,
+#'   independent Leiden/Louvain fitting restarts.
+#' @param parallel.mode `"restarts"` uses workers for independent CPU fits;
+#'   `"fit"` uses them for one shared CPU Louvain/Leiden fit.
 #' @param chunk_rows Maximum query rows per batch.
 #' @param memory_limit Conservative RAM budget for voting buffers.
 #' @param resolution Modularity resolution for Leiden or Louvain.
@@ -350,7 +445,7 @@ massive_cluster_backend <- function(method, backend) {
 #' @param resume Continue from matching partial outputs and checkpoint.
 #' @return A lightweight `fastEmbedR_massive_clusters` descriptor with
 #'   one-based `uint32` labels, float32 confidence, and landmark metadata.
-#' @export
+#' @keywords internal
 massive_cluster_landmarks <- function(
     reference_graph, knn, output,
     method = c("leiden", "louvain", "walktrap"),
@@ -358,33 +453,35 @@ massive_cluster_landmarks <- function(
     chunk_rows = NULL, memory_limit = "8GB",
     resolution = 1, n_iterations = 10L, n_runs = 1L,
     steps = 4L, seed = 1L, checkpoint = FALSE,
-    checkpoint_every = 100L, resume = FALSE
+    checkpoint_every = 100L, resume = FALSE,
+    devices = NULL,
+    parallel.mode = c("restarts", "fit")
 ) {
-    massive_checkpoint_validate_controls(checkpoint, resume)
-    checkpoint_every <- integer_scalar(checkpoint_every)
-    if (is.na(checkpoint_every) || checkpoint_every < 1L) {
-        stop("`checkpoint_every` must be a positive integer.",
-            call. = FALSE)
+    checked <- massive_cluster_landmark_validate(reference_graph, knn,
+        method, backend, parallel.mode, checkpoint, resume,
+        checkpoint_every)
+    reference_graph <- checked$graph
+    method <- checked$method
+    backend <- checked$backend
+    parallel.mode <- checked$parallel.mode
+    checkpoint_every <- checked$checkpoint_every
+    devices <- massive_cluster_landmark_devices(devices, backend,
+        reference_graph$n_vertices)
+    if (length(devices) == 1L) {
+        original <- massive_cuda_memory_cpp()$device
+        on.exit(massive_cuda_select_cpp(original))
+        massive_cuda_select_cpp(devices[[1L]])
     }
-    if (!inherits(knn, "fastEmbedR_massive_knn") ||
-        !knn$backend %in% c("cpu", "cuda", "metal")) stop(
-        "Clustering requires a saved CPU, CUDA, or Metal KNN.",
-        call. = FALSE)
-    reference_graph <- validate_fastembedr_graph(reference_graph)
-    if (reference_graph$n_vertices != knn$n_reference)
-        stop("Landmark graph and KNN reference sizes differ.",
-            call. = FALSE)
-    method <- match.arg(method)
-    backend <- massive_cluster_backend(method, backend)
-    workers <- normalize_nn_threads(n.cores)
+    workers <- massive_cluster_landmark_workers(n.cores,
+        parallel.mode)
     reference_rows <- massive_reference_indices(selection, knn)
     resources <- massive_cluster_resources(knn, reference_graph,
-        workers, chunk_rows, memory_limit, backend, method)
+        workers, chunk_rows, memory_limit, backend, method, n_runs,
+        devices, parallel.mode)
     paths <- massive_cluster_paths(output, resources$output_bytes, resume)
-    controls <- list(method = method, backend = backend, workers = workers,
-        chunk_rows = resources$chunk_rows, resolution = resolution,
-        n_iterations = n_iterations, n_runs = n_runs,
-        steps = steps, seed = seed)
+    controls <- massive_cluster_landmark_controls(method, backend,
+        workers, resources, resolution, n_iterations, n_runs,
+        steps, seed, devices, parallel.mode)
     saved <- if (checkpoint) massive_cluster_checkpoint(
         reference_graph, knn, reference_rows, paths, controls,
         resume) else NULL
@@ -406,7 +503,7 @@ massive_cluster_landmarks <- function(
 #' @param first First one-based query row.
 #' @param n Number of consecutive rows to read.
 #' @return A list with `membership` and `confidence` vectors.
-#' @export
+#' @keywords internal
 massive_read_cluster_rows <- function(x, first = 1, n = 6L) {
     if (!inherits(x, "fastEmbedR_massive_clusters")) {
         stop("`x` must be a massive_cluster_landmarks() result.",

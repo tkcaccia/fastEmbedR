@@ -33,9 +33,18 @@ massive_louvain_output <- function(output, bytes) {
     path
 }
 
-massive_louvain_graph_check <- function(graph, backend) {
-    if (!identical(backend, "cpu")) stop(
-        "EXPERIMENTAL file-backed Louvain requires CPU; no fallback.",
+massive_louvain_graph_check <- function(graph, backend,
+        allow_metal_level = FALSE, allow_cuda_level = FALSE) {
+    metal <- identical(backend, "metal") && allow_metal_level
+    cuda <- identical(backend, "cuda") && allow_cuda_level
+    if (!identical(backend, "cpu") && !metal && !cuda) stop(
+        "EXPERIMENTAL full-graph route requires CPU; no fallback.",
+        call. = FALSE)
+    if (metal && !isTRUE(graph_clustering_metal_available_cpp())) stop(
+        "Native Metal graph clustering is unavailable.",
+        call. = FALSE)
+    if (cuda && !isTRUE(graph_clustering_cuda_available_cpp())) stop(
+        "Native CUDA graph clustering is unavailable.",
         call. = FALSE)
     if (.Platform$OS.type != "unix") stop(
         "File-backed Louvain requires POSIX memory mapping.",
@@ -60,11 +69,72 @@ massive_louvain_controls <- function(max_passes, resolution, seed) {
     list(passes = passes, resolution = resolution, seed = run_seed)
 }
 
+massive_louvain_chunk_rows <- function(chunk_rows, backend) {
+    if (!is.null(chunk_rows)) return(chunk_rows)
+    if (identical(backend, "metal")) 65536L else 8192L
+}
+
+massive_louvain_cpu_workers <- function(n.cores, backend) {
+    workers <- normalize_nn_threads(n.cores)
+    if (workers > 32L) stop(
+        "File-backed clustering supports at most 32 CPU workers.",
+        call. = FALSE)
+    if (backend != "cpu" && workers != 1L) stop(
+        "GPU full-graph clustering uses one CPU coordinator.",
+        call. = FALSE)
+    workers
+}
+
+massive_louvain_initial <- function(initial, graph) {
+    if (is.null(initial)) return(list(path = "", count = 0L))
+    path <- initial$parent_mapping_path
+    if (!isTRUE(all.equal(initial$n_refined, graph$n_vertices)) ||
+        !identical(massive_checkpoint_file_identity(path),
+            initial$parent_mapping_identity)) stop(
+        "Initial Leiden partition changed or has wrong size.",
+        call. = FALSE)
+    list(path = path, count = initial$n_parent)
+}
+
+massive_louvain_state_resources <- function(resources, graph, backend) {
+    if (identical(backend, "cuda")) {
+        resources$mapped_state_bytes <- 4 * graph$n_vertices
+        resources$cuda_state_bytes <- 20 * graph$n_vertices +
+            8 * resources$edge_budget +
+            4 * (resources$chunk_rows + 1)
+        return(resources)
+    }
+    if (!identical(backend, "metal")) return(resources)
+    resources$mapped_state_bytes <- 4 * graph$n_vertices
+    resources$metal_state_bytes <- 20 * graph$n_vertices + 4
+    resources$temporary_host_bytes <- 16 * graph$n_vertices
+    resources
+}
+
+massive_louvain_native_level <- function(paths, graph, path,
+        passes, resolution, resources, seed, contracted,
+        initial_state, backend, n.cores) {
+    fun <- switch(backend, metal = massive_louvain_metal_level_cpp,
+        cuda = massive_louvain_cuda_level_cpp,
+        cpu = massive_louvain_level_cpp)
+    args <- list(paths[[1L]], paths[[2L]], paths[[3L]],
+        graph$n_vertices, path, passes, resolution,
+        resources$chunk_rows, resources$edge_budget, seed,
+        contracted, initial_state$path, initial_state$count)
+    if (backend == "cpu") args <- c(args, list(n.cores))
+    do.call(fun, args)
+}
+
 massive_louvain_run_level <- function(graph, output, passes,
         resolution, seed, chunk_rows, memory_limit, contracted,
-        level_index, initial = NULL) {
+        level_index, initial = NULL, backend = "cpu",
+        n.cores = 1L) {
     resources <- massive_louvain_resources(graph, chunk_rows,
         memory_limit)
+    resources <- massive_louvain_state_resources(resources, graph,
+        backend)
+    metal <- identical(backend, "metal")
+    cuda <- identical(backend, "cuda")
     path <- massive_louvain_output(output,
         resources$mapped_state_bytes)
     paths <- c(graph$offsets_path, graph$indices_path,
@@ -73,33 +143,32 @@ massive_louvain_run_level <- function(graph, output, passes,
     if (!identical(before, graph$file_identity)) stop(
         "Massive graph files changed since construction.",
         call. = FALSE)
-    initial_path <- if (is.null(initial)) "" else
-        initial$parent_mapping_path
-    initial_count <- if (is.null(initial)) 0L else initial$n_parent
-    if (!is.null(initial) &&
-        (!isTRUE(all.equal(initial$n_refined, graph$n_vertices)) ||
-        !identical(massive_checkpoint_file_identity(initial_path),
-            initial$parent_mapping_identity))) stop(
-        "Initial Leiden partition changed or has wrong size.",
-        call. = FALSE)
+    initial_state <- massive_louvain_initial(initial, graph)
     message("EXPERIMENTAL Louvain level ", level_index, ": ",
         graph$n_vertices, " vertices; ", graph$n_edges,
-        " directed edges; mapped state=",
-        round(resources$mapped_state_bytes / 1024^3, 2), " GiB")
-    result <- massive_louvain_level_cpp(paths[[1L]], paths[[2L]],
-        paths[[3L]], graph$n_vertices, path, passes, resolution,
-        resources$chunk_rows, resources$edge_budget, seed,
-        contracted, initial_path, initial_count)
-    if (!identical(before, massive_checkpoint_file_identity(paths))) {
+        " directed edges; ", if (metal) "Metal state=" else if (cuda)
+            "CUDA state=" else
+            "mapped state=",
+        round(if (metal) resources$metal_state_bytes / 1024^3 else
+            if (cuda) resources$cuda_state_bytes / 1024^3 else
+            resources$mapped_state_bytes / 1024^3, 2), " GiB")
+    result <- massive_louvain_native_level(paths, graph, path,
+        passes, resolution, resources, seed, contracted,
+        initial_state, backend, n.cores)
+    if (!identical(before, massive_checkpoint_file_identity(paths)))
         stop("Massive graph files changed during Louvain.",
             call. = FALSE)
-    }
     result$membership_identity <- massive_checkpoint_file_identity(path)
     result$graph_identity <- before
     result$method <- paste0("louvain_local_move_level_", level_index)
     result$resources <- resources
     result$seed <- seed
     result$resolution <- resolution
+    if (cuda) {
+        result$gpu_devices <- as.integer(massive_cuda_memory_cpp()$device)
+        result$gpu_identity <- massive_cuda_device_uuids(
+            result$gpu_devices)
+    }
     result$experimental <- TRUE
     class(result) <- "fastEmbedR_massive_louvain_level"
     result
@@ -107,13 +176,14 @@ massive_louvain_run_level <- function(graph, output, passes,
 
 #' EXPERIMENTAL first local-moving level of file-backed Louvain
 #'
-#' Applies the existing Louvain modularity move rule to every vertex of a
-#' symmetric file-backed UMAP fuzzy graph. CSR blocks are read from a seeded
-#' start in cyclic order; rows within each block are shuffled. Labels,
-#' counts, and volumes are memory-mapped. This function returns one
-#' local-moving level; use
-#' [massive_louvain()] for memory-gated multilevel Louvain. Mapped pages
-#' may contribute to RSS, so `memory_limit` bounds scan buffers rather than
+#' Applies Louvain local moves to every vertex of a symmetric file-backed
+#' UMAP fuzzy graph. The CPU route scans seeded CSR blocks and maps community
+#' state. Metal and CUDA retain community state on the GPU and stream
+#' bounded CSR blocks from the SSD through eight color phases. All routes
+#' audit final modularity on the CPU. This function returns one local-moving
+#' level; use [massive_louvain()] for multilevel Louvain. Mapped pages and
+#' Metal shared buffers
+#' can contribute to RSS, so `memory_limit` bounds scan buffers rather than
 #' total process memory. Interrupted runs retain partial files for inspection
 #' and cannot yet resume.
 #'
@@ -122,20 +192,26 @@ massive_louvain_run_level <- function(graph, output, passes,
 #' @param max_passes Maximum local-moving sweeps.
 #' @param resolution Positive modularity resolution.
 #' @param seed Nonnegative seed controlling the scan start of each pass.
-#' @param chunk_rows Maximum consecutive CSR rows per scan block.
+#' @param chunk_rows Maximum consecutive CSR rows per scan block. The
+#'   default is 8,192 on CPU/CUDA and 65,536 on Metal; the edge budget may
+#'   shorten a block.
 #' @param memory_limit RAM budget for graph scan buffers.
-#' @param backend Only `"cpu"` is implemented; other requests fail.
+#' @param backend `"cpu"`, `"cuda"`, or `"metal"` for one graph level.
+#' @param n.cores CPU workers for bounded row-candidate preparation.
 #' @return A lightweight file-backed first-level Louvain partition.
-#' @export
+#' @keywords internal
 massive_louvain_level <- function(graph, output, max_passes = 10L,
-        resolution = 1, seed = 1L, chunk_rows = 8192L,
-        memory_limit = "1GB", backend = "cpu") {
-    massive_louvain_graph_check(graph, backend)
+        resolution = 1, seed = 1L, chunk_rows = NULL,
+        memory_limit = "1GB", backend = "cpu", n.cores = 1L) {
+    massive_louvain_graph_check(graph, backend, TRUE, TRUE)
+    n.cores <- massive_louvain_cpu_workers(n.cores, backend)
     controls <- massive_louvain_controls(max_passes, resolution,
         seed)
+    chunk_rows <- massive_louvain_chunk_rows(chunk_rows, backend)
     massive_louvain_run_level(graph, output, controls$passes,
         controls$resolution, controls$seed, chunk_rows,
-        memory_limit, FALSE, 0L)
+        memory_limit, FALSE, 0L, backend = backend,
+        n.cores = n.cores)
 }
 
 massive_read_label_rows <- function(x, first, n) {
@@ -164,7 +240,7 @@ massive_read_label_rows <- function(x, first, n) {
 #' @param first First one-based vertex row.
 #' @param n Number of labels to read; capped at one million.
 #' @return One-based integer community labels.
-#' @export
+#' @keywords internal
 massive_read_louvain_rows <- function(x, first = 1, n = 6L) {
     if (!inherits(x, "fastEmbedR_massive_louvain_level")) stop(
         "`x` must be a massive_louvain_level() result.",
@@ -365,11 +441,11 @@ massive_louvain_coarse_csr <- function(contracted, prefix,
 
 massive_louvain_resident_level <- function(contracted, part,
         output, index, resources, resolution, max_passes, seed,
-        original_rows) {
+        original_rows, backend = "cpu") {
     coarse <- massive_louvain_coarse_graph(contracted,
         resources$memory_limit_bytes)
     groups <- graph_cluster(coarse$graph, method = "louvain",
-        backend = "cpu", resolution = resolution,
+        backend = backend, resolution = resolution,
         n_iterations = max_passes,
         seed = as.integer((as.double(seed) + index - 1) %%
             (.Machine$integer.max + 1)))
@@ -386,7 +462,7 @@ massive_louvain_resident_level <- function(contracted, part,
 
 massive_louvain_disk_level <- function(contracted, part,
         output, index, resources, max_passes, resolution, seed,
-        chunk_rows, original_rows) {
+        chunk_rows, original_rows, backend = "cpu", n.cores = 1L) {
     prefix <- paste0(output, ".level", index)
     csr <- massive_louvain_coarse_csr(contracted,
         paste0(prefix, ".csr"), resources$memory_limit_bytes)
@@ -395,7 +471,8 @@ massive_louvain_disk_level <- function(contracted, part,
         resolution,
         as.integer((as.double(seed) + index - 1) %%
             (.Machine$integer.max + 1)), chunk_rows,
-        resources$memory_limit_bytes, TRUE, index)
+        resources$memory_limit_bytes, TRUE, index,
+        backend = backend, n.cores = n.cores)
     if (!isTRUE(all.equal(level$total_edge_weight,
         contracted$total_edge_weight, tolerance = 1e-9))) stop(
         "Contracted Louvain level lost edge weight.",
@@ -409,7 +486,8 @@ massive_louvain_disk_level <- function(contracted, part,
 }
 
 massive_louvain_hierarchy <- function(graph, level, contracted,
-        output, resources, max_passes, resolution, seed, chunk_rows) {
+        output, resources, max_passes, resolution, seed, chunk_rows,
+        backend = "cpu", n.cores = 1L) {
     part <- paste0(output, ".part")
     if (!file.copy(level$membership_path, part)) stop(
         "Cannot copy first-level Louvain labels.", call. = FALSE)
@@ -420,7 +498,7 @@ massive_louvain_hierarchy <- function(graph, level, contracted,
         if (estimate <= 0.5 * resources$memory_limit_bytes) {
             resident <- massive_louvain_resident_level(contracted,
                 part, output, index, resources, resolution,
-                max_passes, seed, graph$n_vertices)
+                max_passes, seed, graph$n_vertices, backend)
             return(list(part = part,
                 n_communities = resident$n_communities,
                 resident_bytes = resident$estimated_resident_bytes,
@@ -428,11 +506,12 @@ massive_louvain_hierarchy <- function(graph, level, contracted,
         }
         step <- massive_louvain_disk_level(contracted, part,
             output, index, resources, max_passes, resolution,
-            seed, chunk_rows, graph$n_vertices)
+            seed, chunk_rows, graph$n_vertices, backend, n.cores)
         levels[[index]] <- list(path = step$level$membership_path,
             n_vertices = contracted$n_vertices,
             n_communities = step$level$n_communities,
-            modularity = step$level$modularity_final)
+            modularity = step$level$modularity_final,
+            quality_rollback = isTRUE(step$level$quality_rollback))
         if (is.null(step$next_graph)) return(list(part = part,
             n_communities = step$level$n_communities,
             resident_bytes = 0, levels = levels))
@@ -443,7 +522,8 @@ massive_louvain_hierarchy <- function(graph, level, contracted,
 }
 
 massive_louvain_prepare <- function(graph, output, controls,
-        chunk_rows, memory_limit, checkpoint, resume, initial = NULL) {
+        chunk_rows, memory_limit, checkpoint, resume, initial = NULL,
+        backend = "cpu") {
     path <- file.path(normalizePath(dirname(output), mustWork = TRUE),
         basename(output))
     signature <- if (checkpoint) massive_louvain_signature(
@@ -456,7 +536,8 @@ massive_louvain_prepare <- function(graph, output, controls,
     level <- if (is.null(saved)) massive_louvain_run_level(graph,
         paste0(path, ".level0.clusters.u32"), controls$passes,
         controls$resolution, controls$seed, chunk_rows,
-        memory_limit, FALSE, 0L, initial) else saved$level
+        memory_limit, FALSE, 0L, initial, backend,
+        controls$n_threads %||% 1L) else saved$level
     if (checkpoint && is.null(saved)) saved <-
         massive_louvain_save_stage(path, signature, "level0", level)
     contracted <- if (identical(stage, "contracted")) {
@@ -476,7 +557,9 @@ massive_louvain_prepare <- function(graph, output, controls,
 #' Runs a file-backed local-moving level, externally contracts its edges,
 #' and keeps higher contracted levels file-backed until a level passes a
 #' conservative resident-memory check. At that point it reuses
-#' [graph_cluster()]. Original graph and final labels remain on disk.
+#' [graph_cluster()]. Metal and CUDA local moves run on the GPU at every level;
+#' graph contraction and final modularity audits run on the CPU. Original
+#' graph and final labels remain on disk.
 #' With `checkpoint = TRUE`, completed first-level and contraction files
 #' can be reused by `resume = TRUE` after validating input, control, and
 #' native-library identities. An interrupted individual scan or higher
@@ -488,34 +571,46 @@ massive_louvain_prepare <- function(graph, output, controls,
 #' @param max_passes Maximum local-moving sweeps per Louvain level.
 #' @param resolution Positive modularity resolution.
 #' @param seed Nonnegative random seed.
-#' @param chunk_rows Maximum consecutive graph rows per scan block.
+#' @param chunk_rows Maximum consecutive graph rows per scan block. The
+#'   default is 8,192 on CPU/CUDA and 65,536 on Metal; the edge budget may
+#'   shorten a block.
 #' @param memory_limit RAM budget for scan buffers and resident levels.
-#' @param backend Only `"cpu"` is implemented; other requests fail.
+#' @param backend `"cpu"`, `"cuda"`, or `"metal"`. GPU local moves use
+#'   the selected device; graph contraction and modularity audits use CPU.
+#' @param n.cores CPU workers for bounded row-candidate preparation.
+#'   Local-move commits remain ordered. GPU routes require one coordinator.
 #' @param checkpoint Save completed first-level and contraction stages.
 #' @param resume Reuse a matching checkpoint; requires `checkpoint = TRUE`.
 #' @param initial Optional `massive_cluster_landmarks()` result whose saved
 #'   labels initialize local moves. Its row order must match `graph`.
 #' @return Lightweight file-backed Louvain result with modularity.
-#' @export
+#' @keywords internal
 massive_louvain <- function(graph, output, max_passes = 10L,
-        resolution = 1, seed = 1L, chunk_rows = 8192L,
+        resolution = 1, seed = 1L, chunk_rows = NULL,
         memory_limit = "1GB", backend = "cpu",
-        checkpoint = FALSE, resume = FALSE, initial = NULL) {
-    massive_louvain_graph_check(graph, backend)
+        checkpoint = FALSE, resume = FALSE, initial = NULL,
+        n.cores = 1L) {
+    massive_louvain_graph_check(graph, backend, TRUE, TRUE)
+    n.cores <- massive_louvain_cpu_workers(n.cores, backend)
     massive_checkpoint_validate_controls(checkpoint, resume)
+    chunk_rows <- massive_louvain_chunk_rows(chunk_rows, backend)
     controls <- massive_louvain_controls(max_passes, resolution, seed)
+    if (n.cores > 1L) controls$n_threads <- n.cores
+    if (backend %in% c("metal", "cuda")) controls$backend <- backend
     initial <- massive_cluster_initial(graph, initial)
     if (!is.null(initial))
         controls$initial <- initial$parent_mapping_identity
     prepared <- massive_louvain_prepare(graph, output, controls,
-        chunk_rows, memory_limit, checkpoint, resume, initial)
+        chunk_rows, memory_limit, checkpoint, resume, initial,
+        backend)
     path <- prepared$path
     level <- prepared$level
     contracted <- prepared$contracted
     resources <- prepared$resources
     hierarchy <- massive_louvain_hierarchy(graph, level,
         contracted, path, resources, controls$passes,
-        controls$resolution, controls$seed, chunk_rows)
+        controls$resolution, controls$seed, chunk_rows, backend,
+        n.cores)
     score <- massive_graph_modularity(graph, hierarchy$part,
         hierarchy$n_communities, resolution, chunk_rows, memory_limit)
     if (score$modularity < level$modularity_final - 1e-7) stop(
@@ -524,19 +619,30 @@ massive_louvain <- function(graph, output, max_passes = 10L,
     if (!file.rename(hierarchy$part, path)) stop(
         "Cannot finalize Louvain label file.", call. = FALSE)
     if (checkpoint) unlink(paste0(path, ".checkpoint.rds"))
-    first_level_modularity <- level$modularity_final
+    massive_louvain_result(level, hierarchy, score, path,
+        contracted, backend, initial)
+}
+
+massive_louvain_result <- function(level, hierarchy, score, path,
+        contracted, backend, initial) {
+    level$first_level <- list(path = paste0(path,
+        ".level0.clusters.u32"),
+        n_communities = contracted$n_vertices,
+        modularity = level$modularity_final)
     level$membership_path <- path
     level$membership_identity <- massive_checkpoint_file_identity(path)
     level$n_communities <- hierarchy$n_communities
     level$modularity_final <- score$modularity
     level$method <- "louvain_multilevel"
-    level$first_level <- list(path = paste0(path,
-        ".level0.clusters.u32"),
-        n_communities = contracted$n_vertices,
-        modularity = first_level_modularity)
     level$contracted_edges <- contracted$n_edges
     level$estimated_coarse_bytes <- hierarchy$resident_bytes
     level$file_backed_levels <- hierarchy$levels
+    level$quality_rollbacks <- as.integer(isTRUE(
+        level$quality_rollback)) + sum(vapply(hierarchy$levels,
+        function(item) isTRUE(item$quality_rollback), FALSE))
+    level$optimization_backend <- backend
+    level$contraction_backend <- "cpu"
+    level$objective_audit_backend <- "cpu"
     level$initial_partition_path <- if (is.null(initial)) NULL else
         initial$parent_mapping_path
     level

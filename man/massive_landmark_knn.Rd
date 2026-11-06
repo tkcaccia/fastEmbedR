@@ -94,3 +94,4 @@ Explicit CUDA \code{sharded_exact} builds one bounded reference shard at a
 time and merges exact candidates on disk. It rereads every query for
 each shard and can be much slower than an in-VRAM index.
 }
+\keyword{internal}

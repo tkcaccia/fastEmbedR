@@ -54,7 +54,7 @@ value. CUDA preflights device allocations against free device memory;
 managed CUDA coordinates count against the host budget.}
 
 \item{backend}{\code{"cpu"}, \code{"metal"}, or \code{"cuda"}; GPU requests have no
-CPU fallback. Metal streams edges but keeps one 2D layout in shared
+CPU fallback. Metal streams edges but keeps one 2D or 3D layout in shared
 unified memory.}
 
 \item{n.cores}{CPU workers for \code{cpu_update = "synchronized"}.
@@ -70,7 +70,7 @@ The default in-place SGD route uses one worker.}
 mapping, or \code{"managed"} for explicit CUDA unified memory. Managed
 storage may page between host and GPU and requires a supporting GPU.
 Metal \code{"mmap"} maps the host staging/output file, but still requires
-one complete 2D layout in Metal shared memory.}
+one complete 2D or 3D layout in Metal shared memory.}
 
 \item{devices}{Optional one to four CUDA device IDs. Explicit devices
 use NCCL to reduce edge updates to coordinate owners at each epoch;
@@ -96,3 +96,4 @@ per-edge schedule. CPU supports file-backed 2D or 3D initialization;
 Completed CPU, Metal, or CUDA epochs can be checkpointed and resumed without
 rescanning earlier epochs.
 }
+\keyword{internal}

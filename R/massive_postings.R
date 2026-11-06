@@ -137,6 +137,7 @@ massive_posting_finalize <- function(x, centers, prefix, paths,
 #' @param checkpoint_every Save after this many write-pass blocks.
 #' @return A lightweight posting-list descriptor.
 #' @export
+#' @keywords internal
 massive_coarse_postings <- function(x, centers, output,
         chunk_rows = NULL, n.cores = 1L, memory_limit = "1GB",
         checkpoint = FALSE, resume = FALSE, checkpoint_every = 100L) {
@@ -185,6 +186,7 @@ massive_coarse_postings <- function(x, centers, output,
 #' @return A list containing `postings` and `centers` for subsequent search
 #'   or full-graph construction.
 #' @export
+#' @keywords internal
 massive_open_postings <- function(output) {
     prefix <- massive_posting_prefix(output)
     manifest <- paste0(prefix, ".manifest.rds")
@@ -243,7 +245,7 @@ massive_open_postings <- function(output) {
 #' @param first One-based row within the posting.
 #' @param n Number of rows to inspect.
 #' @return Original one-based row IDs and a double matrix of features.
-#' @export
+#' @keywords internal
 massive_read_posting <- function(x, list, first = 1L, n = 6L) {
     if (!inherits(x, "fastEmbedR_massive_postings")) stop(
         "`x` must be a massive posting descriptor.", call. = FALSE)
@@ -374,7 +376,7 @@ massive_posting_search_controls <- function(query, postings, centers,
 #'   original source or the physical posting feature file; the latter
 #'   uses the saved row-ID file to identify each query.
 #' @return Neighbor IDs, distances, candidate counts, and backend metadata.
-#' @export
+#' @keywords internal
 massive_search_postings <- function(query, postings, centers,
         first = 1, n = 256L, k = 30L, nprobe = NULL,
         reference_chunk = 8192L, n.cores = 1L,
@@ -434,7 +436,7 @@ massive_search_postings <- function(query, postings, centers,
 #' @param memory_limit Conservative algorithm-buffer RAM budget.
 #' @return Sampled row IDs and recalls, summary, backend, and estimated
 #'   exact-reference read and comparison counts.
-#' @export
+#' @keywords internal
 massive_posting_recall_pilot <- function(x, postings, centers,
         k = 30L, nprobe = NULL, sample_rows = 32L,
         target_recall = 0.99, reference_chunk_rows = 8192L,

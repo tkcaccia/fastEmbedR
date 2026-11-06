@@ -25,7 +25,7 @@
 #'   value. CUDA preflights device allocations against free device memory;
 #'   managed CUDA coordinates count against the host budget.
 #' @param backend `"cpu"`, `"metal"`, or `"cuda"`; GPU requests have no
-#'   CPU fallback. Metal streams edges but keeps one 2D layout in shared
+#'   CPU fallback. Metal streams edges but keeps one 2D or 3D layout in shared
 #'   unified memory.
 #' @param n.cores CPU workers for `cpu_update = "synchronized"`.
 #'   The default in-place SGD route uses one worker.
@@ -36,7 +36,7 @@
 #'   mapping, or `"managed"` for explicit CUDA unified memory. Managed
 #'   storage may page between host and GPU and requires a supporting GPU.
 #'   Metal `"mmap"` maps the host staging/output file, but still requires
-#'   one complete 2D layout in Metal shared memory.
+#'   one complete 2D or 3D layout in Metal shared memory.
 #' @param devices Optional one to four CUDA device IDs. Explicit devices
 #'   use NCCL to reduce edge updates to coordinate owners at each epoch;
 #'   fixed-point accumulation makes the reduction order-independent.
@@ -47,7 +47,7 @@
 #' @param resume Continue a matching interrupted fit on the same backend.
 #' @param checkpoint_every Number of epochs between snapshots.
 #' @return An experimental file-backed `fastEmbedR_massive_matrix`.
-#' @export
+#' @keywords internal
 massive_umap_optimize <- function(graph, init, output,
         n_epochs = 200L, negative_sample_rate = 5L, learning_rate = 1,
         min_dist = 0.1, repulsion_strength = 1, seed = 1L,
@@ -139,7 +139,7 @@ massive_umap_native_fit <- function(graph, init, plan, saved,
     } else if (backend == "metal") {
         massive_umap_optimize_metal_cpp(graph$offsets_path,
             graph$indices_path, graph$weights_path, graph$n_vertices,
-            saved$start_path, saved$format, plan$output,
+            saved$start_path, saved$format, init$ncol, plan$output,
             plan$n_epochs, plan$negative_sample_rate,
             learning_rate, min_dist, repulsion_strength, plan$seed,
             plan$chunk_rows, plan$edge_capacity, plan$limit,
@@ -430,7 +430,7 @@ massive_umap_optimize_plan <- function(graph, init, output,
         cpu_update)
     devices <- massive_umap_plan_storage(devices, backend,
         graph, init, layout_storage)
-    identity <- if (length(devices) > 1L)
+    identity <- if (length(devices) > 0L)
         massive_cuda_device_uuids(devices) else NULL
     controls <- massive_umap_validate_controls(n_epochs, negative_sample_rate,
         learning_rate, min_dist, repulsion_strength, seed, chunk_rows)
@@ -563,9 +563,8 @@ massive_umap_validate_inputs <- function(graph, init, backend,
         "CUDA full-graph UMAP requires native CUDA; ",
         "no CPU fallback was used.", call. = FALSE)
     if (backend == "metal" &&
-        (!isTRUE(embedding_metal_available_cpp()) ||
-            init$ncol != 2L)) stop(
-        "Metal full-graph UMAP needs native Metal and 2D output; ",
+        !isTRUE(embedding_metal_available_cpp())) stop(
+        "Metal full-graph UMAP needs native Metal; ",
         "no CPU fallback was used.", call. = FALSE)
 }
 

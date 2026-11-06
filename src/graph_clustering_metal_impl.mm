@@ -4,7 +4,10 @@
 #include "graph_clustering_metal_api.h"
 
 #include <algorithm>
+#include <climits>
 #include <cstring>
+#include <limits>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -19,10 +22,12 @@ struct MetalParams {
   std::uint32_t color;
   std::uint32_t seed;
   std::uint32_t refinement;
+  std::uint32_t leiden_cuts;
   float graph_volume;
   float resolution;
   float tolerance;
-  float padding;
+  std::uint32_t first;
+  std::uint32_t rows;
 };
 
 struct MetalGraphState {
@@ -58,10 +63,12 @@ struct Params {
   uint color;
   uint seed;
   uint refinement;
+  uint leiden_cuts;
   float graph_volume;
   float resolution;
   float tolerance;
-  float padding;
+  uint first;
+  uint rows;
 };
 
 inline uint mix32(uint value) {
@@ -88,7 +95,12 @@ kernel void graph_propose(
     device const atomic_int* community_count [[buffer(7)]],
     device int* proposal [[buffer(8)]],
     constant Params& params [[buffer(9)]],
-    uint u [[thread_position_in_grid]]) {
+    device const atomic_float* cuts [[buffer(10)]],
+    device const float* parent_volume [[buffer(11)]],
+    device float* proposal_weight [[buffer(12)]],
+    uint local [[thread_position_in_grid]]) {
+  if (local >= params.rows) return;
+  const uint u = params.first + local;
   if (u >= params.n || vertex_color(u, params.seed) != params.color) return;
 
   const int old = labels[u];
@@ -99,9 +111,16 @@ kernel void graph_propose(
       atomic_load_explicit(&community_count[old], memory_order_relaxed) != 1) {
     return;
   }
+  if (params.leiden_cuts) {
+    const float volume = parent_volume[parent[u]];
+    const float threshold = params.resolution * node_degree *
+      (volume - node_degree) / params.graph_volume;
+    if (atomic_load_explicit(&cuts[old], memory_order_relaxed) +
+        params.tolerance < threshold) return;
+  }
 
-  const int begin = row_ptr[u];
-  const int end = row_ptr[u + 1];
+  const int begin = row_ptr[local];
+  const int end = row_ptr[local + 1];
   int candidate_labels[local_candidate_count];
   float candidate_weights[local_candidate_count];
   int unique_count = 0;
@@ -138,13 +157,16 @@ kernel void graph_propose(
   const float old_volume = max(0.0f, old_total - node_degree);
   const float old_score = old_inside - params.resolution * node_degree *
     old_volume / params.graph_volume;
-  float best_score = old_score;
+  float best_score = params.leiden_cuts ? -INFINITY : old_score;
   int best = old;
+  float best_weight = 0.0f;
 
   if (!overflow) {
     for (int index = 0; index < unique_count; ++index) {
       const int candidate = candidate_labels[index];
       if (candidate == old ||
+          (params.leiden_cuts &&
+           vertex_color(candidate, params.seed) >= params.color) ||
           atomic_load_explicit(
             &community_count[candidate], memory_order_relaxed
           ) <= 0) {
@@ -153,13 +175,22 @@ kernel void graph_propose(
       const float candidate_volume = atomic_load_explicit(
         &community_volume[candidate], memory_order_relaxed
       );
+      if (params.leiden_cuts) {
+        const float parent_total = parent_volume[parent[u]];
+        const float threshold = params.resolution * candidate_volume *
+          (parent_total - candidate_volume) / params.graph_volume;
+        if (atomic_load_explicit(&cuts[candidate],
+            memory_order_relaxed) + params.tolerance < threshold) continue;
+      }
       const float score = candidate_weights[index] -
         params.resolution * node_degree *
           candidate_volume / params.graph_volume;
+      if (params.leiden_cuts && score < -params.tolerance) continue;
       if (score > best_score + params.tolerance ||
           (fabs(score - best_score) <= params.tolerance && candidate < best)) {
         best = candidate;
         best_score = score;
+        best_weight = candidate_weights[index];
       }
     }
   } else {
@@ -170,6 +201,8 @@ kernel void graph_propose(
       if (params.refinement && parent[neighbor] != parent[u]) continue;
       const int candidate = labels[neighbor];
       if (candidate == old ||
+          (params.leiden_cuts &&
+           vertex_color(candidate, params.seed) >= params.color) ||
           atomic_load_explicit(
             &community_count[candidate], memory_order_relaxed
           ) <= 0) {
@@ -198,17 +231,28 @@ kernel void graph_propose(
       const float candidate_volume = atomic_load_explicit(
         &community_volume[candidate], memory_order_relaxed
       );
+      if (params.leiden_cuts) {
+        const float parent_total = parent_volume[parent[u]];
+        const float threshold = params.resolution * candidate_volume *
+          (parent_total - candidate_volume) / params.graph_volume;
+        if (atomic_load_explicit(&cuts[candidate],
+            memory_order_relaxed) + params.tolerance < threshold) continue;
+      }
       const float score = inside - params.resolution * node_degree *
         candidate_volume / params.graph_volume;
+      if (params.leiden_cuts && score < -params.tolerance) continue;
       if (score > best_score + params.tolerance ||
           (fabs(score - best_score) <= params.tolerance && candidate < best)) {
         best = candidate;
         best_score = score;
+        best_weight = inside;
       }
     }
   }
-  if (best != old && best_score > old_score + params.tolerance) {
+  if (best != old && (params.leiden_cuts ||
+      best_score > old_score + params.tolerance)) {
     proposal[u] = best;
+    if (params.leiden_cuts) proposal_weight[u] = best_weight;
   }
 }
 
@@ -220,7 +264,14 @@ kernel void graph_apply(
     device atomic_int* community_count [[buffer(4)]],
     device atomic_uint* move_count [[buffer(5)]],
     constant Params& params [[buffer(6)]],
-    uint u [[thread_position_in_grid]]) {
+    device atomic_float* cuts [[buffer(7)]],
+    device const float* proposal_weight [[buffer(8)]],
+    device const int* row_ptr [[buffer(9)]],
+    device const int* col_idx [[buffer(10)]],
+    device const float* edge_weight [[buffer(11)]],
+    uint local [[thread_position_in_grid]]) {
+  if (local >= params.rows) return;
+  const uint u = params.first + local;
   if (u >= params.n || vertex_color(u, params.seed) != params.color) return;
   const int old = labels[u];
   const int next = proposal[u];
@@ -228,6 +279,25 @@ kernel void graph_apply(
   if (params.refinement &&
       atomic_load_explicit(&community_count[old], memory_order_relaxed) != 1) {
     return;
+  }
+  float old_cut = 0.0f;
+  if (params.leiden_cuts) {
+    float simultaneous = 0.0f;
+    for (int position = row_ptr[local];
+         position < row_ptr[local + 1]; ++position) {
+      const int v = col_idx[position];
+      if (v != int(u) && v >= int(params.first) &&
+          v < int(params.first + params.rows) &&
+          vertex_color(v, params.seed) == params.color &&
+          proposal[v] == next) {
+        simultaneous += edge_weight[position];
+      }
+    }
+    old_cut = atomic_exchange_explicit(&cuts[old], 0.0f,
+      memory_order_relaxed);
+    atomic_fetch_add_explicit(&cuts[next],
+      old_cut - 2.0f * proposal_weight[u] - simultaneous,
+      memory_order_relaxed);
   }
   labels[u] = next;
   atomic_fetch_add_explicit(
@@ -324,6 +394,10 @@ void initialize_state() {
 template <typename T>
 id<MTLBuffer> shared_buffer(id<MTLDevice> device,
                             const std::vector<T>& values) {
+  if (values.empty()) {
+    return [device newBufferWithLength:sizeof(T)
+      options:MTLResourceStorageModeShared];
+  }
   return [device
     newBufferWithBytes:values.data()
     length:values.size() * sizeof(T)
@@ -343,6 +417,84 @@ void encode_pipeline(id<MTLComputeCommandEncoder> encoder,
   const NSUInteger threads = thread_count(pipeline);
   [encoder dispatchThreads:MTLSizeMake(n, 1, 1)
       threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
+}
+
+struct MetalStreamSession {
+  id<MTLBuffer> degree = nil;
+  id<MTLBuffer> labels = nil;
+  id<MTLBuffer> parent = nil;
+  id<MTLBuffer> volume = nil;
+  id<MTLBuffer> count = nil;
+  id<MTLBuffer> cuts = nil;
+  id<MTLBuffer> parent_volume = nil;
+  id<MTLBuffer> proposal = nil;
+  id<MTLBuffer> proposal_weight = nil;
+  id<MTLBuffer> moves = nil;
+  MetalParams params{};
+  std::uint64_t seed = 0;
+
+  ~MetalStreamSession() {
+    [degree release];
+    [labels release];
+    [parent release];
+    [volume release];
+    [count release];
+    [cuts release];
+    [parent_volume release];
+    [proposal release];
+    [proposal_weight release];
+    [moves release];
+  }
+};
+
+MetalStreamSession& stream_session(void* handle) {
+  if (handle == nullptr) Rcpp::stop("Metal graph session is missing.");
+  return *static_cast<MetalStreamSession*>(handle);
+}
+
+void encode_graph_color(id<MTLCommandBuffer> command,
+                        id<MTLBuffer> row, id<MTLBuffer> col,
+                        id<MTLBuffer> weight,
+                        MetalStreamSession& session) {
+  const auto& current = state();
+  id<MTLComputeCommandEncoder> proposal = [command computeCommandEncoder];
+  [proposal setBuffer:row offset:0 atIndex:0];
+  [proposal setBuffer:col offset:0 atIndex:1];
+  [proposal setBuffer:weight offset:0 atIndex:2];
+  [proposal setBuffer:session.degree offset:0 atIndex:3];
+  [proposal setBuffer:session.labels offset:0 atIndex:4];
+  [proposal setBuffer:session.parent == nil ? session.labels :
+    session.parent offset:0 atIndex:5];
+  [proposal setBuffer:session.volume offset:0 atIndex:6];
+  [proposal setBuffer:session.count offset:0 atIndex:7];
+  [proposal setBuffer:session.proposal offset:0 atIndex:8];
+  [proposal setBytes:&session.params length:sizeof(session.params) atIndex:9];
+  [proposal setBuffer:session.cuts == nil ? session.volume :
+    session.cuts offset:0 atIndex:10];
+  [proposal setBuffer:session.parent_volume == nil ? session.volume :
+    session.parent_volume offset:0 atIndex:11];
+  [proposal setBuffer:session.proposal_weight == nil ? session.volume :
+    session.proposal_weight offset:0 atIndex:12];
+  encode_pipeline(proposal, current.proposal_pipeline, session.params.rows);
+  [proposal endEncoding];
+
+  id<MTLComputeCommandEncoder> apply = [command computeCommandEncoder];
+  [apply setBuffer:session.degree offset:0 atIndex:0];
+  [apply setBuffer:session.labels offset:0 atIndex:1];
+  [apply setBuffer:session.proposal offset:0 atIndex:2];
+  [apply setBuffer:session.volume offset:0 atIndex:3];
+  [apply setBuffer:session.count offset:0 atIndex:4];
+  [apply setBuffer:session.moves offset:0 atIndex:5];
+  [apply setBytes:&session.params length:sizeof(session.params) atIndex:6];
+  [apply setBuffer:session.cuts == nil ? session.volume :
+    session.cuts offset:0 atIndex:7];
+  [apply setBuffer:session.proposal_weight == nil ? session.volume :
+    session.proposal_weight offset:0 atIndex:8];
+  [apply setBuffer:row offset:0 atIndex:9];
+  [apply setBuffer:col offset:0 atIndex:10];
+  [apply setBuffer:weight offset:0 atIndex:11];
+  encode_pipeline(apply, current.apply_pipeline, session.params.rows);
+  [apply endEncoding];
 }
 
 }  // namespace
@@ -437,10 +589,12 @@ fastembedr_graph_accel::MoveResult graph_local_move_metal_impl(
       0U,
       static_cast<std::uint32_t>(seed ^ (seed >> 32U)),
       refinement ? 1U : 0U,
+      0U,
       graph.volume,
       resolution,
       tolerance,
-      0.0f
+      0U,
+      static_cast<std::uint32_t>(graph.n)
     };
 
     for (int pass = 0; pass < max_passes; ++pass) {
@@ -463,6 +617,9 @@ fastembedr_graph_accel::MoveResult graph_local_move_metal_impl(
         [proposal_encoder setBuffer:count_buffer offset:0 atIndex:7];
         [proposal_encoder setBuffer:proposal_buffer offset:0 atIndex:8];
         [proposal_encoder setBytes:&params length:sizeof(params) atIndex:9];
+        [proposal_encoder setBuffer:volume_buffer offset:0 atIndex:10];
+        [proposal_encoder setBuffer:volume_buffer offset:0 atIndex:11];
+        [proposal_encoder setBuffer:volume_buffer offset:0 atIndex:12];
         encode_pipeline(
           proposal_encoder, current.proposal_pipeline,
           static_cast<NSUInteger>(graph.n)
@@ -478,6 +635,11 @@ fastembedr_graph_accel::MoveResult graph_local_move_metal_impl(
         [apply_encoder setBuffer:count_buffer offset:0 atIndex:4];
         [apply_encoder setBuffer:move_buffer offset:0 atIndex:5];
         [apply_encoder setBytes:&params length:sizeof(params) atIndex:6];
+        [apply_encoder setBuffer:volume_buffer offset:0 atIndex:7];
+        [apply_encoder setBuffer:volume_buffer offset:0 atIndex:8];
+        [apply_encoder setBuffer:row_buffer offset:0 atIndex:9];
+        [apply_encoder setBuffer:col_buffer offset:0 atIndex:10];
+        [apply_encoder setBuffer:weight_buffer offset:0 atIndex:11];
         encode_pipeline(
           apply_encoder, current.apply_pipeline,
           static_cast<NSUInteger>(graph.n)
@@ -504,4 +666,166 @@ fastembedr_graph_accel::MoveResult graph_local_move_metal_impl(
     std::copy(labels, labels + graph.n, result.membership.begin());
     return result;
   }
+}
+
+void* graph_stream_metal_create(const std::vector<float>& degree,
+                                const std::vector<int>& initial,
+                                float graph_volume, float resolution,
+                                std::uint64_t seed,
+                                const std::vector<int>* parent,
+                                const std::vector<float>* cuts,
+                                const std::vector<float>* parent_volume) {
+  @autoreleasepool {
+    initialize_state();
+    if (!graph_clustering_metal_available_impl()) {
+      Rcpp::stop(graph_clustering_metal_error_impl());
+    }
+    if (degree.size() != initial.size() || degree.size() < 2 ||
+        degree.size() > static_cast<std::size_t>(INT_MAX) ||
+        !(graph_volume > 0.0f) || !(resolution > 0.0f)) {
+      Rcpp::stop("Invalid Metal streaming graph state.");
+    }
+    const bool refinement = parent != nullptr;
+    if (refinement && (cuts == nullptr || parent_volume == nullptr ||
+        parent->size() != degree.size() || cuts->size() != degree.size() ||
+        parent_volume->empty())) {
+      Rcpp::stop("Invalid Metal streaming Leiden state.");
+    }
+    const auto n = degree.size();
+    const auto bytes = n * sizeof(int);
+    if (bytes > state().device.maxBufferLength) {
+      Rcpp::stop("Metal graph state exceeds the device buffer limit.");
+    }
+    const auto working_set = state().device.recommendedMaxWorkingSetSize;
+    const double buffers = refinement ? 9.0 : 5.0;
+    if (working_set > 0 && buffers * bytes + 4.0 >
+        0.7 * working_set) {
+      Rcpp::stop("Metal graph state exceeds its working-set budget.");
+    }
+    std::vector<float> volume(n, 0.0f);
+    std::vector<int> count(n, 0);
+    for (std::size_t u = 0; u < n; ++u) {
+      const int label = initial[u];
+      if (label < 0 || static_cast<std::size_t>(label) >= n) {
+        Rcpp::stop("Invalid initial Metal community label.");
+      }
+      volume[static_cast<std::size_t>(label)] += degree[u];
+      ++count[static_cast<std::size_t>(label)];
+    }
+    std::unique_ptr<MetalStreamSession> session(new MetalStreamSession);
+    auto device = state().device;
+    session->degree = shared_buffer(device, degree);
+    session->labels = shared_buffer(device, initial);
+    if (refinement) session->parent = shared_buffer(device, *parent);
+    session->volume = shared_buffer(device, volume);
+    session->count = shared_buffer(device, count);
+    if (refinement) {
+      session->cuts = shared_buffer(device, *cuts);
+      session->parent_volume = shared_buffer(device, *parent_volume);
+      session->proposal_weight = [device newBufferWithLength:bytes
+        options:MTLResourceStorageModeShared];
+    }
+    session->proposal = [device newBufferWithLength:bytes
+      options:MTLResourceStorageModeShared];
+    session->moves = [device newBufferWithLength:sizeof(std::uint32_t)
+      options:MTLResourceStorageModeShared];
+    if (session->degree == nil || session->labels == nil ||
+        session->volume == nil || session->count == nil ||
+        session->proposal == nil || session->moves == nil ||
+        (refinement && (session->parent == nil || session->cuts == nil ||
+          session->parent_volume == nil ||
+          session->proposal_weight == nil))) {
+      Rcpp::stop("Metal streaming graph state allocation failed.");
+    }
+    session->params = {
+      static_cast<std::uint32_t>(n), 0U, 0U,
+      refinement ? 1U : 0U, refinement ? 1U : 0U,
+      graph_volume, resolution,
+      1e-7f * std::max(1.0f, graph_volume / (2.0f * n)),
+      0U, 0U
+    };
+    session->seed = seed;
+    return session.release();
+  }
+}
+
+void graph_stream_metal_begin_pass(void* handle, int pass) {
+  auto& session = stream_session(handle);
+  session.params.seed = static_cast<std::uint32_t>(
+    session.seed ^ (session.seed >> 32U)
+  ) ^ (0x9e3779b9U * static_cast<std::uint32_t>(pass + 1));
+  *static_cast<std::uint32_t*>(session.moves.contents) = 0U;
+}
+
+void graph_stream_metal_set_color(void* handle, int color) {
+  auto& session = stream_session(handle);
+  if (!session.params.leiden_cuts || color < 0 || color >= kColorCount) {
+    Rcpp::stop("Invalid Metal Leiden color phase.");
+  }
+  session.params.color = static_cast<std::uint32_t>(color);
+}
+
+void graph_stream_metal_chunk(void* handle,
+                              const std::vector<int>& row_ptr,
+                              const std::vector<int>& col_idx,
+                              const std::vector<float>& weight,
+                              std::uint32_t first) {
+  @autoreleasepool {
+    auto& session = stream_session(handle);
+    if (row_ptr.size() < 2 || col_idx.size() != weight.size() ||
+        row_ptr.back() != static_cast<int>(col_idx.size()) ||
+        first + row_ptr.size() - 1 > session.params.n) {
+      Rcpp::stop("Invalid Metal streaming graph chunk.");
+    }
+    auto device = state().device;
+    id<MTLBuffer> row = shared_buffer(device, row_ptr);
+    id<MTLBuffer> col = shared_buffer(device, col_idx);
+    id<MTLBuffer> weights = shared_buffer(device, weight);
+    if (row == nil || col == nil || weights == nil) {
+      [row release]; [col release]; [weights release];
+      Rcpp::stop("Metal graph chunk allocation failed.");
+    }
+    session.params.first = first;
+    session.params.rows = static_cast<std::uint32_t>(row_ptr.size() - 1);
+    id<MTLCommandBuffer> command = [state().queue commandBuffer];
+    if (command == nil) Rcpp::stop("Metal graph command allocation failed.");
+    if (session.params.leiden_cuts) {
+      encode_graph_color(command, row, col, weights, session);
+    } else {
+      for (int color = 0; color < kColorCount; ++color) {
+        session.params.color = static_cast<std::uint32_t>(color);
+        encode_graph_color(command, row, col, weights, session);
+      }
+    }
+    [command commit];
+    [command waitUntilCompleted];
+    [row release]; [col release]; [weights release];
+    if (command.status == MTLCommandBufferStatusError) {
+      Rcpp::stop("Metal streaming graph command failed: %s",
+        [[command.error localizedDescription] UTF8String]);
+    }
+  }
+}
+
+std::uint32_t graph_stream_metal_end_pass(void* handle) {
+  auto& session = stream_session(handle);
+  return *static_cast<std::uint32_t*>(session.moves.contents);
+}
+
+std::vector<int> graph_stream_metal_labels(void* handle) {
+  auto& session = stream_session(handle);
+  const auto n = session.params.n;
+  const int* values = static_cast<const int*>(session.labels.contents);
+  return std::vector<int>(values, values + n);
+}
+
+std::vector<int> graph_stream_metal_counts(void* handle) {
+  auto& session = stream_session(handle);
+  const auto n = session.params.n;
+  const int* values = static_cast<const int*>(session.count.contents);
+  return std::vector<int>(values, values + n);
+}
+
+void graph_stream_metal_destroy(void* handle) {
+  delete static_cast<MetalStreamSession*>(handle);
 }

@@ -19,3 +19,4 @@ One-based integer community labels.
 \description{
 Read bounded labels from an experimental Walktrap fit
 }
+\keyword{internal}

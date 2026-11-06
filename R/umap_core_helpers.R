@@ -275,23 +275,15 @@ build_umap_csr_state <- function(indices,
 # Backend dispatch is intentionally separate from graph and policy setup.
 optimize_umap_gpu_csr <- function(graph, init, cfg, backend, seed) {
     if (identical(backend, "metal")) {
-        out <- knn_embed_metal_csr_cpp(
-            graph$offsets,
-            graph$neighbors,
-            graph$weights,
-            init,
-            as.integer(cfg$n_epochs),
-            as.integer(cfg$negative_sample_rate),
-            cfg$learning_rate,
-            cfg$min_dist,
-            as.numeric(graph$max_weight),
-            cfg$repulsion_strength,
-            as.integer(seed),
-            1L
-        )
+        out <- optimize_prepared_umap_metal(graph, init, cfg, seed)
         cfg$metal_graph_input <- attr(out, "metal_graph_input")
         cfg$metal_csr_width <- attr(out, "metal_csr_width")
         cfg$metal_truncated_edges <- attr(out, "metal_truncated_edges")
+        cfg$metal_cpu_warm_epochs <- attr(out, "metal_cpu_warm_epochs")
+        cfg$metal_gpu_epochs <- attr(out, "metal_gpu_epochs")
+        cfg$metal_optimizer_pipeline <- attr(
+            out, "metal_optimizer_pipeline"
+        )
         return(list(layout = out, cfg = cfg))
     }
 
@@ -320,32 +312,33 @@ configure_gpu_host_umap <- function(
     cfg, indices, distances, init, graph_mode, backend, n_components
 ) {
     cfg$graph_prep_backend <- paste0("cpu_", graph_mode, "_csr")
-    cfg$graph_storage <- if (backend == "cuda") {
-        "cpu_csr_uploaded_to_cuda"
-    } else {
-        "cpu_csr_packed_to_metal"
-    }
+    cfg$graph_storage <- if (backend == "cuda")
+        "cpu_csr_uploaded_to_cuda" else "cpu_csr_packed_to_metal"
     cfg$gpu_transfer_policy <- "single_upload_optimizer"
-    cfg$gpu_optimizer_mode <- if (backend == "metal") {
+    staged <- backend == "metal" && n_components == 2L
+    cfg$gpu_optimizer_mode <- if (staged) {
+        "ordered_cpu_warm_metal_atomic"
+    } else if (backend == "metal") {
         "clean_linear_atomic_inplace"
     } else {
         "atomic_coo"
     }
-    cfg$gpu_optimizer_update_rule <- if (backend == "metal") {
+    cfg$gpu_optimizer_update_rule <- if (staged) {
+        "cpu_ordered_then_native_metal_csr_atomic"
+    } else if (backend == "metal") {
         "native_metal_csr_clean_linear_atomic_inplace_edge_update"
     } else {
         "native_cuda_atomic_coo_umap_schedule"
     }
-    cfg$gpu_optimizer_schedule <- if (backend == "metal") {
+    cfg$gpu_optimizer_schedule <- if (staged) {
+        "shared_linear_decay_cpu_warm_metal_finish"
+    } else if (backend == "metal") {
         "clean_edge_probability_linear_decay"
     } else {
         "coo_epochs_per_sample"
     }
-    cfg$gpu_epochs_per_command <- if (backend == "metal") {
-        64L
-    } else {
-        NA_integer_
-    }
+    cfg$gpu_epochs_per_command <- if (backend == "metal")
+        64L else NA_integer_
     cfg$gpu_initial_backend <- backend
     cfg$optimizer_backend <- backend
     cfg <- add_gpu_transfer_metadata(

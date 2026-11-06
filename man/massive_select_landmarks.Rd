@@ -41,3 +41,4 @@ only sampled rows; use it when random access is efficient. Both write
 selected rows in source order to a row-major float32 \code{.f32} file.
 Returned row identifiers are one-based doubles, including above 2^31.
 }
+\keyword{internal}

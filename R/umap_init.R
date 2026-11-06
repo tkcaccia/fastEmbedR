@@ -25,10 +25,16 @@
 #' CSR graph used by the optimizer, so its mathematical input is unchanged.
 #' Explicit GPU requests fail when the corresponding native backend is
 #' unavailable.
+#' CUDA and Metal compute three-dimensional initializations. The prepared
+#' CUDA graph optimizer also reuses a three-dimensional initialization with
+#' its snapshot update mode.
 #'
 #' CUDA KNN input is materialized on the host only for this standalone
-#' diagnostic API. The ordinary one-call CUDA UMAP path remains device
-#' resident.
+#' diagnostic API. The CUDA initializer reserves the union graph's row
+#' capacity from the fixed KNN input, sorts its device graph rows, and errors
+#' if any row requires more than 256 neighbors. Repeated fixed KNN input
+#' produces the same initialization; approximate KNN computed afresh may
+#' differ. The ordinary one-call CUDA UMAP path remains device resident.
 #'
 #' @return A `fastEmbedR_umap_initialization` object with `layout`, `prepared`,
 #'   resolved `parameters`, and component timings. Pass the complete object to
@@ -46,6 +52,7 @@
 #' layout <- umap_knn(initialization, backend = "cpu", seed = 1)
 #' plot(layout, pch = 21, bg = iris$Species)
 #' @export
+#' @keywords internal
 umap_init <- function(x, distances = NULL, n_neighbors = NULL,
                         n_components = 2L,
                         metric = c("euclidean", "cosine", "correlation"),
@@ -89,12 +96,13 @@ validate_umap_init_request <- function(x, backend, n_components,
             call. = FALSE
         )
     }
-    if (n_components != 2L && backend %in% c("cuda", "metal")) {
-        stop(
-            "Native Metal and CUDA UMAP initialization supports ",
-            "two dimensions.",
-            call. = FALSE
-        )
+    if (backend == "metal" && !n_components %in% c(2L, 3L)) {
+        stop("Native Metal UMAP initialization supports 2D or 3D.",
+            call. = FALSE)
+    }
+    if (backend == "cuda" && !n_components %in% c(2L, 3L)) {
+        stop("Native CUDA UMAP initialization supports 2D or 3D.",
+            call. = FALSE)
     }
     list(
         backend = backend, n_components = n_components,

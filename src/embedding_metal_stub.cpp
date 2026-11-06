@@ -120,6 +120,8 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector,
                                        double,
                                        double,
                                        int,
+                                       int,
+                                       int,
                                        int) {
   Rcpp::stop("Metal CSR embedding backend is only available on macOS with Metal support.");
 }
@@ -197,4 +199,13 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix,
                                   bool,
                                   double) {
   Rcpp::stop("Metal t-SNE optimizer is only available on macOS with Metal support.");
+}
+
+List massive_tsne_optimize_metal_impl(
+    const std::string&, const std::string&, const std::string&,
+    const std::string&, const std::string&, int, int, int, int,
+    double, double, double, bool, double, double, double,
+    double, int, const std::string&, int, SEXP,
+    const std::string&, int) {
+  Rcpp::stop("File-backed Metal t-SNE requires macOS with Metal support.");
 }

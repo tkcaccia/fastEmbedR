@@ -19,3 +19,4 @@ One-based integer community labels.
 \description{
 Read bounded labels from experimental file-backed Leiden
 }
+\keyword{internal}

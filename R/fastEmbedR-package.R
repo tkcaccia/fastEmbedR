@@ -1,16 +1,18 @@
-#' fastEmbedR: native UMAP and interpolation-based t-SNE embeddings
+#' fastEmbedR: native embedding, PCA, and clustering
 #'
 #' fastEmbedR provides an opinionated fixed-policy float32 UMAP implementation
 #' and a configurable native interpolation-based t-SNE implementation from
 #' data or
-#' precomputed nearest-neighbor matrices. Use [umap()] or [tsne()]
-#' for one-call workflows, [precompute_knn()] to run CPU,
-#' Metal, or CUDA search separately, or pass reusable KNN `indices` and
-#' `distances` to [umap_knn()] or [tsne_knn()].
-#' Use [pca()] for reusable backend-native PCA and request
+#' precomputed nearest-neighbor matrices. Use [umap()], [tsne()], or [pca()]
+#' for everyday analysis. [precompute_knn()] can run CPU, Metal, or CUDA
+#' search once; pass its result to [umap()] or [tsne()] for reuse.
+#' Request
 #' `tsne_init = TRUE` when a t-SNE-ready initialization is needed.
-#' Score embeddings with [evaluate_embedding()]. Optional downstream graph
-#' utilities are available through [knn_graph()] and [graph_cluster()].
+#' Use [graph_cluster()] for resident or file-backed clustering;
+#' set `landmarks` for approximate all-row assignment.
+#' Score embeddings with [evaluate_embedding()]. Precomputed KNN results can
+#' be passed directly to [umap()] or [tsne()]; full file-backed fits also
+#' expose graph preparation helpers.
 #' Session defaults can be set with
 #' `options(backend = "cpu", n.cores = 4L)`; explicit function arguments take
 #' precedence over these options.

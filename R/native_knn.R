@@ -104,9 +104,11 @@ fastembedr_cpu_knn_method <- function(n) {
     }
 }
 
-fastembedr_embedding_nn_policy <- function(embedding_backend, n = NULL) {
+fastembedr_embedding_nn_policy <- function(embedding_backend, n = NULL,
+                                            p = NULL) {
     embedding_backend <- resolve_embedding_backend(embedding_backend)
     n <- integer_scalar(n %||% NA_integer_)
+    p <- integer_scalar(p %||% NA_integer_)
     small_enough_for_exact <- length(n) == 1L && !is.na(n) && n < 100000L
     method <- if (isTRUE(small_enough_for_exact)) "exact" else "ivf"
     if (identical(embedding_backend, "cuda")) {
@@ -116,9 +118,12 @@ fastembedr_embedding_nn_policy <- function(embedding_backend, n = NULL) {
         ))
     }
     if (identical(embedding_backend, "metal")) {
+        bounded_exact <- !is.na(n) && !is.na(p) &&
+            n <= 50000L && p <= 16384L &&
+            as.double(n) * n * p <= 1.25e11
         return(list(
             backend = "metal",
-            method = if (length(n) == 1L && !is.na(n) && n < 4096L) {
+            method = if ((!is.na(n) && n < 4096L) || bounded_exact) {
                 "exact"
             } else {
                 "ivf"
@@ -334,8 +339,10 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' CPU uses native exhaustive float32 search below 5,000 observations and
 #' faissR's compiled FAISS HNSW interface for Euclidean distance otherwise.
 #' Cosine and correlation retain native HNSW. HNSW targets recall 0.99; its
-#' recall is not audited during each call. Metal uses native exact search for
-#' small inputs and recall-tuned IVF-Flat for larger inputs. CUDA uses RAPIDS
+#' recall is not audited during each call. Metal uses native exact search below
+#' 4,096 rows and for inputs with at most 50,000 rows, 16,384 columns, and
+#' 125 billion row-pair feature operations; otherwise it uses recall-tuned
+#' IVF-Flat. CUDA uses RAPIDS
 #' cuVS brute-force exact search below 100,000 observations and cuVS IVF-Flat
 #' above that threshold. Approximate Metal and CUDA routes use an internal
 #' recall target of 0.99 and report whether their pilot audit met it.
@@ -371,7 +378,8 @@ precompute_knn <- function(data,
     x <- prepared$data
     n <- nrow(x)
     k <- validate_precompute_k(k, n - 1L, "nrow(data) - 1")
-    policy <- fastembedr_embedding_nn_policy(backend, n = n)
+    policy <- fastembedr_embedding_nn_policy(
+        backend, n = n, p = ncol(x))
     keep_gpu <- identical(backend, "cuda")
     result <- timed_do_call(run_precompute_knn, list(
         x, k, metric, policy, n.cores, keep_gpu
@@ -457,6 +465,7 @@ run_precompute_query_knn <- function(reference, query, k, metric,
 #' qry <- x[101:150, , drop = FALSE]
 #' knn <- precompute_query_knn(ref, qry, k = 10, backend = "cpu")
 #' @export
+#' @keywords internal
 precompute_query_knn <- function(reference,
                                     query,
                                     k = 30L,

@@ -21,3 +21,4 @@ Reads complete source rows. The result is a directed edge list with
 one-based \code{from} and \code{to} IDs plus either distances or weights, according
 to the imported graph's \code{edge_value} metadata.
 }
+\keyword{internal}

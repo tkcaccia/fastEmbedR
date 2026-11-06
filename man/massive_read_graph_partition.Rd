@@ -17,3 +17,4 @@ A directed edge list with \code{from}, \code{to}, and value vectors.
 \description{
 Read one bounded experimental graph partition
 }
+\keyword{internal}

@@ -29,7 +29,8 @@ massive_modularity_resources <- function(graph, chunk_rows, memory_limit,
 #' are memory-mapped; their pages may contribute to process RSS. This is a
 #' CPU-only quality diagnostic, not a full-graph clustering algorithm.
 #'
-#' @param graph A result of [massive_umap_fuzzy_graph()].
+#' @param graph A result of [massive_umap_fuzzy_graph()] or a contracted
+#'   float64 CSR graph from the multilevel Louvain/Leiden workflow.
 #' @param membership Path to a `uint32` label file, or a
 #'   `fastEmbedR_massive_clusters` descriptor.
 #' @param n_communities Number of labels for a file path; inferred from a
@@ -44,14 +45,13 @@ massive_modularity_resources <- function(graph, chunk_rows, memory_limit,
 #'   that allocation exceeds `memory_limit`.
 #' @return Modularity, internal and total edge weights, edge-pair count,
 #'   optional connectivity counts, backend, and resource estimates.
-#' @export
+#' @keywords internal
 massive_graph_modularity <- function(graph, membership,
         n_communities = NULL, resolution = 1,
         chunk_rows = 8192L, memory_limit = "1GB", backend = "cpu",
         connectivity = FALSE) {
     if (!identical(backend, "cpu")) stop(
-        "Massive modularity requires CPU; no backend fallback was used.",
-        call. = FALSE)
+        "Massive modularity requires CPU; no fallback.", call. = FALSE)
     if (.Platform$OS.type != "unix") stop(
         "Massive modularity requires POSIX memory mapping.", call. = FALSE)
     if (!inherits(graph, "fastEmbedR_massive_graph") ||
@@ -90,7 +90,8 @@ massive_graph_modularity <- function(graph, membership,
         call. = FALSE)
     value <- massive_graph_modularity_cpp(paths[[1L]], paths[[2L]],
         paths[[3L]], path, graph$n_vertices, groups, resolution,
-        resources$chunk_rows, resources$edge_budget, connectivity)
+        resources$chunk_rows, resources$edge_budget, connectivity,
+        identical(graph$weight_dtype, "float64"))
     if (!identical(before, massive_checkpoint_file_identity(paths)))
         stop("Graph or membership files changed during scan.", call. = FALSE)
     c(value, list(resources = resources, experimental = TRUE))

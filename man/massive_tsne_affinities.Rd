@@ -53,3 +53,4 @@ complete graph is never materialized in memory. A content-hashed manifest
 permits \code{\link[=massive_affinity_graph]{massive_affinity_graph()}} to reload the result. The saved graph
 can feed the experimental CPU \code{\link[=massive_tsne_optimize]{massive_tsne_optimize()}} route.
 }
+\keyword{internal}

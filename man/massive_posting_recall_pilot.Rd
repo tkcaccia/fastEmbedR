@@ -50,3 +50,4 @@ up to one quarter for these lists.
 Center scoring uses bounded candidates when a full scan is too costly.
 The sampled recall cannot certify unsampled rows.
 }
+\keyword{internal}

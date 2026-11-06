@@ -39,8 +39,8 @@
 #' @param seed Random seed.
 #' @param backend Backend used for query KNN when `knn` is `NULL`; `"metal"`
 #'   and `"cuda"` run their native fixed-reference transform optimizers when
-#'   those backends were compiled. CUDA accepts 2D or 3D reference layouts;
-#'   Metal currently accepts 2D. Explicit unavailable GPU requests fail; CPU
+#'   those backends were compiled. CUDA and Metal accept 2D or 3D reference
+#'   layouts. Explicit unavailable GPU requests fail; CPU
 #'   work is never reported as Metal or CUDA.
 #' @param verbose Print native optimizer progress.
 #' @return A numeric matrix with one row per query observation.
@@ -263,8 +263,7 @@ run_tsne_transform_gpu <- function(
     backend, reference_layout, projection, request, controls, init
 ) {
     dimensions <- ncol(reference_layout)
-    if (dimensions != 2L &&
-        !(backend == "cuda" && dimensions == 3L)) {
+    if (!dimensions %in% c(2L, 3L)) {
         stop(
             backend, " t-SNE transform does not support a ",
             dimensions, "D reference layout.",
@@ -638,11 +637,16 @@ landmark_affine_projection <- function(
         max_neighbors <- min(12L, ncol(projection_knn$indices))
     }
     backend <- as.character(backend)[1L]
+    if (backend == "metal" &&
+        !isTRUE(embedding_metal_available_cpp())) {
+        stop("Metal affine landmark projection is unavailable; ",
+            "no CPU fallback was used.", call. = FALSE)
+    }
     metal_work <- as.double(nrow(x_query)) * as.double(ncol(x_query))
-    use_metal <- ncol(landmark_layout) == 2L &&
+    use_metal <- ncol(landmark_layout) %in% c(2L, 3L) &&
         backend %in% c("metal", "gpu") &&
         isTRUE(embedding_metal_available_cpp()) &&
-        metal_work >= 5e6
+        (backend == "metal" || metal_work >= 5e6)
     if (use_metal) {
         layout <- try_metal_affine_projection(
             x_landmarks, x_query, landmark_layout, projection_knn,
@@ -851,12 +855,14 @@ run_full_landmark_tsne <- function(state, request) {
         backend = request$backend,
         keep_knn = request$keep_knn,
         verbose = request$verbose,
-        n.cores = request$n_threads
+        n.cores = request$n_threads,
+        affinity_k = request$affinity_k,
+        devices = request$devices
     )
     fit <- do.call(tsne, c(args, request$extra))
-    policy <- opentsne_neighbor_policy(
-        state$n, fit$parameters$perplexity
-    )
+    policy <- opentsne_neighbor_policy(state$n,
+        fit$parameters$perplexity,
+        affinity_k = fit$parameters$affinity_support_k)
     elapsed <- state$preprocess_time[["elapsed"]] +
         fit$metrics$elapsed[[1L]]
     fit$model <- new_landmark_projection_model(
@@ -896,7 +902,8 @@ partition_landmark_tsne <- function(state, request) {
 landmark_tsne_reference_policy <- function(state, request) {
     policy <- opentsne_neighbor_policy(
         state$n_landmarks,
-        perplexity = request$perplexity
+        perplexity = request$perplexity,
+        affinity_k = request$affinity_k
     )
     perplexity <- request$perplexity %||% policy$perplexity
     n_neighbors <- policy$n_neighbors
@@ -922,7 +929,8 @@ landmark_tsne_reference_args <- function(knn, state, request, policy) {
         seed = request$seed,
         backend = request$backend,
         verbose = request$verbose,
-        n.cores = request$n_threads
+        n.cores = request$n_threads,
+        devices = request$devices
     )
     c(args, request$extra)
 }
@@ -1139,6 +1147,36 @@ run_landmark_tsne_cuda_projection <- function(
     layout
 }
 
+run_landmark_tsne_cuda_devices_projection <- function(
+    state, request, controls, projection_knn
+) {
+    resident <- landmark_tsne_transform_cuda_devices_cpp(
+        state$x_landmarks, state$x_query,
+        state$reference_fit$layout,
+        projection_knn$indices, projection_knn$distances,
+        as.numeric(request$transform_perplexity),
+        controls$n_iter,
+        as.integer(request$transform_early_exaggeration_iter),
+        controls$learning_rate,
+        controls$early_exaggeration,
+        controls$exaggeration,
+        controls$initial_momentum,
+        controls$final_momentum,
+        controls$max_grad_norm,
+        controls$max_step_norm,
+        controls$n_negatives,
+        controls$threshold,
+        as.integer(request$seed + 1009L),
+        as.integer(request$devices)
+    )
+    layout <- resident$Y
+    resident$config$gpu_identity <-
+        massive_cuda_device_uuids(request$devices)
+    attr(layout, "backend") <- "cuda"
+    attr(layout, "fastEmbedR_config") <- resident$config
+    layout
+}
+
 landmark_tsne_projection_init <- function(
     state,
     request,
@@ -1277,12 +1315,44 @@ run_landmark_tsne_host_projection <- function(
     )
 }
 
+project_landmark_tsne_devices <- function(state, request,
+                                            controls, projection) {
+    gpu_knn <- projection$value
+    if (!fastembedr_is_gpu_knn(gpu_knn)) stop(
+        "Resident multi-GPU t-SNE requires native CUDA query KNN.",
+        call. = FALSE)
+    converted <- timed_do_call(fastembedr_gpu_knn_to_host,
+        list(gpu_knn))
+    knn <- converted$value
+    attr(knn, "approximation") <-
+        attr(gpu_knn, "approximation", exact = TRUE)
+    projection$value <- NULL
+    rm(gpu_knn)
+    invisible(gc())
+    transformed <- timed_do_call(
+        run_landmark_tsne_cuda_devices_projection,
+        list(state, request, controls, knn)
+    )
+    state$projection <- list(
+        knn = knn, projected = transformed$value,
+        projection_time = projection$time + converted$time,
+        transform_time = transformed$time,
+        init = list(backend = "cuda",
+            method = "local_affine_knn_projection_cuda_shards"),
+        controls = controls
+    )
+    state
+}
+
 project_landmark_tsne <- function(state, request) {
     controls <- landmark_tsne_transform_controls(state, request)
     projection <- timed_do_call(
         compute_landmark_tsne_projection_knn,
         list(state, request, controls)
     )
+    if (length(request$devices) > 1L) return(
+        project_landmark_tsne_devices(state, request, controls,
+            projection))
     projection_knn <- projection$value
     use_cuda <- identical(request$backend, "cuda") &&
         fastembedr_is_gpu_knn(projection_knn)
@@ -1418,7 +1488,10 @@ landmark_tsne_transform_parameters <- function(state, request) {
         transform_optimizer = config$optimizer,
         transform_repulsion = config$repulsion,
         transform_n_negatives = config$n_negatives,
-        transform_initialization = config$initialization
+        transform_initialization = config$initialization,
+        transform_gpu_devices = config$gpu_devices,
+        transform_gpu_identity = config$gpu_identity,
+        per_device_query_rows = config$per_device_query_rows
     )
 }
 
@@ -1519,7 +1592,9 @@ run_landmark_tsne <- function(data, nn, settings, controls, extra) {
         n_components = settings$n_components,
         standardize = settings$standardize, pca_dims = settings$pca_dims,
         metric = settings$metric, seed = settings$seed,
+        affinity_k = settings$affinity_k,
         backend = settings$backend, keep_knn = settings$keep_knn,
+        devices = settings$devices,
         verbose = settings$verbose, n_threads = settings$n_threads,
         extra = c(settings$optimizer, extra)
     ))

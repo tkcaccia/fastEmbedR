@@ -23,7 +23,9 @@ massive_tsne_optimize(
   checkpoint = FALSE,
   resume = FALSE,
   checkpoint_every = 100L,
-  devices = NULL
+  devices = NULL,
+  graph_access = "auto",
+  edge_chunk_capacity = 8388608L
 )
 }
 \arguments{
@@ -48,7 +50,8 @@ massive_tsne_optimize(
 \item{memory_limit}{Host RAM budget. Coordinated CUDA fits reserve one
 bounded attraction-edge buffer per requested device.}
 
-\item{backend}{\code{"cpu"} or \code{"cuda"}; CUDA currently requires 2D output.}
+\item{backend}{\code{"cpu"}, \code{"cuda"}, or \code{"metal"}. CUDA supports
+2D or 3D output on one to four devices with NCCL for multiple GPUs.}
 
 \item{n.cores}{CPU worker count for FFT, sparse attraction, and updates.}
 
@@ -58,7 +61,12 @@ bounded attraction-edge buffer per requested device.}
 
 \item{checkpoint_every}{Iterations between state snapshots.}
 
-\item{devices}{CUDA device IDs. Two to four IDs run one coordinated 2D fit.}
+\item{devices}{CUDA device IDs. Two to four IDs run one coordinated fit.}
+
+\item{graph_access}{Metal graph access: \code{"auto"}, \code{"mmap"}, or
+\code{"stream"}. Auto streams graphs larger than one edge chunk.}
+
+\item{edge_chunk_capacity}{Maximum attraction edges per Metal SSD chunk.}
 }
 \value{
 An experimental file-backed \code{fastEmbedR_massive_matrix}.
@@ -66,12 +74,14 @@ CUDA results include host-call stage times. \code{attraction_sync}
 can include previously queued FFT work.
 }
 \description{
-Streams a normalized symmetric CSR affinity graph on every iteration.
+Optimizes a normalized symmetric CSR affinity graph from disk.
 The CPU optimizer retains only its float32 coordinates and update state
 in RAM, reuses the package's 2D or 3D FFT repulsion, and writes the
-final coordinates to a file. The CUDA route streams the same affinities
-through its 2D FFT optimizer and retains coordinates on the GPU.
+final coordinates to a file. CUDA streams affinities through a 2D or 3D
+FFT optimizer. Metal maps the complete read-only graph into shared memory
+for its 2D or 3D FFT optimizer, or streams bounded graph chunks from SSD.
 This is a full-graph fit, not landmark projection. Optimization uses
 fixed iteration counts, without automatic KL stopping. Disk reads can
-be substantial. Both routes can checkpoint optimizer state.
+be substantial. All routes can checkpoint optimizer state.
 }
+\keyword{internal}

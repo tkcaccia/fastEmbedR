@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <climits>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -39,6 +40,223 @@
 #include "tsne_affinity_common.h"
 #include "umap_membership.h"
 #include "umap_optimizer_common.h"
+#ifdef FASTEMBEDR_HAS_CUDA
+#include "graph_clustering_cuda_api.h"
+#endif
+#ifdef HAVE_METAL
+#include "graph_clustering_metal_api.h"
+#endif
+
+namespace {
+
+struct ResidentPcaShard {
+  int device;
+  int first;
+  int last;
+  std::vector<double> cross;
+  std::vector<float> scores;
+  std::string error;
+};
+
+std::vector<ResidentPcaShard> resident_pca_shards(
+    const Rcpp::IntegerVector& devices, int rows) {
+  if (devices.size() < 1 || devices.size() > 4 ||
+      devices.size() > rows) {
+    Rcpp::stop("Resident CUDA PCA needs one to four row shards.");
+  }
+  std::vector<ResidentPcaShard> shards;
+  shards.reserve(devices.size());
+  for (int i = 0; i < devices.size(); ++i) {
+    for (int j = 0; j < i; ++j) {
+      if (devices[i] == devices[j]) {
+        Rcpp::stop("Resident CUDA PCA devices must be distinct.");
+      }
+    }
+    shards.push_back({devices[i],
+      static_cast<int>(static_cast<std::int64_t>(rows) * i /
+        devices.size()),
+      static_cast<int>(static_cast<std::int64_t>(rows) * (i + 1) /
+        devices.size()), {}, {}, {}});
+  }
+  return shards;
+}
+
+void resident_pca_worker(const double* input, int rows, int columns,
+    const float* center, const float* scale, const float* loadings,
+    int rank, ResidentPcaShard* shard) {
+  try {
+    if (fastembedr_massive_cuda_select_device(shard->device)) {
+      throw std::runtime_error(fastembedr_massive_pca_cuda_error());
+    }
+    const int batch = std::min(8192, shard->last - shard->first);
+    using Context = std::unique_ptr<void, decltype(
+      &fastembedr_massive_pca_cuda_destroy)>;
+    Context context(fastembedr_massive_pca_cuda_create(batch,
+      columns, rank, center, scale, loadings),
+      fastembedr_massive_pca_cuda_destroy);
+    if (!context) {
+      throw std::runtime_error(fastembedr_massive_pca_cuda_error());
+    }
+    std::vector<float> block(static_cast<std::size_t>(batch) * columns);
+    std::vector<float> result(rank == 0 ?
+      static_cast<std::size_t>(columns) * columns :
+      static_cast<std::size_t>(batch) * rank);
+    if (rank == 0) shard->cross.assign(result.size(), 0.0);
+    else shard->scores.resize(
+      static_cast<std::size_t>(shard->last - shard->first) * rank);
+    for (int first = shard->first; first < shard->last; first += batch) {
+      const int count = std::min(batch, shard->last - first);
+      for (int row = 0; row < count; ++row) {
+        for (int col = 0; col < columns; ++col) {
+          block[static_cast<std::size_t>(row) * columns + col] =
+            static_cast<float>(input[first + row +
+              static_cast<std::size_t>(col) * rows]);
+        }
+      }
+      const int status = rank == 0 ?
+        fastembedr_massive_pca_cuda_cross(context.get(), block.data(),
+          count, result.data()) :
+        fastembedr_massive_pca_cuda_project(context.get(), block.data(),
+          count, result.data());
+      if (status) {
+        throw std::runtime_error(fastembedr_massive_pca_cuda_error());
+      }
+      if (rank == 0) {
+        for (std::size_t i = 0; i < shard->cross.size(); ++i) {
+          shard->cross[i] += result[i];
+        }
+      } else {
+        const auto offset = static_cast<std::size_t>(first -
+          shard->first) * rank;
+        std::copy_n(result.begin(), static_cast<std::size_t>(count) *
+          rank, shard->scores.begin() + offset);
+      }
+    }
+  } catch (const std::exception& error) {
+    shard->error = error.what();
+  } catch (...) {
+    shard->error = "Unknown CUDA worker failure.";
+  }
+}
+
+void resident_pca_run(const Rcpp::NumericMatrix& input,
+    const Rcpp::IntegerVector& devices, const std::vector<float>& center,
+    const std::vector<float>& scale,
+    const std::vector<float>& loadings, int rank,
+    std::vector<ResidentPcaShard>& shards) {
+  std::vector<std::thread> workers;
+  workers.reserve(shards.size());
+  try {
+    for (auto& shard : shards) {
+      workers.emplace_back(resident_pca_worker, REAL(input), input.nrow(),
+        input.ncol(), center.data(), scale.empty() ? nullptr :
+        scale.data(), loadings.empty() ? nullptr : loadings.data(),
+        rank, &shard);
+    }
+  } catch (...) {
+    for (auto& worker : workers) worker.join();
+    throw;
+  }
+  for (auto& worker : workers) worker.join();
+  for (const auto& shard : shards) {
+    if (!shard.error.empty()) {
+      Rcpp::stop("Resident CUDA PCA device %d: %s", shard.device,
+        shard.error.c_str());
+    }
+  }
+}
+
+std::vector<float> resident_pca_float_vector(
+    const Rcpp::NumericVector& values) {
+  std::vector<float> result(values.size());
+  for (R_xlen_t i = 0; i < values.size(); ++i) {
+    if (!std::isfinite(values[i]) ||
+        !std::isfinite(static_cast<float>(values[i]))) {
+      Rcpp::stop("Resident CUDA PCA needs finite float32 controls.");
+    }
+    result[i] = static_cast<float>(values[i]);
+  }
+  return result;
+}
+
+}  // namespace
+
+// [[Rcpp::export]]
+Rcpp::List pca_cuda_resident_covariance_cpp(
+    Rcpp::NumericMatrix input, Rcpp::IntegerVector devices,
+    bool centered) {
+  const int rows = input.nrow();
+  const int columns = input.ncol();
+  if (rows < 3 || columns < 1 || columns > 2048) {
+    Rcpp::stop("Resident CUDA covariance PCA needs 3+ rows and "
+      "at most 2048 columns.");
+  }
+  auto shards = resident_pca_shards(devices, rows);
+  Rcpp::NumericVector means(columns);
+  for (int col = 0; col < columns; ++col) {
+    double total = 0.0;
+    for (int row = 0; row < rows; ++row) {
+      const double value = input(row, col);
+      if (!std::isfinite(value) ||
+          !std::isfinite(static_cast<float>(value))) {
+        Rcpp::stop("Resident CUDA PCA needs finite float32 input.");
+      }
+      total += value;
+    }
+    means[col] = centered ? total / rows : 0.0;
+  }
+  auto center = resident_pca_float_vector(means);
+  const std::vector<float> empty;
+  resident_pca_run(input, devices, center, empty, empty, 0, shards);
+  Rcpp::NumericMatrix covariance(columns, columns);
+  for (int col = 0; col < columns; ++col) {
+    for (int other = 0; other < columns; ++other) {
+      double total = 0.0;
+      const auto position = static_cast<std::size_t>(col) *
+        columns + other;
+      for (const auto& shard : shards) total += shard.cross[position];
+      covariance(col, other) = total / (rows - 1);
+    }
+  }
+  return Rcpp::List::create(Rcpp::Named("center") = means,
+    Rcpp::Named("covariance") = covariance);
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericMatrix pca_cuda_resident_project_cpp(
+    Rcpp::NumericMatrix input, Rcpp::IntegerVector devices,
+    Rcpp::NumericVector center, Rcpp::NumericVector scale,
+    Rcpp::NumericMatrix loadings) {
+  const int rows = input.nrow();
+  const int columns = input.ncol();
+  const int rank = loadings.ncol();
+  if (rows < 1 || columns < 1 || rank < 1 || rank > columns ||
+      loadings.nrow() != columns || center.size() != columns ||
+      scale.size() != columns) {
+    Rcpp::stop("Invalid resident CUDA PCA projection dimensions.");
+  }
+  auto shards = resident_pca_shards(devices, rows);
+  for (int col = 0; col < columns; ++col) {
+    if (!std::isfinite(scale[col]) || scale[col] <= 0) {
+      Rcpp::stop("Resident CUDA PCA needs positive finite scales.");
+    }
+  }
+  auto center_float = resident_pca_float_vector(center);
+  auto scale_float = resident_pca_float_vector(scale);
+  auto loadings_float = resident_pca_float_vector(loadings);
+  resident_pca_run(input, devices, center_float, scale_float,
+    loadings_float, rank, shards);
+  Rcpp::NumericMatrix scores(rows, rank);
+  for (const auto& shard : shards) {
+    for (int row = shard.first; row < shard.last; ++row) {
+      for (int col = 0; col < rank; ++col) {
+        scores(row, col) = shard.scores[
+          static_cast<std::size_t>(row - shard.first) * rank + col];
+      }
+    }
+  }
+  return scores;
+}
 
 #if defined(__unix__) || defined(__APPLE__)
 #include <fcntl.h>
@@ -901,13 +1119,14 @@ class MassiveLouvainLevel {
 
   void optimize(int max_passes, int chunk_rows,
                 std::uint64_t edge_budget, double resolution,
-                std::uint64_t seed) {
+                std::uint64_t seed, int n_threads) {
     std::mt19937_64 generator(seed);
     const double tolerance = louvain_move_tolerance(
       graph_volume_ / 2.0);
     for (int pass = 0; pass < max_passes; ++pass) {
+      const int active_threads = pass == 0 ? 1 : n_threads;
       const auto moved = scan_pass(chunk_rows, edge_budget,
-        resolution, tolerance, generator);
+        resolution, tolerance, generator, active_threads);
       moves_ += moved;
       ++passes_;
       Rcpp::Rcout << "  Louvain pass " << passes_
@@ -952,6 +1171,7 @@ class MassiveLouvainLevel {
   double graph_volume() const { return graph_volume_; }
   std::uint64_t moves() const { return moves_; }
   int passes() const { return passes_; }
+  int effective_workers() const { return effective_workers_; }
 
  private:
   template <typename Function>
@@ -1002,13 +1222,19 @@ class MassiveLouvainLevel {
       best = 0;
       best_score = 0.0;
     }
+    std::vector<std::uint32_t> candidates;
+    candidates.reserve(weights.size());
     for (const auto& candidate : weights) {
-      const auto index = static_cast<std::uint64_t>(candidate.first - 1);
-      if (candidate.first == old || counts_[index] == 0) continue;
-      const double score = louvain_move_score(candidate.second,
+      candidates.push_back(candidate.first);
+    }
+    std::sort(candidates.begin(), candidates.end());
+    for (const auto label : candidates) {
+      const auto index = static_cast<std::uint64_t>(label - 1);
+      if (label == old || counts_[index] == 0) continue;
+      const double score = louvain_move_score(weights.at(label),
         degree, volumes_[index], graph_volume_, resolution);
       if (score > best_score + tolerance) {
-        best = candidate.first;
+        best = label;
         best_score = score;
       }
     }
@@ -1024,7 +1250,7 @@ class MassiveLouvainLevel {
   std::uint64_t scan_pass(int chunk_rows,
                           std::uint64_t edge_budget,
                           double resolution, double tolerance,
-                          std::mt19937_64& generator) {
+                          std::mt19937_64& generator, int n_threads) {
     std::uint64_t moves = 0;
     const auto blocks = (n_ - 1) / chunk_rows + 1;
     const auto offset = generator() % blocks;
@@ -1033,7 +1259,106 @@ class MassiveLouvainLevel {
         chunk_rows + 1;
       const auto end = std::min(n_, first + chunk_rows - 1);
       moves += scan_segment(first, end, edge_budget,
-        resolution, tolerance, generator);
+        resolution, tolerance, generator, n_threads);
+    }
+    return moves;
+  }
+
+  struct PreparedRow {
+    double degree = 0.0;
+    std::unordered_map<std::uint32_t, double> weights;
+    std::vector<std::uint32_t> neighbor_labels;
+  };
+
+  std::uint64_t scan_rows_parallel(
+      std::uint64_t first,
+      const std::vector<std::pair<std::uint32_t, double>>& edges,
+      const std::vector<std::uint64_t>& row_ptr,
+      const std::vector<std::uint32_t>& order,
+      double resolution, double tolerance, int n_threads,
+      std::uint64_t edge_budget) {
+    std::uint64_t moves = 0;
+    const auto scratch_edges = std::max<std::uint64_t>(1,
+      std::min<std::uint64_t>(65536, edge_budget / 8));
+    for (std::size_t begin = 0; begin < order.size();) {
+      std::size_t end = begin;
+      std::uint64_t used = 0;
+      while (end < order.size()) {
+        const auto row = order[end];
+        const auto count = row_ptr[row + 1] - row_ptr[row];
+        if (end > begin && used + count > scratch_edges) break;
+        used += count;
+        ++end;
+      }
+      const auto batch = end - begin;
+      std::vector<PreparedRow> ready(batch);
+      const auto workers = std::min<std::size_t>(batch, n_threads);
+      effective_workers_ = std::max<int>(effective_workers_, workers);
+      std::vector<std::exception_ptr> errors(workers);
+      auto prepare = [&](std::size_t worker) {
+        try {
+          for (std::size_t item = worker; item < batch;
+               item += workers) {
+            const auto row = order[begin + item];
+            const auto source = first + row;
+            auto& state = ready[item];
+            state.neighbor_labels.reserve(
+              row_ptr[row + 1] - row_ptr[row]);
+            state.weights.reserve(std::min<std::uint64_t>(64,
+              row_ptr[row + 1] - row_ptr[row]));
+            for (auto edge = row_ptr[row]; edge < row_ptr[row + 1];
+                 ++edge) {
+              const auto& neighbor = edges[edge];
+              state.degree += neighbor.second;
+              const auto label = neighbor.first == source ? 0u :
+                labels_[neighbor.first - 1];
+              state.neighbor_labels.push_back(label);
+              if (label != 0) state.weights[label] += neighbor.second;
+            }
+          }
+        } catch (...) {
+          errors[worker] = std::current_exception();
+        }
+      };
+      std::vector<std::thread> threads;
+      for (std::size_t worker = 1; worker < workers; ++worker) {
+        threads.emplace_back(prepare, worker);
+      }
+      prepare(0);
+      for (auto& thread : threads) thread.join();
+      for (const auto& error : errors) {
+        if (error) std::rethrow_exception(error);
+      }
+      for (std::size_t item = 0; item < batch; ++item) {
+        const auto row = order[begin + item];
+        const auto source = first + row;
+        auto& state = ready[item];
+        bool stale = false;
+        for (auto edge = row_ptr[row]; edge < row_ptr[row + 1];
+             ++edge) {
+          const auto& neighbor = edges[edge];
+          const auto label = neighbor.first == source ? 0u :
+            labels_[neighbor.first - 1];
+          if (label != state.neighbor_labels[edge - row_ptr[row]]) {
+            stale = true;
+            break;
+          }
+        }
+        if (stale) {
+          state.weights.clear();
+          for (auto edge = row_ptr[row]; edge < row_ptr[row + 1];
+               ++edge) {
+            const auto& neighbor = edges[edge];
+            if (neighbor.first != source) {
+              state.weights[labels_[neighbor.first - 1]] +=
+                neighbor.second;
+            }
+          }
+        }
+        moves += move_row(source, state.degree, state.weights,
+                          resolution, tolerance);
+      }
+      begin = end;
     }
     return moves;
   }
@@ -1041,7 +1366,8 @@ class MassiveLouvainLevel {
   std::uint64_t scan_segment(std::uint64_t first, std::uint64_t end,
                              std::uint64_t edge_budget,
                              double resolution, double tolerance,
-                             std::mt19937_64& generator) {
+                             std::mt19937_64& generator,
+                             int n_threads) {
     std::uint64_t moves = 0;
     std::unordered_map<std::uint32_t, double> weights;
     std::vector<std::pair<std::uint32_t, double>> edges;
@@ -1062,7 +1388,10 @@ class MassiveLouvainLevel {
       order.resize(rows);
       std::iota(order.begin(), order.end(), 0);
       std::shuffle(order.begin(), order.end(), generator);
-      for (const auto row : order) {
+      if (n_threads > 1) {
+        moves += scan_rows_parallel(first, edges, row_ptr, order,
+          resolution, tolerance, n_threads, edge_budget);
+      } else for (const auto row : order) {
         weights.clear();
         double degree = 0.0;
         for (auto edge = row_ptr[row]; edge < row_ptr[row + 1]; ++edge) {
@@ -1091,6 +1420,7 @@ class MassiveLouvainLevel {
   std::uint64_t moves_ = 0;
   std::uint64_t free_cursor_ = 0;
   int passes_ = 0;
+  int effective_workers_ = 1;
 };
 
 class MassiveLeidenRefinement {
@@ -1142,7 +1472,8 @@ class MassiveLeidenRefinement {
   }
 
   void optimize(int chunk_rows, std::uint64_t edge_budget,
-                double resolution, std::uint64_t seed) {
+                double resolution, std::uint64_t seed,
+                int n_threads) {
     std::mt19937_64 generator(seed);
     const auto blocks = (n_ - 1) / chunk_rows + 1;
     const auto offset = generator() % blocks;
@@ -1153,7 +1484,7 @@ class MassiveLeidenRefinement {
         chunk_rows + 1;
       const auto end = std::min(n_, first + chunk_rows - 1);
       refine_segment(first, end, edge_budget, resolution,
-                     tolerance, generator);
+                     tolerance, generator, n_threads);
       Rcpp::checkUserInterrupt();
     }
   }
@@ -1184,8 +1515,15 @@ class MassiveLeidenRefinement {
   }
 
   std::uint64_t moves() const { return moves_; }
+  int effective_workers() const { return effective_workers_; }
 
  private:
+  struct PreparedRow {
+    std::unordered_map<std::uint32_t, double> weights;
+    std::vector<std::uint32_t> touched;
+    std::vector<std::uint32_t> neighbor_labels;
+  };
+
   std::uint32_t parent_at(std::uint64_t row) {
     const auto label = read_u32(parent_.read(
       checked_product(row, 4), 4));
@@ -1195,10 +1533,37 @@ class MassiveLeidenRefinement {
     return label;
   }
 
+  void prepare_row(
+      std::uint64_t row,
+      const std::vector<std::pair<std::uint32_t, double>>& edges,
+      std::uint64_t begin, std::uint64_t end,
+      PreparedRow& prepared) {
+    const auto parent_id = parent_at(row - 1);
+    prepared.neighbor_labels.reserve(end - begin);
+    prepared.weights.reserve(std::min<std::uint64_t>(64,
+      end - begin));
+    for (auto edge = begin; edge < end; ++edge) {
+      const auto& neighbor = edges[edge];
+      if (neighbor.first == row ||
+          parent_at(neighbor.first - 1) != parent_id) {
+        prepared.neighbor_labels.push_back(0);
+        continue;
+      }
+      const auto candidate = labels_[neighbor.first - 1];
+      prepared.neighbor_labels.push_back(candidate);
+      if (candidate == row) continue;
+      if (prepared.weights.emplace(candidate, 0.0).second) {
+        prepared.touched.push_back(candidate);
+      }
+      prepared.weights[candidate] += neighbor.second;
+    }
+  }
+
   void refine_row(std::uint64_t row,
                   const std::vector<std::pair<std::uint32_t, double>>& edges,
                   std::uint64_t begin, std::uint64_t end,
-                  double resolution, double tolerance) {
+                  double resolution, double tolerance,
+                  const PreparedRow* ready = nullptr) {
     if (sizes_[row - 1] != 1) return;
     const auto parent_id = parent_at(row - 1);
     const double degree = volumes_[row - 1];
@@ -1206,29 +1571,30 @@ class MassiveLeidenRefinement {
     const double threshold = resolution * degree *
       (parent_volume - degree) / graph_volume_;
     if (cuts_[row - 1] + tolerance < threshold) return;
-    std::unordered_map<std::uint32_t, double> weights;
-    std::vector<std::uint32_t> touched;
-    for (auto edge = begin; edge < end; ++edge) {
-      const auto& neighbor = edges[edge];
-      if (neighbor.first == row ||
-          parent_at(neighbor.first - 1) != parent_id) continue;
-      const auto candidate = labels_[neighbor.first - 1];
-      if (candidate == row) continue;
-      if (weights.emplace(candidate, 0.0).second) {
-        touched.push_back(candidate);
+    bool stale = ready == nullptr;
+    if (ready != nullptr) {
+      for (auto edge = begin; edge < end; ++edge) {
+        const auto candidate = ready->neighbor_labels[edge - begin];
+        if (candidate != 0 &&
+            labels_[edges[edge].first - 1] != candidate) {
+          stale = true;
+          break;
+        }
       }
-      weights[candidate] += neighbor.second;
     }
+    PreparedRow current;
+    if (stale) prepare_row(row, edges, begin, end, current);
+    const auto& prepared = stale ? current : *ready;
     std::uint32_t best = 0;
     double best_score = -std::numeric_limits<double>::infinity();
-    for (const auto candidate : touched) {
+    for (const auto candidate : prepared.touched) {
       const double candidate_volume = volumes_[candidate - 1];
       const double candidate_threshold = resolution * candidate_volume *
         (parent_volume - candidate_volume) / graph_volume_;
       if (cuts_[candidate - 1] + tolerance < candidate_threshold) {
         continue;
       }
-      const double score = weights[candidate] - resolution *
+      const double score = prepared.weights.at(candidate) - resolution *
         degree * candidate_volume / graph_volume_;
       if (score >= -tolerance && score > best_score + tolerance) {
         best = candidate;
@@ -1241,14 +1607,71 @@ class MassiveLeidenRefinement {
     sizes_[row - 1] = 0;
     volumes_[best - 1] += degree;
     volumes_[row - 1] = 0.0;
-    cuts_[best - 1] += cuts_[row - 1] - 2.0 * weights[best];
+    cuts_[best - 1] += cuts_[row - 1] -
+      2.0 * prepared.weights.at(best);
     cuts_[row - 1] = 0.0;
     ++moves_;
   }
 
+  void refine_rows_parallel(
+      std::uint64_t first,
+      const std::vector<std::pair<std::uint32_t, double>>& edges,
+      const std::vector<std::uint64_t>& row_ptr,
+      const std::vector<std::uint32_t>& order,
+      double resolution, double tolerance, int n_threads,
+      std::uint64_t edge_budget) {
+    const auto scratch_edges = std::max<std::uint64_t>(1,
+      std::min<std::uint64_t>(65536, edge_budget / 8));
+    for (std::size_t begin = 0; begin < order.size();) {
+      std::size_t end = begin;
+      std::uint64_t used = 0;
+      while (end < order.size()) {
+        const auto row = order[end];
+        const auto count = row_ptr[row + 1] - row_ptr[row];
+        if (end > begin && used + count > scratch_edges) break;
+        used += count;
+        ++end;
+      }
+      const auto batch = end - begin;
+      std::vector<PreparedRow> ready(batch);
+      const auto workers = std::min<std::size_t>(batch, n_threads);
+      effective_workers_ = std::max<int>(effective_workers_, workers);
+      std::vector<std::exception_ptr> errors(workers);
+      auto prepare = [&](std::size_t worker) {
+        try {
+          for (std::size_t item = worker; item < batch;
+               item += workers) {
+            const auto row = order[begin + item];
+            prepare_row(first + row, edges, row_ptr[row],
+                        row_ptr[row + 1], ready[item]);
+          }
+        } catch (...) {
+          errors[worker] = std::current_exception();
+        }
+      };
+      std::vector<std::thread> threads;
+      for (std::size_t worker = 1; worker < workers; ++worker) {
+        threads.emplace_back(prepare, worker);
+      }
+      prepare(0);
+      for (auto& thread : threads) thread.join();
+      for (const auto& error : errors) {
+        if (error) std::rethrow_exception(error);
+      }
+      for (std::size_t item = 0; item < batch; ++item) {
+        const auto row = order[begin + item];
+        refine_row(first + row, edges, row_ptr[row],
+                   row_ptr[row + 1], resolution, tolerance,
+                   &ready[item]);
+      }
+      begin = end;
+    }
+  }
+
   void refine_segment(std::uint64_t first, std::uint64_t end,
                       std::uint64_t edge_budget, double resolution,
-                      double tolerance, std::mt19937_64& generator) {
+                      double tolerance, std::mt19937_64& generator,
+                      int n_threads) {
     std::vector<std::pair<std::uint32_t, double>> edges;
     std::vector<std::uint64_t> row_ptr;
     std::vector<std::uint32_t> order;
@@ -1267,7 +1690,10 @@ class MassiveLeidenRefinement {
       order.resize(rows);
       std::iota(order.begin(), order.end(), 0);
       std::shuffle(order.begin(), order.end(), generator);
-      for (const auto offset : order) {
+      if (n_threads > 1) {
+        refine_rows_parallel(first, edges, row_ptr, order,
+          resolution, tolerance, n_threads, edge_budget);
+      } else for (const auto offset : order) {
         refine_row(first + offset, edges, row_ptr[offset],
                    row_ptr[offset + 1], resolution, tolerance);
       }
@@ -1287,6 +1713,7 @@ class MassiveLeidenRefinement {
   MappedLouvainVector<double> parent_volumes_;
   double graph_volume_ = 0.0;
   std::uint64_t moves_ = 0;
+  int effective_workers_ = 1;
 };
 #endif
 
@@ -1397,7 +1824,8 @@ List massive_graph_modularity_cpp(std::string offsets_path,
                                   double resolution,
                                   int chunk_rows,
                                   double edge_budget,
-                                  bool connectivity) {
+                                  bool connectivity,
+                                  bool contracted = false) {
   if (n_communities < 1 || !std::isfinite(resolution) ||
       resolution <= 0.0 || chunk_rows < 1) {
     Rcpp::stop("Invalid massive modularity controls.");
@@ -1405,7 +1833,7 @@ List massive_graph_modularity_cpp(std::string offsets_path,
   const auto maximum = whole_number(edge_budget, "edge_budget");
   if (maximum < 1) Rcpp::stop("Modularity edge budget is empty.");
   CsrGraphSource graph(offsets_path, indices_path, weights_path,
-                       n_vertices, "stream");
+                       n_vertices, "stream", contracted);
   if (connectivity && graph.vertices() > INT_MAX) {
     Rcpp::stop("Connectivity audit exceeds the vertex-ID limit.");
   }
@@ -1446,9 +1874,16 @@ List massive_graph_modularity_cpp(std::string offsets_path,
     const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
     graph.visit(first, rows,
       [&](std::uint64_t source, std::uint32_t target,
-          float weight, std::uint64_t) {
-      if (source >= target) return;
+          double weight, std::uint64_t) {
+      if (source > target) return;
       const auto left = label_at(source);
+      if (source == target) {
+        volume[left] += weight;
+        internal[left] += weight / 2.0;
+        total += weight / 2.0;
+        ++pairs;
+        return;
+      }
       const auto right = label_at(target);
       volume[left] += weight;
       volume[right] += weight;
@@ -1525,9 +1960,11 @@ List massive_louvain_level_cpp(std::string offsets_path,
                                int seed,
                                bool contracted,
                                std::string initial_path = "",
-                               int initial_count = 0) {
+                               int initial_count = 0,
+                               int n_threads = 1) {
 #if defined(__unix__) || defined(__APPLE__)
   if (max_passes < 1 || chunk_rows < 1 || seed < 0 ||
+      n_threads < 1 || n_threads > 32 ||
       !std::isfinite(resolution) || resolution <= 0) {
     Rcpp::stop("Invalid massive Louvain controls.");
   }
@@ -1557,6 +1994,7 @@ List massive_louvain_level_cpp(std::string offsets_path,
   double final = 0.0;
   std::uint64_t moves = 0;
   int passes = 0;
+  int effective_workers = 1;
   std::uint32_t communities = 0;
   double total_edge_weight = 0.0;
   {
@@ -1564,7 +2002,7 @@ List massive_louvain_level_cpp(std::string offsets_path,
     level.initialize(chunk_rows, maximum, resolution,
                      initial_path, initial_count);
     level.optimize(max_passes, chunk_rows, maximum, resolution,
-                   static_cast<std::uint64_t>(seed));
+                   static_cast<std::uint64_t>(seed), n_threads);
     initial = level.initial_modularity();
     final = level.modularity(chunk_rows, maximum, resolution);
     if (final < initial - 1e-7) {
@@ -1573,6 +2011,7 @@ List massive_louvain_level_cpp(std::string offsets_path,
     communities = level.compact();
     moves = level.moves();
     passes = level.passes();
+    effective_workers = level.effective_workers();
     total_edge_weight = level.graph_volume() / 2.0;
   }
   if (std::filesystem::exists(output)) {
@@ -1607,10 +2046,763 @@ List massive_louvain_level_cpp(std::string offsets_path,
     Rcpp::Named("passes") = passes,
     Rcpp::Named("scan_order") = "cyclic_blocks_shuffled_rows",
     Rcpp::Named("initial_partition") = !initial_path.empty(),
+    Rcpp::Named("cpu_workers") = n_threads,
+    Rcpp::Named("cpu_workers_effective") = effective_workers,
+    Rcpp::Named("parallel_stage") = effective_workers > 1 ?
+      "row_candidate_preparation" : "none",
     Rcpp::Named("backend") = "cpu"
   );
 #else
   Rcpp::stop("Massive Louvain requires POSIX memory mapping.");
+#endif
+}
+
+// [[Rcpp::export]]
+List massive_louvain_metal_level_cpp(std::string offsets_path,
+                                    std::string indices_path,
+                                    std::string weights_path,
+                                    double n_vertices,
+                                    std::string output,
+                                    int max_passes,
+                                    double resolution,
+                                    int chunk_rows,
+                                    double edge_budget,
+                                    int seed,
+                                    bool contracted = false,
+                                    std::string initial_path = "",
+                                    int initial_count = 0) {
+#if defined(HAVE_METAL) && defined(__APPLE__)
+  if (max_passes < 1 || chunk_rows < 1 || seed < 0 ||
+      !std::isfinite(resolution) || resolution <= 0) {
+    Rcpp::stop("Invalid Metal Louvain controls.");
+  }
+  const auto maximum = whole_number(edge_budget, "edge_budget");
+  if (maximum < 1 || maximum > INT_MAX) {
+    Rcpp::stop("Metal Louvain edge budget exceeds int32 offsets.");
+  }
+  CsrGraphSource graph(offsets_path, indices_path, weights_path,
+                       n_vertices, "stream", contracted);
+  const auto n = graph.vertices();
+  std::vector<std::string> inputs = {
+    offsets_path, indices_path, weights_path};
+  if (!initial_path.empty()) inputs.push_back(initial_path);
+  std::vector<std::string> stamps;
+  std::vector<std::uint64_t> sizes;
+  for (const auto& path : inputs) {
+    stamps.push_back(file_stamp(path));
+    sizes.push_back(std::filesystem::file_size(path));
+  }
+  const std::string part = output + ".part";
+  if (std::filesystem::exists(output) || std::filesystem::exists(part)) {
+    Rcpp::stop("Metal Louvain output already exists.");
+  }
+
+  std::vector<float> degree(n, 0.0f);
+  std::vector<int> initial(n);
+  if (!initial_path.empty()) {
+    if (initial_count < 1 || static_cast<std::uint64_t>(initial_count) > n) {
+      Rcpp::stop("Invalid initial Metal Louvain community count.");
+    }
+    GraphFile saved(initial_path, checked_product(n, 4), "mmap");
+    for (std::uint64_t u = 0; u < n; ++u) {
+      const auto label = read_u32(saved.read(checked_product(u, 4), 4));
+      if (label < 1 || label > static_cast<std::uint32_t>(initial_count)) {
+        Rcpp::stop("Initial Metal Louvain label is out of range.");
+      }
+      initial[u] = static_cast<int>(label - 1);
+    }
+  } else {
+    std::iota(initial.begin(), initial.end(), 0);
+  }
+  double volume = 0.0;
+  double initial_internal = 0.0;
+  std::vector<double> initial_volume(n, 0.0);
+  for (std::uint64_t first = 1; first <= n;) {
+    const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+    graph.visit(first, rows,
+      [&](std::uint64_t source, std::uint32_t target, double weight,
+          std::uint64_t) {
+        degree[source - 1] += static_cast<float>(weight);
+        initial_volume[initial[source - 1]] += weight;
+        if (source <= target &&
+            initial[source - 1] == initial[target - 1]) {
+          initial_internal += source == target ? weight / 2.0 : weight;
+        }
+        volume += weight;
+      });
+    first += rows;
+    Rcpp::checkUserInterrupt();
+  }
+  if (!(volume > 0.0) || volume > FLT_MAX) {
+    Rcpp::stop("Metal Louvain graph volume is invalid.");
+  }
+  double initial_modularity = initial_internal / (volume / 2.0);
+  for (double value : initial_volume) {
+    const double fraction = value / volume;
+    initial_modularity -= resolution * fraction * fraction;
+  }
+  initial_volume.clear();
+  initial_volume.shrink_to_fit();
+  std::unique_ptr<void, decltype(&graph_stream_metal_destroy)> handle(
+    graph_stream_metal_create(degree, initial,
+      static_cast<float>(volume), static_cast<float>(resolution),
+      static_cast<std::uint64_t>(seed)), graph_stream_metal_destroy);
+  std::uint64_t moves = 0;
+  int passes = 0;
+  for (int pass = 0; pass < max_passes; ++pass) {
+    graph_stream_metal_begin_pass(handle.get(), pass);
+    for (std::uint64_t first = 1; first <= n;) {
+      const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+      std::vector<int> row_ptr(rows + 1, 0);
+      std::vector<int> col_idx;
+      std::vector<float> weight;
+      graph.visit(first, rows,
+        [&](std::uint64_t source, std::uint32_t target,
+            double value, std::uint64_t) {
+          ++row_ptr[source - first + 1];
+          col_idx.push_back(static_cast<int>(target - 1));
+          weight.push_back(static_cast<float>(value));
+        });
+      std::partial_sum(row_ptr.begin(), row_ptr.end(),
+                       row_ptr.begin());
+      graph_stream_metal_chunk(handle.get(), row_ptr, col_idx,
+        weight, static_cast<std::uint32_t>(first - 1));
+      first += rows;
+      Rcpp::checkUserInterrupt();
+    }
+    const auto moved = graph_stream_metal_end_pass(handle.get());
+    moves += moved;
+    ++passes;
+    if (moved == 0) break;
+  }
+  auto labels = graph_stream_metal_labels(handle.get());
+  auto counts = graph_stream_metal_counts(handle.get());
+  handle.reset();
+  std::vector<std::uint32_t> compact(n, 0);
+  std::uint32_t communities = 0;
+  for (std::uint64_t u = 0; u < n; ++u) {
+    if (counts[u] > 0) compact[u] = ++communities;
+  }
+  {
+    MappedLouvainVector<std::uint32_t> result(part, n);
+    for (std::uint64_t u = 0; u < n; ++u) {
+      const int label = labels[u];
+      if (label < 0 || static_cast<std::uint64_t>(label) >= n ||
+          compact[label] == 0) {
+        Rcpp::stop("Metal Louvain labels are inconsistent.");
+      }
+      result[u] = compact[label];
+    }
+    result.sync();
+  }
+  std::vector<double> final_volume(n, 0.0);
+  double final_internal = 0.0;
+  for (std::uint64_t first = 1; first <= n;) {
+    const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+    graph.visit(first, rows,
+      [&](std::uint64_t source, std::uint32_t target,
+          double weight, std::uint64_t) {
+        const auto left = labels[source - 1];
+        final_volume[left] += weight;
+        if (source <= target && left == labels[target - 1]) {
+          final_internal += source == target ? weight / 2.0 : weight;
+        }
+      });
+    first += rows;
+    Rcpp::checkUserInterrupt();
+  }
+  double final = final_internal / (volume / 2.0);
+  for (double value : final_volume) {
+    const double fraction = value / volume;
+    final -= resolution * fraction * fraction;
+  }
+  if (!std::isfinite(final) || final < initial_modularity - 1e-7) {
+    Rcpp::stop("Metal Louvain local moves reduced modularity.");
+  }
+  for (std::size_t i = 0; i < inputs.size(); ++i) {
+    std::error_code error;
+    const auto size = std::filesystem::file_size(inputs[i], error);
+    if (error || size != sizes[i] || file_stamp(inputs[i]) != stamps[i]) {
+      Rcpp::stop("Massive graph files changed during Metal Louvain.");
+    }
+  }
+  std::error_code error;
+  std::filesystem::rename(part, output, error);
+  if (error) Rcpp::stop("Cannot finalize Metal Louvain labels: " +
+                        error.message());
+  return List::create(
+    Rcpp::Named("membership_path") = output,
+    Rcpp::Named("n_vertices") = static_cast<double>(n),
+    Rcpp::Named("n_communities") = static_cast<int>(communities),
+    Rcpp::Named("modularity_initial") = initial_modularity,
+    Rcpp::Named("modularity_final") = final,
+    Rcpp::Named("total_edge_weight") = volume / 2.0,
+    Rcpp::Named("moves") = static_cast<double>(moves),
+    Rcpp::Named("passes") = passes,
+    Rcpp::Named("scan_order") = "metal_streamed_blocks_color_phases",
+    Rcpp::Named("initial_partition") = !initial_path.empty(),
+    Rcpp::Named("backend") = "metal",
+    Rcpp::Named("objective_audit_backend") = "cpu");
+#else
+  Rcpp::stop("Metal streaming Louvain requires macOS Metal.");
+#endif
+}
+
+// [[Rcpp::export]]
+List massive_louvain_cuda_level_cpp(std::string offsets_path,
+                                   std::string indices_path,
+                                   std::string weights_path,
+                                   double n_vertices,
+                                   std::string output,
+                                   int max_passes,
+                                   double resolution,
+                                   int chunk_rows,
+                                   double edge_budget,
+                                   int seed,
+                                   bool contracted = false,
+                                   std::string initial_path = "",
+                                   int initial_count = 0) {
+#if defined(FASTEMBEDR_HAS_CUDA) && defined(__unix__)
+  if (max_passes < 1 || chunk_rows < 1 || seed < 0 ||
+      !std::isfinite(resolution) || resolution <= 0) {
+    Rcpp::stop("Invalid CUDA Louvain controls.");
+  }
+  const auto maximum = whole_number(edge_budget, "edge_budget");
+  if (maximum < 1 || maximum > INT_MAX) {
+    Rcpp::stop("CUDA Louvain edge budget exceeds int32 offsets.");
+  }
+  CsrGraphSource graph(offsets_path, indices_path, weights_path,
+                       n_vertices, "stream", contracted);
+  const auto n = graph.vertices();
+  if (n < 2 || n > INT_MAX) {
+    Rcpp::stop("CUDA streaming Louvain needs 2..2^31-1 vertices.");
+  }
+  const std::vector<std::string> inputs = {
+    offsets_path, indices_path, weights_path};
+  std::vector<std::string> paths = inputs;
+  if (!initial_path.empty()) paths.push_back(initial_path);
+  std::vector<std::string> stamps;
+  std::vector<std::uint64_t> sizes;
+  for (const auto& path : paths) {
+    stamps.push_back(file_stamp(path));
+    sizes.push_back(std::filesystem::file_size(path));
+  }
+  const std::string part = output + ".part";
+  if (std::filesystem::exists(output) ||
+      std::filesystem::exists(part)) {
+    Rcpp::stop("CUDA Louvain output already exists.");
+  }
+  std::vector<int> initial(n);
+  if (!initial_path.empty()) {
+    if (initial_count < 1 || static_cast<std::uint64_t>(initial_count) > n) {
+      Rcpp::stop("Invalid initial CUDA Louvain community count.");
+    }
+    GraphFile saved(initial_path, checked_product(n, 4), "mmap");
+    for (std::uint64_t u = 0; u < n; ++u) {
+      const auto label = read_u32(saved.read(checked_product(u, 4), 4));
+      if (label < 1 || label > static_cast<std::uint32_t>(initial_count)) {
+        Rcpp::stop("Initial CUDA Louvain label is out of range.");
+      }
+      initial[u] = static_cast<int>(label - 1);
+    }
+  } else {
+    std::iota(initial.begin(), initial.end(), 0);
+  }
+  std::vector<float> degree(n, 0.0f);
+  std::vector<double> initial_volume(n, 0.0);
+  double graph_volume = 0.0;
+  double initial_internal = 0.0;
+  for (std::uint64_t first = 1; first <= n;) {
+    const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+    graph.visit(first, rows,
+      [&](std::uint64_t source, std::uint32_t target,
+          double weight, std::uint64_t) {
+        degree[source - 1] += static_cast<float>(weight);
+        initial_volume[initial[source - 1]] += weight;
+        if (source <= target &&
+            initial[source - 1] == initial[target - 1]) {
+          initial_internal += source == target ? weight / 2.0 : weight;
+        }
+        graph_volume += weight;
+      });
+    first += rows;
+    Rcpp::checkUserInterrupt();
+  }
+  if (!(graph_volume > 0.0) || graph_volume > FLT_MAX) {
+    Rcpp::stop("CUDA Louvain graph volume is invalid.");
+  }
+  double initial_modularity = initial_internal / (graph_volume / 2.0);
+  for (double value : initial_volume) {
+    const double fraction = value / graph_volume;
+    initial_modularity -= resolution * fraction * fraction;
+  }
+  initial_volume.clear();
+  initial_volume.shrink_to_fit();
+  std::unique_ptr<void, decltype(&graph_stream_cuda_destroy)> handle(
+    graph_stream_cuda_create(degree, initial,
+      static_cast<float>(graph_volume), static_cast<float>(resolution),
+      static_cast<std::uint64_t>(seed), chunk_rows,
+      static_cast<int>(maximum)), graph_stream_cuda_destroy);
+  std::uint64_t moves = 0;
+  int passes = 0;
+  for (int pass = 0; pass < max_passes; ++pass) {
+    graph_stream_cuda_begin_pass(handle.get(), pass);
+    for (std::uint64_t first = 1; first <= n;) {
+      const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+      std::vector<int> row_ptr(rows + 1, 0);
+      std::vector<int> col_idx;
+      std::vector<float> weight;
+      graph.visit(first, rows,
+        [&](std::uint64_t source, std::uint32_t target,
+            double value, std::uint64_t) {
+          ++row_ptr[source - first + 1];
+          col_idx.push_back(static_cast<int>(target - 1));
+          weight.push_back(static_cast<float>(value));
+        });
+      std::partial_sum(row_ptr.begin(), row_ptr.end(),
+                       row_ptr.begin());
+      graph_stream_cuda_chunk(handle.get(), row_ptr, col_idx,
+        weight, static_cast<int>(first - 1));
+      first += rows;
+      Rcpp::checkUserInterrupt();
+    }
+    const auto moved = graph_stream_cuda_end_pass(handle.get());
+    moves += moved;
+    ++passes;
+    if (moved == 0) break;
+  }
+  const auto labels = graph_stream_cuda_labels(handle.get());
+  const auto counts = graph_stream_cuda_counts(handle.get());
+  handle.reset();
+  std::vector<std::uint32_t> compact(n, 0);
+  std::uint32_t communities = 0;
+  for (std::uint64_t u = 0; u < n; ++u) {
+    if (counts[u] > 0) compact[u] = ++communities;
+  }
+  {
+    MappedLouvainVector<std::uint32_t> result(part, n);
+    for (std::uint64_t u = 0; u < n; ++u) {
+      const int label = labels[u];
+      if (label < 0 || static_cast<std::uint64_t>(label) >= n ||
+          compact[label] == 0) {
+        Rcpp::stop("CUDA Louvain labels are inconsistent.");
+      }
+      result[u] = compact[label];
+    }
+    result.sync();
+  }
+  auto audit = massive_graph_modularity_cpp(offsets_path,
+    indices_path, weights_path, part, n_vertices,
+    static_cast<int>(communities), resolution, chunk_rows,
+    edge_budget, false, contracted);
+  double final = Rcpp::as<double>(audit["modularity"]);
+  bool quality_rollback = false;
+  if (std::isfinite(final) &&
+      final < initial_modularity - 1e-7) {
+    std::fstream restored(part,
+      std::ios::in | std::ios::out | std::ios::binary);
+    if (!restored) Rcpp::stop("Cannot restore CUDA Louvain labels.");
+    for (std::uint64_t u = 0; u < n; ++u) {
+      const std::uint32_t label =
+        static_cast<std::uint32_t>(initial[u] + 1);
+      restored.write(reinterpret_cast<const char*>(&label),
+        sizeof(label));
+    }
+    restored.flush();
+    if (!restored) Rcpp::stop("Cannot flush restored CUDA Louvain labels.");
+    restored.close();
+    communities = initial_count > 0 ?
+      static_cast<std::uint32_t>(initial_count) :
+      static_cast<std::uint32_t>(n);
+    audit = massive_graph_modularity_cpp(offsets_path,
+      indices_path, weights_path, part, n_vertices,
+      static_cast<int>(communities), resolution, chunk_rows,
+      edge_budget, false, contracted);
+    final = Rcpp::as<double>(audit["modularity"]);
+    quality_rollback = true;
+    moves = 0;
+  }
+  if (!std::isfinite(final) || final < initial_modularity - 1e-7) {
+    Rcpp::stop("CUDA Louvain local moves reduced modularity.");
+  }
+  for (std::size_t i = 0; i < paths.size(); ++i) {
+    std::error_code error;
+    const auto size = std::filesystem::file_size(paths[i], error);
+    if (error || size != sizes[i] || file_stamp(paths[i]) != stamps[i]) {
+      Rcpp::stop("Massive graph files changed during CUDA Louvain.");
+    }
+  }
+  std::error_code error;
+  std::filesystem::rename(part, output, error);
+  if (error) Rcpp::stop("Cannot finalize CUDA Louvain labels: " +
+                        error.message());
+  return List::create(
+    Rcpp::Named("membership_path") = output,
+    Rcpp::Named("n_vertices") = static_cast<double>(n),
+    Rcpp::Named("n_communities") = static_cast<int>(communities),
+    Rcpp::Named("modularity_initial") = initial_modularity,
+    Rcpp::Named("modularity_final") = final,
+    Rcpp::Named("total_edge_weight") = graph_volume / 2.0,
+    Rcpp::Named("moves") = static_cast<double>(moves),
+    Rcpp::Named("quality_rollback") = quality_rollback,
+    Rcpp::Named("passes") = passes,
+    Rcpp::Named("scan_order") = "cuda_streamed_blocks_color_phases",
+    Rcpp::Named("initial_partition") = !initial_path.empty(),
+    Rcpp::Named("backend") = "cuda",
+    Rcpp::Named("objective_audit_backend") = "cpu");
+#else
+  Rcpp::stop("CUDA streaming Louvain requires Linux CUDA.");
+#endif
+}
+
+// [[Rcpp::export]]
+List massive_leiden_metal_refine_cpp(std::string offsets_path,
+                                     std::string indices_path,
+                                     std::string weights_path,
+                                     std::string parent_path,
+                                     double n_vertices,
+                                     int n_parent,
+                                     std::string output,
+                                     double resolution,
+                                     int chunk_rows,
+                                     double edge_budget,
+                                     int seed,
+                                     bool contracted) {
+#if defined(HAVE_METAL) && defined(__APPLE__)
+  if (n_parent < 1 || chunk_rows < 1 || seed < 0 ||
+      !std::isfinite(resolution) || resolution <= 0) {
+    Rcpp::stop("Invalid Metal Leiden refinement controls.");
+  }
+  const auto maximum = whole_number(edge_budget, "edge_budget");
+  if (maximum < 1 || maximum > INT_MAX) {
+    Rcpp::stop("Metal Leiden edge budget exceeds int32 offsets.");
+  }
+  CsrGraphSource graph(offsets_path, indices_path, weights_path,
+                       n_vertices, "stream", contracted);
+  const auto n = graph.vertices();
+  if (n < 2 || n > INT_MAX || static_cast<std::uint64_t>(n_parent) > n) {
+    Rcpp::stop("Metal Leiden graph size is invalid.");
+  }
+  const std::vector<std::string> inputs = {
+    offsets_path, indices_path, weights_path, parent_path};
+  std::vector<std::string> stamps;
+  std::vector<std::uint64_t> sizes;
+  for (const auto& path : inputs) {
+    stamps.push_back(file_stamp(path));
+    sizes.push_back(std::filesystem::file_size(path));
+  }
+  const auto map = output + ".parent.u32";
+  for (const auto& path : {output, output + ".part",
+                            map, map + ".part"}) {
+    if (std::filesystem::exists(path)) {
+      Rcpp::stop("Metal Leiden output already exists.");
+    }
+  }
+  GraphFile saved(parent_path, checked_product(n, 4), "mmap");
+  std::vector<int> parent(n);
+  std::vector<int> initial(n);
+  std::vector<float> degree(n, 0.0f);
+  std::vector<float> cuts(n, 0.0f);
+  std::vector<float> parent_volume(n_parent, 0.0f);
+  std::iota(initial.begin(), initial.end(), 0);
+  for (std::uint64_t u = 0; u < n; ++u) {
+    const auto label = read_u32(saved.read(checked_product(u, 4), 4));
+    if (label < 1 || label > static_cast<std::uint32_t>(n_parent)) {
+      Rcpp::stop("Metal Leiden parent label is out of range.");
+    }
+    parent[u] = static_cast<int>(label - 1);
+  }
+  double volume = 0.0;
+  for (std::uint64_t first = 1; first <= n;) {
+    const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+    graph.visit(first, rows,
+      [&](std::uint64_t source, std::uint32_t target, double weight,
+          std::uint64_t) {
+        const auto u = source - 1;
+        degree[u] += static_cast<float>(weight);
+        parent_volume[parent[u]] += static_cast<float>(weight);
+        if (source != target && parent[u] == parent[target - 1]) {
+          cuts[u] += static_cast<float>(weight);
+        }
+        volume += weight;
+      });
+    first += rows;
+    Rcpp::checkUserInterrupt();
+  }
+  if (!(volume > 0.0) || volume > FLT_MAX) {
+    Rcpp::stop("Metal Leiden graph volume is invalid.");
+  }
+  for (const auto value : parent_volume) {
+    if (!std::isfinite(value)) {
+      Rcpp::stop("Metal Leiden parent volume exceeds float32.");
+    }
+  }
+  std::unique_ptr<void, decltype(&graph_stream_metal_destroy)> handle(
+    graph_stream_metal_create(degree, initial,
+      static_cast<float>(volume), static_cast<float>(resolution),
+      static_cast<std::uint64_t>(seed), &parent, &cuts,
+      &parent_volume), graph_stream_metal_destroy);
+  graph_stream_metal_begin_pass(handle.get(), 0);
+  for (int color = 1; color < 8; ++color) {
+    graph_stream_metal_set_color(handle.get(), color);
+    for (std::uint64_t first = 1; first <= n;) {
+      const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+      std::vector<int> row_ptr(rows + 1, 0);
+      std::vector<int> col_idx;
+      std::vector<float> weight;
+      graph.visit(first, rows,
+        [&](std::uint64_t source, std::uint32_t target,
+            double value, std::uint64_t) {
+          ++row_ptr[source - first + 1];
+          col_idx.push_back(static_cast<int>(target - 1));
+          weight.push_back(static_cast<float>(value));
+        });
+      std::partial_sum(row_ptr.begin(), row_ptr.end(), row_ptr.begin());
+      graph_stream_metal_chunk(handle.get(), row_ptr, col_idx,
+        weight, static_cast<std::uint32_t>(first - 1));
+      first += rows;
+      Rcpp::checkUserInterrupt();
+    }
+  }
+  const auto moves = graph_stream_metal_end_pass(handle.get());
+  const auto labels = graph_stream_metal_labels(handle.get());
+  const auto counts = graph_stream_metal_counts(handle.get());
+  handle.reset();
+  std::vector<std::uint32_t> compact(n, 0);
+  std::uint32_t communities = 0;
+  for (std::uint64_t u = 0; u < n; ++u) {
+    if (counts[u] > 0) compact[u] = ++communities;
+  }
+  {
+    MappedLouvainVector<std::uint32_t> result(output + ".part", n);
+    MappedLouvainVector<std::uint32_t> mapping(map + ".part",
+                                                communities);
+    for (std::uint32_t group = 0; group < communities; ++group) {
+      mapping[group] = 0;
+    }
+    for (std::uint64_t u = 0; u < n; ++u) {
+      const int label = labels[u];
+      if (label < 0 || static_cast<std::uint64_t>(label) >= n ||
+          compact[label] == 0) {
+        Rcpp::stop("Metal Leiden labels are inconsistent.");
+      }
+      const auto group = compact[label];
+      result[u] = group;
+      const auto parent_label =
+        static_cast<std::uint32_t>(parent[u] + 1);
+      if (mapping[group - 1] == 0) mapping[group - 1] = parent_label;
+      if (mapping[group - 1] != parent_label) {
+        Rcpp::stop("Metal Leiden crossed a parent community.");
+      }
+    }
+    result.sync();
+    mapping.sync();
+  }
+  if (communities < static_cast<std::uint32_t>(n_parent)) {
+    Rcpp::stop("Metal Leiden refined fewer than its parent groups.");
+  }
+  for (std::size_t index = 0; index < inputs.size(); ++index) {
+    std::error_code error;
+    const auto size = std::filesystem::file_size(inputs[index], error);
+    if (error || size != sizes[index] ||
+        file_stamp(inputs[index]) != stamps[index]) {
+      Rcpp::stop("Massive graph or parent changed during Metal Leiden.");
+    }
+  }
+  std::error_code error;
+  std::filesystem::rename(output + ".part", output, error);
+  if (error) Rcpp::stop("Cannot finalize Metal Leiden labels: " +
+                        error.message());
+  std::filesystem::rename(map + ".part", map, error);
+  if (error) Rcpp::stop("Cannot finalize Metal Leiden parent map: " +
+                        error.message());
+  return List::create(
+    Rcpp::Named("membership_path") = output,
+    Rcpp::Named("parent_mapping_path") = map,
+    Rcpp::Named("n_vertices") = static_cast<double>(n),
+    Rcpp::Named("n_refined") = static_cast<int>(communities),
+    Rcpp::Named("n_parent") = n_parent,
+    Rcpp::Named("moves") = static_cast<double>(moves),
+    Rcpp::Named("scan_order") = "global_color_streamed_blocks",
+    Rcpp::Named("backend") = "metal");
+#else
+  Rcpp::stop("Metal streaming Leiden requires macOS Metal.");
+#endif
+}
+
+// [[Rcpp::export]]
+List massive_leiden_cuda_refine_cpp(std::string offsets_path,
+                                    std::string indices_path,
+                                    std::string weights_path,
+                                    std::string parent_path,
+                                    double n_vertices,
+                                    int n_parent,
+                                    std::string output,
+                                    double resolution,
+                                    int chunk_rows,
+                                    double edge_budget,
+                                    int seed,
+                                    bool contracted) {
+#if defined(FASTEMBEDR_HAS_CUDA) && defined(__unix__)
+  if (n_parent < 1 || chunk_rows < 1 || seed < 0 ||
+      !std::isfinite(resolution) || resolution <= 0.0) {
+    Rcpp::stop("Invalid CUDA Leiden refinement controls.");
+  }
+  const auto maximum = whole_number(edge_budget, "edge_budget");
+  if (maximum < 1 || maximum > INT_MAX) {
+    Rcpp::stop("CUDA Leiden edge budget exceeds int32 offsets.");
+  }
+  CsrGraphSource graph(offsets_path, indices_path, weights_path,
+                       n_vertices, "stream", contracted);
+  const auto n = graph.vertices();
+  if (n < 2 || n > INT_MAX || static_cast<std::uint64_t>(n_parent) > n) {
+    Rcpp::stop("CUDA Leiden graph size is invalid.");
+  }
+  const std::vector<std::string> inputs = {
+    offsets_path, indices_path, weights_path, parent_path};
+  std::vector<std::string> stamps;
+  std::vector<std::uint64_t> sizes;
+  for (const auto& path : inputs) {
+    stamps.push_back(file_stamp(path));
+    sizes.push_back(std::filesystem::file_size(path));
+  }
+  const auto map = output + ".parent.u32";
+  for (const auto& path : {output, output + ".part",
+                            map, map + ".part"}) {
+    if (std::filesystem::exists(path)) {
+      Rcpp::stop("CUDA Leiden output already exists.");
+    }
+  }
+  GraphFile saved(parent_path, checked_product(n, 4), "mmap");
+  std::vector<int> parent(n);
+  std::vector<int> initial(n);
+  std::vector<float> degree(n, 0.0f);
+  std::vector<float> cuts(n, 0.0f);
+  std::vector<float> parent_volume(n_parent, 0.0f);
+  std::iota(initial.begin(), initial.end(), 0);
+  for (std::uint64_t u = 0; u < n; ++u) {
+    const auto label = read_u32(saved.read(checked_product(u, 4), 4));
+    if (label < 1 || label > static_cast<std::uint32_t>(n_parent)) {
+      Rcpp::stop("CUDA Leiden parent label is out of range.");
+    }
+    parent[u] = static_cast<int>(label - 1);
+  }
+  double volume = 0.0;
+  for (std::uint64_t first = 1; first <= n;) {
+    const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+    graph.visit(first, rows,
+      [&](std::uint64_t source, std::uint32_t target, double weight,
+          std::uint64_t) {
+        const auto u = source - 1;
+        degree[u] += static_cast<float>(weight);
+        parent_volume[parent[u]] += static_cast<float>(weight);
+        if (source != target && parent[u] == parent[target - 1]) {
+          cuts[u] += static_cast<float>(weight);
+        }
+        volume += weight;
+      });
+    first += rows;
+    Rcpp::checkUserInterrupt();
+  }
+  if (!(volume > 0.0) || volume > FLT_MAX) {
+    Rcpp::stop("CUDA Leiden graph volume is invalid.");
+  }
+  for (const auto value : parent_volume) {
+    if (!std::isfinite(value)) {
+      Rcpp::stop("CUDA Leiden parent volume exceeds float32.");
+    }
+  }
+  std::unique_ptr<void, decltype(&graph_stream_cuda_destroy)> handle(
+    graph_stream_cuda_create(degree, initial,
+      static_cast<float>(volume), static_cast<float>(resolution),
+      static_cast<std::uint64_t>(seed), chunk_rows,
+      static_cast<int>(maximum), &parent, &cuts, &parent_volume),
+    graph_stream_cuda_destroy);
+  graph_stream_cuda_begin_pass(handle.get(), 0);
+  for (int color = 1; color < 8; ++color) {
+    graph_stream_cuda_set_color(handle.get(), color);
+    for (std::uint64_t first = 1; first <= n;) {
+      const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+      std::vector<int> row_ptr(rows + 1, 0);
+      std::vector<int> col_idx;
+      std::vector<float> weight;
+      graph.visit(first, rows,
+        [&](std::uint64_t source, std::uint32_t target,
+            double value, std::uint64_t) {
+          ++row_ptr[source - first + 1];
+          col_idx.push_back(static_cast<int>(target - 1));
+          weight.push_back(static_cast<float>(value));
+        });
+      std::partial_sum(row_ptr.begin(), row_ptr.end(), row_ptr.begin());
+      graph_stream_cuda_chunk(handle.get(), row_ptr, col_idx,
+        weight, static_cast<int>(first - 1));
+      first += rows;
+      Rcpp::checkUserInterrupt();
+    }
+  }
+  const auto moves = graph_stream_cuda_end_pass(handle.get());
+  const auto labels = graph_stream_cuda_labels(handle.get());
+  const auto counts = graph_stream_cuda_counts(handle.get());
+  handle.reset();
+  std::vector<std::uint32_t> compact(n, 0);
+  std::uint32_t communities = 0;
+  for (std::uint64_t u = 0; u < n; ++u) {
+    if (counts[u] > 0) compact[u] = ++communities;
+  }
+  {
+    MappedLouvainVector<std::uint32_t> result(output + ".part", n);
+    MappedLouvainVector<std::uint32_t> mapping(map + ".part",
+                                                communities);
+    for (std::uint32_t group = 0; group < communities; ++group) {
+      mapping[group] = 0;
+    }
+    for (std::uint64_t u = 0; u < n; ++u) {
+      const int label = labels[u];
+      if (label < 0 || static_cast<std::uint64_t>(label) >= n ||
+          compact[label] == 0) {
+        Rcpp::stop("CUDA Leiden labels are inconsistent.");
+      }
+      const auto group = compact[label];
+      result[u] = group;
+      const auto parent_label =
+        static_cast<std::uint32_t>(parent[u] + 1);
+      if (mapping[group - 1] == 0) mapping[group - 1] = parent_label;
+      if (mapping[group - 1] != parent_label) {
+        Rcpp::stop("CUDA Leiden crossed a parent community.");
+      }
+    }
+    result.sync();
+    mapping.sync();
+  }
+  if (communities < static_cast<std::uint32_t>(n_parent)) {
+    Rcpp::stop("CUDA Leiden refined fewer than its parent groups.");
+  }
+  for (std::size_t index = 0; index < inputs.size(); ++index) {
+    std::error_code error;
+    const auto size = std::filesystem::file_size(inputs[index], error);
+    if (error || size != sizes[index] ||
+        file_stamp(inputs[index]) != stamps[index]) {
+      Rcpp::stop("Massive graph or parent changed during CUDA Leiden.");
+    }
+  }
+  std::error_code error;
+  std::filesystem::rename(output + ".part", output, error);
+  if (error) Rcpp::stop("Cannot finalize CUDA Leiden labels: " +
+                        error.message());
+  std::filesystem::rename(map + ".part", map, error);
+  if (error) Rcpp::stop("Cannot finalize CUDA Leiden parent map: " +
+                        error.message());
+  return List::create(
+    Rcpp::Named("membership_path") = output,
+    Rcpp::Named("parent_mapping_path") = map,
+    Rcpp::Named("n_vertices") = static_cast<double>(n),
+    Rcpp::Named("n_refined") = static_cast<int>(communities),
+    Rcpp::Named("n_parent") = n_parent,
+    Rcpp::Named("moves") = static_cast<double>(moves),
+    Rcpp::Named("scan_order") = "global_color_streamed_blocks",
+    Rcpp::Named("backend") = "cuda");
+#else
+  Rcpp::stop("CUDA streaming Leiden requires Linux CUDA.");
 #endif
 }
 
@@ -1626,9 +2818,11 @@ List massive_leiden_refine_cpp(std::string offsets_path,
                                int chunk_rows,
                                double edge_budget,
                                int seed,
-                               bool contracted) {
+                               bool contracted,
+                               int n_threads = 1) {
 #if defined(__unix__) || defined(__APPLE__)
   if (n_parent < 1 || chunk_rows < 1 || seed < 0 ||
+      n_threads < 1 || n_threads > 32 ||
       !std::isfinite(resolution) || resolution <= 0) {
     Rcpp::stop("Invalid massive Leiden refinement controls.");
   }
@@ -1659,14 +2853,16 @@ List massive_leiden_refine_cpp(std::string offsets_path,
   }
   std::uint32_t communities = 0;
   std::uint64_t moves = 0;
+  int effective_workers = 1;
   {
     MassiveLeidenRefinement refinement(graph, parent_path,
                                        n_parent, output);
     refinement.initialize(chunk_rows, maximum);
     refinement.optimize(chunk_rows, maximum, resolution,
-                        static_cast<std::uint64_t>(seed));
+                        static_cast<std::uint64_t>(seed), n_threads);
     communities = refinement.compact(map + ".part");
     moves = refinement.moves();
+    effective_workers = refinement.effective_workers();
   }
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     std::error_code error;
@@ -1696,6 +2892,10 @@ List massive_leiden_refine_cpp(std::string offsets_path,
     Rcpp::Named("n_refined") = static_cast<int>(communities),
     Rcpp::Named("n_parent") = n_parent,
     Rcpp::Named("moves") = static_cast<double>(moves),
+    Rcpp::Named("cpu_workers") = n_threads,
+    Rcpp::Named("cpu_workers_effective") = effective_workers,
+    Rcpp::Named("parallel_stage") = effective_workers > 1 ?
+      "row_candidate_preparation" : "none",
     Rcpp::Named("scan_order") = "cyclic_blocks_shuffled_rows",
     Rcpp::Named("backend") = "cpu"
   );
@@ -4137,7 +5337,7 @@ List massive_umap_optimize_cpp(std::string offsets_path,
 List massive_umap_optimize_metal_cpp(std::string offsets_path,
     std::string indices_path, std::string weights_path,
     double n_vertices, std::string init_path,
-    std::string init_format, std::string output,
+    std::string init_format, int n_components, std::string output,
     int n_epochs, int negative_sample_rate,
     double learning_rate, double min_dist,
     double repulsion_strength, int seed, int chunk_rows,
@@ -4147,7 +5347,8 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
     SEXP checkpoint_callback = R_NilValue,
     std::string layout_storage = "memory") {
   require_little_endian();
-  if (n_epochs < 2 || negative_sample_rate < 0 ||
+  if ((n_components != 2 && n_components != 3) ||
+      n_epochs < 2 || negative_sample_rate < 0 ||
       negative_sample_rate > 1000 || chunk_rows < 1 ||
       edge_capacity < 1 || start_epoch < 0 ||
       start_epoch > n_epochs || checkpoint_every < 0 ||
@@ -4163,11 +5364,13 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
   CsrGraphSource graph(offsets_path, indices_path, weights_path,
                        n_vertices, "stream");
   FileMatrixSource init(init_path, init_format, "stream",
-                        n_vertices, 2);
-  const auto elements = checked_product(graph.vertices(), 2);
+                        n_vertices, n_components);
+  const auto elements = checked_product(graph.vertices(),
+                                        n_components);
   const auto bytes = checked_product(elements, 4);
   const auto staging_bytes = layout_storage == "memory" ? bytes :
-    static_cast<std::uint64_t>(std::min(chunk_rows, 8192)) * 8;
+    static_cast<std::uint64_t>(std::min(chunk_rows, 8192)) *
+      n_components * 4;
   const double required = 128.0 * 1024 * 1024 +
     bytes * 1.5 + staging_bytes + edge_capacity * 32.0;
   if (graph.vertices() > INT_MAX ||
@@ -4183,14 +5386,14 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
       Rcpp::stop("Metal UMAP mapped input cannot be its output .part file.");
     }
     mapped.reset(new MappedUmapLayout(output, init, graph.vertices(),
-                                     2, chunk_rows, bytes,
+                                     n_components, chunk_rows, bytes,
                                      start_epoch > 0));
   } else {
     resident.resize(static_cast<std::size_t>(elements));
     for (std::uint64_t row = 0; row < graph.vertices();) {
       const auto count = std::min<std::uint64_t>(chunk_rows,
         graph.vertices() - row);
-      init.read_rows(row, count, resident.data() + row * 2);
+      init.read_rows(row, count, resident.data() + row * n_components);
       row += count;
     }
   }
@@ -4208,7 +5411,7 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
   using MetalContext = std::unique_ptr<void, decltype(
     &fastembedr_massive_umap_metal_destroy)>;
   MetalContext context(fastembedr_massive_umap_metal_create(
-    layout, static_cast<int>(graph.vertices()), 2,
+    layout, static_cast<int>(graph.vertices()), n_components,
     n_epochs, negative_sample_rate, learning_rate,
     curve.first, curve.second, repulsion_strength, seed),
     fastembedr_massive_umap_metal_destroy);
@@ -4251,7 +5454,7 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
       const auto snapshot = output + ".epoch_" +
         std::to_string(epoch + 1) + ".f32";
       massive_umap_write_layout(layout, snapshot,
-        graph.vertices(), 2, chunk_rows, bytes);
+        graph.vertices(), n_components, chunk_rows, bytes);
       Rcpp::Function callback(checkpoint_callback);
       callback(epoch + 1, snapshot,
         static_cast<double>(positive),
@@ -4266,7 +5469,8 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
   }
   if (mapped) mapped->finish(output);
   else massive_umap_write_layout(layout, output,
-                                graph.vertices(), 2, chunk_rows, bytes);
+                                graph.vertices(), n_components,
+                                chunk_rows, bytes);
   return List::create(
     Rcpp::Named("n_vertices") =
       static_cast<double>(graph.vertices()),
@@ -4728,35 +5932,38 @@ int massive_tsne_cuda_download(void* context, bool multi, int field,
 
 void massive_tsne_cuda_write(void* context,
                              const std::string& path,
-                             int n, int fields, bool multi) {
+                             int n, int dims, int fields,
+                             bool multi) {
   constexpr int block_rows = 8192;
-  std::vector<float> buffer(block_rows * 2);
+  std::vector<float> buffer(block_rows * dims);
   Float32Sink sink(path);
   for (int field = 0; field < fields; ++field) {
     for (int first = 0; first < n; first += block_rows) {
       const int rows = std::min(block_rows, n - first);
       massive_tsne_cuda_check(massive_tsne_cuda_download(context,
         multi, field, first, rows, buffer.data()));
-      for (int i = 0; i < rows * 2; ++i) {
+      for (int i = 0; i < rows * dims; ++i) {
         if (!std::isfinite(buffer[i]) ||
             (field == 2 && buffer[i] <= 0.0f)) {
           Rcpp::stop("Massive CUDA t-SNE state is non-finite.");
         }
       }
-      sink.append(buffer.data(), static_cast<std::uint64_t>(rows) * 2);
+      sink.append(buffer.data(),
+                  static_cast<std::uint64_t>(rows) * dims);
     }
   }
   sink.finish(checked_product(
-    checked_product(n, fields * 2), sizeof(float)));
+    checked_product(n, fields * dims), sizeof(float)));
 }
 
 void massive_tsne_cuda_load(void* context, FileMatrixSource& init,
-                            int n, int start_iter,
+                            int n, int dims, int start_iter,
                             const std::string& state_path,
                             bool multi) {
   constexpr int block_rows = 8192;
-  std::vector<float> buffer(block_rows * 2);
-  const auto layout_bytes = checked_product(n, 8);
+  std::vector<float> buffer(block_rows * dims);
+  const auto layout_bytes = checked_product(
+    checked_product(n, dims), sizeof(float));
   if (start_iter > 0) {
     std::error_code error;
     const auto bytes = std::filesystem::file_size(state_path, error);
@@ -4767,11 +5974,12 @@ void massive_tsne_cuda_load(void* context, FileMatrixSource& init,
     for (int field = 0; field < 3; ++field) {
       for (int first = 0; first < n; first += block_rows) {
         const int rows = std::min(block_rows, n - first);
-        const auto bytes_read = static_cast<std::streamsize>(rows * 8);
+        const auto bytes_read = static_cast<std::streamsize>(
+          rows * dims * sizeof(float));
         input.read(reinterpret_cast<char*>(buffer.data()), bytes_read);
         if (!input) Rcpp::stop(
           "Massive CUDA t-SNE checkpoint read failed.");
-        for (int i = 0; i < rows * 2; ++i) {
+        for (int i = 0; i < rows * dims; ++i) {
           if (!std::isfinite(buffer[i]) ||
               (field == 2 && buffer[i] <= 0.0f)) {
             Rcpp::stop("Massive CUDA t-SNE checkpoint is invalid.");
@@ -4783,29 +5991,30 @@ void massive_tsne_cuda_load(void* context, FileMatrixSource& init,
     }
     return;
   }
-  double sums[2] = {0.0, 0.0};
+  double sums[3] = {0.0, 0.0, 0.0};
   for (int first = 0; first < n; first += block_rows) {
     const int rows = std::min(block_rows, n - first);
     init.read_rows(first, rows, buffer.data());
     for (int i = 0; i < rows; ++i) {
-      for (int axis = 0; axis < 2; ++axis) {
-        const float value = buffer[2 * i + axis];
+      for (int axis = 0; axis < dims; ++axis) {
+        const float value = buffer[dims * i + axis];
         if (!std::isfinite(value)) Rcpp::stop(
           "Massive CUDA t-SNE initialization is non-finite.");
         sums[axis] += value;
       }
     }
   }
-  const float means[2] = {
-    static_cast<float>(sums[0] / n),
-    static_cast<float>(sums[1] / n)
-  };
+  float means[3] = {0.0f, 0.0f, 0.0f};
+  for (int axis = 0; axis < dims; ++axis) {
+    means[axis] = static_cast<float>(sums[axis] / n);
+  }
   for (int first = 0; first < n; first += block_rows) {
     const int rows = std::min(block_rows, n - first);
     init.read_rows(first, rows, buffer.data());
     for (int i = 0; i < rows; ++i) {
-      buffer[2 * i] -= means[0];
-      buffer[2 * i + 1] -= means[1];
+      for (int axis = 0; axis < dims; ++axis) {
+        buffer[dims * i + axis] -= means[axis];
+      }
     }
     massive_tsne_cuda_check(massive_tsne_cuda_upload(context,
       multi, 0, first, rows, buffer.data()));
@@ -4882,7 +6091,8 @@ List massive_tsne_optimize_cuda_cpp(
   Rcpp::stop("Native massive CUDA t-SNE is unavailable; no CPU fallback.");
 #else
   require_little_endian();
-  if (n < 2 || n > INT_MAX / 2 || dims != 2 ||
+  if (n < 2 || (dims != 2 && dims != 3) ||
+      n > INT_MAX / dims ||
       early_iter < 0 || normal_iter < 0 ||
       static_cast<double>(early_iter) + normal_iter < 1 ||
       static_cast<double>(early_iter) + normal_iter > INT_MAX ||
@@ -4942,10 +6152,10 @@ List massive_tsne_optimize_cuda_cpp(
   void* raw = nullptr;
 #ifdef FASTEMBEDR_HAS_NCCL
   if (multi) raw = fastembedr_massive_tsne_multigpu_create(
-    n, edge_capacity, devices.begin(), devices.size());
+    n, dims, edge_capacity, devices.begin(), devices.size());
 #endif
   if (!multi) raw = fastembedr_massive_tsne_cuda_create(
-    n, edge_capacity);
+    n, dims, edge_capacity);
   if (raw == nullptr) massive_tsne_cuda_check(1);
   auto destroy = [multi](void* pointer) {
 #ifdef FASTEMBEDR_HAS_NCCL
@@ -4957,7 +6167,7 @@ List massive_tsne_optimize_cuda_cpp(
     fastembedr_massive_tsne_cuda_destroy(pointer);
   };
   std::unique_ptr<void, decltype(destroy)> context(raw, destroy);
-  massive_tsne_cuda_load(context.get(), init, n, start_iter,
+  massive_tsne_cuda_load(context.get(), init, n, dims, start_iter,
                          state_path, multi);
   std::vector<int> heads(multi ? 0 : edge_capacity);
   std::vector<int> tails(multi ? 0 : edge_capacity);
@@ -5096,7 +6306,8 @@ List massive_tsne_optimize_cuda_cpp(
       if (multi) massive_tsne_cuda_check(
         fastembedr_massive_tsne_multigpu_gather_state(context.get()));
 #endif
-      massive_tsne_cuda_write(context.get(), snapshot, n, 3,
+      massive_tsne_cuda_write(context.get(), snapshot, n,
+                              dims, 3,
                               multi);
       Rcpp::Function callback(checkpoint_callback);
       const auto elapsed = std::chrono::duration<double>(
@@ -5117,7 +6328,8 @@ List massive_tsne_optimize_cuda_cpp(
       "Coordinated CUDA t-SNE missed owner attraction edges.");
   }
   const auto output_started = std::chrono::steady_clock::now();
-  massive_tsne_cuda_write(context.get(), output_path, n, 1,
+  massive_tsne_cuda_write(context.get(), output_path, n,
+                          dims, 1,
                           multi);
   const auto output_seconds = std::chrono::duration<double>(
     std::chrono::steady_clock::now() - output_started).count();
@@ -5129,7 +6341,8 @@ List massive_tsne_optimize_cuda_cpp(
       "native_cuda_fft_graph_stream",
     Rcpp::Named("repulsion") = "fft_grid_cuda_cufft",
     Rcpp::Named("fft_grid_size") =
-      fastembedr_cuda_opentsne_fft_grid_size(n),
+      dims == 3 ? (n < 5000 ? 16 : 64) :
+        fastembedr_cuda_opentsne_fft_grid_size(n),
     Rcpp::Named("iterations") = total,
     Rcpp::Named("resumed_from_iteration") = start_iter,
     Rcpp::Named("n_threads") = 1,

@@ -10,9 +10,10 @@ massive_leiden_refine_level(
   output,
   resolution = 1,
   seed = 1L,
-  chunk_rows = 8192L,
+  chunk_rows = NULL,
   memory_limit = "1GB",
-  backend = "cpu"
+  backend = "cpu",
+  n.cores = 1L
 )
 }
 \arguments{
@@ -30,7 +31,10 @@ massive_leiden_refine_level(
 
 \item{memory_limit}{RAM budget for graph scan buffers.}
 
-\item{backend}{Only \code{"cpu"} is implemented; no fallback is used.}
+\item{backend}{\code{"cpu"}, \code{"cuda"}, or \code{"metal"}; no fallback is used.}
+
+\item{n.cores}{CPU workers for bounded row-candidate preparation.
+Refinement commits remain ordered. GPU routes require one coordinator.}
 }
 \value{
 A file-backed refinement and refined-to-parent label map.
@@ -38,7 +42,8 @@ A file-backed refinement and refined-to-parent label map.
 \description{
 Refines one Louvain local-move partition using Leiden's constrained
 singleton-merge rule. Graph edges are streamed in bounded blocks and
-labels and refinement state are memory-mapped. This is one stage; use
-\code{\link[=massive_leiden]{massive_leiden()}} for the multilevel fit. Mapped pages can contribute
-to process RSS.
+CPU labels and refinement state are memory-mapped. Metal and CUDA retain
+refinement state on the GPU and stream bounded CSR blocks from the SSD.
+This is one stage; use \code{\link[=massive_leiden]{massive_leiden()}} for the multilevel fit.
 }
+\keyword{internal}

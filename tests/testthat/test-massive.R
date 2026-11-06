@@ -127,7 +127,7 @@ test_that("public UMAP and t-SNE landmark modes stay file-backed", {
     expect_false(file.exists(file.path(directory, "metal.f32")))
     expect_false(file.exists(file.path(directory, "cuda.f32")))
     expect_error(umap(x, devices = 0L),
-        "Experimental output controls")
+        "Resident `devices` requires CUDA UMAP")
     expect_error(umap(source, massive = "landmark",
         landmarks = 20L, output = file.path(directory, "cpu_device.f32"),
         backend = "cpu", devices = 0L), "requires CUDA")
@@ -608,6 +608,288 @@ test_that("completed streamed PCA reopens for file-backed graph work", {
     writeBin(as.raw(1L), con)
     close(con)
     expect_error(massive_open_pca(output), "changed")
+})
+
+test_that("streamed PCA projects the full source from landmark fit", {
+    rows <- seq_len(41)
+    x <- cbind(rows / 13, sin(rows / 4), cos(rows / 7))
+    raw <- make_massive_fixture(x)
+    landmark <- tempfile(fileext = ".f32")
+    fit_path <- tempfile(fileext = ".f32")
+    projected <- tempfile(fileext = ".f32")
+    on.exit(unlink(c(raw, landmark, fit_path, projected,
+        paste0(fit_path, ".manifest.rds"))))
+    source <- massive_matrix(raw, nrow = nrow(x), ncol = ncol(x))
+    selection <- massive_select_landmarks(source, 15L, landmark,
+        seed = 19L, chunk_rows = 7L, memory_limit = "256MB")
+    fit <- pca(selection$data, ncomp = 2L, backend = "cpu",
+        massive = "out_of_core", output = fit_path,
+        chunk_rows = 7L, memory_limit = "256MB")
+    fit <- massive_open_pca(fit_path)
+    result <- massive_project_pca(fit, source, projected,
+        backend = "cpu", n.cores = 2L, chunk_rows = 7L,
+        memory_limit = "256MB", landmarks = selection)
+    expected <- sweep(sweep(x, 2L, fit$center), 2L,
+        fit$scale, "/") %*% fit$loadings
+    expect_equal(massive_read_rows(result$scores, 1L, nrow(x)),
+        expected, tolerance = 1e-4)
+    expect_identical(result$backend, "cpu")
+    expect_identical(result$n_threads, 2L)
+    expect_identical(result$mode, "landmark")
+    expect_identical(result$landmarks$indices, selection$indices)
+    expect_equal(file.info(projected)$size, nrow(x) * 2L * 4L)
+    expect_error(massive_project_pca(fit, source, projected),
+        "already exists")
+    expect_error(massive_project_pca(fit, massive_matrix(cbind(x, 1)),
+        tempfile(fileext = ".f32")), "matching matrix columns")
+    invalid <- fit
+    invalid$scale[[1L]] <- 0
+    expect_error(massive_project_pca(invalid, source,
+        tempfile(fileext = ".f32")), "valid streamed PCA fit")
+    changed <- selection
+    changed$indices[[1L]] <- changed$indices[[1L]] + 1
+    expect_error(massive_project_pca(fit, source,
+        tempfile(fileext = ".f32"), landmarks = changed),
+        "row IDs changed")
+})
+
+test_that("out-of-core PCA projects xtest and verifies saved test scores", {
+    rows <- seq_len(31L)
+    x <- cbind(rows / 9, sin(rows / 5), cos(rows / 7))
+    query <- x[c(2L, 8L, 17L, 28L), , drop = FALSE]
+    raw <- make_massive_fixture(x)
+    test_raw <- make_massive_fixture(query)
+    directory <- tempfile()
+    dir.create(directory)
+    on.exit(unlink(c(raw, test_raw, directory), recursive = TRUE))
+    output <- file.path(directory, "scores.f32")
+    source <- massive_matrix(raw, nrow = nrow(x), ncol = ncol(x))
+    xtest <- massive_matrix(test_raw, nrow = nrow(query),
+        ncol = ncol(query))
+    expect_error(pca(source, ncomp = 2L, xtest =
+        massive_matrix(cbind(query, 1)), massive = "out_of_core",
+        output = output, memory_limit = "256MB"),
+        "matching massive_matrix")
+    expect_false(file.exists(output))
+    fit <- pca(source, ncomp = 2L, xtest = xtest,
+        massive = "out_of_core", output = output, backend = "cpu",
+        n.cores = 2L, chunk_rows = 8L, memory_limit = "256MB",
+        checkpoint = TRUE, tsne_init = TRUE)
+    expected <- sweep(sweep(query, 2L, fit$center),
+        2L, fit$scale, "/") %*% fit$loadings
+    expect_equal(massive_read_rows(fit$scores_test, 1L, 4L),
+        expected, tolerance = 1e-4)
+    expect_identical(fit$test_projection$backend, "cpu")
+    reference <- fastEmbedR:::normalize_opentsne_pca_scores(
+        as.matrix(fit$scores), 2L)
+    expect_equal(as.matrix(fit$tsne_init), reference,
+        tolerance = 1e-7)
+    expect_identical(fit$tsne_init$normalization_backend, "cpu")
+    reopened <- massive_open_pca(output)
+    expect_identical(reopened$test_projection$score_identity,
+        fit$test_projection$score_identity)
+    expect_false(file.exists(paste0(output, ".checkpoint.rds")))
+    expect_false(file.exists(paste0(fit$scores_test$path,
+        ".checkpoint.rds")))
+    expect_identical(reopened$init_identity, fit$init_identity)
+    con <- file(fit$scores_test$path, "ab")
+    writeBin(as.raw(1L), con)
+    close(con)
+    expect_error(massive_open_pca(output),
+        "PCA test scores changed")
+})
+
+test_that("streamed PCA makes a standalone 3D t-SNE initialization", {
+    rows <- seq_len(23L)
+    x <- cbind(rows / 4, sin(rows / 3), cos(rows / 6))
+    raw <- make_massive_fixture(x)
+    directory <- tempfile()
+    dir.create(directory)
+    on.exit(unlink(c(raw, directory), recursive = TRUE))
+    source <- massive_matrix(raw, nrow = nrow(x), ncol = 3L)
+    fit <- pca(source, ncomp = 3L, massive = "out_of_core",
+        output = file.path(directory, "scores.f32"),
+        backend = "cpu", memory_limit = "256MB",
+        tsne_init = TRUE)
+    init <- massive_pca_tsne_init(fit,
+        file.path(directory, "init.f32"), chunk_rows = 5L)
+    expected <- fastEmbedR:::normalize_opentsne_pca_scores(
+        as.matrix(fit$scores), 3L)
+    expect_equal(as.matrix(init), expected, tolerance = 1e-7)
+    expect_equal(as.matrix(fit$tsne_init), expected,
+        tolerance = 1e-7)
+    expect_equal(c(init$nrow, init$ncol), c(23L, 3L))
+    expect_error(massive_pca_tsne_init(fit,
+        file.path(directory, "init.f32")), "already exists")
+    restarted <- file.path(directory, "restarted.f32")
+    con <- file(paste0(restarted, ".part"), "wb")
+    writeBin(as.raw(rep(0L, 12L)), con)
+    close(con)
+    expect_error(massive_pca_tsne_init(fit, restarted),
+        "already exists")
+    recovered <- massive_pca_tsne_init(fit, restarted,
+        chunk_rows = 5L, resume = TRUE)
+    expect_equal(as.matrix(recovered), expected, tolerance = 1e-7)
+    expect_s3_class(massive_open_pca(fit$scores$path),
+        "fastEmbedR_massive_pca")
+    con <- file(fit$tsne_init$path, "ab")
+    writeBin(as.raw(1L), con)
+    close(con)
+    expect_error(massive_open_pca(fit$scores$path),
+        "t-SNE initialization changed")
+})
+
+test_that("CUDA out-of-core PCA projects xtest on the selected device", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    rows <- seq_len(24L)
+    x <- cbind(rows / 8, sin(rows / 4), cos(rows / 6))
+    query <- x[c(3L, 13L, 23L), , drop = FALSE]
+    raw <- make_massive_fixture(x)
+    test_raw <- make_massive_fixture(query)
+    directory <- tempfile()
+    dir.create(directory)
+    on.exit(unlink(c(raw, test_raw, directory), recursive = TRUE))
+    source <- massive_matrix(raw, nrow = 24L, ncol = 3L)
+    xtest <- massive_matrix(test_raw, nrow = 3L, ncol = 3L)
+    fit <- pca(source, ncomp = 2L, xtest = xtest,
+        massive = "out_of_core", backend = "cuda",
+        output = file.path(directory, "scores.f32"),
+        chunk_rows = 8L, memory_limit = "256MB",
+        tsne_init = TRUE)
+    expected <- sweep(sweep(query, 2L, fit$center),
+        2L, fit$scale, "/") %*% fit$loadings
+    expect_identical(fit$test_projection$backend, "cuda")
+    expect_equal(massive_read_rows(fit$scores_test, 1L, 3L),
+        expected, tolerance = 1e-3)
+    expect_equal(as.matrix(fit$tsne_init),
+        fastEmbedR:::normalize_opentsne_pca_scores(
+            as.matrix(fit$scores), 2L), tolerance = 1e-7)
+    expect_true(is.finite(fit$test_projection$resources$peak_vram_bytes))
+})
+
+test_that("CUDA projects a streamed landmark PCA without CPU fallback", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    rows <- seq_len(35)
+    x <- cbind(rows / 9, sin(rows / 5), cos(rows / 8))
+    raw <- make_massive_fixture(x)
+    landmark <- tempfile(fileext = ".f32")
+    fit_path <- tempfile(fileext = ".f32")
+    projected <- tempfile(fileext = ".f32")
+    on.exit(unlink(c(raw, landmark, fit_path, projected,
+        paste0(fit_path, ".manifest.rds"))))
+    source <- massive_matrix(raw, nrow = nrow(x), ncol = ncol(x))
+    selection <- massive_select_landmarks(source, 14L, landmark,
+        seed = 23L, memory_limit = "256MB")
+    fit <- pca(selection$data, ncomp = 2L, backend = "cpu",
+        massive = "out_of_core", output = fit_path,
+        memory_limit = "256MB")
+    result <- massive_project_pca(fit, source, projected,
+        backend = "cuda", chunk_rows = 8L, memory_limit = "256MB",
+        landmarks = selection)
+    expected <- sweep(sweep(x, 2L, fit$center), 2L,
+        fit$scale, "/") %*% fit$loadings
+    expect_equal(massive_read_rows(result$scores, 1L, nrow(x)),
+        expected, tolerance = 1e-3)
+    expect_identical(result$backend, "cuda")
+    expect_identical(result$mode, "landmark")
+    expect_true(is.finite(result$resources$peak_vram_bytes))
+})
+
+test_that("file-backed PCA projection resumes after a committed chunk", {
+    rows <- seq_len(31)
+    x <- cbind(rows / 7, sin(rows / 3), cos(rows / 5))
+    raw <- make_massive_fixture(x)
+    selected <- tempfile(fileext = ".f32")
+    fit_path <- tempfile(fileext = ".f32")
+    output <- tempfile(fileext = ".f32")
+    fresh_path <- tempfile(fileext = ".f32")
+    on.exit(unlink(c(raw, selected, fit_path, output, fresh_path,
+        paste0(fit_path, ".manifest.rds"),
+        paste0(output, c(".part", ".checkpoint.rds")))))
+    source <- massive_matrix(raw, nrow = nrow(x), ncol = ncol(x))
+    selection <- massive_select_landmarks(source, 12L, selected,
+        seed = 19L, memory_limit = "256MB")
+    fit <- pca(selection$data, ncomp = 2L, backend = "cpu",
+        massive = "out_of_core", output = fit_path,
+        memory_limit = "256MB")
+    saved_write <- fastEmbedR:::massive_checkpoint_write
+    writes <- 0L
+    expect_error(with_mocked_bindings(
+        massive_checkpoint_write = function(value, path) {
+            saved_write(value, path)
+            writes <<- writes + 1L
+            if (writes == 2L) stop("test interruption")
+        },
+        massive_project_pca(fit, source, output, n.cores = 2L,
+            chunk_rows = 7L, memory_limit = "256MB",
+            landmarks = selection, checkpoint = TRUE),
+        .package = "fastEmbedR"), "test interruption")
+    expect_true(file.exists(paste0(output, ".part")))
+    expect_identical(readRDS(paste0(output,
+        ".checkpoint.rds"))$completed_rows, 7)
+    expect_error(massive_project_pca(fit, source, output,
+        n.cores = 1L, chunk_rows = 7L, memory_limit = "256MB",
+        landmarks = selection, checkpoint = TRUE, resume = TRUE),
+        "does not match")
+    other <- selection
+    other$indices <- as.numeric(seq_len(12L))
+    other$indices_signature <- fastEmbedR:::massive_checkpoint_signature(
+        other$indices)
+    expect_false(identical(other$indices, selection$indices))
+    expect_error(massive_project_pca(fit, source, output,
+        n.cores = 2L, chunk_rows = 7L, memory_limit = "256MB",
+        landmarks = other, checkpoint = TRUE, resume = TRUE),
+        "does not match")
+    resumed <- massive_project_pca(fit, source, output,
+        n.cores = 2L, chunk_rows = 7L, memory_limit = "256MB",
+        landmarks = selection, checkpoint = TRUE, resume = TRUE)
+    fresh <- massive_project_pca(fit, source, fresh_path,
+        n.cores = 2L, chunk_rows = 7L, memory_limit = "256MB")
+    expect_equal(as.matrix(resumed$scores), as.matrix(fresh$scores))
+    expect_false(file.exists(paste0(output, ".checkpoint.rds")))
+})
+
+test_that("CUDA PCA projection resumes without changing its scores", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    rows <- seq_len(29)
+    x <- cbind(rows / 8, sin(rows / 4), cos(rows / 6))
+    raw <- make_massive_fixture(x)
+    selected <- tempfile(fileext = ".f32")
+    fit_path <- tempfile(fileext = ".f32")
+    output <- tempfile(fileext = ".f32")
+    fresh_path <- tempfile(fileext = ".f32")
+    on.exit(unlink(c(raw, selected, fit_path, output, fresh_path,
+        paste0(fit_path, ".manifest.rds"),
+        paste0(output, c(".part", ".checkpoint.rds")))))
+    source <- massive_matrix(raw, nrow = nrow(x), ncol = ncol(x))
+    selection <- massive_select_landmarks(source, 11L, selected,
+        seed = 23L, memory_limit = "256MB")
+    fit <- pca(selection$data, ncomp = 2L, backend = "cpu",
+        massive = "out_of_core", output = fit_path,
+        memory_limit = "256MB")
+    saved_write <- fastEmbedR:::massive_checkpoint_write
+    writes <- 0L
+    expect_error(with_mocked_bindings(
+        massive_checkpoint_write = function(value, path) {
+            saved_write(value, path)
+            writes <<- writes + 1L
+            if (writes == 2L) stop("test interruption")
+        },
+        massive_project_pca(fit, source, output, backend = "cuda",
+            chunk_rows = 7L, memory_limit = "256MB",
+            landmarks = selection, checkpoint = TRUE),
+        .package = "fastEmbedR"), "test interruption")
+    expect_true(file.exists(paste0(output, ".part")))
+    resumed <- massive_project_pca(fit, source, output,
+        backend = "cuda", chunk_rows = 7L,
+        memory_limit = "256MB", landmarks = selection,
+        checkpoint = TRUE, resume = TRUE)
+    fresh <- massive_project_pca(fit, source, fresh_path,
+        backend = "cuda", chunk_rows = 7L,
+        memory_limit = "256MB")
+    expect_equal(as.matrix(resumed$scores), as.matrix(fresh$scores),
+        tolerance = 1e-5)
+    expect_false(file.exists(paste0(output, ".checkpoint.rds")))
 })
 
 test_that("wide streamed PCA agrees with dense PCA", {
@@ -1312,7 +1594,7 @@ test_that("PCA device selection never falls back to another backend", {
     raw <- make_massive_fixture(x)
     source <- massive_matrix(raw, nrow = 11L, ncol = 5L)
     on.exit(unlink(raw))
-    expect_error(pca(x, devices = 0L), "out-of-core")
+    expect_error(pca(x, devices = 0L), "requires CUDA")
     expect_error(pca(source, massive = "out_of_core",
         backend = "cpu", devices = 0L,
         output = tempfile(fileext = ".f32")), "requires CUDA")
@@ -3454,8 +3736,9 @@ test_that("massive clustering composes selection, graph, and voting", {
 
 test_that("landmark clustering reuses a verified embedding KNN", {
     skip_if_not_installed("float")
-    expect_identical(names(formals(massive_cluster))[5L], "k")
-    expect_identical(tail(names(formals(massive_cluster)), 1L), "nn")
+    controls <- names(formals(massive_cluster))
+    expect_true(all(c("k", "nn", "parallel.mode", "gpu_storage")
+        %in% controls))
     set.seed(422)
     x <- matrix(rnorm(60L * 4L), ncol = 4L)
     input <- make_massive_fixture(x)
@@ -3518,12 +3801,16 @@ test_that("massive clustering rejects unsafe requests before writing", {
         k = 4L, output = prefix, devices = 0L), "requires CUDA")
     expect_error(massive_cluster(source, massive = "auto",
         output = prefix, k = 4L, devices = 0L),
-        "requires landmark clustering")
-    with_mocked_bindings(
-        expect_error(fastEmbedR:::massive_cluster_auto_plan(source,
+        "requires CUDA")
+    with_mocked_bindings({
+        planned <- fastEmbedR:::massive_cluster_auto_plan(source,
             15L, 4L, "cuda", 1L, "2GB", "landmark", prefix,
-            c(0L, 1L)), "Multi-GPU clustering is not implemented"),
+            c(0L, 1L))
+        expect_identical(planned$mode, "landmark")
+        expect_identical(planned$devices, c(0L, 1L))
+    },
         massive_cuda_device_count_cpp = function() 2L,
+        massive_auto_cuda_free = function(...) 8 * 1024^3,
         .package = "fastEmbedR")
     expect_length(list.files(directory), 0L)
 })
@@ -3631,9 +3918,9 @@ test_that("landmark clustering resumes saved communities and rows", {
         5L, "256MB")
     paths <- fastEmbedR:::massive_cluster_paths(resume_prefix,
         resources$output_bytes, TRUE)
-    controls <- list(method = "leiden", backend = "cpu", workers = 1L,
-        chunk_rows = 5L, resolution = 1, n_iterations = 10L,
-        n_runs = 1L, steps = 4L, seed = 3L)
+    controls <- fastEmbedR:::massive_cluster_landmark_controls(
+        "leiden", "cpu", 1L, resources, 1, 10L, 1L,
+        4L, 3L, NULL, "restarts")
     saved <- fastEmbedR:::massive_cluster_checkpoint(graph, knn,
         NULL, paths, controls, FALSE)
     clustered <- graph_cluster(graph, method = "leiden", seed = 3L)
@@ -3688,9 +3975,9 @@ test_that("landmark clustering resumes before its first output", {
         4L, "256MB")
     paths <- fastEmbedR:::massive_cluster_paths(output,
         resources$output_bytes, TRUE)
-    controls <- list(method = "louvain", backend = "cpu", workers = 1L,
-        chunk_rows = 4L, resolution = 1, n_iterations = 10L,
-        n_runs = 1L, steps = 4L, seed = 3L)
+    controls <- fastEmbedR:::massive_cluster_landmark_controls(
+        "louvain", "cpu", 1L, resources, 1, 10L, 1L,
+        4L, 3L, NULL, "restarts")
     saved <- fastEmbedR:::massive_cluster_checkpoint(graph, knn,
         NULL, paths, controls, FALSE)
     clustered <- graph_cluster(graph, method = "louvain", seed = 3L)

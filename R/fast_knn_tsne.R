@@ -19,7 +19,8 @@
 #' @param n_neighbors Optional number of non-self neighbor columns to use from
 #'   the supplied KNN graph. This lets you compute a wide KNN once and reuse
 #'   its first columns. If omitted, the compact affinity policy uses
-#'   `ceiling(perplexity)` columns. An explicit value must equal that width.
+#'   `ceiling(perplexity)` columns. A wider value such as
+#'   `ceiling(3 * perplexity)` is an explicit affinity-model control.
 #' @param perplexity t-SNE perplexity. If `NULL`, the optimizer chooses a safe
 #'   value from the supplied KNN width and sample size.
 #' @param init_data Optional original high-dimensional data matrix used only to
@@ -30,20 +31,22 @@
 #'   selects affinity construction and layout optimization only; it does not
 #'   trigger a nearest-neighbor search. Host KNN matrices can be consumed by
 #'   any compiled backend. A CUDA-resident KNN object can be consumed directly
-#'   only by the CUDA backend. Unavailable GPU requests fail without CPU
-#'   fallback.
+#'   only by the CUDA backend. Coordinated CUDA fits materialize KNN in
+#'   host RAM. Unavailable GPU requests fail without CPU fallback.
 #' @param n.cores Number of CPU cores used for CPU affinity construction and
 #'   t-SNE optimization. `NULL` uses the package t-SNE thread option, which
-#'   defaults to four. No KNN search is performed. Metal and CUDA optimizers
-#'   ignore this argument.
+#'   defaults to four. No KNN search is performed. Coordinated CUDA fits
+#'   use this count for host sparse-affinity construction.
+#' @param devices Optional two to four CUDA device indices for one resident
+#'   2D or 3D fit with NCCL. KNN affinities remain in host RAM.
 #' @param ... Additional low-level optimizer controls, including `theta` and
 #'   `min_gain`.
 #' @return An embedding matrix with settings stored in
 #'   `attr(layout, "fastEmbedR_config")`. Float32 KNN distances, including a
 #'   CUDA-resident KNN object, produce a `float::float32` layout; host double
 #'   distances produce a standard R double matrix. Native optimization uses
-#'   float32 in both cases. The exact returned representation is recorded in
-#'   `attr(layout, "precision")` and in `fastEmbedR_config$output_precision`.
+#'   float32 in both cases. The returned type is recorded in
+#'   `attr(layout, "precision")` and the configuration's `output_precision`.
 #' @examples
 #' x <- scale(as.matrix(iris[, 1:4]))
 #' d <- as.matrix(stats::dist(x))
@@ -80,24 +83,32 @@ validate_gpu_tsne_knn <- function(info, n_neighbors, perplexity) {
             call. = FALSE
         )
     }
-    perplexity <- perplexity %||% policy$perplexity
+    perplexity <- perplexity %||%
+        min(policy$perplexity, n_neighbors)
     validate_tsne_support_width(n_neighbors, perplexity)
     list(n_neighbors = n_neighbors, perplexity = perplexity)
 }
 
 validate_tsne_support_width <- function(n_neighbors, perplexity) {
     required <- opentsne_support_width(perplexity)
-    if (n_neighbors != required) {
+    width <- integer_scalar(n_neighbors)
+    if (is.na(width) || width < required) {
         stop(
-            "Compact t-SNE affinity support requires `n_neighbors = ",
-            required, "` for this perplexity.",
+            "`n_neighbors` must be a positive integer of at least ",
+            required, " for this perplexity.",
             call. = FALSE
         )
     }
-    invisible(n_neighbors)
+    invisible(width)
 }
 
 run_gpu_tsne_knn <- function(indices, init_data, settings, extra) {
+    if (length(settings$devices) > 1L) {
+        host <- fastembedr_gpu_knn_to_host(indices)
+        resolved <- resolve_host_tsne_knn(host, NULL,
+            settings$n_neighbors, settings$perplexity)
+        return(run_host_tsne_knn(resolved, init_data, settings, extra))
+    }
     info <- fastembedr_gpu_knn_info(indices)
     policy <- validate_gpu_tsne_knn(
         info, settings$n_neighbors, settings$perplexity
@@ -139,6 +150,12 @@ resolve_host_tsne_knn <- function(
                 call. = FALSE
             )
         }
+        if (!is.null(n_neighbors)) {
+            width <- integer_scalar(n_neighbors)
+            if (is.na(width) || width != indices$n_neighbors) stop(
+                "A prepared t-SNE KNN cannot change its affinity width.",
+                call. = FALSE)
+        }
         return(list(
             knn = indices$knn,
             perplexity = perplexity %||% indices$perplexity,
@@ -154,7 +171,8 @@ resolve_host_tsne_knn <- function(
         knn = normalize_opentsne_knn_input(
             indices, distances, n_neighbors
         ),
-        perplexity = perplexity %||% policy$perplexity,
+        perplexity = perplexity %||%
+            min(policy$perplexity, n_neighbors),
         n_neighbors = n_neighbors
     )
 }
@@ -182,6 +200,7 @@ run_host_tsne_knn <- function(resolved, init_data, settings, extra) {
         perplexity = resolved$perplexity, Y_init = Y_init,
         seed = settings$seed, verbose = settings$verbose,
         backend = settings$backend, n_threads = settings$n_threads,
+        devices = settings$devices,
         input_had_self = knn$has_self, input_backend = knn$input_backend
     ), settings$optimizer, extra)
     layout <- do.call(fast_knn_opentsne_materialized, args)
@@ -192,6 +211,7 @@ run_host_tsne_knn <- function(resolved, init_data, settings, extra) {
 
 #' @rdname tsne_knn
 #' @export
+#' @keywords internal
 tsne_knn <- function(
     indices, distances = NULL, n_neighbors = NULL, perplexity = NULL,
     n_components = 2L,
@@ -201,13 +221,13 @@ tsne_knn <- function(
     n_iter = NULL, exaggeration = NULL, initial_momentum = 0.8,
     final_momentum = 0.8, max_step_norm = "auto",
     negative_gradient_method = "auto", record_costs = FALSE,
-    auto_config = TRUE, ...
+    auto_config = TRUE, devices = NULL, ...
 ) {
     extra <- list(...)
     if ("affinity_support" %in% names(extra)) {
         stop(
-            "`affinity_support` is not configurable; t-SNE uses compact ",
-            "support with `k = ceiling(perplexity)`.",
+            "`affinity_support` is not configurable; set ",
+            "`n_neighbors` for an explicit support width.",
             call. = FALSE
         )
     }
@@ -216,7 +236,7 @@ tsne_knn <- function(
         n_neighbors = n_neighbors, perplexity = perplexity,
         n_components = validate_opentsne_n_components(n_components),
         Y_init = Y_init, seed = seed, verbose = verbose, backend = backend,
-        n_threads = n.cores,
+        n_threads = n.cores, devices = devices,
         optimizer = list(
             learning_rate = learning_rate,
             early_exaggeration_iter = early_exaggeration_iter,
@@ -246,6 +266,7 @@ tsne_knn <- function(
 tsne_knn_call_args <- function(data, settings, overrides, extra) {
     args <- c(list(
         indices = data,
+        n_neighbors = settings$affinity_k,
         n_components = settings$n_components,
         perplexity = settings$perplexity,
         init_data = settings$init_data,
@@ -253,7 +274,8 @@ tsne_knn_call_args <- function(data, settings, overrides, extra) {
         seed = settings$seed,
         verbose = settings$verbose,
         backend = settings$backend,
-        n.cores = settings$n_threads
+        n.cores = settings$n_threads,
+        devices = settings$devices
     ), settings$optimizer)
     args <- utils::modifyList(args, overrides)
     c(args, extra)
@@ -347,9 +369,8 @@ prepare_tsne_knn_input_run <- function(data, nn, settings) {
         )
     }
     full <- normalize_opentsne_knn_input(data, NULL, NULL)
-    policy <- opentsne_neighbor_policy(
-        full$n, settings$perplexity, full$n_neighbors
-    )
+    policy <- opentsne_neighbor_policy(full$n, settings$perplexity,
+        full$n_neighbors, settings$affinity_k)
     knn <- normalize_opentsne_knn_input(
         data, NULL, policy$n_neighbors
     )
@@ -434,7 +455,8 @@ compute_tsne_matrix_knn <- function(
 ) {
     engine <- "supplied"
     if (is.null(nn)) {
-        policy <- fastembedr_embedding_nn_policy(backend, n = n)
+        policy <- fastembedr_embedding_nn_policy(
+            backend, n = n, p = ncol(x))
         engine <- fastembedr_nn_policy_engine(
             policy, keep_gpu = policy$backend == "cuda",
             metric = metric
@@ -507,18 +529,23 @@ validate_tsne_dots <- function(extra) {
     if ("n_neighbors" %in% names(extra)) {
         stop(
             "`n_neighbors` is not an argument of `tsne()`; use ",
-            "`perplexity` instead.",
+            "`affinity_k` for the affinity width.",
             call. = FALSE
         )
     }
     if ("affinity_support" %in% names(extra)) {
         stop(
-            "`affinity_support` is not configurable; t-SNE uses compact ",
-            "support with `k = ceiling(perplexity)`.",
+            "`affinity_support` is not configurable; use `affinity_k`.",
             call. = FALSE
         )
     }
     invisible(extra)
+}
+
+validate_tsne_resident_devices <- function(devices, backend) {
+    if (!is.null(devices) && backend != "cuda")
+        stop("Resident `devices` requires CUDA t-SNE.",
+            call. = FALSE)
 }
 
 tsne_optimizer_settings <- function(
@@ -539,14 +566,16 @@ tsne_optimizer_settings <- function(
 
 new_tsne_settings <- function(
     perplexity, n_components, init_data, Y_init, standardize, pca_dims,
-    metric, seed, backend, keep_knn, verbose, n.cores, optimizer
+    metric, seed, backend, keep_knn, verbose, n.cores, optimizer,
+    devices = NULL, affinity_k = NULL
 ) {
     list(
-        perplexity = perplexity,
+        perplexity = perplexity, affinity_k = affinity_k,
         n_components = validate_opentsne_n_components(n_components),
         init_data = init_data, Y_init = Y_init,
         standardize = standardize, pca_dims = pca_dims, metric = metric,
         seed = seed, backend = backend, keep_knn = isTRUE(keep_knn),
+        devices = devices,
         verbose = verbose, n_threads = n.cores, optimizer = optimizer
     )
 }
@@ -611,9 +640,8 @@ run_matrix_input_tsne <- function(data, nn, settings, extra, input_float) {
     ))
     x <- preprocess$value$data
     metric <- resolve_embedding_metric(settings$metric, x)
-    policy <- opentsne_neighbor_policy(
-        nrow(x), settings$perplexity
-    )
+    policy <- opentsne_neighbor_policy(nrow(x), settings$perplexity,
+        affinity_k = settings$affinity_k)
     settings$perplexity <- policy$perplexity
     retain_cuda_data <- is.null(nn) && settings$backend == "cuda" &&
         metric == "euclidean" && is.null(settings$Y_init) &&
@@ -662,6 +690,24 @@ tsne_landmark_controls <- function(landmarks, transform_k,
         initialization = initialization)
 }
 
+dispatch_tsne_resident <- function(data, nn, settings, controls, extra,
+        devices, landmarks) {
+    validate_tsne_resident_devices(devices, settings$backend)
+    if (landmark_embedding_requested(landmarks))
+        return(run_landmark_tsne(data, nn, settings, controls, extra))
+    if (fastembedr_is_gpu_knn(data))
+        return(run_gpu_input_tsne(data, nn, settings, extra))
+    if (is_knn_input(data))
+        return(run_knn_input_tsne(data, nn, settings, extra))
+    run_matrix_input_tsne(data, nn, settings, extra, is_float32_matrix(data))
+}
+
+validate_tsne_affinity_scope <- function(affinity_k, massive) {
+    if (!is.null(affinity_k) && !identical(massive, "off")) stop(
+        "`affinity_k` requires a resident t-SNE fit.",
+        call. = FALSE)
+}
+
 #' Run native interpolation-based t-SNE from a data matrix
 #'
 #' `tsne()` computes or reuses a KNN graph, then runs the package-native
@@ -678,6 +724,11 @@ tsne_landmark_controls <- function(landmarks, transform_k,
 #' @param perplexity t-SNE perplexity. If `NULL`, uses the largest safe value
 #'   up to 30 that is available for the input. Compact affinity support uses
 #'   `ceiling(perplexity)` non-self neighbors.
+#' @param affinity_k Optional number of non-self neighbors for resident
+#'   t-SNE affinities. Defaults to `ceiling(perplexity)`; use
+#'   `ceiling(3 * perplexity)` for conventional-width support. This setting
+#'   also controls the reference fit in resident landmark mode. It is
+#'   unavailable for file-backed fits.
 #' @param n_components Output dimensionality, 2 or 3. FFT repulsion is used
 #'   on every backend.
 #' @param init_data Optional original high-dimensional data matrix used only to
@@ -702,8 +753,8 @@ tsne_landmark_controls <- function(landmarks, transform_k,
 #'   Euclidean searches, and native HNSW for other supported metrics.
 #'   Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
 #'   cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
-#'   that threshold. Device pointers pass directly to the native CUDA t-SNE
-#'   optimizer.
+#'   that threshold. Single-GPU device pointers pass directly to the native
+#'   CUDA optimizer; coordinated fits materialize KNN in host RAM.
 #'   Unsupported GPU requests fail clearly and are not relabelled CPU runs.
 #' @param keep_knn If `TRUE`, retain KNN matrices in the returned object.
 #' @param verbose Print optimizer progress.
@@ -736,7 +787,8 @@ tsne_landmark_controls <- function(landmarks, transform_k,
 #' @param landmarks `FALSE` (the default) embeds all observations. A fraction
 #'   in `(0, 1)`, a positive landmark count, or explicit row indices enables
 #'   landmark embedding followed by fixed-reference transformation of the
-#'   remaining rows.
+#'   remaining rows. File-backed landmark mode currently accepts a count
+#'   only; fractions and explicit row indices require resident input.
 #' @param transform_k Number of landmark neighbors used to place non-landmark
 #'   observations. Used only when landmarking is enabled.
 #' @param transform_perplexity Perplexity used to transform non-landmark rows.
@@ -749,15 +801,16 @@ tsne_landmark_controls <- function(landmarks, transform_k,
 #' @param initialization Initial placement for transformed rows: `"median"`,
 #'   `"weighted"`, or `"random"`.
 #' @param massive `"off"` (default), experimental `"landmark"`, or
-#'   `"out_of_core_graph"` for a prepared t-SNE affinity graph.
-#'   Landmarking is always explicit.
+#'   `"out_of_core_graph"` for a prepared t-SNE affinity graph. When
+#'   omitted, a prepared file-backed graph selects full-graph mode; a
+#'   file-backed matrix with explicit landmarks selects landmark mode.
 #' @param landmark_method Sampling method for experimental landmark mode:
 #'   `"reservoir"` (default) or `"random"` for fast random-access storage.
 #'   Auto mode uses ordinary t-SNE when its conservative memory estimate fits;
 #'   otherwise it reports and runs approximate landmark t-SNE. The landmark
 #'   route requires a file-backed [massive_matrix()] and a new `.f32` output.
-#'   Full-graph mode streams affinities into the CPU FFT optimizer and
-#'   currently has no CUDA route.
+#'   Full-graph mode streams affinities into the CPU, Metal, or CUDA FFT
+#'   optimizer.
 #' @param output New `.f32` path for experimental file-backed coordinates.
 #' @param chunk_rows Maximum experimental query rows per batch.
 #' @param memory_limit Conservative experimental RAM budget.
@@ -766,10 +819,14 @@ tsne_landmark_controls <- function(landmarks, transform_k,
 #'   100 iterations and at the final iteration.
 #' @param resume Continue a matching interrupted experimental workflow.
 #'   Changed input, backend, or fit controls fail without recomputation.
-#' @param devices Optional CUDA device indices. With experimental
-#'   full-graph 2D t-SNE, two devices coordinate one fit using NCCL.
-#'   Landmark projection distributes query rows across devices while
-#'   reference fitting and KNN use the first device.
+#' @param devices Optional CUDA device indices. In resident full-data mode,
+#'   two to four devices coordinate one 2D or 3D fit with host KNN
+#'   affinities and NCCL. The experimental file-backed full-graph route
+#'   also accepts two to four CUDA devices.
+#'   Resident landmark fits coordinate the reference optimizer across
+#'   devices and shard the fixed-reference query transform across them.
+#'   Query KNN is computed on one GPU and materialized in host RAM before
+#'   its device shards; the scientific calculation uses no SSD files.
 #' @param ... Additional low-level parameters passed to [tsne_knn()].
 #' @details
 #' The t-SNE API exposes the principal
@@ -782,7 +839,7 @@ tsne_landmark_controls <- function(landmarks, transform_k,
 #' parameters: it uses the backend router with target recall 0.99. Supply an
 #' externally generated KNN object to [tsne_knn()] when search policy must be
 #' controlled independently. The resolved settings are returned in
-#' `fit$parameters`. Affinity construction always uses compact support with
+#' `fit$parameters`. Affinities default to compact support with
 #' `k = ceiling(perplexity)` non-self neighbors. Landmark mode embeds the
 #' selected reference rows with the same t-SNE implementation and transforms
 #' all remaining rows while keeping the reference coordinates fixed.
@@ -815,7 +872,9 @@ tsne <- function(
     initialization = c("median", "weighted", "random"),
     massive = "off", output = NULL, chunk_rows = NULL,
     memory_limit = "8GB", devices = NULL, landmark_method = "reservoir",
-    checkpoint = FALSE, resume = FALSE, ...) {
+    checkpoint = FALSE, resume = FALSE, affinity_k = NULL, ...) {
+    if (missing(massive)) massive <- embedding_default_massive(
+        data, landmarks)
     extra <- list(...)
     validate_tsne_dots(extra)
     backend <- resolve_embedding_backend(backend)
@@ -824,10 +883,12 @@ tsne <- function(
         n_iter, exaggeration, initial_momentum, final_momentum,
         max_step_norm, negative_gradient_method, record_costs, auto_config
     )
-    settings <- new_tsne_settings(
-        perplexity, n_components, init_data, Y_init, standardize, pca_dims,
-        metric, seed, backend, keep_knn, verbose, n.cores, optimizer
-    )
+    settings <- new_tsne_settings(perplexity, n_components,
+        init_data, Y_init, standardize, pca_dims, metric, seed,
+        backend, keep_knn, verbose, n.cores, optimizer, devices,
+        affinity_k)
+    validate_tsne_affinity_scope(affinity_k, massive)
+    controls <- NULL
     if (!identical(massive, "off") || landmark_embedding_requested(landmarks))
         controls <- tsne_landmark_controls(landmarks, transform_k,
             transform_perplexity, transform_iter,
@@ -838,13 +899,8 @@ tsne <- function(
             massive, output, chunk_rows, memory_limit, devices,
             landmark_method, checkpoint, resume))
     massive_embedding_off(output, chunk_rows, memory_limit,
-        devices = devices, landmark_method = landmark_method,
+        landmark_method = landmark_method,
         checkpoint = checkpoint, resume = resume)
-    if (landmark_embedding_requested(landmarks))
-        return(run_landmark_tsne(data, nn, settings, controls, extra))
-    if (fastembedr_is_gpu_knn(data))
-        return(run_gpu_input_tsne(data, nn, settings, extra))
-    if (is_knn_input(data)) return(run_knn_input_tsne(
-        data, nn, settings, extra))
-    run_matrix_input_tsne(data, nn, settings, extra, is_float32_matrix(data))
+    dispatch_tsne_resident(data, nn, settings, controls, extra,
+        devices, landmarks)
 }

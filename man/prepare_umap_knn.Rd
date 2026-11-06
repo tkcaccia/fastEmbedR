@@ -55,3 +55,4 @@ prep <- prepare_umap_knn(idx, dst)
 y1 <- umap_knn(prep, seed = 1)
 y2 <- umap_knn(prep, seed = 2)
 }
+\keyword{internal}

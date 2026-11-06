@@ -20,7 +20,8 @@ pca(
   memory_limit = "512MB",
   checkpoint = FALSE,
   resume = FALSE,
-  devices = NULL
+  devices = NULL,
+  landmarks = FALSE
 )
 }
 \arguments{
@@ -30,6 +31,8 @@ observations in rows.}
 \item{ncomp}{Number of principal components.}
 
 \item{xtest}{Optional test/query matrix with the same columns as \code{x}.
+In out-of-core mode, supply a matching \code{\link[=massive_matrix]{massive_matrix()}} descriptor;
+projected scores are written beside \code{output} as \code{.test.f32}.
 Projected coordinates are returned in \code{scores_test}.}
 
 \item{center}{If \code{TRUE}, mean-center columns before decomposition.}
@@ -52,10 +55,13 @@ covariance-eigensolver route records but does not consume this value.}
 \item{tsne_init}{If \code{TRUE}, add \code{tsne_init} to the returned PCA
 object. This matrix is centered and rescaled so its largest component
 standard deviation is \code{1e-4}, ready to pass as \code{Y_init} to \code{\link[=tsne]{tsne()}}
-or \code{\link[=tsne_knn]{tsne_knn()}}.}
+or \code{\link[=tsne_knn]{tsne_knn()}}. In out-of-core mode, this is a file-backed 2D/3D
+\code{.init.f32} matrix for \code{\link[=massive_tsne_optimize]{massive_tsne_optimize()}}; its normalization
+runs on CPU in bounded passes.}
 
-\item{massive}{\code{"off"} (default) keeps the existing in-memory route.
-\code{"auto"} estimates memory and selects the in-memory route when safe,
+\item{massive}{\code{"off"} keeps the in-memory route. When omitted for a
+file-backed input descriptor, \code{"auto"} is selected. \code{"auto"} estimates
+memory and selects the in-memory route when safe,
 otherwise streamed PCA. \code{"out_of_core"} explicitly activates
 covariance PCA for a \code{\link[=massive_matrix]{massive_matrix()}} source with at most 1024
 columns on CPU or 2048 on CUDA. Wider matrices use randomized
@@ -79,18 +85,26 @@ completed score batches beside \code{output} for recovery.}
 \item{resume}{Continue from a matching PCA checkpoint and partial score
 file. Available when out-of-core processing is selected.}
 
-\item{devices}{Optional distinct CUDA device IDs for experimental
-file-backed PCA score projection. The decomposition runs on the first
-selected device; projection rows are sharded across devices. Optional
-checkpointing saves the decomposition and completed shard blocks;
-resume requires the same input, settings, and device list.}
+\item{devices}{Optional distinct CUDA device IDs. With resident matrix
+input, two to four devices split covariance and score projection;
+the small eigendecomposition runs on CPU. Out-of-core CUDA PCA shards
+file-backed fitting and score projection across devices.}
+
+\item{landmarks}{\code{FALSE} fits all rows. For resident PCA, a count,
+fraction, explicit row indices, or \code{TRUE} selects fitting rows and
+projects every input row onto their principal components. File-backed
+landmark PCA uses \code{\link[=massive_project_pca]{massive_project_pca()}} instead. Resident Metal
+projects with its native matrix multiply; CPU and single-device CUDA
+use CPU projection. Multi-GPU CUDA projects on the requested devices.
+The route is recorded in \code{projection_backend}.}
 }
 \value{
 A \code{fastEmbedR_pca} list with \code{scores}, \code{loadings},
 \code{singular_values}, centering/scaling vectors, backend metadata, and
 decomposition metadata. When \code{tsne_init = TRUE}, the list also
 contains \code{tsne_init}; when \code{xtest} is supplied, it also contains
-\code{scores_test}. Metal and CUDA preserve \code{float::float32} scores, loadings,
+\code{scores_test}. Out-of-core \code{scores_test} is file-backed. Metal and CUDA
+preserve \code{float::float32} scores, loadings,
 initialization, and compatible test projections when the input is
 float32. CPU results also record the worker and BLAS limits.
 }

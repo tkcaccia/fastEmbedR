@@ -36,3 +36,4 @@ The resulting \code{.weights.f32} file shares the existing index file. These
 are directed memberships, not the symmetrized fuzzy UMAP graph, and are
 not yet accepted by full-data UMAP optimization.
 }
+\keyword{internal}
