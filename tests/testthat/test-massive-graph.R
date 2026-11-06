@@ -202,8 +202,8 @@ test_that("full KNN audit bounds its exact read chunk independently", {
     setup <- list(resources = list(chunk_rows = 5L,
         reference_chunk_rows = 1000000L), workers = 1L)
     large <- fastEmbedR:::massive_synthetic_matrix(1000000L, 96L)
-    expect_identical(fastEmbedR:::massive_exact_audit_reference_chunk(
-        large, setup), 666666L)
+    expect_identical(fastEmbedR:::massive_full_knn_audit_reference_rows(
+        large, setup), 500000L)
     audited <- fastEmbedR:::massive_full_knn_audit(
         graph, source, 5L, setup)
     expect_true(audited$recall_audited)
