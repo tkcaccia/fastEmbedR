@@ -63,7 +63,7 @@ Rcpp::List fastembedr_graph_cluster_cuda_devices_cpp(
   namespace accel = fastembedr_graph_accel;
   int count = 0;
   if (cudaGetDeviceCount(&count) != cudaSuccess || count < 2 ||
-      devices.size() < 2 || devices.size() > 4 ||
+      devices.size() < 2 || devices.size() > static_cast<std::size_t>(count) ||
       n_vertices < devices.size() ||
       n_runs < 1 || n_iterations < 1 ||
       (method != "louvain" && method != "leiden") ||

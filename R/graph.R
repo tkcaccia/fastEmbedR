@@ -527,7 +527,7 @@ finish_graph_cluster <- function(result, graph, settings, started) {
 #'   Final clustering uses `resolution[1]` and `seed[1]`; no additional
 #'   resolution or seed is inferred. `n_iterations` applies to every partition.
 #'   `small_groups`, when supplied, is applied last.
-#'   With `devices`, CUDA partitions graph rows over two to four GPUs.
+#'   With `devices`, CUDA partitions graph rows across the selected GPUs.
 #'   Every device updates the same partition, with labels synchronized
 #'   through host RAM after each color phase. Separate `n_runs` remain
 #'   independent repeats. Consensus and graph reweighting apply to
@@ -571,7 +571,7 @@ finish_graph_cluster <- function(result, graph, settings, started) {
 #'   community updates can yield different partitions for the same seed.
 #'   Matrix input with explicit `landmarks` returns a
 #'   `fastEmbedR_landmark_clusters` result with all-row labels.
-#' @param devices Optional vector of two to four distinct CUDA device IDs
+#' @param devices Optional vector of at least two distinct CUDA device IDs
 #'   for a coordinated resident fit. Requires `backend = "cuda"`.
 #' @references
 #' Blondel VD, Guillaume JL, Lambiotte R, Lefebvre E. Fast unfolding of
@@ -697,8 +697,8 @@ graph_cluster_resident <- function(graph, method, backend,
     if (settings$parallel.fit && settings$n.cores > 32L) stop(
         "CPU fit mode supports at most 32 workers.", call. = FALSE)
     if (!is.null(devices)) {
-        if (length(devices) < 2L || length(devices) > 4L) stop(
-            "Resident multi-GPU clustering needs two to four devices.",
+        if (length(devices) < 2L) stop(
+            "Resident multi-GPU clustering needs at least two devices.",
             call. = FALSE)
         settings$devices <- massive_validate_devices(devices,
             settings$backend, graph$n_vertices)

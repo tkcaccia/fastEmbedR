@@ -80,13 +80,45 @@ test_that("resident CUDA graph devices reject unsupported controls", {
     graph <- list(from = 1L, to = 2L, weight = 1,
         n_vertices = 2L)
     expect_error(graph_cluster(graph, backend = "cuda",
-        devices = 0L), "two to four")
+        devices = 0L), "at least two")
     with_mocked_bindings({
         expect_error(graph_cluster(graph, backend = "cuda",
             n.cores = 2L,
             devices = c(0L, 1L)), "CPU workers")
     }, massive_validate_devices = function(devices, backend, nrow)
         as.integer(devices), .package = "fastEmbedR")
+})
+
+test_that("resident graph clustering forwards eight selected GPUs", {
+    graph <- list(from = seq.int(1L, 15L),
+        to = seq.int(2L, 16L), weight = rep(1, 15L),
+        n_vertices = 16L)
+    selected <- 0:7
+    calls <- 0L
+    with_mocked_bindings({
+        fit <- graph_cluster(graph, method = "louvain",
+            backend = "cuda", devices = selected)
+        expect_identical(calls, 1L)
+        expect_identical(fit$gpu_devices, selected)
+        expect_identical(fit$gpu_identity, paste0("gpu", selected))
+        expect_length(fit$membership, 16L)
+    },
+    massive_validate_devices = function(devices, backend, nrow) {
+        expect_identical(backend, "cuda")
+        expect_identical(nrow, 16L)
+        as.integer(devices)
+    },
+    massive_cuda_device_uuids = function(devices)
+        paste0("gpu", devices),
+    graph_clustering_cuda_available_cpp = function() TRUE,
+    fastembedr_graph_cluster_cuda_devices_cpp = function(..., devices) {
+        calls <<- calls + 1L
+        expect_identical(devices, selected)
+        list(membership = rep(1:2, each = 8L),
+            modularity = 0.2, n_communities = 2L,
+            gpu_devices = devices,
+            implementation = "resident_cuda_coordinated_host_sync")
+    }, .package = "fastEmbedR")
 })
 
 test_that("coordinated CUDA clustering accepts consensus controls", {

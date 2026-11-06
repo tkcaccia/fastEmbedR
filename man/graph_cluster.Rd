@@ -84,7 +84,7 @@ communities. No original feature matrix is used by these options.}
 propose moves for one shared partition; coarsening and Leiden
 refinement remain serial.}
 
-\item{devices}{Optional vector of two to four distinct CUDA device IDs
+\item{devices}{Optional vector of at least two distinct CUDA device IDs
 for a coordinated resident fit. Requires \code{backend = "cuda"}.}
 
 \item{parallel.mode}{\code{"restarts"} preserves parallel independent
@@ -133,7 +133,7 @@ squared coassignment frequencies. Optional projection weighting follows.
 Final clustering uses \code{resolution[1]} and \code{seed[1]}; no additional
 resolution or seed is inferred. \code{n_iterations} applies to every partition.
 \code{small_groups}, when supplied, is applied last.
-With \code{devices}, CUDA partitions graph rows over two to four GPUs.
+With \code{devices}, CUDA partitions graph rows across the selected GPUs.
 Every device updates the same partition, with labels synchronized
 through host RAM after each color phase. Separate \code{n_runs} remain
 independent repeats. Consensus and graph reweighting apply to
