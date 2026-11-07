@@ -51,9 +51,10 @@ tsne(
 )
 }
 \arguments{
-\item{data}{Numeric matrix/data frame with observations in rows, a list
-containing KNN \code{indices} and \code{distances}, or an experimental saved
-affinity graph for \code{massive = "out_of_core_graph"}.}
+\item{data}{Numeric matrix/data frame, a file-backed \code{\link[=massive_matrix]{massive_matrix()}},
+a list containing KNN \code{indices} and \code{distances}, or a saved affinity
+graph. A file-backed matrix without landmarks triggers full-data graph
+preparation in the experimental one-call route.}
 
 \item{perplexity}{t-SNE perplexity. If \code{NULL}, uses the largest safe value
 up to 30 that is available for the input. Compact affinity support uses
@@ -95,7 +96,9 @@ that threshold. Single-GPU device pointers pass directly to the native
 CUDA optimizer; coordinated fits materialize KNN in host RAM.
 Unsupported GPU requests fail clearly and are not relabelled CPU runs.}
 
-\item{keep_knn}{If \code{TRUE}, retain KNN matrices in the returned object.}
+\item{keep_knn}{If \code{TRUE}, retain KNN matrices or file-backed KNN files
+in the returned pipeline. One-call file-backed fits release KNN files
+after graph construction when this is \code{FALSE}.}
 
 \item{verbose}{Print optimizer progress.}
 
@@ -163,9 +166,11 @@ large fixed-reference transforms.}
 \item{massive}{\code{"off"} (default), experimental \code{"landmark"}, or
 \code{"out_of_core_graph"} for a prepared t-SNE affinity graph. When
 omitted, a prepared file-backed graph selects full-graph mode; a
-file-backed matrix with explicit landmarks selects landmark mode.}
+file-backed matrix selects a full fit unless landmarks are supplied.}
 
-\item{output}{New \code{.f32} path for experimental file-backed coordinates.}
+\item{output}{New \code{.f32} path for experimental file-backed coordinates.
+A one-call full fit also writes KNN, affinity, and PCA initialization
+files beside this path and reports their stage times.}
 
 \item{chunk_rows}{Maximum experimental query rows per batch.}
 
@@ -195,16 +200,21 @@ optimizer.}
 
 \item{checkpoint}{Save experimental workflow stages. Full-graph t-SNE
 also saves coordinates, momentum updates, and adaptive gains every
-100 iterations and at the final iteration.}
+100 iterations and at the final iteration. One-call full fits use a
+source-identified stage record and restartable global graph sorting,
+which needs more SSD space than the default bucketed sort.}
 
 \item{resume}{Continue a matching interrupted experimental workflow.
-Changed input, backend, or fit controls fail without recomputation.}
+Changed input, backend, or fit controls fail without recomputation.
+One-call recovery requires a committed stage or native checkpoint;
+an incomplete stage with no valid checkpoint fails closed.}
 
-\item{affinity_k}{Optional number of non-self neighbors for resident
+\item{affinity_k}{Optional number of non-self neighbors for
 t-SNE affinities. Defaults to \code{ceiling(perplexity)}; use
 \code{ceiling(3 * perplexity)} for conventional-width support. This setting
-also controls the reference fit in resident landmark mode. It is
-unavailable for file-backed fits.}
+also controls the reference fit in resident landmark mode and KNN
+preparation for a file-backed one-call full fit. It is unavailable when
+a prepared affinity graph is supplied.}
 
 \item{...}{Additional low-level parameters passed to \code{\link[=tsne_knn]{tsne_knn()}}.}
 }

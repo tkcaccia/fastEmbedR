@@ -101,7 +101,7 @@ massive_matrix_rows <- function(x, first, n) {
 
 #' Read bounded rows from a file-backed result
 #'
-#' @param x A `fastEmbedR_massive_matrix`, file-backed Leiden,
+#' @param x A `fastEmbedR_massive_matrix`, file-backed PCA fit, Leiden,
 #'   Louvain, Walktrap, or landmark-clustering result.
 #' @param first First one-based row to read.
 #' @param n Number of consecutive rows. Matrix reads are limited to
@@ -111,6 +111,8 @@ massive_matrix_rows <- function(x, first, n) {
 #'   clustering.
 #' @export
 massive_read_rows <- function(x, first = 1, n = 6L) {
+    if (inherits(x, "fastEmbedR_massive_pca"))
+        return(massive_read_rows(x$scores, first, n))
     if (inherits(x, "fastEmbedR_massive_clusters"))
         return(massive_read_cluster_rows(x, first, n))
     if (inherits(x, "fastEmbedR_massive_leiden"))

@@ -9,6 +9,8 @@ embedding_default_massive <- function(data, landmarks) {
         return("out_of_core_graph")
     if (inherits(data, "fastEmbedR_massive_matrix") &&
         landmark_embedding_requested(landmarks)) return("landmark")
+    if (fastembedr_file_backed_input(data))
+        return("out_of_core_data")
     "off"
 }
 
@@ -21,8 +23,9 @@ massive_embedding_mode <- function(mode, cpu_update = "sgd") {
         !cpu_update %in% c("sgd", "synchronized")) stop(
         "`cpu_update` must be 'sgd' or 'synchronized'.",
         call. = FALSE)
-    mode <- match.arg(mode, c("off", "landmark", "out_of_core_graph"))
-    if (mode != "out_of_core_graph" &&
+    mode <- match.arg(mode, c("off", "landmark", "out_of_core_graph",
+        "out_of_core_data"))
+    if (!mode %in% c("out_of_core_graph", "out_of_core_data") &&
         !identical(cpu_update, "sgd")) stop(
         "`cpu_update` requires full-graph UMAP.", call. = FALSE)
     mode
@@ -367,6 +370,15 @@ dispatch_massive_umap <- function(data, landmarks, n_neighbors,
         refinement_epochs, local_refine, local_neighbors,
         overlap_rows, devices, landmark_method, init,
         layout_storage, checkpoint, resume, cpu_update, ef_search) {
+    if (identical(massive, "out_of_core_data")) return(
+        run_full_backed_umap(data, landmarks, n_neighbors,
+            n_components, standardize, pca_dims, metric, nn, seed,
+            backend, n.cores, keep_knn, graph_mode, verbose,
+            transform_k, output, chunk_rows, memory_limit,
+            refinement_epochs, local_refine, local_neighbors,
+            overlap_rows, devices, landmark_method, init,
+            layout_storage, checkpoint, resume, cpu_update,
+            ef_search))
     if (identical(massive, "out_of_core_graph")) return(
         run_massive_umap_graph(data, init, output, n_components,
             seed, backend, n.cores, chunk_rows, memory_limit,
@@ -542,6 +554,10 @@ run_massive_tsne <- function(data, nn, settings, extra, controls,
                             devices, landmark_method,
                             checkpoint, resume) {
     massive <- massive_embedding_mode(massive)
+    if (identical(massive, "out_of_core_data")) return(
+        run_full_backed_tsne(data, nn, settings, extra, controls,
+            output, chunk_rows, memory_limit, devices,
+            landmark_method, checkpoint, resume))
     if (identical(massive, "out_of_core_graph")) return(
         run_massive_tsne_graph(data, nn, settings, extra,
             controls, output, chunk_rows, memory_limit,

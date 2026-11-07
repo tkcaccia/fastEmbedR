@@ -10,7 +10,8 @@
 [Reproducibility](reproducibility.md) |
 [References](references.md)
 
-Start with `pca()`, `tsne()`, `umap()`, and `graph_cluster()`. The same
+Start with `pca()`, `tsne()`, `umap()`, and `graph_cluster()`. These are the
+four analysis entry points for resident and file-backed data. The same
 embedding functions accept either a matrix or a precomputed KNN result.
 File-backed data enter through `massive_matrix()`; use
 `graph_cluster()` for resident or file-backed clustering. Graph preparation
@@ -32,9 +33,26 @@ clustering stages are internal.
 | You want a fast approximation for very large data | set `landmarks` in `umap()` or `tsne()` and report it as landmarking |
 | Your float32 input exceeds RAM | describe it with `massive_matrix()`; choose `landmarks` when approximating |
 | You want quality metrics | `evaluate_embedding(x, layout)` |
-| You want native graph communities | `graph_cluster(knn_graph(x), method = "leiden")` |
+| You want native graph communities | `graph_cluster(x, method = "leiden")` |
 | You want landmark clustering | `graph_cluster(x, landmarks = 0.1)` |
 | You want to inspect a file-backed result | `massive_read_rows(result)` |
+
+Every analysis fit supports `summary(fit)`. It returns the recorded backend
+and devices, full or landmark scope, stage times, and available memory
+figures with their measurement basis. Missing memory measurements remain
+`NA`; they are not estimated from the number of rows. The summary contains
+no output coordinates or labels. Read only the rows needed from a
+file-backed result:
+
+```r
+print(summary(fit))
+first_rows <- massive_read_rows(fit, first = 1L, n = 20L)
+```
+
+`massive_read_rows()` also accepts a file-backed PCA fit and reads its score
+file. Matrix reads are limited to 128 MB per call; label readers impose
+their own row caps. A file-backed descriptor never loads all rows for
+`summary()`.
 
 
 Precompute KNN only when methods must share exactly the same neighbors:
@@ -68,9 +86,10 @@ options(old)
 
 The file-backed result is a `fastEmbedR_massive_graph` descriptor, not a
 resident KNN matrix. It supports Euclidean distance and needs a new output
-prefix. Construct a fuzzy graph or affinity graph from it before a full
-file-backed UMAP or t-SNE fit. A storage option never copies a resident matrix
-to SSD implicitly. The memory option limits algorithm buffers, not total RSS.
+prefix. Reuse it to prepare multiple embeddings, or let `umap()` and
+`tsne()` build their graph stages from the original file-backed matrix in
+one full-data call. A storage option never copies a resident matrix to SSD
+implicitly. The memory option limits algorithm buffers, not total RSS.
 The option names are ordinary session-wide R keys and can be shared with
 other packages that adopt the same values. `pca()`, `tsne()`, `umap()`,
 `graph_cluster()`, and `precompute_knn()` also accept an explicit `storage`
@@ -310,7 +329,14 @@ results.
 
 ## Graph Clustering
 
-Build a graph from raw data, an embedding result, or a reusable KNN object:
+Pass a resident data matrix directly to build its KNN graph in the call:
+
+```r
+communities <- graph_cluster(x, method = "leiden", k = 20,
+                             backend = "cpu", seed = 1)
+```
+
+Pass a prepared graph when its exact edges must be reused:
 
 ```r
 graph <- knn_graph(x, k = 20, weight = "snn", n.cores = 4)
@@ -335,6 +361,12 @@ communities <- graph_cluster(x, landmarks = 0.1,
                                  vote_k = 30, backend = "cpu")
 table(communities$membership)
 ```
+
+`landmarks`, `k`, and `vote_k` are explicit controls. `vote_k` applies only
+to resident landmark assignments. A prepared graph rejects landmark
+controls, since its edges and vertices are already fixed. File-backed
+matrices need an explicit landmark count; a full file-backed fit still
+needs a prepared graph.
 
 `graph_cluster(..., landmarks = ...)` keeps reference labels fixed and reports the reference
 fit, selection, all-row confidence, and stage times. Its graph assembly and
@@ -485,15 +517,38 @@ device resident for the projection and refinement stages.
 
 `massive_matrix()` describes a row-major `.f32` or `.fbin` file without
 loading it into R. Ordinary matrix calls remain unchanged. File-backed
-calls require a persistent output path. The descriptor and an explicit
-`landmarks` value or prepared graph select the appropriate route:
+calls require a persistent output path. A descriptor without landmarks
+selects a full-data fit for PCA, UMAP, and t-SNE; explicit landmarks select
+an approximation for UMAP and t-SNE. A prepared graph may be reused:
 
 | Function | Mode | What is fitted |
 | --- | --- | --- |
 | `pca()` | `massive = "out_of_core"` | Streamed PCA on all rows. |
 | `massive_project_pca()` | File-backed projection | Apply a saved PCA fit to another file-backed source. |
 | `umap()`, `tsne()` | `massive = "landmark"` | Reference landmarks, then projection of other rows. |
+| `umap()`, `tsne()` | One-call full data | Prepare KNN, graph, spectral UMAP or PCA t-SNE initialization, and optimize all rows. |
 | `umap()`, `tsne()` | `massive = "out_of_core_graph"` | All rows of a prepared graph or affinity object. |
+
+The experimental one-call full route needs Euclidean raw data, a new `.f32`
+output path, and enough SSD space for KNN, graph, initialization, and final
+coordinates. It records separate stage times and intermediate descriptors.
+The ordinary route uses a lower-disk bucketed graph sort and releases
+intermediate KNN files by default. Set `keep_knn = TRUE` to retain them.
+With `checkpoint = TRUE`, a source-identified stage record uses the
+restartable global graph sort and retains KNN files until the fit completes;
+this requires more SSD space. A matching call with `resume = TRUE` reuses
+completed stages and native checkpoints. Changed inputs or controls fail.
+Work interrupted before a native checkpoint may require a new output.
+
+```r
+source <- massive_matrix("full.fbin")
+layout_u <- umap(source, n_neighbors = 30L, n_components = 2L,
+                 backend = "cpu", storage = "file_backed",
+                 output = "full-umap.f32", memory_limit = "8GB")
+layout_t <- tsne(source, perplexity = 30, n_components = 3L,
+                 backend = "cpu", storage = "file_backed",
+                 output = "full-tsne.f32", memory_limit = "8GB")
+```
 
 Full-data file-backed PCA runs through `pca()`. State the storage mode when
 you require bounded reads even if the source could fit in memory:
@@ -518,9 +573,9 @@ records `optimizer`, `parameters$cpu_update`, and
 `resources$effective_cpu_workers`. Other modes and backends reject
 `"synchronized"` rather than silently using another optimizer.
 
-The last mode requires a graph and file-backed initialization prepared
-before the embedding call. It does not build an entire graph from a file
-automatically. `massive_full_knn_graph()` uses the package's existing
+The prepared-graph mode requires a graph and file-backed initialization
+supplied by the caller. The one-call mode builds them from the matrix.
+`massive_full_knn_graph()` uses the package's existing
 CPU exact/HNSW or CUDA cuVS exact/IVF search routes; approximate search
 remains approximate even when every row is optimized. The file-backed
 Metal full-graph UMAP supports 2D and 3D with streamed graph edges and a

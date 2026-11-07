@@ -90,7 +90,9 @@ PCA uses \code{options(n.cores)} (one by default); KNN and UMAP use their
 stage defaults. The ordered CPU stage of a 2D Metal fit uses one thread;
 native GPU stages ignore this argument.}
 
-\item{keep_knn}{Keep KNN matrices in the returned object.}
+\item{keep_knn}{Keep KNN matrices or file-backed KNN files in the returned
+pipeline. One-call file-backed fits release KNN files after graph
+construction when this is \code{FALSE}.}
 
 \item{graph_mode}{Graph weighting mode. \code{"fuzzy"} (the default) uses the
 standard UMAP fuzzy graph. \code{"binary"} uses a symmetric unit-weight graph
@@ -111,13 +113,15 @@ to \code{n_neighbors}.}
 
 \item{massive}{\code{"off"} (default), experimental \code{"landmark"},
 or \code{"out_of_core_graph"}. When omitted, a prepared file-backed graph
-selects full-graph mode; a file-backed matrix with explicit landmarks
-selects landmark mode. The
-full-graph route needs a symmetric fuzzy graph and file-backed \code{init}.
+selects full-graph mode; a file-backed matrix selects a full fit unless
+landmarks are supplied. A prepared graph needs file-backed \code{init}.
 Build the graph with \code{\link[=massive_umap_fuzzy_graph]{massive_umap_fuzzy_graph()}}. The experimental
 CUDA full-graph route requires a device-resident 2D layout.}
 
-\item{output}{New \code{.f32} path for experimental file-backed coordinates.}
+\item{output}{New \code{.f32} path for experimental file-backed coordinates.
+A one-call full fit also writes KNN, fuzzy graph, and streamed spectral
+initialization from that graph. The spectral stage runs on CPU and is
+recorded separately even when the fit backend is Metal or CUDA.}
 
 \item{chunk_rows}{Maximum experimental query rows per batch.}
 
@@ -162,10 +166,15 @@ CPU mapping, or \code{"managed"} for CUDA managed-memory coordinates in
 experimental full-graph UMAP. CUDA rejects \code{"mmap"}.}
 
 \item{checkpoint}{Save experimental workflow stages and completed batches.
-Only available for massive landmark or full-graph mode.}
+A one-call full fit records source-identified stages and uses the
+restartable global graph sort, which needs more SSD space than the
+default bucketed sort.}
 
 \item{resume}{Continue a matching interrupted experimental workflow.
-Changed input, backend, or fit controls fail without recomputation.}
+Changed input, backend, or fit controls fail without recomputation.
+One-call recovery requires a committed stage or native checkpoint;
+an incomplete stage with no valid checkpoint fails closed, except that
+an incomplete owned spectral output is rebuilt from the verified graph.}
 
 \item{cpu_update}{\code{"sgd"} (default) uses ordered single-worker updates.
 \code{"synchronized"} enables deterministic multicore CPU updates for

@@ -51,15 +51,18 @@ do not inherit the M3 performance results. CUDA architecture flags and a
 successful build likewise do not constitute runtime or performance evidence
 for an untested GPU. See the [hardware evidence contract][validation].
 
-The intended workflow is:
+The intended analysis workflow uses `pca()`, `tsne()`, `umap()`, and
+`graph_cluster()` for resident and file-backed inputs:
 
 1. call `pca()`, `tsne()`, or `umap()` on a matrix;
 2. if both embeddings must share neighbors, call `precompute_knn()` once
    and pass its result to `tsne()` and `umap()`;
 3. evaluate or plot the embedding.
 
-`graph_cluster()` handles resident and file-backed graph or landmark
-workflows. `massive_read_rows()` inspects
+`graph_cluster(x)` builds a graph from a data matrix; pass a prepared graph
+to reuse its edges. `landmarks`, `k`, and `vote_k` are named controls.
+`summary(fit)` reports backend, devices, scope, stages, and recorded memory
+without reading file-backed output. `massive_read_rows()` inspects
 bounded rows of file-backed matrices and clustering results. Direct KNN
 optimizers and file-stage functions remain available for controlled work;
 they are grouped under advanced reference topics.
@@ -71,7 +74,12 @@ memory_limit = "8GB")` alongside `options(backend = "cpu")`.
 The main analysis functions also accept `storage` directly when one call
 needs to override the session setting.
 The file-backed result is a graph descriptor, not a resident KNN matrix;
-prepare fuzzy weights or affinities from it before a full embedding fit.
+`umap()` and `tsne()` can prepare fuzzy weights or affinities from a
+file-backed matrix in one experimental full-data call. Supply a new `.f32`
+output path and enough SSD space for the intermediate graph and
+initialization. Full-data UMAP computes a streamed spectral start from its
+fuzzy graph; full-data t-SNE uses PCA. Prepared graphs remain available for
+reuse and recovery.
 
 For the one-call functions `tsne()` and `umap()`, the embedding backend is
 deliberately limited to `backend = "cpu"`, `"metal"`, or `"cuda"`. Internal

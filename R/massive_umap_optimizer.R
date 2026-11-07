@@ -182,7 +182,8 @@ massive_umap_result <- function(plan, graph, init, built, saved,
     result$optimizer <- if (plan$backend == "cpu" &&
         plan$cpu_update == "synchronized")
         "synchronized_cpu_fixed_point" else if (plan$backend == "metal")
-        "streamed_metal_atomic" else if (is.null(plan$devices))
+        "streamed_metal_snapshot_fixed_point" else if (
+            is.null(plan$devices))
         paste0("streamed_", plan$backend, "_sgd") else "synchronized_cuda_nccl"
     result$layout_storage <- if (plan$backend == "cuda" &&
         layout_storage == "memory") "device" else layout_storage
@@ -202,8 +203,8 @@ massive_umap_result <- function(plan, graph, init, built, saved,
         massive_umap_cuda_result(result, plan, built, layout_storage)
     if (plan$backend == "metal") result$resources <- c(result$resources,
         list(metal_memory_model = "unified_shared",
-            metal_buffer_bytes_estimate = plan$layout_bytes +
-                16 * plan$edge_capacity,
+            metal_buffer_bytes_estimate = 2 * plan$layout_bytes +
+                20 * plan$edge_capacity,
             edge_batch_capacity = plan$edge_capacity,
             peak_vram_bytes = NA_real_))
     result$updates <- built[c("positive_updates", "negative_updates")]

@@ -98,12 +98,34 @@ weighted voting; it is not full-data graph clustering.
 
 # Full-graph analysis
 
-A full file-backed fit requires a prepared nearest-neighbor graph.
-Graph preparation is explicit because exact all-pairs search can take
-quadratic time. The graph builders and importers remain public for
-advanced use; the algorithm itself still runs through the four main
-functions. The example below uses a bounded exact graph on a data size
-where that search is practical.
+A full file-backed fit can prepare its nearest-neighbor graph and
+initialization in one call. UMAP uses a streamed spectral start from its
+fuzzy graph; t-SNE uses PCA. It records the KNN, graph, initialization,
+and optimization times separately. The KNN policy may choose approximate
+search for larger inputs; all rows are still optimized. Set
+`checkpoint = TRUE` to record completed stages and native progress.
+The checkpointed route uses a restartable global graph sort and needs
+more SSD space. After an interruption, repeat the same call with
+`checkpoint = TRUE, resume = TRUE`; changed inputs or controls fail.
+An incomplete spectral output is rebuilt from the verified graph on resume.
+Other work completed before its first native checkpoint may need a new output.
+
+```{r eval=FALSE}
+small <- massive_matrix("small-features.f32", nrow = 2000L,
+                        ncol = 128L)
+layout <- umap(small, n_neighbors = 30L, n_components = 2L,
+               backend = "cpu", storage = "file_backed",
+               output = "full-umap.f32", memory_limit = "8GB")
+layout_t <- tsne(small, perplexity = 30, n_components = 3L,
+                 backend = "cpu", storage = "file_backed",
+                 output = "full-tsne.f32", memory_limit = "8GB")
+summary(layout)
+massive_read_rows(layout, first = 1L, n = 20L)
+```
+
+Prepare and reuse the graph explicitly when multiple fits share KNN or when
+stage-level recovery is required. The example below uses a bounded exact
+graph on a size where that search is practical.
 
 ```{r eval=FALSE}
 small <- massive_matrix("small-features.f32", nrow = 2000L,

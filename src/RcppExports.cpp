@@ -2475,6 +2475,26 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// massive_spectral_init_stream_cpp
+List massive_spectral_init_stream_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string output, int n_components, int spectral_n_iter, int seed, int chunk_rows, double memory_limit);
+RcppExport SEXP _fastEmbedR_massive_spectral_init_stream_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP outputSEXP, SEXP n_componentsSEXP, SEXP spectral_n_iterSEXP, SEXP seedSEXP, SEXP chunk_rowsSEXP, SEXP memory_limitSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type offsets_path(offsets_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type indices_path(indices_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type weights_path(weights_pathSEXP);
+    Rcpp::traits::input_parameter< double >::type n_vertices(n_verticesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type output(outputSEXP);
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    Rcpp::traits::input_parameter< int >::type spectral_n_iter(spectral_n_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< int >::type chunk_rows(chunk_rowsSEXP);
+    Rcpp::traits::input_parameter< double >::type memory_limit(memory_limitSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_spectral_init_stream_cpp(offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit));
+    return rcpp_result_gen;
+END_RCPP
+}
 // massive_validate_csr_graph_cpp
 List massive_validate_csr_graph_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices);
 RcppExport SEXP _fastEmbedR_massive_validate_csr_graph_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP) {
@@ -3450,6 +3470,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_umap_optimize_cuda_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_optimize_cuda_cpp, 23},
     {"_fastEmbedR_massive_tsne_optimize_cuda_cpp", (DL_FUNC) &_fastEmbedR_massive_tsne_optimize_cuda_cpp, 24},
     {"_fastEmbedR_massive_read_graph_edges_cpp", (DL_FUNC) &_fastEmbedR_massive_read_graph_edges_cpp, 9},
+    {"_fastEmbedR_massive_spectral_init_stream_cpp", (DL_FUNC) &_fastEmbedR_massive_spectral_init_stream_cpp, 10},
     {"_fastEmbedR_massive_validate_csr_graph_cpp", (DL_FUNC) &_fastEmbedR_massive_validate_csr_graph_cpp, 4},
     {"_fastEmbedR_massive_read_csr_graph_edges_cpp", (DL_FUNC) &_fastEmbedR_massive_read_csr_graph_edges_cpp, 8},
     {"_fastEmbedR_massive_exact_graph_batch_cpp", (DL_FUNC) &_fastEmbedR_massive_exact_graph_batch_cpp, 6},

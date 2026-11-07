@@ -26,6 +26,16 @@ test_that("graph_cluster accepts resident and file-backed matrices", {
         "Resident landmark clustering")
     expect_error(graph_cluster(graph, massive = "landmark"),
         "File-backed controls")
+    expect_error(graph_cluster(graph, landmarks = 24L),
+        "data matrix, not a prepared graph")
+    expect_error(graph_cluster(graph, vote_k = 4L),
+        "data matrix, not a prepared graph")
+    prepared <- structure(list(n_vertices = 8L),
+        class = "fastEmbedR_massive_graph")
+    expect_error(graph_cluster(prepared, landmarks = 4L),
+        "data matrix, not a prepared graph")
+    expect_error(graph_cluster(x, vote_k = 4L),
+        "requires `landmarks`")
     work <- tempfile("unified-cluster-")
     dir.create(work)
     on.exit(unlink(work, recursive = TRUE))
@@ -33,6 +43,8 @@ test_that("graph_cluster accepts resident and file-backed matrices", {
     writeBin(as.numeric(t(x)), path, size = 4L,
         endian = "little")
     input <- massive_matrix(path, nrow(x), ncol(x))
+    expect_error(graph_cluster(input, vote_k = 4L),
+        "requires `landmarks`")
     fit <- graph_cluster(input, method = "louvain",
         landmarks = 24L, k = 4L,
         output = file.path(work, "fit"),

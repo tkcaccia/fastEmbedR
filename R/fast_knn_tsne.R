@@ -703,8 +703,9 @@ dispatch_tsne_resident <- function(data, nn, settings, controls, extra,
 }
 
 validate_tsne_affinity_scope <- function(affinity_k, massive) {
-    if (!is.null(affinity_k) && !identical(massive, "off")) stop(
-        "`affinity_k` requires a resident t-SNE fit.",
+    if (!is.null(affinity_k) &&
+        !massive %in% c("off", "out_of_core_data")) stop(
+        "`affinity_k` needs a data-matrix t-SNE fit.",
         call. = FALSE)
 }
 
@@ -718,17 +719,19 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #' The implementation follows published sparse-affinity and interpolation-based
 #' t-SNE methods and provides independent CPU, Metal, and CUDA kernels.
 #'
-#' @param data Numeric matrix/data frame with observations in rows, a list
-#'   containing KNN `indices` and `distances`, or an experimental saved
-#'   affinity graph for `massive = "out_of_core_graph"`.
+#' @param data Numeric matrix/data frame, a file-backed [massive_matrix()],
+#'   a list containing KNN `indices` and `distances`, or a saved affinity
+#'   graph. A file-backed matrix without landmarks triggers full-data graph
+#'   preparation in the experimental one-call route.
 #' @param perplexity t-SNE perplexity. If `NULL`, uses the largest safe value
 #'   up to 30 that is available for the input. Compact affinity support uses
 #'   `ceiling(perplexity)` non-self neighbors.
-#' @param affinity_k Optional number of non-self neighbors for resident
+#' @param affinity_k Optional number of non-self neighbors for
 #'   t-SNE affinities. Defaults to `ceiling(perplexity)`; use
 #'   `ceiling(3 * perplexity)` for conventional-width support. This setting
-#'   also controls the reference fit in resident landmark mode. It is
-#'   unavailable for file-backed fits.
+#'   also controls the reference fit in resident landmark mode and KNN
+#'   preparation for a file-backed one-call full fit. It is unavailable when
+#'   a prepared affinity graph is supplied.
 #' @param n_components Output dimensionality, 2 or 3. FFT repulsion is used
 #'   on every backend.
 #' @param init_data Optional original high-dimensional data matrix used only to
@@ -756,7 +759,9 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #'   that threshold. Single-GPU device pointers pass directly to the native
 #'   CUDA optimizer; coordinated fits materialize KNN in host RAM.
 #'   Unsupported GPU requests fail clearly and are not relabelled CPU runs.
-#' @param keep_knn If `TRUE`, retain KNN matrices in the returned object.
+#' @param keep_knn If `TRUE`, retain KNN matrices or file-backed KNN files
+#'   in the returned pipeline. One-call file-backed fits release KNN files
+#'   after graph construction when this is `FALSE`.
 #' @param verbose Print optimizer progress.
 #' @param n.cores Number of CPU cores used by CPU PCA preprocessing, KNN, and
 #'   t-SNE optimization. With `NULL`, PCA uses `options(n.cores)` (one by
@@ -803,7 +808,7 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #' @param massive `"off"` (default), experimental `"landmark"`, or
 #'   `"out_of_core_graph"` for a prepared t-SNE affinity graph. When
 #'   omitted, a prepared file-backed graph selects full-graph mode; a
-#'   file-backed matrix with explicit landmarks selects landmark mode.
+#'   file-backed matrix selects a full fit unless landmarks are supplied.
 #' @param landmark_method Sampling method for experimental landmark mode:
 #'   `"reservoir"` (default) or `"random"` for fast random-access storage.
 #'   Auto mode uses ordinary t-SNE when its conservative memory estimate fits;
@@ -812,6 +817,8 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #'   Full-graph mode streams affinities into the CPU, Metal, or CUDA FFT
 #'   optimizer.
 #' @param output New `.f32` path for experimental file-backed coordinates.
+#'   A one-call full fit also writes KNN, affinity, and PCA initialization
+#'   files beside this path and reports their stage times.
 #' @param chunk_rows Maximum experimental query rows per batch.
 #' @param memory_limit Conservative experimental RAM budget. When omitted for
 #'   file-backed input, uses `options(memory_limit = ...)`, or
@@ -820,9 +827,13 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #'   uses `options(storage = ...)`. The input must match the selection.
 #' @param checkpoint Save experimental workflow stages. Full-graph t-SNE
 #'   also saves coordinates, momentum updates, and adaptive gains every
-#'   100 iterations and at the final iteration.
+#'   100 iterations and at the final iteration. One-call full fits use a
+#'   source-identified stage record and restartable global graph sorting,
+#'   which needs more SSD space than the default bucketed sort.
 #' @param resume Continue a matching interrupted experimental workflow.
 #'   Changed input, backend, or fit controls fail without recomputation.
+#'   One-call recovery requires a committed stage or native checkpoint;
+#'   an incomplete stage with no valid checkpoint fails closed.
 #' @param devices Optional CUDA device indices. In resident full-data mode,
 #'   two to four devices coordinate one 2D or 3D fit with host KNN
 #'   affinities and NCCL. The experimental file-backed full-graph route

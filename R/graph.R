@@ -456,6 +456,27 @@ finish_graph_cluster <- function(result, graph, settings, started) {
     result
 }
 
+graph_cluster_input_controls <- function(graph, landmarks, k,
+        vote_k, k_given, vote_given, dots) {
+    matrix_input <- is.matrix(graph) || is_float32_matrix(graph) ||
+        inherits(graph, "fastEmbedR_massive_matrix")
+    routed_input <- matrix_input ||
+        inherits(graph, "fastEmbedR_massive_graph")
+    if (!matrix_input && (!is.null(landmarks) || k_given ||
+        vote_given)) stop(
+        "Landmark controls require a data matrix, not a prepared graph.",
+        call. = FALSE)
+    if (vote_given && is.null(landmarks)) stop(
+        "`vote_k` requires `landmarks`.", call. = FALSE)
+    if (!is.null(landmarks)) dots$landmarks <- landmarks
+    if (k_given) dots$k <- k
+    if (vote_given) dots$vote_k <- vote_k
+    if (fastembedr_file_backed_input(graph) &&
+        !is.null(dots$vote_k)) stop(
+        "`vote_k` requires a resident data matrix.", call. = FALSE)
+    list(data_input = routed_input, dots = dots)
+}
+
 #' Native graph community detection
 #'
 #' `graph_cluster()` clusters a matrix, compact graph, or file-backed input
@@ -465,8 +486,10 @@ finish_graph_cluster <- function(result, graph, settings, started) {
 #' have CPU, CUDA, and Metal implementations. Walktrap is CPU-only. No Python,
 #' `igraph`, cuGraph, or external clustering function is called at run time.
 #'
-#' @param graph A `fastEmbedR_graph`, or an edge-list list containing `from`,
-#'   `to`, `weight`, and `n_vertices`.
+#' @param graph A resident data matrix, `fastEmbedR_graph`, file-backed
+#'   matrix or prepared file-backed graph. An edge-list list with `from`,
+#'   `to`, `weight`, and `n_vertices` is also accepted. Data matrices build
+#'   a KNN graph first; prepared graphs reuse their existing edges.
 #' @param method `"leiden"`, `"louvain"`, or `"walktrap"`. Walktrap is the
 #'   package's true random-walk community method.
 #' @param backend Execution backend. `"cuda"` and `"metal"` are available for
@@ -491,9 +514,14 @@ finish_graph_cluster <- function(result, graph, settings, started) {
 #'   `"out_of_core_graph"`. A file-backed graph selects full-graph mode;
 #'   a matrix selects auto mode unless `storage = "file_backed"` requests
 #'   a landmark fit. Resident graphs reject it.
-#' @param ... For a matrix with explicit `landmarks`, resident landmark
-#'   controls such as `k` and `vote_k`. For file-backed data, storage
-#'   controls such as `output`, an integer landmark count, `chunk_rows`,
+#' @param landmarks Optional reference-row fraction, count, or indices for
+#'   resident data; a count for file-backed data. Prepared graphs reject it.
+#' @param k Neighbors in a landmark reference graph. Ignored unless
+#'   `landmarks` is supplied. Prepared graphs reject it.
+#' @param vote_k Neighbors for assigning non-landmark resident rows.
+#'   File-backed data and prepared graphs reject it.
+#' @param ... For file-backed data, storage
+#'   controls such as `output`, `chunk_rows`,
 #'   `memory_limit`, `checkpoint`, `resume`, and `gpu_storage`.
 #'   When omitted for file-backed input, the memory budget uses
 #'   `options(memory_limit = ...)`, or `"8GB"`.
@@ -633,28 +661,34 @@ graph_cluster <- function(graph,
                             n.cores = 1L,
                             devices = NULL,
                             parallel.mode = c("restarts", "fit"),
-                            massive = NULL, storage = NULL, ...) {
+                            massive = NULL, storage = NULL,
+                            landmarks = NULL, k = 30L, vote_k = k, ...) {
     storage <- fastembedr_storage_option(graph, storage)
+    controls <- graph_cluster_input_controls(graph, landmarks,
+        k, vote_k, !missing(k), !missing(vote_k), list(...))
+    data_input <- controls$data_input
+    dots <- controls$dots
     if (is.matrix(graph) || is_float32_matrix(graph)) {
-        dots <- list(...)
         if (!is.null(dots$landmarks)) return(
             graph_cluster_resident_landmarks(graph, method, backend,
                 resolution, n_iterations, n_runs, steps, seed,
                 layout_merge, projection, small_groups, n.cores,
                 devices, parallel.mode, massive, dots))
     }
-    if (is.matrix(graph) || is_float32_matrix(graph) ||
-        inherits(graph, c("fastEmbedR_massive_matrix",
-            "fastEmbedR_massive_graph"))) {
+    if (data_input) {
         if (!is.null(layout_merge) || !is.null(projection) ||
             !is.null(small_groups)) stop(
             "These graph options need a resident graph.",
             call. = FALSE)
-        return(graph_cluster_data_input(graph, method, backend,
-            resolution, n_iterations, n_runs, steps, seed,
-            n.cores, devices, parallel.mode, massive, storage, ...))
+        return(do.call(graph_cluster_data_input, c(list(graph = graph,
+            method = method, backend = backend,
+            resolution = resolution, n_iterations = n_iterations,
+            n_runs = n_runs, steps = steps, seed = seed,
+            n.cores = n.cores, devices = devices,
+            parallel.mode = parallel.mode, massive = massive,
+            storage = storage), dots)))
     }
-    if (!is.null(massive) || length(list(...))) stop(
+    if (!is.null(massive) || length(dots)) stop(
         "File-backed controls require a file-backed input.",
         call. = FALSE)
     graph_cluster_resident(graph, method, backend, resolution,

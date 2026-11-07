@@ -45,7 +45,9 @@
 #'   PCA uses `options(n.cores)` (one by default); KNN and UMAP use their
 #'   stage defaults. The ordered CPU stage of a 2D Metal fit uses one thread;
 #'   native GPU stages ignore this argument.
-#' @param keep_knn Keep KNN matrices in the returned object.
+#' @param keep_knn Keep KNN matrices or file-backed KNN files in the returned
+#'   pipeline. One-call file-backed fits release KNN files after graph
+#'   construction when this is `FALSE`.
 #' @param graph_mode Graph weighting mode. `"fuzzy"` (the default) uses the
 #'   standard UMAP fuzzy graph. `"binary"` uses a symmetric unit-weight graph
 #'   as an adjacency-only sensitivity approximation; it is not standard UMAP
@@ -295,9 +297,8 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #'   to `n_neighbors`.
 #' @param massive `"off"` (default), experimental `"landmark"`,
 #'   or `"out_of_core_graph"`. When omitted, a prepared file-backed graph
-#'   selects full-graph mode; a file-backed matrix with explicit landmarks
-#'   selects landmark mode. The
-#'   full-graph route needs a symmetric fuzzy graph and file-backed `init`.
+#'   selects full-graph mode; a file-backed matrix selects a full fit unless
+#'   landmarks are supplied. A prepared graph needs file-backed `init`.
 #'   Build the graph with [massive_umap_fuzzy_graph()]. The experimental
 #'   CUDA full-graph route requires a device-resident 2D layout.
 #' @param init File-backed 2D or 3D initial coordinates for experimental
@@ -308,6 +309,9 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #'   otherwise it reports and runs approximate landmark UMAP. The landmark
 #'   route requires a file-backed [massive_matrix()] and a new `.f32` output.
 #' @param output New `.f32` path for experimental file-backed coordinates.
+#'   A one-call full fit also writes KNN, fuzzy graph, and streamed spectral
+#'   initialization from that graph. The spectral stage runs on CPU and is
+#'   recorded separately even when the fit backend is Metal or CUDA.
 #' @param chunk_rows Maximum experimental query rows per batch.
 #' @param memory_limit Conservative experimental RAM budget. When omitted for
 #'   file-backed input, uses `options(memory_limit = ...)`, or
@@ -315,9 +319,14 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
 #'   uses `options(storage = ...)`. The input must match the selection.
 #' @param checkpoint Save experimental workflow stages and completed batches.
-#'   Only available for massive landmark or full-graph mode.
+#'   A one-call full fit records source-identified stages and uses the
+#'   restartable global graph sort, which needs more SSD space than the
+#'   default bucketed sort.
 #' @param resume Continue a matching interrupted experimental workflow.
 #'   Changed input, backend, or fit controls fail without recomputation.
+#'   One-call recovery requires a committed stage or native checkpoint;
+#'   an incomplete stage with no valid checkpoint fails closed, except that
+#'   an incomplete owned spectral output is rebuilt from the verified graph.
 #' @param layout_storage `"memory"` (default), `"mmap"` for a writable
 #'   CPU mapping, or `"managed"` for CUDA managed-memory coordinates in
 #'   experimental full-graph UMAP. CUDA rejects `"mmap"`.

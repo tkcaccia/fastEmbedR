@@ -277,7 +277,8 @@ test_that("full-graph Metal UMAP streams a prepared fuzzy graph", {
             chunk_rows = 5L, memory_limit = "256MB"),
         .package = "fastEmbedR")
     expect_identical(fit$backend, "metal")
-    expect_identical(fit$optimizer, "streamed_metal_atomic")
+    expect_identical(fit$optimizer,
+        "streamed_metal_snapshot_fixed_point")
     expect_identical(fit$resources$metal_memory_model,
         "unified_shared")
     expect_equal(fit$resources$edge_batch_capacity, 65536L)

@@ -6456,6 +6456,284 @@ List massive_read_graph_edges_cpp(std::string indices_path,
                       Rcpp::Named("distance") = distance);
 }
 
+namespace {
+
+template <typename Function>
+void spectral_stream_scan(CsrGraphSource& graph, int chunk_rows,
+                          Function consume) {
+  for (std::uint64_t first = 1; first <= graph.vertices();) {
+    const auto begin = graph.offset(first - 1);
+    const auto end = graph.offset(first);
+    const auto budget = std::max<std::uint64_t>(65536, end - begin);
+    const auto rows = graph.bounded_rows(first, chunk_rows, budget);
+    graph.visit(first, rows, consume);
+    first += rows;
+    Rcpp::checkUserInterrupt();
+  }
+}
+
+void spectral_stream_orthogonalize(std::vector<double>& q,
+                                   std::uint64_t n, int block,
+                                   const std::vector<double>& inv_degree,
+                                   double inv_sqrt_volume,
+                                   std::mt19937& rng) {
+  std::normal_distribution<double> normal(0.0, 1.0);
+  for (int col = 0; col < block; ++col) {
+    bool ready = false;
+    for (int attempt = 0; attempt < 2 && !ready; ++attempt) {
+      double dot = 0.0;
+      for (std::uint64_t row = 0; row < n; ++row) {
+        const double inv = inv_degree[row];
+        const double trivial = inv > 0.0 ? inv_sqrt_volume / inv : 0.0;
+        dot += q[row * block + col] * trivial;
+      }
+      for (std::uint64_t row = 0; row < n; ++row) {
+        const double inv = inv_degree[row];
+        const double trivial = inv > 0.0 ? inv_sqrt_volume / inv : 0.0;
+        q[row * block + col] -= dot * trivial;
+      }
+      for (int prior = 0; prior < col; ++prior) {
+        dot = 0.0;
+        for (std::uint64_t row = 0; row < n; ++row) {
+          dot += q[row * block + col] * q[row * block + prior];
+        }
+        for (std::uint64_t row = 0; row < n; ++row) {
+          q[row * block + col] -= dot * q[row * block + prior];
+        }
+      }
+      double norm = 0.0;
+      for (std::uint64_t row = 0; row < n; ++row) {
+        const double value = q[row * block + col];
+        norm += value * value;
+      }
+      ready = std::isfinite(norm) && norm > 1e-20;
+      if (ready) {
+        const double scale = 1.0 / std::sqrt(norm);
+        for (std::uint64_t row = 0; row < n; ++row) {
+          q[row * block + col] *= scale;
+        }
+      } else if (attempt == 0) {
+        for (std::uint64_t row = 0; row < n; ++row) {
+          q[row * block + col] = normal(rng);
+        }
+      }
+    }
+    if (!ready) Rcpp::stop("Streamed spectral basis lost rank.");
+  }
+}
+
+std::vector<int> spectral_stream_ritz(std::vector<double>& projected,
+                                      std::vector<double>& rotation,
+                                      int block) {
+  rotation.assign(static_cast<std::size_t>(block) * block, 0.0);
+  for (int col = 0; col < block; ++col) {
+    rotation[static_cast<std::size_t>(col) * block + col] = 1.0;
+  }
+  for (int sweep = 0; sweep < 80; ++sweep) {
+    int p = 0;
+    int q = 1;
+    double largest = 0.0;
+    for (int row = 0; row < block; ++row) {
+      for (int col = row + 1; col < block; ++col) {
+        const double value = std::abs(projected[row * block + col]);
+        if (value > largest) {
+          largest = value;
+          p = row;
+          q = col;
+        }
+      }
+    }
+    if (largest < 1e-10) break;
+    const double app = projected[p * block + p];
+    const double aqq = projected[q * block + q];
+    const double apq = projected[p * block + q];
+    const double tau = (aqq - app) / (2.0 * apq);
+    const double t = (tau >= 0.0 ? 1.0 : -1.0) /
+      (std::abs(tau) + std::sqrt(1.0 + tau * tau));
+    const double cs = 1.0 / std::sqrt(1.0 + t * t);
+    const double sn = t * cs;
+    for (int row = 0; row < block; ++row) {
+      if (row == p || row == q) continue;
+      const double rp = projected[row * block + p];
+      const double rq = projected[row * block + q];
+      projected[row * block + p] = cs * rp - sn * rq;
+      projected[p * block + row] = projected[row * block + p];
+      projected[row * block + q] = sn * rp + cs * rq;
+      projected[q * block + row] = projected[row * block + q];
+    }
+    projected[p * block + p] = cs * cs * app -
+      2.0 * sn * cs * apq + sn * sn * aqq;
+    projected[q * block + q] = sn * sn * app +
+      2.0 * sn * cs * apq + cs * cs * aqq;
+    projected[p * block + q] = 0.0;
+    projected[q * block + p] = 0.0;
+    for (int row = 0; row < block; ++row) {
+      const double rp = rotation[row * block + p];
+      const double rq = rotation[row * block + q];
+      rotation[row * block + p] = cs * rp - sn * rq;
+      rotation[row * block + q] = sn * rp + cs * rq;
+    }
+  }
+  std::vector<int> order(block);
+  std::iota(order.begin(), order.end(), 0);
+  std::sort(order.begin(), order.end(), [&](int a, int b) {
+    return projected[a * block + a] > projected[b * block + b];
+  });
+  return order;
+}
+
+}  // namespace
+
+// [[Rcpp::export]]
+List massive_spectral_init_stream_cpp(std::string offsets_path,
+    std::string indices_path, std::string weights_path,
+    double n_vertices, std::string output, int n_components,
+    int spectral_n_iter, int seed, int chunk_rows,
+    double memory_limit) {
+  CsrGraphSource graph(offsets_path, indices_path, weights_path,
+                       n_vertices, "stream");
+  const auto n = graph.vertices();
+  const int block = static_cast<int>(std::min<std::uint64_t>(
+    n - 1, std::max(n_components + 6, 8)));
+  if ((n_components != 2 && n_components != 3) ||
+      block < n_components || spectral_n_iter < 1 ||
+      spectral_n_iter > 1000 || chunk_rows < 1 ||
+      !std::isfinite(memory_limit) || memory_limit <= 0) {
+    Rcpp::stop("Invalid streamed spectral initialization controls.");
+  }
+  const auto values = checked_product(n, block);
+  const auto estimated = checked_product(values, 16) +
+    checked_product(n, 8) +
+    checked_product(chunk_rows, n_components * 4) + 16 * 1024 * 1024;
+  if (estimated > memory_limit ||
+      values > std::numeric_limits<std::size_t>::max() /
+        sizeof(double)) {
+    Rcpp::stop("Streamed spectral initialization exceeds RAM budget.");
+  }
+  if (std::filesystem::exists(output) ||
+      std::filesystem::exists(output + ".part")) {
+    Rcpp::stop("Spectral initialization output already exists.");
+  }
+  std::vector<double> inv_degree(n, 0.0);
+  spectral_stream_scan(graph, chunk_rows,
+    [&](std::uint64_t source, std::uint32_t, double weight,
+        std::uint64_t) {
+      inv_degree[source - 1] += weight;
+    });
+  const double volume = std::accumulate(inv_degree.begin(),
+                                        inv_degree.end(), 0.0);
+  if (!std::isfinite(volume) || volume <= 0.0) {
+    Rcpp::stop("Streamed spectral graph has no positive edges.");
+  }
+  for (double& degree : inv_degree) {
+    degree = degree > 0.0 ? 1.0 / std::sqrt(degree) : 0.0;
+  }
+  std::mt19937 rng(static_cast<std::uint32_t>(seed));
+  std::normal_distribution<double> normal(0.0, 1.0);
+  std::vector<double> q(values), z(values);
+  for (double& value : q) value = normal(rng);
+  const double inv_sqrt_volume = 1.0 / std::sqrt(volume);
+  spectral_stream_orthogonalize(q, n, block, inv_degree,
+                                 inv_sqrt_volume, rng);
+  auto multiply = [&](const std::vector<double>& input,
+                      std::vector<double>& result) {
+    std::fill(result.begin(), result.end(), 0.0);
+    spectral_stream_scan(graph, chunk_rows,
+      [&](std::uint64_t source, std::uint32_t target, double weight,
+          std::uint64_t) {
+        const auto row = source - 1;
+        const auto neighbor = static_cast<std::uint64_t>(target - 1);
+        const double scaled = weight * inv_degree[row] *
+          inv_degree[neighbor];
+        for (int col = 0; col < block; ++col) {
+          result[row * block + col] +=
+            scaled * input[neighbor * block + col];
+        }
+      });
+  };
+  for (int iter = 0; iter < spectral_n_iter; ++iter) {
+    multiply(q, z);
+    spectral_stream_orthogonalize(z, n, block, inv_degree,
+                                   inv_sqrt_volume, rng);
+    q.swap(z);
+  }
+  multiply(q, z);
+  std::vector<double> projected(block * block, 0.0);
+  for (std::uint64_t row = 0; row < n; ++row) {
+    for (int a = 0; a < block; ++a) {
+      for (int b = a; b < block; ++b) {
+        projected[a * block + b] +=
+          q[row * block + a] * z[row * block + b];
+      }
+    }
+  }
+  for (int a = 0; a < block; ++a) {
+    for (int b = a + 1; b < block; ++b) {
+      projected[b * block + a] = projected[a * block + b];
+    }
+  }
+  std::vector<double> rotation;
+  const auto order = spectral_stream_ritz(projected, rotation, block);
+  auto coordinate = [&](std::uint64_t row, int component) {
+    double value = 0.0;
+    const int eigen_col = order[component];
+    for (int basis = 0; basis < block; ++basis) {
+      value += q[row * block + basis] *
+        rotation[basis * block + eigen_col];
+    }
+    return value;
+  };
+  std::vector<double> mean(n_components, 0.0);
+  for (std::uint64_t row = 0; row < n; ++row) {
+    for (int col = 0; col < n_components; ++col) {
+      mean[col] += coordinate(row, col);
+    }
+  }
+  for (double& value : mean) value /= static_cast<double>(n);
+  double max_abs = 0.0;
+  for (std::uint64_t row = 0; row < n; ++row) {
+    for (int col = 0; col < n_components; ++col) {
+      max_abs = std::max(max_abs,
+        std::abs(coordinate(row, col) - mean[col]));
+    }
+  }
+  if (!std::isfinite(max_abs) || max_abs <= 0.0) {
+    Rcpp::stop("Streamed spectral initialization collapsed.");
+  }
+  Float32Sink sink(output);
+  std::normal_distribution<double> jitter(0.0, 1e-4);
+  std::vector<float> buffer(checked_product(chunk_rows, n_components));
+  const double scale = 10.0 / max_abs;
+  for (std::uint64_t first = 0; first < n;) {
+    const auto rows = std::min<std::uint64_t>(chunk_rows, n - first);
+    for (std::uint64_t local = 0; local < rows; ++local) {
+      for (int col = 0; col < n_components; ++col) {
+        const double value = (coordinate(first + local, col) -
+          mean[col]) * scale + jitter(rng);
+        if (!std::isfinite(value) ||
+            std::abs(value) > std::numeric_limits<float>::max()) {
+          Rcpp::stop("Streamed spectral coordinate is invalid.");
+        }
+        buffer[local * n_components + col] =
+          static_cast<float>(value);
+      }
+    }
+    sink.append(buffer.data(), rows * n_components);
+    first += rows;
+    Rcpp::checkUserInterrupt();
+  }
+  sink.finish(checked_product(n, n_components * 4));
+  return List::create(
+    Rcpp::Named("backend_used") = "native_cpu_streamed_spectral",
+    Rcpp::Named("n_vertices") = static_cast<double>(n),
+    Rcpp::Named("dimensions") = n_components,
+    Rcpp::Named("iterations") = spectral_n_iter,
+    Rcpp::Named("graph_passes") = spectral_n_iter + 2,
+    Rcpp::Named("memory_bytes_estimate") =
+      static_cast<double>(estimated),
+    Rcpp::Named("output") = output);
+}
+
 // [[Rcpp::export]]
 List massive_validate_csr_graph_cpp(std::string offsets_path,
                                     std::string indices_path,

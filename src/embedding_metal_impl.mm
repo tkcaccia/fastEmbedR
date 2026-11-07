@@ -199,6 +199,7 @@ struct MetalEmbeddingState {
   id<MTLComputePipelineState> embed_apply_delta_pipeline;
   id<MTLComputePipelineState> massive_umap_batch_pipeline;
   id<MTLComputePipelineState> massive_umap_batch_3d_pipeline;
+  id<MTLComputePipelineState> massive_umap_snapshot_pipeline;
   id<MTLComputePipelineState> embed_atomic_3d_pipeline;
   id<MTLComputePipelineState> embed_clean_atomic_3d_pipeline;
   id<MTLComputePipelineState> refine_prepare_pipeline;
@@ -411,6 +412,7 @@ MetalEmbeddingState& metal_embedding_state() {
       state.embed_apply_delta_pipeline != nil &&
       state.massive_umap_batch_pipeline != nil &&
       state.massive_umap_batch_3d_pipeline != nil &&
+      state.massive_umap_snapshot_pipeline != nil &&
       state.embed_atomic_3d_pipeline != nil &&
       state.embed_clean_atomic_3d_pipeline != nil &&
       state.refine_prepare_pipeline != nil &&
@@ -475,6 +477,8 @@ MetalEmbeddingState& metal_embedding_state() {
     state, "massive_umap_batch");
   state.massive_umap_batch_3d_pipeline = make_pipeline(
     state, "massive_umap_batch_3d");
+  state.massive_umap_snapshot_pipeline = make_pipeline(
+    state, "massive_umap_batch_snapshot");
   state.embed_atomic_3d_pipeline =
     make_pipeline(state, "embed_epoch_atomic_3d");
   state.embed_clean_atomic_3d_pipeline =
@@ -1858,6 +1862,73 @@ kernel void massive_umap_batch_3d(
       float coeff = repulsive_coeff(d2, p);
       add_layout_3d(layout, head,
         alpha * clamp(coeff * diff, -4.0f, 4.0f));
+    }
+    ++done;
+  }
+  completed[gid] = done;
+}
+
+kernel void massive_umap_batch_snapshot(
+  device const int* layout [[buffer(0)]],
+  device atomic_int* delta [[buffer(1)]],
+  device const int* heads [[buffer(2)]],
+  device const int* tails [[buffer(3)]],
+  device const int* negative_counts [[buffer(4)]],
+  device uint* completed [[buffer(5)]],
+  constant EmbedParams& p [[buffer(6)]],
+  constant uint& epoch [[buffer(7)]],
+  constant uint& count [[buffer(8)]],
+  constant uint& dimensions [[buffer(9)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  if (gid >= count) return;
+  const uint head = uint(heads[gid]);
+  const uint tail = uint(tails[gid]);
+  const uint hb = dimensions * head;
+  const uint tb = dimensions * tail;
+  constexpr float scale = 1.0f / 65536.0f;
+  const float alpha = p.learning_rate *
+    (1.0f - float(epoch) / float(p.n_epochs));
+  float head_pos[3];
+  float diff[3];
+  float d2 = 0.0f;
+  for (uint axis = 0u; axis < dimensions; ++axis) {
+    head_pos[axis] = float(layout[hb + axis]) * scale;
+    diff[axis] = head_pos[axis] -
+      float(layout[tb + axis]) * scale;
+    d2 += diff[axis] * diff[axis];
+  }
+  if (d2 > 0.0f) {
+    const float coeff = attractive_coeff(d2, 1.0f, p);
+    for (uint axis = 0u; axis < dimensions; ++axis) {
+      const int update = fixed_delta(
+        alpha * clip4(coeff * diff[axis]));
+      atomic_fetch_add_explicit(&delta[hb + axis],
+        update, memory_order_relaxed);
+      atomic_fetch_add_explicit(&delta[tb + axis],
+        -update, memory_order_relaxed);
+    }
+  }
+  uint done = 0u;
+  for (int sample = 0; sample < negative_counts[gid]; ++sample) {
+    const uint neg = deterministic_vertex(p.n, p.seed,
+      epoch, head, tail, uint(sample));
+    if (neg == head) continue;
+    const uint nb = dimensions * neg;
+    float negative_d2 = 0.0f;
+    for (uint axis = 0u; axis < dimensions; ++axis) {
+      diff[axis] = head_pos[axis] -
+        float(layout[nb + axis]) * scale;
+      negative_d2 += diff[axis] * diff[axis];
+    }
+    if (negative_d2 > 0.0f) {
+      const float coeff = repulsive_coeff(negative_d2, p);
+      for (uint axis = 0u; axis < dimensions; ++axis) {
+        const int update = fixed_delta(
+          alpha * clip4(coeff * diff[axis]));
+        atomic_fetch_add_explicit(&delta[hb + axis],
+          update, memory_order_relaxed);
+      }
     }
     ++done;
   }
@@ -9311,6 +9382,7 @@ NumericMatrix knn_embed_metal_impl(IntegerMatrix indices,
 
 struct MassiveMetalUmapContext {
   id<MTLBuffer> layout;
+  id<MTLBuffer> delta;
   EmbedParams params;
   int dimensions;
 };
@@ -9329,21 +9401,27 @@ extern "C" void* fastembedr_massive_umap_metal_create(
       static_cast<std::size_t>(dimensions);
     const auto bytes = elements * sizeof(std::int32_t);
     const auto working_set = state.device.recommendedMaxWorkingSetSize;
-    if (bytes > state.device.maxBufferLength ||
-        (working_set > 0 && bytes > 0.6 * working_set)) {
+    if (elements > std::numeric_limits<std::uint32_t>::max() ||
+        bytes > state.device.maxBufferLength ||
+        (working_set > 0 && bytes > 0.3 * working_set)) {
       Rcpp::stop("Metal UMAP layout exceeds device shared memory.");
     }
     auto* context = new MassiveMetalUmapContext{};
     context->layout = [state.device newBufferWithLength:bytes
       options:MTLResourceStorageModeShared];
-    if (context->layout == nil) {
+    context->delta = [state.device newBufferWithLength:bytes
+      options:MTLResourceStorageModeShared];
+    if (context->layout == nil || context->delta == nil) {
+      [context->layout release];
+      [context->delta release];
       delete context;
-      Rcpp::stop("Metal UMAP layout allocation failed.");
+      Rcpp::stop("Metal UMAP layout/delta allocation failed.");
     }
     auto* fixed = static_cast<std::int32_t*>([context->layout contents]);
     for (std::size_t i = 0; i < elements; ++i) {
       if (!std::isfinite(init[i]) || std::abs(init[i]) > 16000.0f) {
         [context->layout release];
+        [context->delta release];
         delete context;
         Rcpp::stop("Metal UMAP initialization is nonfinite or too large.");
       }
@@ -9387,23 +9465,43 @@ extern "C" std::uint64_t fastembedr_massive_umap_metal_step(
     const auto epoch_u = static_cast<std::uint32_t>(epoch);
     const auto count_u = static_cast<std::uint32_t>(count);
     id<MTLCommandBuffer> command = [state.queue commandBuffer];
+    id<MTLBlitCommandEncoder> clear = [command blitCommandEncoder];
+    [clear fillBuffer:context->delta
+        range:NSMakeRange(0, [context->delta length]) value:0];
+    [clear endEncoding];
+    id<MTLComputePipelineState> pipeline =
+      state.massive_umap_snapshot_pipeline;
     id<MTLComputeCommandEncoder> encoder =
       [command computeCommandEncoder];
-    id<MTLComputePipelineState> pipeline = context->dimensions == 3 ?
-      state.massive_umap_batch_3d_pipeline :
-      state.massive_umap_batch_pipeline;
     [encoder setComputePipelineState:pipeline];
     [encoder setBuffer:context->layout offset:0 atIndex:0];
-    [encoder setBuffer:h offset:0 atIndex:1];
-    [encoder setBuffer:t offset:0 atIndex:2];
-    [encoder setBuffer:neg offset:0 atIndex:3];
-    [encoder setBuffer:done offset:0 atIndex:4];
+    [encoder setBuffer:context->delta offset:0 atIndex:1];
+    [encoder setBuffer:h offset:0 atIndex:2];
+    [encoder setBuffer:t offset:0 atIndex:3];
+    [encoder setBuffer:neg offset:0 atIndex:4];
+    [encoder setBuffer:done offset:0 atIndex:5];
     [encoder setBytes:&context->params length:sizeof(EmbedParams)
-      atIndex:5];
-    [encoder setBytes:&epoch_u length:sizeof(epoch_u) atIndex:6];
-    [encoder setBytes:&count_u length:sizeof(count_u) atIndex:7];
+      atIndex:6];
+    [encoder setBytes:&epoch_u length:sizeof(epoch_u) atIndex:7];
+    [encoder setBytes:&count_u length:sizeof(count_u) atIndex:8];
+    const auto dimensions_u =
+      static_cast<std::uint32_t>(context->dimensions);
+    [encoder setBytes:&dimensions_u length:sizeof(dimensions_u)
+      atIndex:9];
     dispatch_rows(encoder, pipeline, count);
     [encoder endEncoding];
+    const auto n_values = context->params.n * dimensions_u;
+    id<MTLComputeCommandEncoder> apply =
+      [command computeCommandEncoder];
+    [apply setComputePipelineState:state.embed_apply_delta_pipeline];
+    [apply setBuffer:context->layout offset:0 atIndex:0];
+    [apply setBuffer:context->delta offset:0 atIndex:1];
+    [apply setBytes:&n_values length:sizeof(n_values) atIndex:2];
+    const NSUInteger apply_threads = bounded_threads(
+      state.embed_apply_delta_pipeline);
+    [apply dispatchThreads:MTLSizeMake(n_values, 1, 1)
+      threadsPerThreadgroup:MTLSizeMake(apply_threads, 1, 1)];
+    [apply endEncoding];
     wait_for_command(command, "full-graph UMAP edge batch");
     const auto* values = static_cast<const std::uint32_t*>(
       [done contents]);
@@ -9433,6 +9531,7 @@ extern "C" void fastembedr_massive_umap_metal_destroy(void* raw) {
   if (raw == nullptr) return;
   auto* context = static_cast<MassiveMetalUmapContext*>(raw);
   [context->layout release];
+  [context->delta release];
   delete context;
 }
 

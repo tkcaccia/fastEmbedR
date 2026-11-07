@@ -7,7 +7,7 @@
 massive_read_rows(x, first = 1, n = 6L)
 }
 \arguments{
-\item{x}{A \code{fastEmbedR_massive_matrix}, file-backed Leiden,
+\item{x}{A \code{fastEmbedR_massive_matrix}, file-backed PCA fit, Leiden,
 Louvain, Walktrap, or landmark-clustering result.}
 
 \item{first}{First one-based row to read.}
