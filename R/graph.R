@@ -521,7 +521,9 @@ graph_cluster_input_controls <- function(graph, landmarks, k,
 #'   a matrix selects auto mode unless `storage = "file_backed"` requests
 #'   a landmark fit. Resident graphs reject it.
 #' @param landmarks Optional reference-row fraction, count, or indices for
-#'   resident data; a count for file-backed data. Prepared graphs reject it.
+#'   resident data; a count for file-backed data. `FALSE` explicitly selects
+#'   full clustering for resident data. Prepared graphs reject a landmark
+#'   selection.
 #' @param k Neighbors in a landmark reference graph. Ignored unless
 #'   `landmarks` is supplied. Prepared graphs reject it.
 #' @param vote_k Neighbors for assigning non-landmark resident rows.
