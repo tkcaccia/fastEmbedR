@@ -68,8 +68,10 @@ test_that("public file-backed KNN resumes after a committed block", {
     expect_true(isTRUE(resumed$resumed))
     expected <- precompute_knn(source, k = 3L, backend = "cpu",
         output = file.path(work, "expected"), memory_limit = "256MB")
-    expect_equal(massive_read_graph_edges(resumed, 1L, nrow(x)),
-        massive_read_graph_edges(expected, 1L, nrow(x)))
+    expect_equal(fastEmbedR:::massive_read_graph_edges(
+        resumed, 1L, nrow(x)),
+        fastEmbedR:::massive_read_graph_edges(
+            expected, 1L, nrow(x)))
 })
 
 test_that("storage options fail before hidden conversion", {
@@ -125,9 +127,7 @@ test_that("file-backed KNN requires output and supported metric", {
 })
 
 test_that("file-backed KNN routing respects work and session options", {
-    testthat::local_mocked_bindings(
-        massive_full_knn_graph = function(...) list(...),
-        .package = "fastEmbedR")
+    testthat::with_mocked_bindings({
     previous <- options(n.cores = 1L, storage = "file_backed",
         memory_limit = "128MB")
     on.exit(options(previous))
@@ -153,6 +153,8 @@ test_that("file-backed KNN routing respects work and session options", {
         backend = "cuda", output = "cuda")$method, "ivf_sharded")
     expect_identical(precompute_knn(source(1000, 10), k = 30L,
         backend = "metal", output = "metal")$method, "exact")
+    }, massive_full_knn_graph = function(...) list(...),
+        .package = "fastEmbedR")
 })
 
 test_that("explicit storage rejects conflicting legacy modes early", {
@@ -171,9 +173,7 @@ test_that("explicit storage rejects conflicting legacy modes early", {
 })
 
 test_that("file-backed clustering cannot auto-materialize", {
-    testthat::local_mocked_bindings(
-        massive_cluster = function(...) list(...),
-        .package = "fastEmbedR")
+    testthat::with_mocked_bindings({
     source <- structure(list(format = "f32", nrow = 100L, ncol = 3L),
         class = "fastEmbedR_massive_matrix")
     graph <- structure(list(n_vertices = 100L),
@@ -188,4 +188,6 @@ test_that("file-backed clustering cannot auto-materialize", {
     previous <- options(storage = "file_backed")
     on.exit(options(previous))
     expect_error(graph_cluster(source), "needs a prepared graph")
+    }, massive_cluster = function(...) list(...),
+        .package = "fastEmbedR")
 })

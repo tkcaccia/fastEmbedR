@@ -21,6 +21,7 @@ test_that("file-backed full UMAP runs through the main API", {
             events <<- c(events, "spectral")
             list(backend_used = "native_cpu_streamed_spectral")
         },
+        massive_checkpoint_input_files_identity = function(...) list(),
         massive_matrix = function(...) coordinates,
         run_massive_umap_graph = function(...) {
             events <<- c(events, "fit")

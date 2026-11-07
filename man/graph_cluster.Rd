@@ -107,7 +107,8 @@ A file-backed matrix needs \code{landmarks}; a full file-backed fit needs
 a prepared graph. These controls are rejected for a resident graph.}
 
 \item{landmarks}{Optional reference-row fraction, count, or indices for
-resident data; a count for file-backed data. Prepared graphs reject it.}
+resident data; a count for file-backed data. \code{FALSE} explicitly selects
+full clustering for resident data. Prepared graphs reject a landmark selection.}
 
 \item{k}{Neighbors in a landmark reference graph. Ignored unless
 \code{landmarks} is supplied. Prepared graphs reject it.}

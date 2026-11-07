@@ -25,9 +25,9 @@ unavailable explicit accelerator request raises an error.
 | `umap_init()` | native sparse graph initialization | native Metal initialization from prepared graph state | native CUDA initialization when compiled | Returns reusable graph and initial coordinates; a raw CUDA diagnostic call may materialize KNN on the host, whereas ordinary one-call CUDA UMAP remains resident. |
 | `umap_knn()` | native C++ CSR graph and optimizer | 2D: ordered CPU half followed by native Metal `atomic_inplace` half; 3D: native Metal optimizer | native CUDA pure-atomic optimizer; experimental resident NCCL route on two to four GPUs | The 2D Metal CPU and GPU epoch counts are returned in metadata. Coordinated CUDA builds the CSR graph in host RAM and keeps layouts and updates on GPUs. Small two-A10G 2D/3D device checks passed; performance remains unqualified. |
 | `umap()` | native exact/faissR HNSW, then `umap_knn()` | native exact/IVF-Flat KNN, then staged 2D or native 3D Metal UMAP | native cuVS device KNN, then native CUDA UMAP; experimental resident NCCL fit with explicit devices | Coordinated CUDA materializes native KNN in host RAM; no SSD graph or optimizer state is used. Other CUDA KNN fits stay on device. Metal IVF exact-reranks candidates in the original dimensions. |
-| `tsne_knn()` | native C++ FFT-grid optimizer | native Metal FFT-grid optimizer | native CUDA FFT-grid optimizer using cuFFT; experimental resident NCCL route on two to four GPUs | Use `Y_init` or `init_data` for explicit PCA initialization. Coordinated CUDA builds sparse affinities in host RAM and keeps optimizer state on the GPUs. The new resident route needs two-GPU device validation. |
+| `tsne_knn()` | native C++ FFT-grid optimizer | native Metal FFT-grid optimizer | native CUDA FFT-grid optimizer using cuFFT; experimental resident NCCL route on two to four GPUs | Use `Y_init` or `init_data` for explicit PCA initialization. Coordinated CUDA builds sparse affinities in host RAM and keeps optimizer state on the GPUs. Small two-A10G 2D/3D device checks passed; larger quality, memory, and speed remain unqualified. |
 | `tsne()` | native exact/faissR HNSW, then `tsne_knn()` | native exact/IVF-Flat, then Metal t-SNE | native cuVS device KNN, then CUDA t-SNE; experimental resident NCCL fit with explicit devices | CPU uses exact search below 5,000 rows. Coordinated CUDA materializes native KNN in host RAM; no SSD graph or optimizer state is used. The package does not call Python openTSNE in public functions. |
-| `pca()` / t-SNE PCA init | float32 blocked rSVD with OpenBLAS or native products | native float32 MPS block-subspace rSVD; resident landmark score projection uses native Metal multiplication | package-native rSVD; optional RAPIDS RAFT TSVD; experimental resident two to four GPU covariance PCA | Resident `landmarks` fits selected rows and projects all input rows. CPU and single-device CUDA projection use CPU; multi-GPU CUDA projects on the requested devices. Resident multi-GPU PCA accepts a double matrix with at most 2,048 columns. GPUs split covariance and score projection; CPU solves the small eigensystem. Small two-A10G PCA and landmark projections passed; Metal resident projection still needs device qualification. GPU requests never silently fall back to CPU. |
+| `pca()` / t-SNE PCA init | float32 blocked rSVD with OpenBLAS or native products | native float32 MPS block-subspace rSVD; resident landmark score projection uses native Metal multiplication | package-native rSVD; optional RAPIDS RAFT TSVD; experimental resident two to four GPU covariance PCA | Resident `landmarks` fits selected rows and projects all input rows. CPU and single-device CUDA projection use CPU; multi-GPU CUDA projects on the requested devices. Resident multi-GPU PCA accepts a double matrix with at most 2,048 columns. GPUs split covariance and score projection; CPU solves the small eigensystem. Small two-A10G PCA and landmark projections passed. Metal landmark projection matched CPU on a 100-row device check (maximum difference `5.23e-7`); larger quality and speed remain unqualified. GPU requests never silently fall back to CPU. |
 | `transform_tsne()` | native fixed-reference transform | native Metal projection/transform kernels where available | native CUDA projection/transform kernels where built | Used by t-SNE landmarking. |
 | `select_landmarks()` | native selection | shared selection | shared selection | Selection is independent of the embedding method and can be reused. |
 | `precompute_query_knn()` | native exact below 5,000 reference rows; faissR HNSW otherwise | native exact/recall-tuned IVF-Flat reference-query search | native exact/IVF-Flat reference-query search | Searches only the fixed reference; CUDA output remains device resident. |
@@ -50,11 +50,13 @@ backend. Precomputed KNN routes use `n_neighbors` for the same control.
 Resident landmark t-SNE applies this width to its reference fit. File-backed
 routes do not accept the explicit width control.
 
-Resident landmark `tsne()` and `umap()` currently use one CUDA device and
-reject an explicit multi-device `devices` request. The resident multi-GPU
-full-data routes and the experimental file-backed, sharded landmark
-projection are separate implementations. Coordinated resident landmark
-reference fitting and query projection remain to be implemented.
+Resident partial-landmark `tsne()` and `umap()` accept two to four CUDA
+devices for a coordinated reference fit and sharded query projection. A
+160-row two-A10G 2D/3D t-SNE device check passed. Multi-GPU landmark UMAP
+has CPU-side routing checks; its device execution and real-data quality
+remain unqualified. Neither route has established useful scaling or the
+ability to exceed combined GPU memory. The file-backed landmark routes
+are separate implementations and must be tested outside UCT HPC.
 
 ## Distance Metrics
 

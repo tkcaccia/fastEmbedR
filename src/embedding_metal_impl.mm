@@ -353,7 +353,7 @@ bool weighted_edge_less(const WeightedEdge& a, const WeightedEdge& b) {
 
 std::string ns_error_message(NSError* error) {
   if (error == nil) return "";
-  NSString* description = [error localizedDescription];
+  NSString* description = [error description];
   if (description == nil) return "unknown Metal error";
   return std::string([description UTF8String]);
 }

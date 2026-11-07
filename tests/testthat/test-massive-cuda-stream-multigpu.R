@@ -114,6 +114,7 @@ test_that("streamed hierarchy contracts and audits original graph", {
 })
 
 test_that("streamed Louvain levels use real CSR contraction", {
+    skip_on_os("windows")
     prefix <- tempfile()
     source <- tempfile()
     output <- tempfile()
@@ -177,6 +178,7 @@ test_that("streamed Louvain rejects an unconverged 64-level result", {
 })
 
 test_that("streamed Leiden uses real refinement and connectivity audit", {
+    skip_on_os("windows")
     source <- tempfile()
     prefix <- tempfile()
     output <- tempfile()

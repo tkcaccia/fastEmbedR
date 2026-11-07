@@ -1171,6 +1171,7 @@ test_that("exact checkpoint interval replays uncommitted query blocks", {
         chunk_rows = 4L, reference_chunk_rows = 5L,
         memory_limit = "256MB", checkpoint = TRUE, resume = TRUE,
         checkpoint_every = 2L)
+    expect_true(observed$resumed)
     expect_identical(observed$checkpoint_every, 2L)
     expect_equal(massive_read_graph_edges(observed, 1L, 16L),
         massive_read_graph_edges(expected, 1L, 16L))

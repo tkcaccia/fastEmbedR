@@ -241,7 +241,8 @@ test_that("precompute_knn exposes no search-algorithm selector", {
     expect_identical(
         names(formals(precompute_knn)),
         c("data", "k", "metric", "backend", "n.cores", "storage",
-            "output", "memory_limit", "devices")
+            "output", "memory_limit", "devices", "checkpoint",
+            "resume", "checkpoint_every")
     )
     expect_error(
         precompute_knn(matrix(rnorm(40), nrow = 10), k = 10L),

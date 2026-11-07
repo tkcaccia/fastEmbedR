@@ -56,6 +56,8 @@ jobs:
         config:
           - { os: ubuntu-latest, r: release }
           - { os: ubuntu-latest, r: devel }
+          # Distinguish a current runner-image Metal failure from package code.
+          - { os: macos-15, r: release }
           - { os: macos-latest, r: release }
           - { os: windows-latest, r: release }
     steps:
@@ -89,6 +91,29 @@ jobs:
         run: |
           bash -n .github/scripts/run-hardware-validation.sh
           Rscript -e 'parse(file = ".github/scripts/validate-hardware.R")'
+      - name: Diagnose hosted Metal pipeline compilation
+        if: runner.os == 'macOS'
+        run: bash .github/scripts/diagnose-metal-ci.sh
+      - name: Probe installed Metal backend outside R CMD check
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        shell: bash
+        run: |
+          probe_lib="$RUNNER_TEMP/fastembedr-probe-lib"
+          mkdir -p "$probe_lib"
+          tarballs=(source-package/fastEmbedR_*.tar.gz)
+          test "${#tarballs[@]}" -eq 1
+          test -f "${tarballs[0]}"
+          R CMD INSTALL --library="$probe_lib" "${tarballs[0]}"
+          FASTEMBEDR_PROBE_LIB="$probe_lib" Rscript -e '
+            .libPaths(c(Sys.getenv("FASTEMBEDR_PROBE_LIB"), .libPaths()))
+            set.seed(27)
+            x <- matrix(rnorm(96 * 6), nrow = 96)
+            fit <- fastEmbedR::precompute_knn(
+              x, k = 7L, backend = "metal")
+            stopifnot(identical(fit$execution_backend, "metal"))
+            cat("Installed package Metal KNN passed outside check.\n")
+          '
       - name: Check
         shell: Rscript {0}
         run: |
