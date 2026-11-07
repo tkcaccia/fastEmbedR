@@ -32,6 +32,12 @@ test_that("graph_cluster accepts resident and file-backed matrices", {
         "Resident landmark clustering")
     expect_error(graph_cluster(graph, massive = "landmark"),
         "File-backed controls")
+    expect_error(graph_cluster(graph, landmarks = 24L),
+        "data matrix, not a prepared graph")
+    expect_error(graph_cluster(graph, vote_k = 4L),
+        "data matrix, not a prepared graph")
+    expect_error(graph_cluster(x, vote_k = 4L),
+        "requires `landmarks`")
     work <- tempfile("unified-cluster-")
     dir.create(work)
     on.exit(unlink(work, recursive = TRUE))

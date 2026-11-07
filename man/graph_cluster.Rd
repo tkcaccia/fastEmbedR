@@ -21,12 +21,17 @@ graph_cluster(
   parallel.mode = c("restarts", "fit"),
   massive = NULL,
   storage = NULL,
+  landmarks = NULL,
+  k = 30L,
+  vote_k = k,
   ...
 )
 }
 \arguments{
-\item{graph}{A \code{fastEmbedR_graph}, or an edge-list list containing \code{from},
-\code{to}, \code{weight}, and \code{n_vertices}.}
+\item{graph}{A resident data matrix, \code{fastEmbedR_graph}, file-backed
+matrix or prepared file-backed graph. An edge-list list with \code{from},
+\code{to}, \code{weight}, and \code{n_vertices} is also accepted. Data matrices build
+a KNN graph first; prepared graphs reuse their existing edges.}
 
 \item{method}{\code{"leiden"}, \code{"louvain"}, or \code{"walktrap"}. Walktrap is the
 package's true random-walk community method.}
@@ -101,9 +106,18 @@ uses \code{options(storage = ...)}. The input must match the selection.
 A file-backed matrix needs \code{landmarks}; a full file-backed fit needs
 a prepared graph. These controls are rejected for a resident graph.}
 
-\item{...}{For a matrix with explicit \code{landmarks}, resident landmark
-controls such as \code{k} and \code{vote_k}. For file-backed data, storage
-controls such as \code{output}, an integer landmark count, \code{chunk_rows},
+\item{landmarks}{Optional reference-row fraction, count, or indices for
+resident data; a count for file-backed data. `FALSE` explicitly selects
+full clustering for resident data. Prepared graphs reject a landmark selection.}
+
+\item{k}{Neighbors in a landmark reference graph. Ignored unless
+\code{landmarks} is supplied. Prepared graphs reject it.}
+
+\item{vote_k}{Neighbors for assigning non-landmark resident rows.
+File-backed data and prepared graphs reject it.}
+
+\item{...}{For file-backed data, storage
+controls such as \code{output}, \code{chunk_rows},
 \code{memory_limit}, \code{checkpoint}, \code{resume}, and \code{gpu_storage}.
 When omitted for file-backed input, the memory budget uses
 \code{options(memory_limit = ...)}, or \code{"8GB"}.}
