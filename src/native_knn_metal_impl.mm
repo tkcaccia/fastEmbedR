@@ -927,7 +927,11 @@ id<MTLComputePipelineState> make_pipeline(id<MTLDevice> device, id<MTLLibrary> l
   NSError* error = nil;
   id<MTLComputePipelineState> result = [device newComputePipelineStateWithFunction:function error:&error];
   [function release];
-  if (!result) Rcpp::stop("failed to build Metal pipeline: %s", error ? [[error localizedDescription] UTF8String] : "unknown");
+  if (!result) {
+    Rcpp::stop("failed to build Metal pipeline `%s`: %s",
+      [name UTF8String],
+      error ? [[error description] UTF8String] : "unknown");
+  }
   return result;
 }
 
