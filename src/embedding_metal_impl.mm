@@ -1294,6 +1294,15 @@ uint deterministic_vertex(uint n, uint seed, uint epoch, uint i, uint edge, uint
   return mix_uint(x) % n;
 }
 
+uint deterministic_edge_vertex(uint n, uint seed, uint epoch,
+                               uint edge, uint sample) {
+  uint x = seed;
+  x ^= epoch * 0x9e3779b9u;
+  x ^= (edge + 1u) * 0x85ebca6bu;
+  x ^= (sample + 1u) * 0xc2b2ae35u;
+  return mix_uint(x) % n;
+}
+
 uint deterministic_reference(uint n, uint seed, uint epoch, uint row, uint sample) {
   uint x = seed;
   x ^= (epoch + 1u) * 0x9e3779b9u;
@@ -1874,11 +1883,12 @@ kernel void massive_umap_batch_snapshot(
   device const int* heads [[buffer(2)]],
   device const int* tails [[buffer(3)]],
   device const int* negative_counts [[buffer(4)]],
-  device uint* completed [[buffer(5)]],
-  constant EmbedParams& p [[buffer(6)]],
-  constant uint& epoch [[buffer(7)]],
-  constant uint& count [[buffer(8)]],
-  constant uint& dimensions [[buffer(9)]],
+  device const uint* edge_ordinals [[buffer(5)]],
+  device uint* completed [[buffer(6)]],
+  constant EmbedParams& p [[buffer(7)]],
+  constant uint& epoch [[buffer(8)]],
+  constant uint& count [[buffer(9)]],
+  constant uint& dimensions [[buffer(10)]],
   uint gid [[thread_position_in_grid]]
 ) {
   if (gid >= count) return;
@@ -1911,8 +1921,8 @@ kernel void massive_umap_batch_snapshot(
   }
   uint done = 0u;
   for (int sample = 0; sample < negative_counts[gid]; ++sample) {
-    const uint neg = deterministic_vertex(p.n, p.seed,
-      epoch, head, tail, uint(sample));
+    const uint neg = deterministic_edge_vertex(p.n, p.seed,
+      epoch, edge_ordinals[gid], uint(sample));
     if (neg == head) continue;
     const uint nb = dimensions * neg;
     float negative_d2 = 0.0f;
@@ -9441,7 +9451,8 @@ extern "C" void* fastembedr_massive_umap_metal_create(
 
 extern "C" std::uint64_t fastembedr_massive_umap_metal_step(
     void* raw, const int* heads, const int* tails,
-    const int* negative_counts, int count, int epoch) {
+    const int* negative_counts, const std::uint32_t* edge_ordinals,
+    int count, int epoch) {
   if (raw == nullptr || count < 0) {
     Rcpp::stop("Invalid Metal UMAP edge batch.");
   }
@@ -9456,10 +9467,13 @@ extern "C" std::uint64_t fastembedr_massive_umap_metal_step(
       length:bytes options:MTLResourceStorageModeShared];
     id<MTLBuffer> neg = [state.device newBufferWithBytes:negative_counts
       length:bytes options:MTLResourceStorageModeShared];
+    id<MTLBuffer> edge = [state.device newBufferWithBytes:edge_ordinals
+      length:bytes options:MTLResourceStorageModeShared];
     id<MTLBuffer> done = [state.device newBufferWithLength:bytes
       options:MTLResourceStorageModeShared];
-    if (h == nil || t == nil || neg == nil || done == nil) {
-      [h release]; [t release]; [neg release]; [done release];
+    if (h == nil || t == nil || neg == nil || edge == nil || done == nil) {
+      [h release]; [t release]; [neg release]; [edge release];
+      [done release];
       Rcpp::stop("Metal UMAP edge-buffer allocation failed.");
     }
     const auto epoch_u = static_cast<std::uint32_t>(epoch);
@@ -9479,15 +9493,16 @@ extern "C" std::uint64_t fastembedr_massive_umap_metal_step(
     [encoder setBuffer:h offset:0 atIndex:2];
     [encoder setBuffer:t offset:0 atIndex:3];
     [encoder setBuffer:neg offset:0 atIndex:4];
-    [encoder setBuffer:done offset:0 atIndex:5];
+    [encoder setBuffer:edge offset:0 atIndex:5];
+    [encoder setBuffer:done offset:0 atIndex:6];
     [encoder setBytes:&context->params length:sizeof(EmbedParams)
-      atIndex:6];
-    [encoder setBytes:&epoch_u length:sizeof(epoch_u) atIndex:7];
-    [encoder setBytes:&count_u length:sizeof(count_u) atIndex:8];
+      atIndex:7];
+    [encoder setBytes:&epoch_u length:sizeof(epoch_u) atIndex:8];
+    [encoder setBytes:&count_u length:sizeof(count_u) atIndex:9];
     const auto dimensions_u =
       static_cast<std::uint32_t>(context->dimensions);
     [encoder setBytes:&dimensions_u length:sizeof(dimensions_u)
-      atIndex:9];
+      atIndex:10];
     dispatch_rows(encoder, pipeline, count);
     [encoder endEncoding];
     const auto n_values = context->params.n * dimensions_u;
@@ -9507,7 +9522,8 @@ extern "C" std::uint64_t fastembedr_massive_umap_metal_step(
       [done contents]);
     std::uint64_t completed = 0;
     for (int i = 0; i < count; ++i) completed += values[i];
-    [h release]; [t release]; [neg release]; [done release];
+    [h release]; [t release]; [neg release]; [edge release];
+    [done release];
     return completed;
   }
 }

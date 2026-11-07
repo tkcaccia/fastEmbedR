@@ -5469,27 +5469,31 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
     fastembedr_massive_umap_metal_destroy);
   std::vector<int> heads(edge_capacity), tails(edge_capacity);
   std::vector<int> negatives(edge_capacity);
+  std::vector<std::uint32_t> edge_ordinals(edge_capacity);
   auto positive = initial_positive;
   auto negative = initial_negative;
   const double min_weight = max_weight / n_epochs;
   int next_percent = (start_epoch * 100 / n_epochs / 10 + 1) * 10;
   for (int epoch = start_epoch; epoch < n_epochs; ++epoch) {
     int active = 0;
+    std::uint64_t sample_edge = 0;
     auto flush = [&]() {
       negative += fastembedr_massive_umap_metal_step(
         context.get(), heads.data(), tails.data(),
-        negatives.data(), active, epoch);
+        negatives.data(), edge_ordinals.data(), active, epoch);
       active = 0;
     };
     massive_umap_scan(graph, chunk_rows, edge_capacity,
       [&](std::uint64_t head, std::uint64_t tail,
           float weight, std::uint64_t) {
       if (weight < min_weight) return;
+      const auto edge = sample_edge++;
       const double period = max_weight /
         std::max(static_cast<double>(weight), 1e-6);
       if (!massive_umap_due(epoch, period)) return;
       heads[active] = static_cast<int>(head);
       tails[active] = static_cast<int>(tail);
+      edge_ordinals[active] = static_cast<std::uint32_t>(edge);
       negatives[active] = massive_umap_negative_count(
         epoch, period, negative_sample_rate);
       ++positive;

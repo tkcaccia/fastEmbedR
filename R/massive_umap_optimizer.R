@@ -204,7 +204,7 @@ massive_umap_result <- function(plan, graph, init, built, saved,
     if (plan$backend == "metal") result$resources <- c(result$resources,
         list(metal_memory_model = "unified_shared",
             metal_buffer_bytes_estimate = 2 * plan$layout_bytes +
-                20 * plan$edge_capacity,
+                24 * plan$edge_capacity,
             edge_batch_capacity = plan$edge_capacity,
             peak_vram_bytes = NA_real_))
     result$updates <- built[c("positive_updates", "negative_updates")]
@@ -407,7 +407,7 @@ massive_umap_plan_layout <- function(graph, init, controls,
         min(1e6, max(65536, graph$max_degree))) else NULL
     staged <- min(controls$chunk_rows, 8192L) * init$ncol * 4
     resident <- if (backend == "metal") {
-        1.5 * bytes + capacity * 32 +
+        1.5 * bytes + capacity * 36 +
             if (layout_storage == "memory") bytes else staged
     } else if (layout_storage == "managed" ||
         (layout_storage == "memory" && backend == "cpu"))
