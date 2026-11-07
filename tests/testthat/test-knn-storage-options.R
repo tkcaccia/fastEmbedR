@@ -109,3 +109,38 @@ test_that("file-backed KNN routing respects work and session options", {
     expect_identical(precompute_knn(source(1000, 10), k = 30L,
         backend = "metal", output = "metal")$method, "exact")
 })
+
+test_that("explicit storage rejects conflicting legacy modes early", {
+    x <- matrix(seq_len(24), ncol = 3L)
+    source <- structure(list(format = "f32", nrow = 8L, ncol = 3L),
+        class = "fastEmbedR_massive_matrix")
+    expect_error(pca(x, storage = "resident", massive = "auto"),
+        "Resident storage")
+    expect_error(tsne(x, storage = "resident", massive = "landmark"),
+        "Resident storage")
+    expect_error(umap(x, storage = "resident", massive = "landmark"),
+        "Resident storage")
+    expect_error(pca(source, massive = "off"), "file-backed input")
+    expect_error(tsne(source, massive = "off"), "file-backed input")
+    expect_error(umap(source, massive = "off"), "file-backed input")
+})
+
+test_that("file-backed clustering cannot auto-materialize", {
+    testthat::local_mocked_bindings(
+        massive_cluster = function(...) list(...),
+        .package = "fastEmbedR")
+    source <- structure(list(format = "f32", nrow = 100L, ncol = 3L),
+        class = "fastEmbedR_massive_matrix")
+    graph <- structure(list(n_vertices = 100L),
+        class = "fastEmbedR_massive_graph")
+    expect_error(graph_cluster(source, storage = "file_backed"),
+        "needs a prepared graph")
+    fit <- graph_cluster(source, storage = "file_backed",
+        landmarks = 30L, output = "unused")
+    expect_identical(fit$massive, "landmark")
+    full <- graph_cluster(graph, storage = "file_backed")
+    expect_identical(full$massive, "out_of_core_graph")
+    previous <- options(storage = "file_backed")
+    on.exit(options(previous))
+    expect_error(graph_cluster(source), "needs a prepared graph")
+})

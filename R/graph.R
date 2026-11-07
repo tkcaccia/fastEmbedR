@@ -489,7 +489,8 @@ finish_graph_cluster <- function(result, graph, settings, started) {
 #'   runs; `"fit"` parallelizes local moves within one CPU fit.
 #' @param massive Optional data mode: `"auto"`, `"landmark"`, or
 #'   `"out_of_core_graph"`. A file-backed graph selects full-graph mode;
-#'   a matrix selects auto mode. Resident graphs reject it.
+#'   a matrix selects auto mode unless `storage = "file_backed"` requests
+#'   a landmark fit. Resident graphs reject it.
 #' @param ... For a matrix with explicit `landmarks`, resident landmark
 #'   controls such as `k` and `vote_k`. For file-backed data, storage
 #'   controls such as `output`, an integer landmark count, `chunk_rows`,
@@ -498,7 +499,8 @@ finish_graph_cluster <- function(result, graph, settings, started) {
 #'   `options(memory_limit = ...)`, or `"8GB"`.
 #' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
 #'   uses `options(storage = ...)`. The input must match the selection.
-#'   These are rejected for a resident graph.
+#'   A file-backed matrix needs `landmarks`; a full file-backed fit needs
+#'   a prepared graph. These controls are rejected for a resident graph.
 #' @param steps Random-walk length for Walktrap.
 #' @param seed Finite integer seed(s). A vector automatically enables
 #'   consensus; each seed is tested once per supplied resolution. The first
@@ -632,7 +634,7 @@ graph_cluster <- function(graph,
                             devices = NULL,
                             parallel.mode = c("restarts", "fit"),
                             massive = NULL, storage = NULL, ...) {
-    fastembedr_storage_option(graph, storage)
+    storage <- fastembedr_storage_option(graph, storage)
     if (is.matrix(graph) || is_float32_matrix(graph)) {
         dots <- list(...)
         if (!is.null(dots$landmarks)) return(
@@ -650,7 +652,7 @@ graph_cluster <- function(graph,
             call. = FALSE)
         return(graph_cluster_data_input(graph, method, backend,
             resolution, n_iterations, n_runs, steps, seed,
-            n.cores, devices, parallel.mode, massive, ...))
+            n.cores, devices, parallel.mode, massive, storage, ...))
     }
     if (!is.null(massive) || length(list(...))) stop(
         "File-backed controls require a file-backed input.",
@@ -730,8 +732,10 @@ graph_cluster_resident <- function(graph, method, backend,
 
 graph_cluster_data_input <- function(graph, method, backend,
         resolution, n_iterations, n_runs, steps, seed, n.cores,
-        devices, parallel.mode, massive, ...) {
+        devices, parallel.mode, massive, storage, ...) {
     dots <- list(...)
+    massive <- fastembedr_cluster_storage_mode(graph, massive,
+        storage, dots$landmarks)
     if (fastembedr_file_backed_input(graph) &&
         is.null(dots$memory_limit))
         dots$memory_limit <- fastembedr_memory_option("8GB")

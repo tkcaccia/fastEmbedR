@@ -75,6 +75,11 @@ The option names are ordinary session-wide R keys and can be shared with
 other packages that adopt the same values. `pca()`, `tsne()`, `umap()`,
 `graph_cluster()`, and `precompute_knn()` also accept an explicit `storage`
 argument that overrides the session setting.
+The storage request is checked before analysis: `storage = "file_backed"`
+cannot silently materialize a clustering input. A file-backed matrix needs
+explicit `landmarks` for clustering until one-call full graph preparation is
+implemented; full file-backed clustering accepts a prepared graph.
+Conflicting legacy `massive` settings fail before fitting.
 
 ### Updating older scripts
 

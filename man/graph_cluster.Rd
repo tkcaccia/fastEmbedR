@@ -93,11 +93,13 @@ runs; \code{"fit"} parallelizes local moves within one CPU fit.}
 
 \item{massive}{Optional data mode: \code{"auto"}, \code{"landmark"}, or
 \code{"out_of_core_graph"}. A file-backed graph selects full-graph mode;
-a matrix selects auto mode. Resident graphs reject it.}
+a matrix selects auto mode unless \code{storage = "file_backed"} requests
+a landmark fit. Resident graphs reject it.}
 
 \item{storage}{\code{"auto"}, \code{"resident"}, or \code{"file_backed"}. When omitted,
 uses \code{options(storage = ...)}. The input must match the selection.
-These are rejected for a resident graph.}
+A file-backed matrix needs \code{landmarks}; a full file-backed fit needs
+a prepared graph. These controls are rejected for a resident graph.}
 
 \item{...}{For a matrix with explicit \code{landmarks}, resident landmark
 controls such as \code{k} and \code{vote_k}. For file-backed data, storage

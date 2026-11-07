@@ -782,7 +782,9 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #'   `options(memory_limit = ...)`, or `"512MB"`.
 #'   This does not limit R itself or linked-library memory.
 #' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
-#'   uses `options(storage = ...)`. The input must match the selection.
+#'   uses `options(storage = ...)`. The input must match the selection;
+#'   `"file_backed"` forces out-of-core PCA, while conflicting `massive`
+#'   values fail before fitting.
 #' @param checkpoint Save the experimental out-of-core PCA model and
 #'   completed score batches beside `output` for recovery.
 #' @param resume Continue from a matching PCA checkpoint and partial score
@@ -828,7 +830,7 @@ pca <- function(x, ncomp = 2L, xtest = NULL, center = TRUE,
     memory_missing <- missing(memory_limit)
     storage <- fastembedr_storage_option(x, storage)
     massive <- pca_resolve_massive(x, massive, automatic)
-    if (storage == "file_backed" && automatic) massive <- "out_of_core"
+    massive <- fastembedr_pca_storage_mode(x, massive, storage)
     if (memory_missing && massive != "off")
         memory_limit <- fastembedr_memory_option("512MB")
     if (!identical(landmarks, FALSE) && !is.null(landmarks))
