@@ -7,7 +7,7 @@
 massive_umap_fuzzy_graph(
   x,
   output,
-  memory_limit = "8GB",
+  memory_limit = getOption("memory_limit", "8GB"),
   backend = "cpu",
   checkpoint = FALSE,
   resume = FALSE,
@@ -24,7 +24,8 @@ bucketed sort.}
 \item{output}{New prefix for \code{.offsets.u64}, \code{.indices.u32}, and
 \code{.weights.f32} output files.}
 
-\item{memory_limit}{RAM budget for external sorting, at least 64 MB.}
+\item{memory_limit}{RAM budget for external sorting, at least 64 MB. When
+omitted, uses \code{options(memory_limit = ...)}, or \code{"8GB"}.}
 
 \item{backend}{Only \code{"cpu"} is currently supported.}
 

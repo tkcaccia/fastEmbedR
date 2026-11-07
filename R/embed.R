@@ -778,7 +778,11 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' @param chunk_rows Maximum rows read per block in out-of-core mode.
 #' @param memory_limit Conservative RAM budget for out-of-core buffers
 #'   and any resident R-matrix input, for example `"512MB"` or `"16GB"`.
+#'   When omitted for file-backed input, uses
+#'   `options(memory_limit = ...)`, or `"512MB"`.
 #'   This does not limit R itself or linked-library memory.
+#' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
+#'   uses `options(storage = ...)`. The input must match the selection.
 #' @param checkpoint Save the experimental out-of-core PCA model and
 #'   completed score batches beside `output` for recovery.
 #' @param resume Continue from a matching PCA checkpoint and partial score
@@ -814,21 +818,19 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' plot(fit$tsne_init, pch = 21, bg = iris$Species)
 #' @export
 
-pca <- function(x, ncomp = 2L, xtest = NULL,
-                center = TRUE, scale = FALSE,
-                backend = NULL,
-                n.cores = NULL,
-                seed = 4L,
-                tsne_init = FALSE,
-                massive = "off",
-                output = NULL,
-                chunk_rows = NULL,
-                memory_limit = "512MB",
-                checkpoint = FALSE,
-                resume = FALSE,
-                devices = NULL,
-                landmarks = FALSE) {
-    massive <- pca_resolve_massive(x, massive, missing(massive))
+pca <- function(x, ncomp = 2L, xtest = NULL, center = TRUE,
+        scale = FALSE, backend = NULL, n.cores = NULL, seed = 4L,
+        tsne_init = FALSE, massive = "off", output = NULL,
+        chunk_rows = NULL, memory_limit = "512MB", checkpoint = FALSE,
+        resume = FALSE, devices = NULL, landmarks = FALSE,
+        storage = NULL) {
+    automatic <- missing(massive)
+    memory_missing <- missing(memory_limit)
+    storage <- fastembedr_storage_option(x, storage)
+    massive <- pca_resolve_massive(x, massive, automatic)
+    if (storage == "file_backed" && automatic) massive <- "out_of_core"
+    if (memory_missing && massive != "off")
+        memory_limit <- fastembedr_memory_option("512MB")
     if (!identical(landmarks, FALSE) && !is.null(landmarks))
         return(pca_resident_landmarks(x, ncomp, xtest, center,
             scale, backend, n.cores, seed, tsne_init, devices,

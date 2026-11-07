@@ -9,7 +9,11 @@ precompute_knn(
   k = 30L,
   metric = c("euclidean", "cosine", "correlation"),
   backend = NULL,
-  n.cores = NULL
+  n.cores = NULL,
+  storage = NULL,
+  output = NULL,
+  memory_limit = NULL,
+  devices = NULL
 )
 }
 \arguments{
@@ -25,11 +29,25 @@ with observations in rows.}
 
 \item{n.cores}{Number of CPU cores. Native GPU backends ignore
 this argument.}
+
+\item{storage}{\code{"auto"}, \code{"resident"}, or \code{"file_backed"}. When omitted,
+\code{options(storage = ...)} is used. A file-backed input must be
+a disk-backed \code{\link[=massive_matrix]{massive_matrix()}} descriptor; a resident matrix is never
+silently copied to disk.}
+
+\item{output}{New file prefix required for a file-backed KNN result.}
+
+\item{memory_limit}{Host working-memory budget for file-backed KNN. When
+omitted, \code{options(memory_limit = ...)} is used, or \code{"8GB"}.}
+
+\item{devices}{Optional CUDA device indices for file-backed KNN. Resident
+\code{precompute_knn()} does not accept this argument.}
 }
 \value{
-A \code{fastEmbedR_knn} object. Host results contain \code{indices} and
-\code{distances}; CUDA results additionally inherit from \code{fastEmbedR_gpu_knn}
-and own device-resident index and distance buffers.
+A resident \code{fastEmbedR_knn} object, or a file-backed
+\code{fastEmbedR_massive_graph} descriptor. Resident host results contain
+\code{indices} and \code{distances}; resident CUDA results additionally inherit
+from \code{fastEmbedR_gpu_knn} and own device-resident buffers.
 }
 \description{
 \code{precompute_knn()} exposes the same nearest-neighbor search
@@ -49,7 +67,16 @@ cuVS brute-force exact search below 100,000 observations and cuVS IVF-Flat
 above that threshold. Approximate Metal and CUDA routes use an internal
 recall target of 0.99 and report whether their pilot audit met it.
 
-The CUDA result remains on the GPU and can be passed directly to
+A file-backed descriptor uses bounded KNN graph construction and writes
+indices and distances under \code{output}. CPU selects exact search up to 5,000
+rows when estimated pair-feature work is at most 125 billion, and sharded
+HNSW otherwise. CUDA selects exact search below 100,000 rows under the same
+work limit and sharded IVF-Flat otherwise. Metal selects bounded exact
+search. File-backed KNN currently supports Euclidean distance only. The
+result is a \code{fastEmbedR_massive_graph} descriptor; construct UMAP fuzzy
+weights or t-SNE affinities from it before full-graph fitting.
+
+The resident CUDA result remains on the GPU and can be passed directly to
 \code{\link[=umap_knn]{umap_knn()}} or \code{\link[=tsne_knn]{tsne_knn()}} with \code{backend = "cuda"}. CPU and Metal
 results contain one-based \code{indices} and \code{distances} matrices. Every result
 excludes the observation itself. An unavailable requested backend raises an

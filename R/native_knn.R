@@ -334,6 +334,15 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' @param backend Search backend: `"cpu"`, `"cuda"`, or `"metal"`.
 #' @param n.cores Number of CPU cores. Native GPU backends ignore
 #'   this argument.
+#' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
+#'   `options(storage = ...)` is used. A file-backed input must be
+#'   a disk-backed [massive_matrix()] descriptor; a resident matrix is never
+#'   silently copied to disk.
+#' @param output New file prefix required for a file-backed KNN result.
+#' @param memory_limit Host working-memory budget for file-backed KNN. When
+#'   omitted, `options(memory_limit = ...)` is used, or `"8GB"`.
+#' @param devices Optional CUDA device indices for file-backed KNN. Resident
+#'   `precompute_knn()` does not accept this argument.
 #'
 #' @details
 #' CPU uses native exhaustive float32 search below 5,000 observations and
@@ -347,27 +356,49 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' above that threshold. Approximate Metal and CUDA routes use an internal
 #' recall target of 0.99 and report whether their pilot audit met it.
 #'
-#' The CUDA result remains on the GPU and can be passed directly to
+#' A file-backed descriptor uses bounded KNN graph construction and writes
+#' indices and distances under `output`. CPU selects exact search up to 5,000
+#' rows when estimated pair-feature work is at most 125 billion, and sharded
+#' HNSW otherwise. CUDA selects exact search below 100,000 rows under the same
+#' work limit and sharded IVF-Flat otherwise. Metal selects bounded exact
+#' search. File-backed KNN currently supports Euclidean distance only. The
+#' result is a `fastEmbedR_massive_graph` descriptor; construct UMAP fuzzy
+#' weights or t-SNE affinities from it before full-graph fitting.
+#'
+#' The resident CUDA result remains on the GPU and can be passed directly to
 #' [umap_knn()] or [tsne_knn()] with `backend = "cuda"`. CPU and Metal
 #' results contain one-based `indices` and `distances` matrices. Every result
 #' excludes the observation itself. An unavailable requested backend raises an
 #' error; no CPU fallback is reported as GPU work.
 #'
-#' @return A `fastEmbedR_knn` object. Host results contain `indices` and
-#'   `distances`; CUDA results additionally inherit from `fastEmbedR_gpu_knn`
-#'   and own device-resident index and distance buffers.
+#' @return A resident `fastEmbedR_knn` object, or a file-backed
+#'   `fastEmbedR_massive_graph` descriptor. Resident host results contain
+#'   `indices` and `distances`; resident CUDA results additionally inherit
+#'   from `fastEmbedR_gpu_knn` and own device-resident buffers.
 #' @examples
 #' x <- scale(as.matrix(iris[, 1:4]))
 #' knn <- precompute_knn(x, k = 15, backend = "cpu", n.cores = 2)
 #' layout <- umap_knn(knn, backend = "cpu", seed = 1)
 #' @export
-precompute_knn <- function(data,
-                            k = 30L,
-                            metric = c("euclidean", "cosine", "correlation"),
-                            backend = NULL,
-                            n.cores = NULL) {
+precompute_knn <- function(data, k = 30L,
+        metric = c("euclidean", "cosine", "correlation"),
+        backend = NULL, n.cores = NULL, storage = NULL,
+        output = NULL, memory_limit = NULL, devices = NULL) {
+    if (inherits(data, "fastEmbedR_massive_graph")) stop(
+        "precompute_knn() needs a data matrix, not a prepared graph.",
+        call. = FALSE)
+    fastembedr_storage_option(data, storage)
     backend <- resolve_embedding_backend(backend)
     metric <- resolve_embedding_metric(metric, data)
+    if (fastembedr_file_backed_input(data)) return(
+        precompute_knn_backed(data, k, metric, backend, n.cores,
+            output, memory_limit, devices))
+    if (inherits(data, "fastEmbedR_massive_matrix")) stop(
+        "A memory-backed massive_matrix() is not a disk-backed source; ",
+        "pass its resident matrix to precompute_knn().", call. = FALSE)
+    if (!is.null(output) || !is.null(memory_limit) || !is.null(devices)) stop(
+        "File-backed KNN controls require a disk-backed massive_matrix().",
+        call. = FALSE)
     prepared <- prepare_embedding_data(
         data,
         standardize = FALSE,
@@ -394,6 +425,31 @@ precompute_knn <- function(data,
         policy,
         result$time
     )
+}
+
+precompute_knn_backed <- function(data, k, metric, backend, n.cores,
+        output, memory_limit, devices) {
+    if (!identical(metric, "euclidean")) stop(
+        "File-backed KNN currently supports Euclidean distance only.",
+        call. = FALSE)
+    if (is.null(output)) stop(
+        "File-backed KNN requires a new `output` file prefix.",
+        call. = FALSE)
+    limit <- if (is.null(memory_limit))
+        fastembedr_memory_option("8GB") else memory_limit
+    massive_memory_bytes(limit)
+    pair_work <- as.double(data$nrow) * data$nrow * data$ncol
+    bounded_exact <- is.finite(pair_work) && pair_work <= 125e9
+    method <- if (backend == "cpu") {
+        if (data$nrow <= 5000L && bounded_exact)
+            "exact" else "hnsw_sharded"
+    } else if (backend == "cuda") {
+        if (data$nrow < 100000L && bounded_exact)
+            "exact" else "ivf_sharded"
+    } else "exact"
+    massive_full_knn_graph(data, k = k, output = output,
+        backend = backend, n.cores = resolve_n_cores(n.cores),
+        memory_limit = limit, method = method, devices = devices)
 }
 
 prepare_query_knn_inputs <- function(reference, query, backend) {

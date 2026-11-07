@@ -813,7 +813,11 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #'   optimizer.
 #' @param output New `.f32` path for experimental file-backed coordinates.
 #' @param chunk_rows Maximum experimental query rows per batch.
-#' @param memory_limit Conservative experimental RAM budget.
+#' @param memory_limit Conservative experimental RAM budget. When omitted for
+#'   file-backed input, uses `options(memory_limit = ...)`, or
+#'   `"8GB"`.
+#' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
+#'   uses `options(storage = ...)`. The input must match the selection.
 #' @param checkpoint Save experimental workflow stages. Full-graph t-SNE
 #'   also saves coordinates, momentum updates, and adaptive gains every
 #'   100 iterations and at the final iteration.
@@ -867,14 +871,15 @@ tsne <- function(
     negative_gradient_method = "auto", record_costs = FALSE,
     auto_config = TRUE, landmarks = FALSE, transform_k = NULL,
     transform_perplexity = 5, transform_iter = 250L,
-    transform_early_exaggeration_iter = 0L,
-    transform_n_negatives = NULL,
+    transform_early_exaggeration_iter = 0L, transform_n_negatives = NULL,
     initialization = c("median", "weighted", "random"),
-    massive = "off", output = NULL, chunk_rows = NULL,
+    massive = "off", output = NULL, chunk_rows = NULL, storage = NULL,
     memory_limit = "8GB", devices = NULL, landmark_method = "reservoir",
     checkpoint = FALSE, resume = FALSE, affinity_k = NULL, ...) {
-    if (missing(massive)) massive <- embedding_default_massive(
-        data, landmarks)
+    storage <- fastembedr_embedding_storage(data, landmarks, massive,
+        missing(massive), memory_limit, missing(memory_limit), "t-SNE", storage)
+    massive <- storage$massive
+    memory_limit <- storage$memory_limit
     extra <- list(...)
     validate_tsne_dots(extra)
     backend <- resolve_embedding_backend(backend)

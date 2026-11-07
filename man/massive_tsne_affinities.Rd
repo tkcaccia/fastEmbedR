@@ -8,7 +8,7 @@ massive_tsne_affinities(
   x,
   perplexity,
   output,
-  memory_limit = "8GB",
+  memory_limit = getOption("memory_limit", "8GB"),
   backend = "cpu",
   n.cores = 1L,
   checkpoint = FALSE,
@@ -25,7 +25,8 @@ massive_tsne_affinities(
 
 \item{output}{New CSR output prefix.}
 
-\item{memory_limit}{RAM budget for external sorting, at least 64 MB.}
+\item{memory_limit}{RAM budget for external sorting, at least 64 MB. When
+omitted, uses \code{options(memory_limit = ...)}, or \code{"8GB"}.}
 
 \item{backend}{Only \code{"cpu"} is supported for graph construction.}
 

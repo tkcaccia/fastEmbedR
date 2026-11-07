@@ -283,7 +283,8 @@ massive_weighted_graph <- function(prefix, n_vertices, k,
 #'   bucketed sort.
 #' @param output New prefix for `.offsets.u64`, `.indices.u32`, and
 #'   `.weights.f32` output files.
-#' @param memory_limit RAM budget for external sorting, at least 64 MB.
+#' @param memory_limit RAM budget for external sorting, at least 64 MB. When
+#'   omitted, uses `options(memory_limit = ...)`, or `"8GB"`.
 #' @param backend Only `"cpu"` is currently supported.
 #' @param checkpoint Save completed sorted-pair runs for resume.
 #' @param resume Continue a matching interrupted graph sort.
@@ -296,9 +297,9 @@ massive_weighted_graph <- function(prefix, n_vertices, k,
 #' @export
 #' @keywords internal
 massive_umap_fuzzy_graph <- function(x, output,
-        memory_limit = "8GB", backend = "cpu", checkpoint = FALSE,
-        resume = FALSE, checkpoint_every = 100L,
-        sort_method = c("global", "bucketed"),
+        memory_limit = getOption("memory_limit", "8GB"),
+        backend = "cpu", checkpoint = FALSE, resume = FALSE,
+        checkpoint_every = 100L, sort_method = c("global", "bucketed"),
         consume_knn = FALSE) {
     sort_method <- match.arg(sort_method)
     if (!identical(backend, "cpu")) stop(
@@ -499,7 +500,8 @@ massive_fuzzy_graph <- function(prefix, n_vertices,
 #' @param x A distance-valued [massive_knn_graph()] descriptor.
 #' @param perplexity Positive perplexity no larger than the KNN width.
 #' @param output New CSR output prefix.
-#' @param memory_limit RAM budget for external sorting, at least 64 MB.
+#' @param memory_limit RAM budget for external sorting, at least 64 MB. When
+#'   omitted, uses `options(memory_limit = ...)`, or `"8GB"`.
 #' @param backend Only `"cpu"` is supported for graph construction.
 #' @param n.cores CPU workers for independent conditional-probability rows.
 #' @param checkpoint Save completed sorted-pair runs for resume.
@@ -512,11 +514,10 @@ massive_fuzzy_graph <- function(prefix, n_vertices,
 #' @export
 #' @keywords internal
 massive_tsne_affinities <- function(x, perplexity, output,
-        memory_limit = "8GB", backend = "cpu", n.cores = 1L,
-        checkpoint = FALSE, resume = FALSE,
-        checkpoint_every = 100L,
-        sort_method = c("global", "bucketed"),
-        consume_knn = FALSE) {
+        memory_limit = getOption("memory_limit", "8GB"),
+        backend = "cpu", n.cores = 1L, checkpoint = FALSE,
+        resume = FALSE, checkpoint_every = 100L,
+        sort_method = c("global", "bucketed"), consume_knn = FALSE) {
     sort_method <- match.arg(sort_method)
     if (sort_method == "bucketed" && (checkpoint || resume)) stop(
         "Bucketed graph sorting does not support checkpoints.",

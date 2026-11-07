@@ -159,6 +159,10 @@ knn_graph <- function(x,
                         mutual = FALSE,
                         prune = 0,
                         n.cores = NULL) {
+    if (fastembedr_file_backed_input(x)) stop(
+        "Use precompute_knn(x, output = ...) for file-backed KNN, then ",
+        "massive_umap_fuzzy_graph() for an undirected fuzzy graph.",
+        call. = FALSE)
     if (inherits(x, "fastEmbedR_graph")) {
         return(validate_fastembedr_graph(x))
     }
@@ -490,6 +494,10 @@ finish_graph_cluster <- function(result, graph, settings, started) {
 #'   controls such as `k` and `vote_k`. For file-backed data, storage
 #'   controls such as `output`, an integer landmark count, `chunk_rows`,
 #'   `memory_limit`, `checkpoint`, `resume`, and `gpu_storage`.
+#'   When omitted for file-backed input, the memory budget uses
+#'   `options(memory_limit = ...)`, or `"8GB"`.
+#' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
+#'   uses `options(storage = ...)`. The input must match the selection.
 #'   These are rejected for a resident graph.
 #' @param steps Random-walk length for Walktrap.
 #' @param seed Finite integer seed(s). A vector automatically enables
@@ -623,7 +631,8 @@ graph_cluster <- function(graph,
                             n.cores = 1L,
                             devices = NULL,
                             parallel.mode = c("restarts", "fit"),
-                            massive = NULL, ...) {
+                            massive = NULL, storage = NULL, ...) {
+    fastembedr_storage_option(graph, storage)
     dots <- list(...)
     if (identical(dots$landmarks, FALSE)) {
         if (inherits(graph, "fastEmbedR_massive_matrix")) stop(
@@ -728,6 +737,9 @@ graph_cluster_resident <- function(graph, method, backend,
 graph_cluster_data_input <- function(graph, method, backend,
         resolution, n_iterations, n_runs, steps, seed, n.cores,
         devices, parallel.mode, massive, dots) {
+    if (fastembedr_file_backed_input(graph) &&
+        is.null(dots$memory_limit))
+        dots$memory_limit <- fastembedr_memory_option("8GB")
     if (is.null(massive)) massive <- if (
         inherits(graph, "fastEmbedR_massive_graph")) {
         "out_of_core_graph"

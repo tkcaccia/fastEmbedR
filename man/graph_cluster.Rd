@@ -20,6 +20,7 @@ graph_cluster(
   devices = NULL,
   parallel.mode = c("restarts", "fit"),
   massive = NULL,
+  storage = NULL,
   ...
 )
 }
@@ -94,11 +95,16 @@ runs; \code{"fit"} parallelizes local moves within one CPU fit.}
 \code{"out_of_core_graph"}. A file-backed graph selects full-graph mode;
 a matrix selects auto mode. Resident graphs reject it.}
 
+\item{storage}{\code{"auto"}, \code{"resident"}, or \code{"file_backed"}. When omitted,
+uses \code{options(storage = ...)}. The input must match the selection.
+These are rejected for a resident graph.}
+
 \item{...}{For a matrix with explicit \code{landmarks}, resident landmark
 controls such as \code{k} and \code{vote_k}. For file-backed data, storage
 controls such as \code{output}, an integer landmark count, \code{chunk_rows},
 \code{memory_limit}, \code{checkpoint}, \code{resume}, and \code{gpu_storage}.
-These are rejected for a resident graph.}
+When omitted for file-backed input, the memory budget uses
+\code{options(memory_limit = ...)}, or \code{"8GB"}.}
 }
 \value{
 A \code{fastEmbedR_graph_cluster} containing one-based \code{membership},

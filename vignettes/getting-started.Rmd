@@ -125,6 +125,13 @@ R, for example
 3. the `FASTEMBEDR_BACKEND` environment variable;
 4. CPU when none of the above is set.
 
+For a disk-backed `massive_matrix()` or prepared graph, you may also set
+`options(storage = "file_backed",
+memory_limit = "8GB")`. This validates that the input really is
+file-backed and supplies the default working-memory budget. `precompute_knn()`
+then requires an `output` prefix and returns a file-backed KNN descriptor.
+See the [file-backed vignette](massive-data.html) for a complete example.
+
 The backend requested by the user and the backend that actually ran are also
 recorded in returned objects, for example
 `fit_cpu$parameters[c("backend", "nn_backend", "n.cores")]`. A requested
