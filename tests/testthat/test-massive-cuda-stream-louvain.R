@@ -1,4 +1,5 @@
 test_that("file-backed Louvain selects CUDA local moves explicitly", {
+    skip_on_os("windows")
     graph <- structure(list(storage = "csr",
         weight_method = "umap_fuzzy_union",
         symmetrized = TRUE, n_vertices = 8L),

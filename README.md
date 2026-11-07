@@ -229,9 +229,9 @@ and RAPIDS cuVS
 Apache-2.0 notices under `inst/LICENSES/`.
 
 See [Source provenance and licensing][provenance] for the
-audit structure. Source-level records are maintained in [`inst/NOTICE`](inst/NOTICE),
-[`inst/COPYRIGHTS`](inst/COPYRIGHTS), and the machine-readable
-[`inst/THIRD_PARTY_DEPENDENCIES.json`](inst/THIRD_PARTY_DEPENDENCIES.json).
+audit structure. Source-level records are maintained in
+[`inst/NOTICE`][notice], [`inst/COPYRIGHTS`][copyrights], and the
+machine-readable [`inst/THIRD_PARTY_DEPENDENCIES.json`][third-party].
 These files distinguish adapted or vendored code from optional linked
 libraries, Apple system frameworks, design references, and benchmark-only
 software. Every adapted/vendored component is pinned to an upstream commit and
@@ -259,3 +259,9 @@ mapped to both package and upstream source files.
   https://github.com/tkcaccia/fastEmbedR/blob/main/docs/backend-validation.md
 [provenance]:
   https://github.com/tkcaccia/fastEmbedR/blob/main/docs/provenance-and-licensing.md
+[notice]:
+  https://github.com/tkcaccia/fastEmbedR/blob/main/inst/NOTICE
+[copyrights]:
+  https://github.com/tkcaccia/fastEmbedR/blob/main/inst/COPYRIGHTS
+[third-party]:
+  https://github.com/tkcaccia/fastEmbedR/blob/main/inst/THIRD_PARTY_DEPENDENCIES.json
