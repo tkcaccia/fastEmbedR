@@ -44,6 +44,7 @@ reference:
       - massive_read_rows
   - title: Object methods
     contents:
+      - fastembedr_fit_summary
       - plot.fastEmbedR_embedding
       - print.fastEmbedR_embedding
       - print.fastEmbedR_graph
