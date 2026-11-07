@@ -580,6 +580,9 @@ CPU exact/HNSW or CUDA cuVS exact/IVF search routes; approximate search
 remains approximate even when every row is optimized. The file-backed
 Metal full-graph UMAP supports 2D and 3D with streamed graph edges and a
 complete shared-memory layout.
+Its optimizer runs on Metal and then uses one CPU thread for 25 final
+epochs in 2D or 50 in 3D. The fit reports `optimizer_backend_stages`,
+`optimizer_stage_seconds`, and the combined pipeline backend.
 Experimental Metal full-graph t-SNE supports 2D and 3D.
 `graph_access = "mmap"`
 maps the complete read-only CSR graph into Metal buffers;

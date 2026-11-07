@@ -142,8 +142,10 @@ domain.
 Resident 2D Metal UMAP uses an ordered, single-thread CPU warm stage followed
 by the native `atomic_inplace` Metal optimizer. The public result records both
 stage lengths. Resident 3D Metal UMAP uses the native optimizer throughout.
-File-backed full-graph UMAP follows a separate Metal route and needs its own
-large-data quality qualification.
+File-backed full-graph UMAP follows a separate Metal snapshot route with a
+25-epoch ordered CPU tail in 2D or 50 epochs in 3D. Both stage times are
+reported. Fixed-graph 5,000-row development checks passed the paired
+silhouette margin; large-data quality still needs qualification.
 
 The validated t-SNE Metal path is the package-native FFT-grid path with PCA
 initialization. Its PCA initialization uses a single resident float32 workspace,

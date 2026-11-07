@@ -55,7 +55,8 @@ managed CUDA coordinates count against the host budget.}
 
 \item{backend}{\code{"cpu"}, \code{"metal"}, or \code{"cuda"}; GPU requests have no
 CPU fallback. Metal streams edges but keeps one 2D or 3D layout in shared
-unified memory.}
+unified memory. It finishes with 25 ordered CPU epochs in 2D or 50 in
+3D; the returned fit records both optimizer stages and timings.}
 
 \item{n.cores}{CPU workers for \code{cpu_update = "synchronized"}.
 The default in-place SGD route uses one worker.}

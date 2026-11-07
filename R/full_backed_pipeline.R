@@ -125,6 +125,8 @@ full_backed_pipeline_record <- function(fit, data, neighbors, graph,
         prepared, knn_seconds, graph_seconds, init_seconds,
         fit_seconds,
         graph_workers, fit_workers, backend, keep_knn) {
+    optimize_backend <- if (is.null(fit$optimizer_backend_stages))
+        backend else paste(fit$optimizer_backend_stages, collapse = "+")
     fit$pipeline <- list(input = data,
         neighbors = if (keep_knn) neighbors else NULL,
         knn_released = !keep_knn,
@@ -132,9 +134,11 @@ full_backed_pipeline_record <- function(fit, data, neighbors, graph,
         initialization = prepared[c("method", "backend", "resources")],
         fit_scope = "all_rows_optimized",
         stage_backend = c(knn = backend, graph = "cpu",
-            init = prepared$backend, optimize = backend),
+            init = prepared$backend, optimize = optimize_backend),
         graph_stage_cpu_workers = graph_workers,
-        optimizer_cpu_workers = fit_workers,
+        optimizer_cpu_workers = if (optimize_backend == "metal+cpu")
+            1L else fit_workers,
+        optimizer_stage_seconds = fit$optimizer_stage_seconds,
         stage_seconds = c(knn = knn_seconds, graph = graph_seconds,
             init = init_seconds, optimize = fit_seconds))
     fit

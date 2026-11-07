@@ -26,7 +26,8 @@
 #'   managed CUDA coordinates count against the host budget.
 #' @param backend `"cpu"`, `"metal"`, or `"cuda"`; GPU requests have no
 #'   CPU fallback. Metal streams edges but keeps one 2D or 3D layout in shared
-#'   unified memory.
+#'   unified memory. It finishes with 25 ordered CPU epochs in 2D or 50 in
+#'   3D; the returned fit records both optimizer stages and timings.
 #' @param n.cores CPU workers for `cpu_update = "synchronized"`.
 #'   The default in-place SGD route uses one worker.
 #' @param cpu_update `"sgd"` (default) retains ordered in-place updates;
@@ -76,6 +77,14 @@ massive_umap_optimize <- function(graph, init, output,
     if (plan$backend == "cuda" && is.null(plan$devices) &&
         !identical(built$backend_used, "native_cuda_umap_stream")) stop(
         "CUDA UMAP used an unexpected native route.", call. = FALSE)
+    if (plan$backend == "metal" &&
+        (!identical(built$backend_used,
+            "metal_snapshot_cpu_ordered_tail") ||
+        !is.numeric(built$metal_seconds) ||
+        !is.numeric(built$cpu_tail_seconds) ||
+        any(!is.finite(c(built$metal_seconds,
+            built$cpu_tail_seconds))))) stop(
+        "Metal UMAP stage accounting is incomplete.", call. = FALSE)
     if (!is.null(plan$devices))
         massive_umap_validate_cuda_fit(plan, graph, built, saved)
     massive_umap_result(plan, graph, init, built, saved, checkpoint,
@@ -182,7 +191,7 @@ massive_umap_result <- function(plan, graph, init, built, saved,
     result$optimizer <- if (plan$backend == "cpu" &&
         plan$cpu_update == "synchronized")
         "synchronized_cpu_fixed_point" else if (plan$backend == "metal")
-        "streamed_metal_snapshot_fixed_point" else if (
+        "metal_snapshot_cpu_ordered_tail" else if (
             is.null(plan$devices))
         paste0("streamed_", plan$backend, "_sgd") else "synchronized_cuda_nccl"
     result$layout_storage <- if (plan$backend == "cuda" &&
@@ -195,23 +204,36 @@ massive_umap_result <- function(plan, graph, init, built, saved,
         layout_mmap_bytes = plan$layout_bytes * (layout_storage == "mmap"),
         graph_bytes = graph$n_edges * 8 + (graph$n_vertices + 1) * 8,
         effective_cpu_workers = if (plan$backend == "cpu") plan$n.cores
-            else NULL,
+            else if (plan$backend == "metal") 1L else NULL,
         delta_ram_bytes = plan$delta_bytes,
         checkpoint_disk_bytes = plan$layout_bytes *
             (2 + (layout_storage == "mmap")) * checkpoint)
     if (plan$backend == "cuda") result <-
         massive_umap_cuda_result(result, plan, built, layout_storage)
-    if (plan$backend == "metal") result$resources <- c(result$resources,
-        list(metal_memory_model = "unified_shared",
-            metal_buffer_bytes_estimate = 2 * plan$layout_bytes +
-                24 * plan$edge_capacity,
-            edge_batch_capacity = plan$edge_capacity,
-            peak_vram_bytes = NA_real_))
+    if (plan$backend == "metal") result <-
+        massive_umap_metal_result(result, plan, built)
     result$updates <- built[c("positive_updates", "negative_updates")]
     if (plan$backend == "cuda") result$updates$edge_visits <- built$edge_visits
     result$source_identity <- plan$source_identity
     if (!is.null(saved$sidecar)) massive_umap_checkpoint_cleanup(
         plan$output, saved$sidecar)
+    result
+}
+
+massive_umap_metal_result <- function(result, plan, built) {
+    result$native_backend_used <- built$backend_used
+    result$optimizer_backend_stages <- c("metal", "cpu")
+    result$optimizer_stage_seconds <- c(
+        metal = built$metal_seconds,
+        cpu_tail = built$cpu_tail_seconds)
+    result$parameters$metal_epochs <- built$metal_epochs
+    result$parameters$cpu_tail_epochs <- built$cpu_tail_epochs
+    result$resources <- c(result$resources,
+        list(metal_memory_model = "unified_shared",
+            metal_buffer_bytes_estimate = 2 * plan$layout_bytes +
+                24 * plan$edge_capacity,
+            edge_batch_capacity = plan$edge_capacity,
+            peak_vram_bytes = NA_real_))
     result
 }
 

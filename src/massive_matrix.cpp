@@ -5075,6 +5075,45 @@ void massive_umap_scan(CsrGraphSource& graph, int chunk_rows,
   }
 }
 
+std::pair<std::uint64_t, std::uint64_t> massive_umap_ordered_tail(
+    CsrGraphSource& graph, float* layout, int dimensions,
+    int chunk_rows, std::uint64_t max_edges, int start_epoch,
+    int end_epoch, int total_epochs,
+    int negative_rate, double learning_rate, double a, double b,
+    double gamma, int seed, float max_weight) {
+  std::pair<std::uint64_t, std::uint64_t> counts{};
+  const double threshold = max_weight / total_epochs;
+  for (int epoch = start_epoch; epoch < end_epoch; ++epoch) {
+    const double alpha = learning_rate *
+      (1.0 - static_cast<double>(epoch) / total_epochs);
+    std::uint64_t active_edge = 0;
+    massive_umap_scan(graph, chunk_rows, max_edges,
+      [&](std::uint64_t head, std::uint64_t tail,
+          float weight, std::uint64_t) {
+        if (weight < threshold) return;
+        const auto sample_edge = active_edge++;
+        const double period = max_weight /
+          std::max(static_cast<double>(weight), 1e-6);
+        if (!massive_umap_due(epoch, period)) return;
+        massive_umap_attract(layout, head, tail, dimensions,
+                              a, b, alpha);
+        ++counts.first;
+        const int samples = massive_umap_negative_count(
+          epoch, period, negative_rate);
+        for (int sample = 0; sample < samples; ++sample) {
+          const auto negative = fastembedr_umap_negative_vertex(
+            static_cast<int>(graph.vertices()), seed, epoch,
+            static_cast<std::size_t>(sample_edge), sample);
+          if (negative == static_cast<int>(head)) continue;
+          massive_umap_repulse(layout, head, negative, dimensions,
+                                a, b, gamma, alpha);
+          ++counts.second;
+        }
+      });
+  }
+  return counts;
+}
+
 void massive_umap_write_layout(const float* layout,
                                const std::string& path,
                                std::uint64_t vertices, int dimensions,
@@ -5316,8 +5355,6 @@ List massive_umap_optimize_cpp(std::string offsets_path,
   std::uint64_t negative_updates = initial_negative;
   int next_percent = (start_epoch * 100 / n_epochs / 10 + 1) * 10;
   for (int epoch = start_epoch; epoch < n_epochs; ++epoch) {
-    const double alpha = learning_rate *
-      (1.0 - static_cast<double>(epoch) / n_epochs);
     if (cpu_update == "synchronized") {
       const auto counts = massive_umap_synchronized_epoch(graph,
         offsets_path, indices_path, weights_path, layout,
@@ -5329,30 +5366,13 @@ List massive_umap_optimize_cpp(std::string offsets_path,
       positive_updates += counts.first;
       negative_updates += counts.second;
     } else {
-      std::uint64_t active_edge = 0;
-      massive_umap_scan(graph, chunk_rows, max_edges,
-      [&](std::uint64_t head, std::uint64_t tail,
-          float weight, std::uint64_t) {
-      if (weight < min_sample_weight) return;
-      const auto sample_edge = active_edge++;
-      const double period = max_weight /
-        std::max(static_cast<double>(weight), 1e-6);
-      if (!massive_umap_due(epoch, period)) return;
-      massive_umap_attract(layout, head, tail, dimensions,
-                            curve.first, curve.second, alpha);
-      ++positive_updates;
-      const int count = massive_umap_negative_count(epoch, period,
-                                                    negative_sample_rate);
-      for (int sample = 0; sample < count; ++sample) {
-        const auto negative = fastembedr_umap_negative_vertex(
-          static_cast<int>(graph.vertices()), seed, epoch,
-          static_cast<std::size_t>(sample_edge), sample);
-        if (negative == static_cast<int>(head)) continue;
-        massive_umap_repulse(layout, head, negative, dimensions,
-          curve.first, curve.second, repulsion_strength, alpha);
-        ++negative_updates;
-      }
-      });
+      const auto counts = massive_umap_ordered_tail(graph, layout,
+        dimensions, chunk_rows, max_edges, epoch, epoch + 1,
+        n_epochs, negative_sample_rate, learning_rate,
+        curve.first, curve.second, repulsion_strength, seed,
+        max_weight);
+      positive_updates += counts.first;
+      negative_updates += counts.second;
     }
     for (std::uint64_t element = 0; element < elements; ++element) {
       if (!std::isfinite(layout[element])) {
@@ -5474,6 +5494,7 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
   auto negative = initial_negative;
   const double min_weight = max_weight / n_epochs;
   int next_percent = (start_epoch * 100 / n_epochs / 10 + 1) * 10;
+  const auto metal_started = std::chrono::steady_clock::now();
   for (int epoch = start_epoch; epoch < n_epochs; ++epoch) {
     int active = 0;
     std::uint64_t sample_edge = 0;
@@ -5518,6 +5539,20 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
     }
   }
   fastembedr_massive_umap_metal_download(context.get(), layout);
+  context.reset();
+  const double metal_seconds = std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - metal_started).count();
+  const int tail_epochs = n_components == 2 ? 25 : 50;
+  const auto tail_started = std::chrono::steady_clock::now();
+  const auto tail = massive_umap_ordered_tail(graph, layout,
+    n_components, chunk_rows, edge_capacity, 0, tail_epochs,
+    tail_epochs,
+    negative_sample_rate, learning_rate, curve.first,
+    curve.second, repulsion_strength, seed, max_weight);
+  positive += tail.first;
+  negative += tail.second;
+  const double cpu_tail_seconds = std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - tail_started).count();
   for (std::size_t i = 0; i < elements; ++i) {
     if (!std::isfinite(layout[i])) {
       Rcpp::stop("Full-graph Metal UMAP produced nonfinite coordinates.");
@@ -5534,7 +5569,12 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
     Rcpp::Named("positive_updates") =
       static_cast<double>(positive),
     Rcpp::Named("negative_updates") =
-      static_cast<double>(negative));
+      static_cast<double>(negative),
+    Rcpp::Named("backend_used") = "metal_snapshot_cpu_ordered_tail",
+    Rcpp::Named("metal_epochs") = n_epochs,
+    Rcpp::Named("cpu_tail_epochs") = tail_epochs,
+    Rcpp::Named("metal_seconds") = metal_seconds,
+    Rcpp::Named("cpu_tail_seconds") = cpu_tail_seconds);
 }
 
 #ifdef FASTEMBEDR_HAS_CUDA

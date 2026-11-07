@@ -38,6 +38,9 @@
 #'   The stage counts are recorded in `fit$parameters`. Resident 3D Metal
 #'   UMAP runs its optimizer on Metal. Other GPU requests must resolve to a
 #'   native backend; the package does not relabel CPU work as GPU.
+#'   File-backed full-graph Metal UMAP runs its main optimizer on Metal,
+#'   followed by a bounded one-thread CPU refinement: 25 epochs in 2D or
+#'   50 epochs in 3D. Both stages and their times are recorded in the fit.
 #' @param n.cores Requested CPU core count. For matrix input, the value is
 #'   passed to CPU PCA preprocessing, KNN, and UMAP. UMAP accepts up to 32
 #'   workers and records both requested and configured values; individual

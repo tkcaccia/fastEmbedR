@@ -30,7 +30,9 @@ primary contributions are:
 Resident 2D Metal UMAP currently uses one CPU thread for the first half of
 its optimizer epochs, followed by the native Metal optimizer. The fit records
 both stage lengths. Resident 3D Metal UMAP runs its optimizer entirely on
-Metal. File-backed Metal UMAP follows a separate route.
+Metal. File-backed Metal UMAP follows a separate route: a native Metal
+snapshot optimizer followed by 25 ordered CPU epochs in 2D or 50 in 3D.
+The fit reports both stages and their times.
 
 The t-SNE implementation combines sparse perplexity affinities, two-phase
 optimization, interpolation/FFT repulsion, and fixed-reference transformation

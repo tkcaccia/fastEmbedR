@@ -343,7 +343,14 @@ the CPU and Metal epoch counts and the pipeline name. This staged optimizer
 passed the fixed-graph Fashion-MNIST and MNIST development quality gates on
 Silvano's Mac; its larger-scale quality and speed are still under study.
 Resident 3D UMAP uses the Metal optimizer for all epochs. File-backed Metal
-UMAP has a separate route and has not inherited this quality qualification.
+UMAP has a separate route: a Metal snapshot optimizer followed by 25 ordered
+CPU epochs in 2D or 50 in 3D. The public fit records both stages and times.
+Fixed-graph 5,000-row Fashion-MNIST and MNIST development checks passed a
+0.01 silhouette margin against ordered CPU for three 2D seeds and one 3D
+seed per dataset; larger-scale quality remains unqualified.
+On a deterministic 1,000-row scoring subset, the largest paired
+trustworthiness decline was 0.0072 and the largest 15-neighbor preservation
+decline was 0.0275. These checks do not establish publication-scale parity.
 Three-dimensional landmark refinement remains unavailable and fails
 explicitly. Only the final layout and metadata return to R. The package-native
 Metal FFT work used by t-SNE was informed by permissive Apple GPU FFT
