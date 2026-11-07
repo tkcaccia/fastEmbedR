@@ -35,7 +35,8 @@ umap(
   checkpoint = FALSE,
   resume = FALSE,
   cpu_update = "sgd",
-  ef_search = 0L
+  ef_search = 0L,
+  storage = NULL
 )
 }
 \arguments{
@@ -83,8 +84,8 @@ native backend; the package does not relabel CPU work as GPU.}
 
 \item{n.cores}{Requested CPU core count. For matrix input, the value is
 passed to CPU PCA preprocessing, KNN, and UMAP. UMAP accepts up to 32
-workers and records requested and configured counts; individual stages
-may use fewer workers when their inputs are small. With \code{NULL},
+workers and records both requested and configured values; individual
+stages may use fewer workers when their inputs are small. With \code{NULL},
 PCA uses \code{options(n.cores)} (one by default); KNN and UMAP use their
 stage defaults. The ordered CPU stage of a 2D Metal fit uses one thread;
 native GPU stages ignore this argument.}
@@ -120,7 +121,9 @@ CUDA full-graph route requires a device-resident 2D layout.}
 
 \item{chunk_rows}{Maximum experimental query rows per batch.}
 
-\item{memory_limit}{Conservative experimental RAM budget.}
+\item{memory_limit}{Conservative experimental RAM budget. When omitted for
+file-backed input, uses \code{options(memory_limit = ...)}, or
+\code{"8GB"}.}
 
 \item{refinement_epochs}{Fixed-reference UMAP projection epochs. In
 resident landmark mode, the default is 50 and an explicit zero disables
@@ -171,6 +174,9 @@ full-graph UMAP. Other modes and backends reject this choice.}
 \item{ef_search}{CPU HNSW search effort for experimental massive landmark
 UMAP. Zero uses the faissR preset. A positive value requires CPU HNSW
 and does not guarantee recall; audit the resulting graph separately.}
+
+\item{storage}{\code{"auto"}, \code{"resident"}, or \code{"file_backed"}. When omitted,
+uses \code{options(storage = ...)}. The input must match the selection.}
 }
 \value{
 A \code{fastEmbedR_embedding} object. Landmark fits also contain \code{model},

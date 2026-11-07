@@ -309,7 +309,11 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #'   route requires a file-backed [massive_matrix()] and a new `.f32` output.
 #' @param output New `.f32` path for experimental file-backed coordinates.
 #' @param chunk_rows Maximum experimental query rows per batch.
-#' @param memory_limit Conservative experimental RAM budget.
+#' @param memory_limit Conservative experimental RAM budget. When omitted for
+#'   file-backed input, uses `options(memory_limit = ...)`, or
+#'   `"8GB"`.
+#' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
+#'   uses `options(storage = ...)`. The input must match the selection.
 #' @param checkpoint Save experimental workflow stages and completed batches.
 #'   Only available for massive landmark or full-graph mode.
 #' @param resume Continue a matching interrupted experimental workflow.
@@ -363,11 +367,13 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
     local_refine = FALSE, local_neighbors = 15L, overlap_rows = 500L,
     devices = NULL, landmark_method = "reservoir", init = NULL,
     layout_storage = "memory", checkpoint = FALSE, resume = FALSE,
-    cpu_update = "sgd", ef_search = 0L) {
+    cpu_update = "sgd", ef_search = 0L, storage = NULL) {
     resident_epochs <- if (missing(refinement_epochs)) NULL else
         refinement_epochs
-    if (missing(massive)) massive <- embedding_default_massive(
-        data, landmarks)
+    storage <- fastembedr_embedding_storage(data, landmarks, massive,
+        missing(massive), memory_limit, missing(memory_limit), "UMAP", storage)
+    massive <- storage$massive
+    memory_limit <- storage$memory_limit
     massive <- massive_embedding_mode(massive, cpu_update)
     if (!identical(massive, "off")) return(dispatch_massive_umap(data,
         landmarks, n_neighbors, n_components, standardize, pca_dims, metric, nn,

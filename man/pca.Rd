@@ -21,7 +21,8 @@ pca(
   checkpoint = FALSE,
   resume = FALSE,
   devices = NULL,
-  landmarks = FALSE
+  landmarks = FALSE,
+  storage = NULL
 )
 }
 \arguments{
@@ -77,6 +78,8 @@ including when auto mode selects that route.}
 
 \item{memory_limit}{Conservative RAM budget for out-of-core buffers
 and any resident R-matrix input, for example \code{"512MB"} or \code{"16GB"}.
+When omitted for file-backed input, uses
+\code{options(memory_limit = ...)}, or \code{"512MB"}.
 This does not limit R itself or linked-library memory.}
 
 \item{checkpoint}{Save the experimental out-of-core PCA model and
@@ -97,6 +100,9 @@ landmark PCA uses \code{\link[=massive_project_pca]{massive_project_pca()}} inst
 projects with its native matrix multiply; CPU and single-device CUDA
 use CPU projection. Multi-GPU CUDA projects on the requested devices.
 The route is recorded in \code{projection_backend}.}
+
+\item{storage}{\code{"auto"}, \code{"resident"}, or \code{"file_backed"}. When omitted,
+uses \code{options(storage = ...)}. The input must match the selection.}
 }
 \value{
 A \code{fastEmbedR_pca} list with \code{scores}, \code{loadings},

@@ -40,6 +40,7 @@ tsne(
   massive = "off",
   output = NULL,
   chunk_rows = NULL,
+  storage = NULL,
   memory_limit = "8GB",
   devices = NULL,
   landmark_method = "reservoir",
@@ -168,7 +169,12 @@ file-backed matrix with explicit landmarks selects landmark mode.}
 
 \item{chunk_rows}{Maximum experimental query rows per batch.}
 
-\item{memory_limit}{Conservative experimental RAM budget.}
+\item{storage}{\code{"auto"}, \code{"resident"}, or \code{"file_backed"}. When omitted,
+uses \code{options(storage = ...)}. The input must match the selection.}
+
+\item{memory_limit}{Conservative experimental RAM budget. When omitted for
+file-backed input, uses \code{options(memory_limit = ...)}, or
+\code{"8GB"}.}
 
 \item{devices}{Optional CUDA device indices. In resident full-data mode,
 two to four devices coordinate one 2D or 3D fit with host KNN

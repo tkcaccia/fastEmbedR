@@ -22,6 +22,7 @@ clustering stages are internal.
 | Situation | Use |
 | --- | --- |
 | You want to precompute fastEmbedR's native neighbors | `precompute_knn()` |
+| You want neighbors from a file-backed source | `precompute_knn(massive_matrix(...), output = "knn")` |
 | You already computed nearest neighbors | `umap(knn)` or `tsne(knn)` |
 | You want one call from a data matrix | `umap()` or `tsne()` |
 | You want reusable PCA scores or t-SNE initialization | `pca()` |
@@ -52,6 +53,28 @@ layout_tsne <- tsne(knn, init_data = x, seed = 1)
 
 This keeps nearest-neighbor time separate from embedding time and makes
 benchmarks easier to interpret.
+
+For a disk-backed source, set session defaults with base R `options()` or
+pass an explicit backend and memory budget:
+
+```r
+old <- options(backend = "cpu", n.cores = 4L,
+               storage = "file_backed",
+               memory_limit = "8GB")
+source <- massive_matrix("features.f32", nrow = 1000000L, ncol = 128L)
+knn_file <- precompute_knn(source, k = 30L, output = "full_knn")
+options(old)
+```
+
+The file-backed result is a `fastEmbedR_massive_graph` descriptor, not a
+resident KNN matrix. It supports Euclidean distance and needs a new output
+prefix. Construct a fuzzy graph or affinity graph from it before a full
+file-backed UMAP or t-SNE fit. A storage option never copies a resident matrix
+to SSD implicitly. The memory option limits algorithm buffers, not total RSS.
+The option names are ordinary session-wide R keys and can be shared with
+other packages that adopt the same values. `pca()`, `tsne()`, `umap()`,
+`graph_cluster()`, and `precompute_knn()` also accept an explicit `storage`
+argument that overrides the session setting.
 
 ### Updating older scripts
 

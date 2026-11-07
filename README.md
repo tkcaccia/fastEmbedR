@@ -64,6 +64,15 @@ bounded rows of file-backed matrices and clustering results. Direct KNN
 optimizers and file-stage functions remain available for controlled work;
 they are grouped under advanced reference topics.
 
+For reusable file-backed neighbors, describe the input with
+`massive_matrix()` and call `precompute_knn(x, output = "knn-prefix")`.
+Session defaults can be set with `options(storage = "file_backed",
+memory_limit = "8GB")` alongside `options(backend = "cpu")`.
+The main analysis functions also accept `storage` directly when one call
+needs to override the session setting.
+The file-backed result is a graph descriptor, not a resident KNN matrix;
+prepare fuzzy weights or affinities from it before a full embedding fit.
+
 For the one-call functions `tsne()` and `umap()`, the embedding backend is
 deliberately limited to `backend = "cpu"`, `"metal"`, or `"cuda"`. Internal
 CPU one-call embeddings use package-native exhaustive float32 search below

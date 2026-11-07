@@ -21,6 +21,41 @@ column counts; an `.fbin` file contains them in its header. Keep all
 output paths on storage with sufficient space. These routes are
 experimental and their supported backends differ.
 
+Base R's `options()` can set session defaults for the backend, CPU workers,
+storage preference, and file-backed working-memory budget. Explicit `backend`
+and `memory_limit` arguments take precedence over their session defaults.
+The public analysis functions also accept an explicit `storage` argument.
+A storage choice that conflicts with the input is rejected.
+`storage = "file_backed"` requires a disk-backed descriptor; it
+never writes a resident matrix to disk implicitly.
+The memory budget limits algorithm working buffers, not all process RSS or
+GPU allocator overhead.
+These ordinary R options can be shared by packages that use the same values;
+restore the previous values when the analysis is finished.
+
+```{r eval=FALSE}
+old_options <- options(
+  backend = "cpu", n.cores = 4L,
+  storage = "file_backed",
+  memory_limit = "8GB"
+)
+x <- massive_matrix("features.f32", nrow = 1000000L, ncol = 128L)
+knn <- precompute_knn(x, k = 30L, output = "features-knn")
+fuzzy <- massive_umap_fuzzy_graph(knn, output = "features-fuzzy",
+                                 sort_method = "bucketed")
+options(old_options)
+```
+
+For file-backed KNN, `precompute_knn()` returns a file-backed graph descriptor
+rather than a resident `fastEmbedR_knn` object. It selects bounded exact or
+sharded approximate search according to the backend and row count. Only
+Euclidean distance is currently supported for this route. The output prefix
+must be new and point to storage with enough free space. Convert the KNN
+descriptor to a fuzzy graph or affinity graph before a full UMAP or t-SNE fit.
+The fuzzy-graph conversion is currently a CPU step and also reads the session
+memory budget when `memory_limit` is omitted. For t-SNE, use
+`massive_tsne_affinities(knn, perplexity = 30, output = "features-affinity")`.
+
 ```{r eval=FALSE}
 library(fastEmbedR)
 x <- massive_matrix("features.f32", nrow = 1000000, ncol = 128)
@@ -73,9 +108,8 @@ where that search is practical.
 ```{r eval=FALSE}
 small <- massive_matrix("small-features.f32", nrow = 2000L,
                         ncol = 128L)
-knn <- massive_full_knn_graph(small, k = 30L,
-                             output = "full_knn",
-                             backend = "cpu", memory_limit = "8GB")
+knn <- precompute_knn(small, k = 30L, output = "full_knn",
+                      backend = "cpu", memory_limit = "8GB")
 fuzzy <- massive_umap_fuzzy_graph(knn, output = "fuzzy",
                                   sort_method = "bucketed")
 initial <- massive_matrix("initial_2d.f32", nrow = small$nrow,
