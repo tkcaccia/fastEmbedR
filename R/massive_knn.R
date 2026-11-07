@@ -1767,6 +1767,7 @@ massive_full_knn_exact <- function(x, k, output, n.cores,
     graph$resources <- resources
     graph$search_seconds <- measurement$seconds
     graph$checkpoint <- checkpoint
+    graph$resumed <- resume
     graph$checkpoint_every <- checkpoint_every
     massive_full_knn_audit(graph, x, audit_rows, setup)
 }
