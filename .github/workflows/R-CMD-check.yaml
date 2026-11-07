@@ -91,6 +91,9 @@ jobs:
         run: |
           bash -n .github/scripts/run-hardware-validation.sh
           Rscript -e 'parse(file = ".github/scripts/validate-hardware.R")'
+      - name: Diagnose hosted Metal pipeline compilation
+        if: runner.os == 'macOS'
+        run: bash .github/scripts/diagnose-metal-ci.sh
       - name: Check
         shell: Rscript {0}
         run: |
