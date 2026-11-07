@@ -40,3 +40,18 @@ else
   printf 'Offline native KNN Metal compilation failed:\n'
   head -80 "$RUNNER_TEMP/fastembedr-metal-compile.log"
 fi
+
+python3 - "$RUNNER_TEMP/fastembedr-knn.metal" <<'PY'
+import subprocess
+import sys
+
+command = ["swift", ".github/scripts/probe-metal-runtime.swift", sys.argv[1]]
+try:
+    result = subprocess.run(command, capture_output=True, text=True,
+                            timeout=60, check=False)
+    print("Runtime Metal probe exit:", result.returncode)
+    print(result.stdout[:5000])
+    print(result.stderr[:2000])
+except (OSError, subprocess.TimeoutExpired) as error:
+    print("Runtime Metal probe unavailable or timed out:", error)
+PY
