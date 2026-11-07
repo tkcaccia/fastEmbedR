@@ -13,7 +13,10 @@ precompute_knn(
   storage = NULL,
   output = NULL,
   memory_limit = NULL,
-  devices = NULL
+  devices = NULL,
+  checkpoint = FALSE,
+  resume = FALSE,
+  checkpoint_every = 100L
 )
 }
 \arguments{
@@ -42,6 +45,12 @@ omitted, \code{options(memory_limit = ...)} is used, or \code{"8GB"}.}
 
 \item{devices}{Optional CUDA device indices for file-backed KNN. Resident
 \code{precompute_knn()} does not accept this argument.}
+
+\item{checkpoint}{Save completed file-backed KNN query blocks.}
+
+\item{resume}{Continue a matching file-backed KNN checkpoint.}
+
+\item{checkpoint_every}{Save progress after this many query blocks.}
 }
 \value{
 A resident \code{fastEmbedR_knn} object, or a file-backed

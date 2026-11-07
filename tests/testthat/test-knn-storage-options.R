@@ -13,11 +13,14 @@ test_that("file-backed KNN uses the public route and session budget", {
         memory_limit = "128MB")
     on.exit(options(previous), add = TRUE)
     graph <- precompute_knn(input, k = 2L,
-        output = file.path(directory, "knn"))
+        output = file.path(directory, "knn"),
+        checkpoint = TRUE, checkpoint_every = 1L)
     expect_s3_class(graph, "fastEmbedR_massive_graph")
     expect_equal(graph$n_vertices, nrow(x))
     expect_equal(graph$k, 2L)
     expect_true(isTRUE(graph$exact))
+    expect_true(isTRUE(graph$checkpoint))
+    expect_identical(graph$checkpoint_every, 1L)
     expect_true(file.exists(file.path(directory, "knn.indices.u32")))
     expect_true(file.exists(file.path(directory, "knn.distances.f32")))
     indices <- matrix(readBin(graph$indices_path, integer(),
@@ -33,6 +36,42 @@ test_that("file-backed KNN uses the public route and session budget", {
         expect_equal(indices[row, ], expected)
         expect_equal(distances[row, ], exact[expected], tolerance = 1e-5)
     }
+})
+
+test_that("public file-backed KNN resumes after a committed block", {
+    skip_on_os("windows")
+    set.seed(481L)
+    x <- matrix(rnorm(300L * 4L), ncol = 4L)
+    work <- tempfile("knn-resume-")
+    dir.create(work)
+    on.exit(unlink(work, recursive = TRUE), add = TRUE)
+    path <- file.path(work, "input.f32")
+    writeBin(as.numeric(t(x)), path, size = 4L,
+        endian = "little")
+    source <- massive_matrix(path, nrow(x), ncol(x))
+    output <- file.path(work, "graph")
+    native <- fastEmbedR:::massive_exact_graph_batch_cpp
+    calls <- 0L
+    expect_error(testthat::with_mocked_bindings(
+        precompute_knn(source, k = 3L, backend = "cpu",
+            output = output, memory_limit = "256MB",
+            checkpoint = TRUE, checkpoint_every = 1L),
+        massive_exact_graph_batch_cpp = function(...) {
+            calls <<- calls + 1L
+            if (calls == 2L) stop("injected interruption")
+            native(...)
+        }, .package = "fastEmbedR"), "injected interruption")
+    expect_true(file.exists(paste0(output, ".checkpoint.rds")))
+    resumed <- precompute_knn(source, k = 3L, backend = "cpu",
+        output = output, memory_limit = "256MB", checkpoint = TRUE,
+        resume = TRUE, checkpoint_every = 1L)
+    expect_true(isTRUE(resumed$resumed))
+    expected <- precompute_knn(source, k = 3L, backend = "cpu",
+        output = file.path(work, "expected"), memory_limit = "256MB")
+    expect_equal(fastEmbedR:::massive_read_graph_edges(
+        resumed, 1L, nrow(x)),
+        fastEmbedR:::massive_read_graph_edges(
+            expected, 1L, nrow(x)))
 })
 
 test_that("storage options fail before hidden conversion", {
@@ -60,6 +99,8 @@ test_that("storage options fail before hidden conversion", {
     expect_error(precompute_knn(x, k = 2L, backend = "cpu",
         output = tempfile()), "File-backed KNN controls")
     expect_error(precompute_knn(x, k = 2L, backend = "cpu",
+        checkpoint = TRUE), "File-backed KNN controls")
+    expect_error(precompute_knn(x, k = 2L, backend = "cpu",
         storage = "typo"), "Storage must")
 })
 
@@ -86,9 +127,7 @@ test_that("file-backed KNN requires output and supported metric", {
 })
 
 test_that("file-backed KNN routing respects work and session options", {
-    testthat::local_mocked_bindings(
-        massive_full_knn_graph = function(...) list(...),
-        .package = "fastEmbedR")
+    testthat::with_mocked_bindings({
     previous <- options(n.cores = 1L, storage = "file_backed",
         memory_limit = "128MB")
     on.exit(options(previous))
@@ -100,6 +139,12 @@ test_that("file-backed KNN routing respects work and session options", {
     expect_identical(small$method, "exact")
     expect_identical(small$memory_limit, "128MB")
     expect_identical(small$n.cores, 1L)
+    resumed <- precompute_knn(source(1000, 10), k = 30L,
+        backend = "cpu", output = "resume", checkpoint = TRUE,
+        resume = TRUE, checkpoint_every = 2L)
+    expect_true(resumed$checkpoint)
+    expect_true(resumed$resume)
+    expect_identical(resumed$checkpoint_every, 2L)
     expect_identical(precompute_knn(source(6000, 10), k = 30L,
         backend = "cpu", output = "large")$method, "hnsw_sharded")
     expect_identical(precompute_knn(source(2000, 50000), k = 30L,
@@ -108,6 +153,8 @@ test_that("file-backed KNN routing respects work and session options", {
         backend = "cuda", output = "cuda")$method, "ivf_sharded")
     expect_identical(precompute_knn(source(1000, 10), k = 30L,
         backend = "metal", output = "metal")$method, "exact")
+    }, massive_full_knn_graph = function(...) list(...),
+        .package = "fastEmbedR")
 })
 
 test_that("explicit storage rejects conflicting legacy modes early", {
@@ -126,9 +173,7 @@ test_that("explicit storage rejects conflicting legacy modes early", {
 })
 
 test_that("file-backed clustering cannot auto-materialize", {
-    testthat::local_mocked_bindings(
-        massive_cluster = function(...) list(...),
-        .package = "fastEmbedR")
+    testthat::with_mocked_bindings({
     source <- structure(list(format = "f32", nrow = 100L, ncol = 3L),
         class = "fastEmbedR_massive_matrix")
     graph <- structure(list(n_vertices = 100L),
@@ -143,4 +188,6 @@ test_that("file-backed clustering cannot auto-materialize", {
     previous <- options(storage = "file_backed")
     on.exit(options(previous))
     expect_error(graph_cluster(source), "needs a prepared graph")
+    }, massive_cluster = function(...) list(...),
+        .package = "fastEmbedR")
 })

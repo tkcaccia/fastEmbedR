@@ -343,6 +343,9 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #'   omitted, `options(memory_limit = ...)` is used, or `"8GB"`.
 #' @param devices Optional CUDA device indices for file-backed KNN. Resident
 #'   `precompute_knn()` does not accept this argument.
+#' @param checkpoint Save completed file-backed KNN query blocks.
+#' @param resume Continue a matching file-backed KNN checkpoint.
+#' @param checkpoint_every Save progress after this many query blocks.
 #'
 #' @details
 #' CPU uses native exhaustive float32 search below 5,000 observations and
@@ -383,7 +386,10 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 precompute_knn <- function(data, k = 30L,
         metric = c("euclidean", "cosine", "correlation"),
         backend = NULL, n.cores = NULL, storage = NULL,
-        output = NULL, memory_limit = NULL, devices = NULL) {
+        output = NULL, memory_limit = NULL, devices = NULL,
+        checkpoint = FALSE, resume = FALSE,
+        checkpoint_every = 100L) {
+    massive_checkpoint_validate_controls(checkpoint, resume)
     if (inherits(data, "fastEmbedR_massive_graph")) stop(
         "precompute_knn() needs a data matrix, not a prepared graph.",
         call. = FALSE)
@@ -392,11 +398,13 @@ precompute_knn <- function(data, k = 30L,
     metric <- resolve_embedding_metric(metric, data)
     if (fastembedr_file_backed_input(data)) return(
         precompute_knn_backed(data, k, metric, backend, n.cores,
-            output, memory_limit, devices))
+            output, memory_limit, devices, checkpoint, resume,
+            checkpoint_every))
     if (inherits(data, "fastEmbedR_massive_matrix")) stop(
         "A memory-backed massive_matrix() is not a disk-backed source; ",
         "pass its resident matrix to precompute_knn().", call. = FALSE)
-    if (!is.null(output) || !is.null(memory_limit) || !is.null(devices)) stop(
+    if (!is.null(output) || !is.null(memory_limit) || !is.null(devices) ||
+        checkpoint || resume || !identical(checkpoint_every, 100L)) stop(
         "File-backed KNN controls require a disk-backed massive_matrix().",
         call. = FALSE)
     prepared <- prepare_embedding_data(
@@ -419,16 +427,13 @@ precompute_knn <- function(data, k = 30L,
         n = n, k = k, metric = metric, exclude_self = TRUE,
         backend = backend, keep_gpu = keep_gpu
     )
-    finish_precomputed_knn(
-        result$value,
-        metadata,
-        policy,
-        result$time
-    )
+    finish_precomputed_knn(result$value, metadata, policy,
+        result$time)
 }
 
 precompute_knn_backed <- function(data, k, metric, backend, n.cores,
-        output, memory_limit, devices) {
+        output, memory_limit, devices, checkpoint, resume,
+        checkpoint_every) {
     if (!identical(metric, "euclidean")) stop(
         "File-backed KNN currently supports Euclidean distance only.",
         call. = FALSE)
@@ -449,7 +454,9 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
     } else "exact"
     massive_full_knn_graph(data, k = k, output = output,
         backend = backend, n.cores = resolve_n_cores(n.cores),
-        memory_limit = limit, method = method, devices = devices)
+        memory_limit = limit, method = method, devices = devices,
+        checkpoint = checkpoint, resume = resume,
+        checkpoint_every = checkpoint_every)
 }
 
 prepare_query_knn_inputs <- function(reference, query, backend) {
