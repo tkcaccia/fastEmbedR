@@ -624,8 +624,14 @@ graph_cluster <- function(graph,
                             devices = NULL,
                             parallel.mode = c("restarts", "fit"),
                             massive = NULL, ...) {
+    dots <- list(...)
+    if (identical(dots$landmarks, FALSE)) {
+        if (inherits(graph, "fastEmbedR_massive_matrix")) stop(
+            "Full file-backed matrix clustering needs a prepared graph.",
+            call. = FALSE)
+        dots$landmarks <- NULL
+    }
     if (is.matrix(graph) || is_float32_matrix(graph)) {
-        dots <- list(...)
         if (!is.null(dots$landmarks)) return(
             graph_cluster_resident_landmarks(graph, method, backend,
                 resolution, n_iterations, n_runs, steps, seed,
@@ -641,9 +647,9 @@ graph_cluster <- function(graph,
             call. = FALSE)
         return(graph_cluster_data_input(graph, method, backend,
             resolution, n_iterations, n_runs, steps, seed,
-            n.cores, devices, parallel.mode, massive, ...))
+            n.cores, devices, parallel.mode, massive, dots))
     }
-    if (!is.null(massive) || length(list(...))) stop(
+    if (!is.null(massive) || length(dots)) stop(
         "File-backed controls require a file-backed input.",
         call. = FALSE)
     graph_cluster_resident(graph, method, backend, resolution,
@@ -721,7 +727,7 @@ graph_cluster_resident <- function(graph, method, backend,
 
 graph_cluster_data_input <- function(graph, method, backend,
         resolution, n_iterations, n_runs, steps, seed, n.cores,
-        devices, parallel.mode, massive, ...) {
+        devices, parallel.mode, massive, dots) {
     if (is.null(massive)) massive <- if (
         inherits(graph, "fastEmbedR_massive_graph")) {
         "out_of_core_graph"
@@ -740,7 +746,7 @@ graph_cluster_data_input <- function(graph, method, backend,
         args$n_runs <- n_runs
         args$steps <- steps
     } else if (method == "walktrap") args$steps <- steps
-    do.call(massive_cluster, c(args, list(...)))
+    do.call(massive_cluster, c(args, dots))
 }
 
 graph_cluster_options <- function(options, graph) {

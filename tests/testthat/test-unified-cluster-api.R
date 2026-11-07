@@ -9,6 +9,12 @@ test_that("graph_cluster accepts resident and file-backed matrices", {
     direct <- graph_cluster(x, method = "louvain", k = 4L,
         memory_limit = "1GB", seed = 19L)
     expect_length(direct$membership, nrow(x))
+    full_explicit <- graph_cluster(x, method = "louvain", k = 4L,
+        memory_limit = "1GB", seed = 19L, landmarks = FALSE)
+    expect_identical(full_explicit$membership, direct$membership)
+    graph_explicit <- graph_cluster(graph, method = "louvain",
+        seed = 19L, landmarks = FALSE)
+    expect_identical(graph_explicit$membership, resident$membership)
     landmark <- graph_cluster(x, method = "louvain",
         landmarks = 24L, k = 4L, vote_k = 4L, seed = 19L)
     reference <- cluster_landmarks(x, landmarks = 24L,
@@ -33,6 +39,8 @@ test_that("graph_cluster accepts resident and file-backed matrices", {
     writeBin(as.numeric(t(x)), path, size = 4L,
         endian = "little")
     input <- massive_matrix(path, nrow(x), ncol(x))
+    expect_error(graph_cluster(input, method = "louvain",
+        landmarks = FALSE), "needs a prepared graph")
     fit <- graph_cluster(input, method = "louvain",
         landmarks = 24L, k = 4L,
         output = file.path(work, "fit"),
