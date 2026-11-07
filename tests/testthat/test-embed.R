@@ -56,7 +56,7 @@ test_that("wide embedding PCA uses requested CPU cores", {
     single <- fastEmbedR:::run_embedding_pca(x, 3L, "cpu", 40L, 1L)
     parallel <- fastEmbedR:::run_embedding_pca(x, 3L, "cpu", 40L, 4L)
     expect_equal(single$n_threads, 1L)
-    expect_equal(parallel$n_threads, 2L)
+    expect_equal(parallel$n_threads, 4L)
     expect_equal(parallel$scores, single$scores, tolerance = 1e-3)
 
     prepared <- fastEmbedR:::prepare_umap_matrix(
@@ -84,6 +84,21 @@ test_that("wide embedding PCA uses requested CPU cores", {
     )
     expect_true(is.na(unchanged$preprocess$pca_dims))
     expect_equal(dim(unchanged$data), dim(x))
+})
+
+test_that("explicit PCA core counts are honored on Fashion-width input", {
+    set.seed(401)
+    x <- matrix(rnorm(384L * 784L), 384L, 784L)
+    single <- pca(
+        x, ncomp = 2L, backend = "cpu", n.cores = 1L, seed = 401L
+    )
+    parallel <- pca(
+        x, ncomp = 2L, backend = "cpu", n.cores = 16L, seed = 401L
+    )
+    expect_identical(parallel$n.cores_requested, 16L)
+    expect_identical(parallel$n.cores_effective, 16L)
+    expect_identical(parallel$n_threads, 16L)
+    expect_equal(parallel$scores, single$scores, tolerance = 1e-3)
 })
 
 test_that("explicit CUDA PCA never falls back to CPU", {

@@ -1,5 +1,9 @@
 # fastEmbedR 0.1
 
+* Resident CPU PCA now honors explicit `n.cores` requests on moderate-width
+  inputs. Automatic thread selection retains the small-task cap. This also
+  corrects the effective-core metadata used by CPU scaling benchmarks.
+
 * CPU UMAP now accepts up to 32 requested workers for resident 2D and 3D
   fits. Native stages choose fewer workers for small workloads; the
   concurrent 3D optimizer is enabled on graphs with at least 10,000 rows.

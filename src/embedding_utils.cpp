@@ -153,11 +153,14 @@ bool cholesky_solve_inplace(const std::vector<double>& chol,
 
 int resolve_projection_threads(int n_threads, const int n) {
   if (n <= 1) return 1;
+  const bool automatic = n_threads < 1;
   if (n_threads < 1) {
     const unsigned int hw = std::thread::hardware_concurrency();
     n_threads = hw == 0 ? 1 : static_cast<int>(hw);
   }
-  const int cap = n < 256 ? 1 : n < 2048 ? 2 : n_threads;
+  // Keep small-task caps for automatic sizing, not explicit core requests.
+  const int cap = automatic ? (n < 256 ? 1 : n < 2048 ? 2 : n_threads)
+                            : n_threads;
   return std::max(1, std::min(std::min(n_threads, cap), n));
 }
 
