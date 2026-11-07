@@ -21,10 +21,12 @@ kernel void fastembedr_probe(device float* values [[buffer(0)]],
 }
 """
 
-func probe(_ label: String, _ source: String, _ functionName: String) {
+func probe(_ label: String, _ source: String, _ functionName: String,
+           _ options: MTLCompileOptions? = nil) {
     let prefix = "Runtime Metal \(label)"
     do {
-        let library = try device.makeLibrary(source: source, options: nil)
+        let library = try device.makeLibrary(source: source,
+                                             options: options)
         guard let function = library.makeFunction(name: functionName) else {
             print("\(prefix): function missing after library build.")
             return
@@ -47,6 +49,19 @@ do {
     let source = try String(contentsOfFile: CommandLine.arguments[1],
                             encoding: .utf8)
     probe("signed_hash_project", source, "signed_hash_project")
+    let defaults = MTLCompileOptions()
+    probe("explicit_defaults", source, "signed_hash_project", defaults)
+    let language = MTLCompileOptions()
+    language.languageVersion = .version3_1
+    probe("language_3_1", source, "signed_hash_project", language)
+    if #available(macOS 15.0, *) {
+        let fast = MTLCompileOptions()
+        fast.mathMode = .fast
+        probe("fast_math", source, "signed_hash_project", fast)
+        fast.languageVersion = .version3_1
+        probe("fast_math_language_3_1", source,
+              "signed_hash_project", fast)
+    }
 } catch {
     print("Runtime Metal source read failed: \(error)")
 }
