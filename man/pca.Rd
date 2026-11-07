@@ -102,7 +102,9 @@ use CPU projection. Multi-GPU CUDA projects on the requested devices.
 The route is recorded in \code{projection_backend}.}
 
 \item{storage}{\code{"auto"}, \code{"resident"}, or \code{"file_backed"}. When omitted,
-uses \code{options(storage = ...)}. The input must match the selection.}
+uses \code{options(storage = ...)}. The input must match the selection;
+\code{"file_backed"} forces out-of-core PCA, while conflicting \code{massive}
+values fail before fitting.}
 }
 \value{
 A \code{fastEmbedR_pca} list with \code{scores}, \code{loadings},
