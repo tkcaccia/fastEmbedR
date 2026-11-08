@@ -7,6 +7,7 @@
 \alias{summary.fastEmbedR_graph_cluster}
 \alias{summary.fastEmbedR_landmark_clusters}
 \alias{summary.fastEmbedR_massive_matrix}
+\alias{summary.fastEmbedR_massive_projection}
 \alias{summary.fastEmbedR_massive_clusters}
 \alias{summary.fastEmbedR_massive_leiden}
 \alias{summary.fastEmbedR_massive_louvain_level}
@@ -22,6 +23,8 @@
 \method{summary}{fastEmbedR_landmark_clusters}(object, ...)
 
 \method{summary}{fastEmbedR_massive_matrix}(object, ...)
+
+\method{summary}{fastEmbedR_massive_projection}(object, ...)
 
 \method{summary}{fastEmbedR_massive_clusters}(object, ...)
 

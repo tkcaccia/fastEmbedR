@@ -52,6 +52,7 @@ fastembedr_summary_scope <- function(x) {
     scope <- x$fit_scope %||% x$pipeline$fit_scope
     if (!is.null(scope)) return(if (grepl("landmark", scope))
         "landmark" else "full")
+    if (identical(x$mode, "landmark")) return("landmark")
     if (isTRUE(x$parameters$landmark) ||
         !is.null(x$n_reference))
         return("landmark")
@@ -61,7 +62,9 @@ fastembedr_summary_scope <- function(x) {
 fastembedr_summary_fit <- function(x) {
     backed <- inherits(x, "fastEmbedR_massive_matrix") ||
         inherits(x, c("fastEmbedR_massive_pca",
-            "fastEmbedR_massive_clusters", "fastEmbedR_massive_leiden",
+            "fastEmbedR_massive_clusters",
+            "fastEmbedR_massive_projection",
+            "fastEmbedR_massive_leiden",
             "fastEmbedR_massive_louvain_level",
             "fastEmbedR_massive_walktrap"))
     backend <- fastembedr_summary_backend(x)
@@ -126,6 +129,12 @@ summary.fastEmbedR_landmark_clusters <- function(object, ...) {
 summary.fastEmbedR_massive_matrix <- function(object, ...) {
     if (is.null(object$method)) stop(
         "A matrix descriptor is input data, not a fit.", call. = FALSE)
+    fastembedr_summary_fit(object)
+}
+
+#' @rdname fastembedr_fit_summary
+#' @export
+summary.fastEmbedR_massive_projection <- function(object, ...) {
     fastembedr_summary_fit(object)
 }
 

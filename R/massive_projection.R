@@ -412,7 +412,9 @@ massive_projection_result <- function(path, graph, fit, dimensions,
             local$neighbors,
         overlap_rows = if (is.null(local)) NA_integer_ else
             local$overlap,
-        elapsed_sec = elapsed, experimental = TRUE,
+        elapsed_sec = elapsed,
+        stage_seconds = list(projection = elapsed),
+        experimental = TRUE,
         row_start = row_range[1L], row_end = row_range[2L])
     class(result) <- "fastEmbedR_massive_projection"
     result

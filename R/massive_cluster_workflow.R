@@ -156,10 +156,13 @@ massive_cluster_workflow <- function(x, plan, paths, k, method,
         parallel.mode)
     workflow <- massive_cluster_workflow_checkpoint(x, plan, paths,
         controls, checkpoint, resume, reused)
+    precompute_started <- proc.time()[[3L]]
     prepared <- massive_cluster_precompute(x, plan, paths, k, backend,
         workers, landmark_method, knn_method, chunk_rows,
         memory_limit, seed, workflow, checkpoint, resume, reused)
+    precompute_seconds <- unname(proc.time()[[3L]] - precompute_started)
     low_sidecar <- paste0(paths$prefix, ".checkpoint.rds")
+    cluster_started <- proc.time()[[3L]]
     result <- massive_cluster_landmarks(prepared$graph, prepared$knn,
         paths$prefix, method = method, selection = prepared$selection,
         backend = backend,
@@ -170,7 +173,10 @@ massive_cluster_workflow <- function(x, plan, paths, k, method,
         checkpoint_every = checkpoint_every,
         resume = resume && file.exists(low_sidecar),
         devices = plan$devices, parallel.mode = parallel.mode)
+    cluster_seconds <- unname(proc.time()[[3L]] - cluster_started)
     if (!is.null(prepared$workflow)) unlink(prepared$workflow$path)
+    result$stage_seconds <- list(precompute = precompute_seconds,
+        cluster_and_assign = cluster_seconds)
     result$mode <- "landmark"
     result$selection <- prepared$selection
     result$knn <- prepared$knn

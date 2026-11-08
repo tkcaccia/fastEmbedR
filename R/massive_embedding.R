@@ -468,17 +468,24 @@ massive_embedding_run <- function(data, request, k, dimensions, backend,
             overlap_rows = overlap_rows))
     if (request$ef_search > 0L) config$ef_search <- request$ef_search
     workflow <- massive_embedding_workflow(data, request, paths, config)
+    selection_started <- proc.time()[[3L]]
     selected <- massive_workflow_selection(data, request, paths,
         seed, workflow, reused)
+    selection_seconds <- unname(proc.time()[[3L]] - selection_started)
     selection <- selected$selection
+    reference_started <- proc.time()[[3L]]
     fitted <- massive_embedding_reference(selection, data, request,
         dimensions, paths, fit_reference, selected$workflow)
+    reference_seconds <- unname(proc.time()[[3L]] - reference_started)
+    graph_started <- proc.time()[[3L]]
     built <- massive_embedding_graph(data, selection, request, paths,
         k, backend, n.cores, fitted$workflow, reused)
+    graph_seconds <- unname(proc.time()[[3L]] - graph_started)
     graph <- built$graph
     projection_sidecar <- if (is.null(request$devices)) {
         paste0(paths$path, ".checkpoint.rds")
     } else paste0(paths$path, ".multigpu.checkpoint.rds")
+    projection_started <- proc.time()[[3L]]
     result <- massive_project_landmarks(fitted$fit, graph, paths$path,
         selection = selection, backend = backend, n.cores = n.cores,
         chunk_rows = request$chunk_rows,
@@ -491,12 +498,18 @@ massive_embedding_run <- function(data, request, k, dimensions, backend,
         overlap_rows = overlap_rows, devices = request$devices,
         checkpoint = request$checkpoint,
         resume = request$resume && file.exists(projection_sidecar))
+    projection_seconds <- unname(proc.time()[[3L]] -
+        projection_started)
     if (!is.null(built$workflow)) unlink(built$workflow$path)
     result$reference_fit_path <- paths$model
     result$selection <- selection
     result$graph_reused <- !is.null(reused)
-    massive_embedding_result_resources(result, paths, graph,
+    result <- massive_embedding_result_resources(result, paths, graph,
         !is.null(reused))
+    result$stage_seconds <- list(selection = selection_seconds,
+        reference_fit = reference_seconds, query_knn = graph_seconds,
+        projection = projection_seconds)
+    result
 }
 
 run_massive_umap_landmark <- function(data, landmarks, n_neighbors,

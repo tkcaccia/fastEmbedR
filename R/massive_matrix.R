@@ -111,6 +111,8 @@ massive_matrix_rows <- function(x, first, n) {
 #'   clustering.
 #' @export
 massive_read_rows <- function(x, first = 1, n = 6L) {
+    if (inherits(x, "fastEmbedR_massive_projection"))
+        return(massive_read_rows(x$layout, first, n))
     if (inherits(x, "fastEmbedR_massive_pca"))
         return(massive_read_rows(x$scores, first, n))
     if (inherits(x, "fastEmbedR_massive_clusters"))
