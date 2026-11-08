@@ -174,6 +174,14 @@ massive_cluster_workflow <- function(x, plan, paths, k, method,
         resume = resume && file.exists(low_sidecar),
         devices = plan$devices, parallel.mode = parallel.mode)
     cluster_seconds <- unname(proc.time()[[3L]] - cluster_started)
+    massive_cluster_workflow_result(result, prepared, estimates,
+        paths, reused, backend, plan, started, precompute_seconds,
+        cluster_seconds)
+}
+
+massive_cluster_workflow_result <- function(result, prepared,
+        estimates, paths, reused, backend, plan, started,
+        precompute_seconds, cluster_seconds) {
     if (!is.null(prepared$workflow)) unlink(prepared$workflow$path)
     result$stage_seconds <- list(precompute = precompute_seconds,
         cluster_and_assign = cluster_seconds)
@@ -275,38 +283,41 @@ massive_cluster_full_graph <- function(x, method, backend, output,
         !is.null(devices)) stop(
         "Full-graph clustering needs CPU, Metal, or CUDA devices.",
         call. = FALSE)
-    result <- if (identical(method, "walktrap")) {
+    result <- massive_cluster_full_fit(x, method, backend, output,
+        workers, chunk_rows, memory_limit, resolution,
+        n_iterations, steps, seed, checkpoint, resume, initial)
+    result$mode <- "out_of_core_graph"
+    if (is.null(result$stage_seconds))
+        result$stage_seconds <- list(
+            fit = unname(proc.time()[[3L]] - started))
+    result
+}
+
+massive_cluster_full_fit <- function(x, method, backend, output,
+        workers, chunk_rows, memory_limit, resolution,
+        n_iterations, steps, seed, checkpoint, resume, initial) {
+    if (identical(method, "walktrap")) {
         if (!is.null(initial) || checkpoint || resume ||
             !isTRUE(all.equal(resolution, 1)) ||
             n_iterations != 10L) stop(
             "Partitioned Walktrap has no initialization or checkpoint; ",
             "resolution and iteration controls do not apply.",
             call. = FALSE)
-        massive_walktrap(x, output, steps = steps,
+        return(massive_walktrap(x, output, steps = steps,
             chunk_rows = chunk_rows %||% 4000L,
-            memory_limit = memory_limit, backend = backend)
-    } else if (identical(method, "leiden")) {
-        massive_leiden(x, output, max_passes = n_iterations,
-            resolution = resolution, seed = seed,
-            chunk_rows = chunk_rows,
-            memory_limit = memory_limit, backend = backend,
-            n.cores = workers,
-            checkpoint = checkpoint, resume = resume,
-            initial = initial)
-    } else {
-        massive_louvain(x, output, max_passes = n_iterations,
-            resolution = resolution, seed = seed,
-            chunk_rows = chunk_rows,
-            memory_limit = memory_limit, backend = backend,
-            n.cores = workers,
-            checkpoint = checkpoint, resume = resume,
-            initial = initial)
+            memory_limit = memory_limit, backend = backend))
     }
-    result$mode <- "out_of_core_graph"
-    if (is.null(result$stage_seconds))
-        result$stage_seconds <- list(
-            fit = unname(proc.time()[[3L]] - started))
-    result
+    if (identical(method, "leiden")) return(massive_leiden(x, output,
+        max_passes = n_iterations, resolution = resolution,
+        seed = seed, chunk_rows = chunk_rows,
+        memory_limit = memory_limit, backend = backend,
+        n.cores = workers, checkpoint = checkpoint, resume = resume,
+        initial = initial))
+    massive_louvain(x, output, max_passes = n_iterations,
+        resolution = resolution, seed = seed, chunk_rows = chunk_rows,
+        memory_limit = memory_limit, backend = backend,
+        n.cores = workers, checkpoint = checkpoint, resume = resume,
+        initial = initial)
 }
 
 massive_cluster_full_request <- function(x, method, backend, output,

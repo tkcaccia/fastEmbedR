@@ -848,15 +848,11 @@ pca <- function(x, ncomp = 2L, xtest = NULL, center = TRUE,
     massive <- fastembedr_pca_storage_mode(x, massive, storage)
     if (memory_missing && massive != "off")
         memory_limit <- fastembedr_memory_option("512MB")
-    if (!identical(landmarks, FALSE) && !is.null(landmarks)) {
-        if (massive != "off") return(pca_file_landmarks(x, ncomp,
-            xtest, center, scale, backend, n.cores, seed, tsne_init,
-            devices, landmarks, output, chunk_rows, memory_limit,
-            checkpoint, resume))
-        return(pca_resident_landmarks(x, ncomp, xtest, center,
+    if (!identical(landmarks, FALSE) && !is.null(landmarks))
+        return(pca_landmarks_dispatch(x, ncomp, xtest, center,
             scale, backend, n.cores, seed, tsne_init, devices,
-            landmarks, massive, checkpoint, resume))
-    }
+            landmarks, massive, output, chunk_rows, memory_limit,
+            checkpoint, resume))
     if (massive == "auto") return(run_massive_auto_pca(x, ncomp,
         xtest, center, scale, backend, n.cores, seed, tsne_init, output,
         chunk_rows, memory_limit, checkpoint, resume, devices))

@@ -124,8 +124,9 @@ massive_read_rows(groups, first = 1L, n = 20L)
 ```
 
 For a file-backed landmark fit, `summary()` reports the landmark scope,
-actual backend, stage times, and bounded output access. The `massive_read_rows()`
-call reads only the requested rows of an embedding or clustering result.
+actual backend, stage times, and bounded output access.
+`massive_read_rows()` reads only the requested rows of an embedding or
+clustering result.
 For a resident matrix, the same calls use the ordinary resident route
 when `landmarks` is absent. `graph_cluster()` accepts Leiden, Louvain,
 and Walktrap. A landmark result assigns the remaining observations by

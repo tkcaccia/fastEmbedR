@@ -481,35 +481,47 @@ massive_embedding_run <- function(data, request, k, dimensions, backend,
     built <- massive_embedding_graph(data, selection, request, paths,
         k, backend, n.cores, fitted$workflow, reused)
     graph_seconds <- unname(proc.time()[[3L]] - graph_started)
-    graph <- built$graph
-    projection_sidecar <- if (is.null(request$devices)) {
+    projected <- massive_embedding_project(data, request, paths,
+        fitted$fit, built$graph, selection, backend, n.cores, seed,
+        refinement_epochs, transform_iter, transform_perplexity,
+        local_refine, local_neighbors, overlap_rows)
+    result <- projected$result
+    projection_seconds <- projected$seconds
+    if (!is.null(built$workflow)) unlink(built$workflow$path)
+    result$reference_fit_path <- paths$model
+    result$selection <- selection
+    result$graph_reused <- !is.null(reused)
+    result <- massive_embedding_result_resources(result, paths,
+        built$graph, !is.null(reused))
+    result$stage_seconds <- list(selection = selection_seconds,
+        reference_fit = reference_seconds, query_knn = graph_seconds,
+        projection = projection_seconds)
+    result
+}
+
+massive_embedding_project <- function(data, request, paths,
+        fit, graph, selection, backend, n.cores, seed,
+        refinement_epochs, transform_iter, transform_perplexity,
+        local_refine, local_neighbors, overlap_rows) {
+    sidecar <- if (is.null(request$devices)) {
         paste0(paths$path, ".checkpoint.rds")
     } else paste0(paths$path, ".multigpu.checkpoint.rds")
-    projection_started <- proc.time()[[3L]]
-    result <- massive_project_landmarks(fitted$fit, graph, paths$path,
+    started <- proc.time()[[3L]]
+    result <- massive_project_landmarks(fit, graph, paths$path,
         selection = selection, backend = backend, n.cores = n.cores,
         chunk_rows = request$chunk_rows,
         memory_limit = request$memory_limit,
-        refinement_epochs = refinement_epochs, transform_iter = transform_iter,
+        refinement_epochs = refinement_epochs,
+        transform_iter = transform_iter,
         transform_perplexity = transform_perplexity, seed = seed,
         source = if (local_refine) data else NULL,
         local_refine = local_refine,
         local_neighbors = local_neighbors,
         overlap_rows = overlap_rows, devices = request$devices,
         checkpoint = request$checkpoint,
-        resume = request$resume && file.exists(projection_sidecar))
-    projection_seconds <- unname(proc.time()[[3L]] -
-        projection_started)
-    if (!is.null(built$workflow)) unlink(built$workflow$path)
-    result$reference_fit_path <- paths$model
-    result$selection <- selection
-    result$graph_reused <- !is.null(reused)
-    result <- massive_embedding_result_resources(result, paths, graph,
-        !is.null(reused))
-    result$stage_seconds <- list(selection = selection_seconds,
-        reference_fit = reference_seconds, query_knn = graph_seconds,
-        projection = projection_seconds)
-    result
+        resume = request$resume && file.exists(sidecar))
+    list(result = result,
+        seconds = unname(proc.time()[[3L]] - started))
 }
 
 run_massive_umap_landmark <- function(data, landmarks, n_neighbors,
