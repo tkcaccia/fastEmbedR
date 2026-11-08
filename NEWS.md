@@ -1,5 +1,12 @@
 # fastEmbedR 0.1
 
+* Use a 128-point FFT grid for resident CPU 3D t-SNE fits with at
+  least 100,000 rows. Skip the pairwise near-field correction only
+  while the smoothing cutoff has a bounded small error, retaining
+  exact correction at larger cutoffs. Exact-force and large-grid
+  regressions cover the new route; the 2D and Metal optimizers are
+  unchanged.
+
 * Resident CPU PCA now honors explicit `n.cores` requests on moderate-width
   inputs. Automatic thread selection retains the small-task cap. This also
   corrects the effective-core metadata used by CPU scaling benchmarks.

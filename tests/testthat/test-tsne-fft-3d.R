@@ -28,6 +28,44 @@ test_that("3D FFT repulsion agrees with exact forces", {
     expect_lt(max(abs(duplicate$repulsive_fft)), 1e-7)
 })
 
+test_that("3D FFT near correction stays accurate on large grids", {
+    set.seed(419)
+    n <- 5000L
+    k <- 12L
+    indices <- outer(seq_len(n), seq_len(k),
+        function(i, j) (i + j - 1L) %% n + 1L)
+    distances <- matrix(rep(seq_len(k) / 10, each = n), n, k)
+    for (spread in c(1, 10, 50)) {
+        layout <- matrix(rnorm(n * 3L, sd = spread), n, 3L)
+        result <- fastEmbedR:::tsne_fft_3d_force_diagnostic_cpp(
+            indices, distances, layout, 5, 1, 64L, 4L)
+        error <- sqrt(sum((result$repulsive_fft -
+            result$repulsive_exact)^2)) /
+            sqrt(sum(result$repulsive_exact^2))
+        expect_lt(error, 0.04)
+        expect_lt(abs(result$sum_q_fft / result$sum_q_exact - 1),
+            0.003)
+    }
+})
+
+test_that("large resident CPU 3D fits select the finer FFT grid", {
+    n <- 100000L
+    k <- 6L
+    indices <- outer(seq_len(n), seq_len(k),
+        function(i, j) (i + j - 1L) %% n + 1L)
+    distances <- matrix(rep(seq_len(k) / 10, each = n), n, k)
+    set.seed(42L)
+    init <- matrix(rnorm(n * 3L, sd = 0.1), n, 3L)
+    fit <- tsne_knn(indices, distances, n_components = 3L,
+        perplexity = 5, Y_init = init,
+        early_exaggeration_iter = 0L, n_iter = 1L,
+        n.cores = 4L, seed = 42L)
+    expect_identical(dim(fit), c(n, 3L))
+    expect_true(all(is.finite(fit)))
+    expect_identical(attr(fit, "fastEmbedR_config")$fft_grid_size,
+        128L)
+})
+
 test_that("3D CPU auto routing uses FFT", {
     n <- 3201L
     k <- 6L

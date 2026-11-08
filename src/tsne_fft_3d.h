@@ -116,7 +116,7 @@ void tsne_grid_point_3d(const float* y, const float* lower,
 }
 
 int tsne_fft_3d_grid_size(int n) {
-  return n < 5000 ? 16 : 64;
+  return n < 5000 ? 16 : (n < 100000 ? 64 : 128);
 }
 
 float tsne_smooth_q(float squared_distance, float cutoff_squared,
@@ -272,8 +272,8 @@ void compute_gradient_fft_3d_f(const SparseProbabilitiesF* p,
   const float cutoff = (n < 5000 ? 3.0f : 2.0f) * spacing;
   const float cutoff_squared = cutoff * cutoff;
   const float q_cutoff = 1.0f / (1.0f + cutoff_squared);
-  // The omitted third-order Taylor remainder is below 1e-6 here.
-  const bool correct_near = cutoff_squared > 0.01f;
+  // Below this cutoff, the Taylor kernel error is at most 0.008.
+  const bool correct_near = cutoff_squared > 0.25f;
   for (int axis = 0; axis < 3; ++axis) {
     lower[axis] = 0.5f * (lower[axis] + upper[axis]) - half -
       2.0f * spacing;
