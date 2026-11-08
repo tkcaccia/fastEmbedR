@@ -252,11 +252,16 @@ massive_cluster_full_graph <- function(x, method, backend, output,
         "Landmark and KNN controls do not apply to a full graph.",
         call. = FALSE)
     workers <- massive_cluster_full_workers(n.cores, method, backend)
+    started <- proc.time()[[3L]]
     if (backend == "cuda" && !is.null(devices)) {
-        return(massive_cluster_full_cuda(x, method, output,
+        result <- massive_cluster_full_cuda(x, method, output,
             devices, chunk_rows, memory_limit, resolution,
             n_iterations, seed, checkpoint, resume, initial,
-            gpu_storage))
+            gpu_storage)
+        if (is.null(result$stage_seconds))
+            result$stage_seconds <- list(
+                fit = unname(proc.time()[[3L]] - started))
+        return(result)
     }
     if (backend == "cuda" && method == "walktrap") stop(
         "CUDA Walktrap is unavailable; no fallback.", call. = FALSE)
@@ -292,6 +297,9 @@ massive_cluster_full_graph <- function(x, method, backend, output,
             initial = initial)
     }
     result$mode <- "out_of_core_graph"
+    if (is.null(result$stage_seconds))
+        result$stage_seconds <- list(
+            fit = unname(proc.time()[[3L]] - started))
     result
 }
 
