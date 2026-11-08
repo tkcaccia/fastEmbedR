@@ -485,6 +485,10 @@ resident_float32_row_major_block_cpp <- function(input, first_row, count) {
     .Call(`_fastEmbedR_resident_float32_row_major_block_cpp`, input, first_row, count)
 }
 
+resident_float32_column_major_block_cpp <- function(input, first_row, count) {
+    .Call(`_fastEmbedR_resident_float32_column_major_block_cpp`, input, first_row, count)
+}
+
 resident_float32_score_matrix_cpp <- function(rows, columns) {
     .Call(`_fastEmbedR_resident_float32_score_matrix_cpp`, rows, columns)
 }

@@ -65,6 +65,14 @@ test_that("streamed Metal PCA projects float32 blocks", {
     expect_equal(dim(scores), dim(expected))
     expect_equal(as.vector(scores), as.vector(expected),
         tolerance = 1e-4)
+    if (requireNamespace("float", quietly = TRUE)) {
+        columns <- fastEmbedR:::resident_float32_column_major_block_cpp(
+            float::fl(x), 1L, nrow(x))
+        column_scores <- fastEmbedR:::pca_project_block_metal_cpp(
+            columns, loadings, centers, scales)
+        expect_equal(column_scores, scores, tolerance = 1e-4,
+            ignore_attr = TRUE)
+    }
     expect_gt(attr(scores, "metal_allocated_bytes_observed"), 0)
     expect_equal(raw$center, rep(0, 7L))
     expect_equal(raw$cross, crossprod(x), tolerance = 1e-4)

@@ -24,6 +24,9 @@ test_that("blocked Metal PCA algebra matches a covariance reference", {
         resident_float32_row_major_block_cpp = function(input,
                 first_row, count) input[seq.int(first_row,
                     length.out = count), , drop = FALSE],
+        resident_float32_column_major_block_cpp = function(input,
+                first_row, count) input[seq.int(first_row,
+                    length.out = count), , drop = FALSE],
         pca_crossprod_block_metal_cpp = function(block, center) {
             means <- if (center) colMeans(block) else rep(0, ncol(block))
             adjusted <- sweep(block, 2L, means)

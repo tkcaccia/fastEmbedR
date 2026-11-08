@@ -2122,6 +2122,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// resident_float32_column_major_block_cpp
+Rcpp::RawVector resident_float32_column_major_block_cpp(SEXP input, double first_row, int count);
+RcppExport SEXP _fastEmbedR_resident_float32_column_major_block_cpp(SEXP inputSEXP, SEXP first_rowSEXP, SEXP countSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type input(inputSEXP);
+    Rcpp::traits::input_parameter< double >::type first_row(first_rowSEXP);
+    Rcpp::traits::input_parameter< int >::type count(countSEXP);
+    rcpp_result_gen = Rcpp::wrap(resident_float32_column_major_block_cpp(input, first_row, count));
+    return rcpp_result_gen;
+END_RCPP
+}
 // resident_float32_score_matrix_cpp
 SEXP resident_float32_score_matrix_cpp(int rows, int columns);
 RcppExport SEXP _fastEmbedR_resident_float32_score_matrix_cpp(SEXP rowsSEXP, SEXP columnsSEXP) {
@@ -3506,6 +3519,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_leiden_refine_cpp", (DL_FUNC) &_fastEmbedR_massive_leiden_refine_cpp, 13},
     {"_fastEmbedR_massive_reference_buffer_cpp", (DL_FUNC) &_fastEmbedR_massive_reference_buffer_cpp, 1},
     {"_fastEmbedR_resident_float32_row_major_block_cpp", (DL_FUNC) &_fastEmbedR_resident_float32_row_major_block_cpp, 3},
+    {"_fastEmbedR_resident_float32_column_major_block_cpp", (DL_FUNC) &_fastEmbedR_resident_float32_column_major_block_cpp, 3},
     {"_fastEmbedR_resident_float32_score_matrix_cpp", (DL_FUNC) &_fastEmbedR_resident_float32_score_matrix_cpp, 2},
     {"_fastEmbedR_resident_float32_score_assign_cpp", (DL_FUNC) &_fastEmbedR_resident_float32_score_assign_cpp, 3},
     {"_fastEmbedR_resident_float32_project_cpu_cpp", (DL_FUNC) &_fastEmbedR_resident_float32_project_cpu_cpp, 5},

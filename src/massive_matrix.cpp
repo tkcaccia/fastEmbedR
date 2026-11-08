@@ -3050,18 +3050,61 @@ Rcpp::RawVector resident_float32_row_major_block_cpp(SEXP input,
   Rcpp::RawVector result(items * sizeof(float));
   const int* source = INTEGER(values);
   Rbyte* destination = RAW(result);
-  for (int row = 0; row < count; ++row) {
-    const std::size_t source_row = first - 1u + row;
+  constexpr int tile_rows = 256;
+  for (int row_base = 0; row_base < count; row_base += tile_rows) {
+    const int take = std::min(tile_rows, count - row_base);
     for (int column = 0; column < columns; ++column) {
-      const std::size_t source_pos =
-        static_cast<std::size_t>(column) * rows + source_row;
-      const std::size_t target_pos =
-        static_cast<std::size_t>(row) * columns + column;
-      std::memcpy(destination + target_pos * sizeof(float),
-                  source + source_pos, sizeof(float));
+      const int* source_column = source +
+        static_cast<std::size_t>(column) * rows + first - 1u + row_base;
+      Rbyte* target_column = destination +
+        (static_cast<std::size_t>(row_base) * columns + column) *
+          sizeof(float);
+      for (int offset = 0; offset < take; ++offset) {
+        std::memcpy(target_column +
+                    static_cast<std::size_t>(offset) * columns *
+                      sizeof(float),
+                    source_column + offset, sizeof(float));
+      }
     }
   }
   result.attr("fastembed_row_major_float32") = true;
+  result.attr("nrow") = count;
+  result.attr("ncol") = columns;
+  return result;
+}
+
+// [[Rcpp::export]]
+Rcpp::RawVector resident_float32_column_major_block_cpp(SEXP input,
+                                                         double first_row,
+                                                         int count) {
+  if (!Rf_inherits(input, "float32")) {
+    Rcpp::stop("Resident Metal PCA blocks require float32 input.");
+  }
+  Rcpp::S4 object(input);
+  Rcpp::IntegerMatrix values(object.slot("Data"));
+  const int rows = values.nrow();
+  const int columns = values.ncol();
+  const auto first = whole_number(first_row, "first_row");
+  if (first < 1 || count < 1 || first > static_cast<std::uint64_t>(rows) ||
+      static_cast<std::uint64_t>(count) > rows - first + 1) {
+    Rcpp::stop("Resident Metal PCA block row range is invalid.");
+  }
+  const auto items = checked_product(count, columns);
+  if (items > (128u * 1024u * 1024u) / sizeof(float)) {
+    Rcpp::stop("Resident Metal PCA block exceeds 128 MiB.");
+  }
+  Rcpp::RawVector result(items * sizeof(float));
+  const int* source = INTEGER(values);
+  Rbyte* destination = RAW(result);
+  for (int column = 0; column < columns; ++column) {
+    const std::size_t source_pos =
+      static_cast<std::size_t>(column) * rows + first - 1u;
+    const std::size_t target_pos =
+      static_cast<std::size_t>(column) * count * sizeof(float);
+    std::memcpy(destination + target_pos, source + source_pos,
+                static_cast<std::size_t>(count) * sizeof(float));
+  }
+  result.attr("fastembed_column_major_float32") = true;
   result.attr("nrow") = count;
   result.attr("ncol") = columns;
   return result;

@@ -151,6 +151,30 @@ std::pair<int, int> metal_row_major_float_dims(SEXP values,
   return std::make_pair(rows, columns);
 }
 
+std::pair<int, int> metal_pca_project_block_dims(SEXP values,
+                                                bool& column_major) {
+  SEXP marker = Rf_getAttrib(values,
+    Rf_install("fastembed_column_major_float32"));
+  column_major = TYPEOF(marker) == LGLSXP &&
+    Rf_length(marker) == 1 && LOGICAL(marker)[0] == TRUE;
+  if (!column_major) return metal_row_major_float_dims(values, "block");
+  SEXP nrow = Rf_getAttrib(values, Rf_install("nrow"));
+  SEXP ncol = Rf_getAttrib(values, Rf_install("ncol"));
+  if (TYPEOF(values) != RAWSXP || TYPEOF(nrow) != INTSXP ||
+      Rf_length(nrow) != 1 || TYPEOF(ncol) != INTSXP ||
+      Rf_length(ncol) != 1) {
+    Rcpp::stop("Metal PCA needs a column-major float32 block.");
+  }
+  const int rows = INTEGER(nrow)[0];
+  const int columns = INTEGER(ncol)[0];
+  if (rows < 1 || columns < 1 ||
+      static_cast<std::uint64_t>(rows) * columns * sizeof(float) !=
+        static_cast<std::uint64_t>(XLENGTH(values))) {
+    Rcpp::stop("Metal PCA column-major block dimensions are invalid.");
+  }
+  return std::make_pair(rows, columns);
+}
+
 std::vector<float> metal_copy_float_matrix_row_major(SEXP values,
                                                       const char* name) {
   const std::pair<int, int> dims = metal_matrix_dims(values, name);
@@ -2282,6 +2306,7 @@ kernel void pca_project_block(
   constant uint& rows [[buffer(5)]],
   constant uint& columns [[buffer(6)]],
   constant uint& components [[buffer(7)]],
+  constant uint& column_major [[buffer(8)]],
   uint2 gid [[thread_position_in_grid]]
 ) {
   const uint row = gid.x;
@@ -2289,7 +2314,8 @@ kernel void pca_project_block(
   if (row >= rows || component >= components) return;
   float total = 0.0f;
   for (uint column = 0u; column < columns; ++column) {
-    const float value = input[row * columns + column];
+    const float value = column_major != 0u ?
+      input[column * rows + row] : input[row * columns + column];
     total += ((value - centers[column]) / scales[column]) *
       loadings[component * columns + column];
   }
@@ -6134,7 +6160,8 @@ NumericMatrix pca_project_block_metal_impl(SEXP block,
                                            NumericMatrix loadings,
                                            NumericVector centers,
                                            NumericVector scales) {
-  const auto dims = metal_row_major_float_dims(block, "block");
+  bool column_major = false;
+  const auto dims = metal_pca_project_block_dims(block, column_major);
   const int rows = dims.first;
   const int columns = dims.second;
   const int components = loadings.ncol();
@@ -6208,6 +6235,8 @@ NumericMatrix pca_project_block_metal_impl(SEXP block,
     [encoder setBytes:&rows_u length:sizeof(rows_u) atIndex:5];
     [encoder setBytes:&columns_u length:sizeof(columns_u) atIndex:6];
     [encoder setBytes:&components_u length:sizeof(components_u) atIndex:7];
+    const std::uint32_t layout_u = column_major ? 1u : 0u;
+    [encoder setBytes:&layout_u length:sizeof(layout_u) atIndex:8];
     const NSUInteger width = std::min<NSUInteger>(
       256u, state.pca_project_block_pipeline.maxTotalThreadsPerThreadgroup
     );

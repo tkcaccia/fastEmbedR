@@ -51,7 +51,7 @@ metal_resident_project <- function(x, loadings, centers, scales,
     started <- proc.time()[[3L]]
     for (first in seq.int(1, rows, by = chunk_rows)) {
         take <- as.integer(min(chunk_rows, rows - first + 1))
-        block <- resident_float32_row_major_block_cpp(x, first, take)
+        block <- resident_float32_column_major_block_cpp(x, first, take)
         projected <- pca_project_block_metal_cpp(block, loadings,
             centers, scales)
         observed <- attr(projected, "metal_allocated_bytes_observed")

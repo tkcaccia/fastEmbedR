@@ -23,6 +23,20 @@ test_that("resident materialization preserves float32 across tiles", {
     packed <- matrix(readBin(block, numeric(), n = 50L * columns,
         size = 4L, endian = "little"), nrow = 50L, byrow = TRUE)
     expect_equal(packed, values[10920:10969, ], tolerance = 1e-4)
+    tiled <- fastEmbedR:::resident_float32_row_major_block_cpp(
+        resident, 10700L, 300L)
+    packed_tiles <- matrix(readBin(tiled, numeric(),
+        n = 300L * columns, size = 4L, endian = "little"),
+        nrow = 300L, byrow = TRUE)
+    expect_equal(packed_tiles, values[10700:10999, ],
+        tolerance = 1e-4)
+    column_block <- fastEmbedR:::resident_float32_column_major_block_cpp(
+        resident, 10700L, 300L)
+    column_values <- matrix(readBin(column_block, numeric(),
+        n = 300L * columns, size = 4L, endian = "little"),
+        nrow = 300L)
+    expect_equal(column_values, values[10700:10999, ],
+        tolerance = 1e-4)
     expect_error(fastEmbedR:::resident_float32_row_major_block_cpp(
         resident, rows, 2L), "row range")
     scores <- fastEmbedR:::resident_float32_score_matrix_cpp(rows, 2L)

@@ -1,5 +1,9 @@
 # fastEmbedR 0.1
 
+* Project tall resident Metal PCA scores from contiguous column-major
+  float32 blocks, avoiding the row-major packing step. Keep the
+  file-backed row-major projection route unchanged.
+
 * Admit explicit `storage = "resident"` file-matrix inputs for the four
   public analysis entry points only when float32 materialization fits
   the requested memory limit and available RAM. Keep that admission
