@@ -808,9 +808,11 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' @param landmarks `FALSE` fits all rows. For resident PCA, a count,
 #'   fraction, explicit row indices, or `TRUE` selects fitting rows and
 #'   projects every input row onto their principal components. File-backed
-#'   landmark PCA uses [massive_project_pca()] instead. Resident Metal
-#'   projects with its native matrix multiply; CPU and single-device CUDA
-#'   use CPU projection. Multi-GPU CUDA projects on the requested devices.
+#'   PCA accepts `TRUE`, a fraction, or a count and writes all-row scores to
+#'   `output`; explicit row indices and landmark checkpoint/resume are not
+#'   yet supported. Resident Metal projects with its native matrix multiply;
+#'   CPU and single-device CUDA use CPU projection. Multi-GPU CUDA projects
+#'   on the requested devices.
 #'   The route is recorded in `projection_backend`.
 #' @return A `fastEmbedR_pca` list with `scores`, `loadings`,
 #'   `singular_values`, centering/scaling vectors, backend metadata, and
@@ -846,10 +848,15 @@ pca <- function(x, ncomp = 2L, xtest = NULL, center = TRUE,
     massive <- fastembedr_pca_storage_mode(x, massive, storage)
     if (memory_missing && massive != "off")
         memory_limit <- fastembedr_memory_option("512MB")
-    if (!identical(landmarks, FALSE) && !is.null(landmarks))
+    if (!identical(landmarks, FALSE) && !is.null(landmarks)) {
+        if (massive != "off") return(pca_file_landmarks(x, ncomp,
+            xtest, center, scale, backend, n.cores, seed, tsne_init,
+            devices, landmarks, output, chunk_rows, memory_limit,
+            checkpoint, resume))
         return(pca_resident_landmarks(x, ncomp, xtest, center,
             scale, backend, n.cores, seed, tsne_init, devices,
             landmarks, massive, checkpoint, resume))
+    }
     if (massive == "auto") return(run_massive_auto_pca(x, ncomp,
         xtest, center, scale, backend, n.cores, seed, tsne_init, output,
         chunk_rows, memory_limit, checkpoint, resume, devices))

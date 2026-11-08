@@ -70,6 +70,21 @@ first_scores <- massive_read_rows(fit_pca$scores, first = 1L, n = 6L)
 source is small, set `massive = "out_of_core"`. A large resident R matrix
 is not silently converted to a file-backed source.
 
+File-backed PCA also accepts a landmark count or fraction through the same
+`pca()` entry point. It fits the selected rows, projects every source row
+into a file-backed score matrix, and reports the landmark scope and stages.
+`massive_read_rows()` reads only the requested scores. `TRUE` chooses an
+automatic count. Explicit row indices and checkpoint/resume for this PCA
+landmark route are not yet supported; such requests fail before fitting.
+
+```{r eval=FALSE}
+fit_pca_landmark <- pca(x, ncomp = 30L, landmarks = 10000L,
+                        backend = "cpu", output = "scores-landmark.f32",
+                        memory_limit = "8GB")
+summary(fit_pca_landmark)
+first_scores <- massive_read_rows(fit_pca_landmark, first = 1L, n = 20L)
+```
+
 To load a file-backed matrix into RAM intentionally, set
 `storage = "resident"` and provide a memory limit that admits the float32
 input. The same choice works with `tsne()`, `umap()`, and

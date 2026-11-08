@@ -21,7 +21,7 @@ test_that("resident PCA landmarks fit selected rows and project all rows", {
     expect_error(pca(x, ncomp = 3L, landmarks = 1:3),
         "more selected landmarks")
     expect_error(pca(x, landmarks = ids,
-        massive = "out_of_core"), "massive_project_pca")
+        massive = "out_of_core"), "disk-backed massive_matrix")
     expect_error(pca(x, landmarks = ids, checkpoint = TRUE),
         "checkpoint controls")
     full <- pca(x, landmarks = seq_len(nrow(x)), backend = "cpu")

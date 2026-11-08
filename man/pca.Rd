@@ -96,9 +96,11 @@ file-backed fitting and score projection across devices.}
 \item{landmarks}{\code{FALSE} fits all rows. For resident PCA, a count,
 fraction, explicit row indices, or \code{TRUE} selects fitting rows and
 projects every input row onto their principal components. File-backed
-landmark PCA uses \code{\link[=massive_project_pca]{massive_project_pca()}} instead. Resident Metal
-projects with its native matrix multiply; CPU and single-device CUDA
-use CPU projection. Multi-GPU CUDA projects on the requested devices.
+PCA accepts \code{TRUE}, a fraction, or a count and writes all-row scores to
+\code{output}; explicit row indices and landmark checkpoint/resume are not
+yet supported. Resident Metal projects with its native matrix multiply;
+CPU and single-device CUDA use CPU projection. Multi-GPU CUDA projects
+on the requested devices.
 The route is recorded in \code{projection_backend}.}
 
 \item{storage}{\code{"auto"}, \code{"resident"}, or \code{"file_backed"}. When omitted,
