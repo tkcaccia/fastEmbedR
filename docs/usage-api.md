@@ -294,16 +294,16 @@ Supplying `xtest` adds projected test coordinates in
 With `massive = "out_of_core"`, supply `xtest` as a `massive_matrix()`
 descriptor with matching columns. The projection runs on the selected
 backend and writes a separate file beside `output`, replacing `.f32` with
-`.test.f32`. `massive_open_pca(output)` checks both score files. If the test
+`.test.f32`. `massive_open_pca(output)` checks both score files. For a full-data fit, if the test
 projection is interrupted, reopen the completed fit and resume that stage
 with `massive_project_pca()` using the test score path.
 
 With out-of-core `tsne_init = TRUE` and two or three components, PCA writes
 `.init.f32` beside the score file. Its bounded CPU normalization matches the
 resident initialization scale, and the result can be passed to
-`tsne()` as `Y_init` with a prepared affinity graph. After interruption,
-rerun `pca(..., tsne_init = TRUE, resume = TRUE)` with the same input and
-output to regenerate the initialization from verified scores.
+`tsne()` as `Y_init` with a prepared affinity graph. For a full-data fit, after interruption, rerun
+`pca(..., tsne_init = TRUE, resume = TRUE)` with the same input and output
+to regenerate the initialization from verified scores.
 
 `irlba` is not imported, suggested, linked, or called by fastEmbedR. It is
 used only by external benchmark scripts as a CPU reference.
@@ -519,11 +519,12 @@ device resident for the projection and refinement stages.
 loading it into R. Ordinary matrix calls remain unchanged. File-backed
 calls require a persistent output path. A descriptor without landmarks
 selects a full-data fit for PCA, UMAP, and t-SNE; explicit landmarks select
-an approximation for UMAP and t-SNE. A prepared graph may be reused:
+an approximation for all three. A prepared graph may be reused:
 
 | Function | Mode | What is fitted |
 | --- | --- | --- |
 | `pca()` | `massive = "out_of_core"` | Streamed PCA on all rows. |
+| `pca()` | File-backed `landmarks` | Fit selected rows and project all source rows to bounded float32 scores. |
 | `massive_project_pca()` | File-backed projection | Apply a saved PCA fit to another file-backed source. |
 | `umap()`, `tsne()` | `massive = "landmark"` | Reference landmarks, then projection of other rows. |
 | `umap()`, `tsne()` | One-call full data | Prepare KNN, graph, spectral UMAP or PCA t-SNE initialization, and optimize all rows. |
@@ -560,11 +561,23 @@ fit <- pca(source, ncomp = 2L, massive = "out_of_core",
     checkpoint = TRUE)
 ```
 
-File-backed *landmark* PCA is not yet a one-call `pca()` route. A saved
-subset fit can be projected through `massive_project_pca()`, but subset
-selection is currently an internal stage. Do not pass `landmarks` with a
-file-backed source to `pca()` until this route is implemented. The resident
-`pca()` landmark route does accept a fraction, count, or row indices.
+File-backed landmark PCA uses the same `pca()` entry point. A positive
+integer count, a fraction in `(0, 1)`, or `TRUE` selects reference rows;
+all source rows receive scores. The result records the landmark scope,
+selection, reference fit, projection stages, backend, and file-backed score
+descriptor. `massive_read_rows(fit, first, n)` reads bounded output, and
+`massive_open_pca(output)` reopens the saved fit. Explicit row indices and
+partial-landmark checkpoint/resume are currently unsupported and fail before
+fitting. The lower-level `massive_project_pca()` remains available for a
+prepared reference fit.
+
+```r
+fit <- pca(source, ncomp = 2L, landmarks = 10000L,
+    output = "landmark-scores.f32", backend = "cpu",
+    storage = "file_backed", memory_limit = "8GB")
+summary(fit)
+first_scores <- massive_read_rows(fit, first = 1L, n = 20L)
+```
 
 For CPU full-graph UMAP, `cpu_update = "sgd"` uses ordered updates with one
 worker. Set `cpu_update = "synchronized"` with `n.cores > 1` to use the
