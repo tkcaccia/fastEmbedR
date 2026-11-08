@@ -60,7 +60,7 @@ massive_matrix <- function(x, nrow = NULL, ncol = NULL,
 
 massive_auto_materialize <- function(source) {
     massive_read_rows_cpp(source, 1, as.integer(source$nrow),
-        8 * source$nrow * source$ncol)
+        4 * source$nrow * source$ncol, float32 = TRUE)
 }
 
 massive_synthetic_matrix <- function(nrow, ncol) {

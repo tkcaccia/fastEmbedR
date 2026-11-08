@@ -9,7 +9,6 @@ test_that("PCA infers storage mode from a file-backed input", {
         memory_limit = "1GB")
     expect_identical(fit$massive_auto, "in_memory")
     expect_equal(dim(fit$scores), c(nrow(x), 2L))
-    explicit <- pca(source, ncomp = 2L, backend = "cpu",
-        massive = "off")
-    expect_null(explicit$massive_auto)
+    expect_error(pca(source, ncomp = 2L, backend = "cpu",
+        massive = "off"), "file-backed input")
 })

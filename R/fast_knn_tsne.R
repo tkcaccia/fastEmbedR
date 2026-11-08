@@ -824,7 +824,9 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #'   file-backed input, uses `options(memory_limit = ...)`, or
 #'   `"8GB"`.
 #' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
-#'   uses `options(storage = ...)`. The input must match the selection.
+#'   uses `options(storage = ...)`. Explicit `"resident"` on a
+#'   [massive_matrix()] file descriptor loads float32 input after a RAM and
+#'   `memory_limit` check; the limit does not bound the subsequent fit.
 #' @param checkpoint Save experimental workflow stages. Full-graph t-SNE
 #'   also saves coordinates, momentum updates, and adaptive gains every
 #'   100 iterations and at the final iteration. One-call full fits use a
@@ -870,29 +872,29 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #' )
 #' plot(fit, labels = iris$Species)
 #' @export
-tsne <- function(
-    data, perplexity = NULL, n_components = 2L,
-    init_data = NULL, Y_init = NULL, standardize = FALSE,
-    pca_dims = NULL, metric = c("euclidean", "cosine", "correlation"),
-    nn = NULL, seed = 4L, backend = NULL, keep_knn = FALSE,
-    verbose = FALSE, n.cores = NULL, learning_rate = "auto",
-    early_exaggeration_iter = NULL, early_exaggeration = "auto",
-    n_iter = NULL, exaggeration = NULL, initial_momentum = 0.8,
-    final_momentum = 0.8, max_step_norm = "auto",
+tsne <- function(data, perplexity = NULL, n_components = 2L, init_data = NULL,
+    Y_init = NULL, standardize = FALSE, pca_dims = NULL,
+    metric = c("euclidean", "cosine", "correlation"), nn = NULL, seed = 4L,
+    backend = NULL, keep_knn = FALSE, verbose = FALSE, n.cores = NULL,
+    learning_rate = "auto", early_exaggeration_iter = NULL,
+    early_exaggeration = "auto", n_iter = NULL, exaggeration = NULL,
+    initial_momentum = 0.8, final_momentum = 0.8, max_step_norm = "auto",
     negative_gradient_method = "auto", record_costs = FALSE,
     auto_config = TRUE, landmarks = FALSE, transform_k = NULL,
     transform_perplexity = 5, transform_iter = 250L,
     transform_early_exaggeration_iter = 0L, transform_n_negatives = NULL,
-    initialization = c("median", "weighted", "random"),
-    massive = "off", output = NULL, chunk_rows = NULL, storage = NULL,
-    memory_limit = "8GB", devices = NULL, landmark_method = "reservoir",
-    checkpoint = FALSE, resume = FALSE, affinity_k = NULL, ...) {
+    initialization = c("median", "weighted", "random"), massive = "off",
+    output = NULL, chunk_rows = NULL, storage = NULL, memory_limit = "8GB",
+    devices = NULL, landmark_method = "reservoir", checkpoint = FALSE,
+    resume = FALSE, affinity_k = NULL, ...) {
     storage <- fastembedr_embedding_storage(data, landmarks, massive,
-        missing(massive), memory_limit, missing(memory_limit), "t-SNE", storage)
+        missing(massive), memory_limit, missing(memory_limit), "t-SNE", storage,
+        fastembedr_resident_controls_ok(output, chunk_rows,
+            checkpoint, resume))
+    data <- storage$data
     massive <- storage$massive
     memory_limit <- storage$memory_limit
-    extra <- list(...)
-    validate_tsne_dots(extra)
+    extra <- validate_tsne_dots(list(...))
     backend <- resolve_embedding_backend(backend)
     optimizer <- tsne_optimizer_settings(
         learning_rate, early_exaggeration_iter, early_exaggeration,
@@ -904,17 +906,17 @@ tsne <- function(
         backend, keep_knn, verbose, n.cores, optimizer, devices,
         affinity_k)
     validate_tsne_affinity_scope(affinity_k, massive)
-    controls <- NULL
-    if (!identical(massive, "off") || landmark_embedding_requested(landmarks))
-        controls <- tsne_landmark_controls(landmarks, transform_k,
+    controls <- if (!identical(massive, "off") ||
+        landmark_embedding_requested(landmarks))
+        tsne_landmark_controls(landmarks, transform_k,
             transform_perplexity, transform_iter,
             transform_early_exaggeration_iter,
-            transform_n_negatives, initialization)
+            transform_n_negatives, initialization) else NULL
     if (!identical(massive, "off"))
         return(run_massive_tsne(data, nn, settings, extra, controls,
             massive, output, chunk_rows, memory_limit, devices,
             landmark_method, checkpoint, resume))
-    massive_embedding_off(output, chunk_rows, memory_limit,
+    massive_embedding_off(output, chunk_rows, storage$control_memory_limit,
         landmark_method = landmark_method,
         checkpoint = checkpoint, resume = resume)
     dispatch_tsne_resident(data, nn, settings, controls, extra,

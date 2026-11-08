@@ -534,7 +534,9 @@ graph_cluster_input_controls <- function(graph, landmarks, k,
 #'   When omitted for file-backed input, the memory budget uses
 #'   `options(memory_limit = ...)`, or `"8GB"`.
 #' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
-#'   uses `options(storage = ...)`. The input must match the selection.
+#'   uses `options(storage = ...)`. Explicit `"resident"` on a
+#'   [massive_matrix()] file descriptor loads float32 input after a RAM and
+#'   `memory_limit` check; the limit does not bound the subsequent fit.
 #'   A file-backed matrix needs `landmarks`; a full file-backed fit needs
 #'   a prepared graph. These controls are rejected for a resident graph.
 #' @param steps Random-walk length for Walktrap.
@@ -657,8 +659,7 @@ graph_cluster_input_controls <- function(graph, landmarks, k,
 #' @export
 graph_cluster <- function(graph,
                             method = c("leiden", "louvain", "walktrap"),
-                            backend = NULL,
-                            resolution = 1,
+                            backend = NULL, resolution = 1,
                             n_iterations = 10L,
                             n_runs = 1L,
                             steps = 4L,
@@ -666,14 +667,17 @@ graph_cluster <- function(graph,
                             layout_merge = NULL,
                             projection = NULL,
                             small_groups = NULL,
-                            n.cores = 1L,
-                            devices = NULL,
+                            n.cores = 1L, devices = NULL,
                             parallel.mode = c("restarts", "fit"),
                             massive = NULL, storage = NULL,
                             landmarks = NULL, k = 30L, vote_k = k, ...) {
+    prepared <- graph_cluster_prepare_input(graph, storage,
+        list(...), massive)
+    graph <- prepared$graph
+    dots <- prepared$dots
     storage <- fastembedr_storage_option(graph, storage)
     controls <- graph_cluster_input_controls(graph, landmarks,
-        k, vote_k, !missing(k), !missing(vote_k), list(...))
+        k, vote_k, !missing(k), !missing(vote_k), dots)
     data_input <- controls$data_input
     dots <- controls$dots
     if (is.matrix(graph) || is_float32_matrix(graph)) {
@@ -702,6 +706,21 @@ graph_cluster <- function(graph,
     graph_cluster_resident(graph, method, backend, resolution,
         n_iterations, n_runs, steps, seed, layout_merge, projection,
         small_groups, n.cores, devices, parallel.mode)
+}
+
+graph_cluster_prepare_input <- function(graph, storage, dots,
+        massive) {
+    if (fastembedr_resident_file_requested(graph, storage)) {
+        backed <- c("output", "chunk_rows", "checkpoint", "resume",
+            "gpu_storage")
+        if (!is.null(massive) || any(names(dots) %in% backed)) stop(
+            "Resident file loading conflicts with file-backed ",
+            "clustering controls.", call. = FALSE)
+        graph <- fastembedr_explicit_resident_data(graph, storage,
+            dots$memory_limit %||% fastembedr_memory_option("8GB"))
+        dots$memory_limit <- NULL
+    }
+    list(graph = graph, dots = dots)
 }
 
 graph_cluster_resident_landmarks <- function(graph, method, backend,

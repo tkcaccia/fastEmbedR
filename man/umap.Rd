@@ -188,7 +188,9 @@ UMAP. Zero uses the faissR preset. A positive value requires CPU HNSW
 and does not guarantee recall; audit the resulting graph separately.}
 
 \item{storage}{\code{"auto"}, \code{"resident"}, or \code{"file_backed"}. When omitted,
-uses \code{options(storage = ...)}. The input must match the selection.}
+uses \code{options(storage = ...)}. Explicit \code{"resident"} on a
+\code{\link[=massive_matrix]{massive_matrix()}} file descriptor loads float32 input after a RAM and
+\code{memory_limit} check; the limit does not bound the subsequent fit.}
 }
 \value{
 A \code{fastEmbedR_embedding} object. Landmark fits also contain \code{model},

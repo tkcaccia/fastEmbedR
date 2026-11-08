@@ -102,13 +102,16 @@ a matrix selects auto mode unless \code{storage = "file_backed"} requests
 a landmark fit. Resident graphs reject it.}
 
 \item{storage}{\code{"auto"}, \code{"resident"}, or \code{"file_backed"}. When omitted,
-uses \code{options(storage = ...)}. The input must match the selection.
+uses \code{options(storage = ...)}. Explicit \code{"resident"} on a
+\code{\link[=massive_matrix]{massive_matrix()}} file descriptor loads float32 input after a RAM and
+\code{memory_limit} check; the limit does not bound the subsequent fit.
 A file-backed matrix needs \code{landmarks}; a full file-backed fit needs
 a prepared graph. These controls are rejected for a resident graph.}
 
 \item{landmarks}{Optional reference-row fraction, count, or indices for
 resident data; a count for file-backed data. \code{FALSE} explicitly selects
-full clustering for resident data. Prepared graphs reject a landmark selection.}
+full clustering for resident data. Prepared graphs reject a landmark
+selection.}
 
 \item{k}{Neighbors in a landmark reference graph. Ignored unless
 \code{landmarks} is supplied. Prepared graphs reject it.}

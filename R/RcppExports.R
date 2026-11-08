@@ -481,6 +481,22 @@ massive_reference_buffer_cpp <- function(spec) {
     .Call(`_fastEmbedR_massive_reference_buffer_cpp`, spec)
 }
 
+resident_float32_row_major_block_cpp <- function(input, first_row, count) {
+    .Call(`_fastEmbedR_resident_float32_row_major_block_cpp`, input, first_row, count)
+}
+
+resident_float32_score_matrix_cpp <- function(rows, columns) {
+    .Call(`_fastEmbedR_resident_float32_score_matrix_cpp`, rows, columns)
+}
+
+resident_float32_score_assign_cpp <- function(scores, first_row, block) {
+    .Call(`_fastEmbedR_resident_float32_score_assign_cpp`, scores, first_row, block)
+}
+
+resident_float32_project_cpu_cpp <- function(input, loadings, centers, scales, n_threads) {
+    .Call(`_fastEmbedR_resident_float32_project_cpu_cpp`, input, loadings, centers, scales, n_threads)
+}
+
 massive_read_rows_cpp <- function(spec, first_row, count, max_bytes, float32 = FALSE, row_major = FALSE) {
     .Call(`_fastEmbedR_massive_read_rows_cpp`, spec, first_row, count, max_bytes, float32, row_major)
 }

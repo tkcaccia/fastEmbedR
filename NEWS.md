@@ -1,5 +1,16 @@
 # fastEmbedR 0.1
 
+* Admit explicit `storage = "resident"` file-matrix inputs for the four
+  public analysis entry points only when float32 materialization fits
+  the requested memory limit and available RAM. Keep that admission
+  budget separate from embedding output controls.
+
+* Use bounded float32 covariance and score projection for resident
+  PCA shapes that exceed R's signed-32-bit matrix-product limit.
+  CPU projection reports the effective worker count; the Metal route
+  reports observed native allocation. Both routes completed guarded
+  PCA fits of the real 100M-row Deep1B subset on Silvano's Mac.
+
 * Use a 128-point FFT grid for resident CPU 3D t-SNE fits with at
   least 100,000 rows. Skip the pairwise near-field correction only
   while the smoothing cutoff has a bounded small error, retaining

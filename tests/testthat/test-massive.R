@@ -271,7 +271,7 @@ test_that("public landmark t-SNE accepts checkpointed completion", {
     expect_equal(dim(as.matrix(fit$layout)), c(48L, 2L))
     expect_false(file.exists(paste0(stem, ".workflow.checkpoint.rds")))
     expect_error(tsne(source, massive = "off", checkpoint = TRUE),
-        "requires massive mode")
+        "file-backed input")
 })
 
 test_that("landmark t-SNE reuses a checked UMAP neighbor graph", {
@@ -1255,7 +1255,7 @@ test_that("streamed PCA resumes only committed score batches", {
     expect_false(file.exists(sidecar))
     expect_false(file.exists(paste0(output, ".part")))
     expect_error(pca(source, massive = "off", checkpoint = TRUE),
-        "require")
+        "file-backed input")
 })
 
 test_that("covariance PCA resumes from a saved mean pass", {

@@ -175,7 +175,9 @@ files beside this path and reports their stage times.}
 \item{chunk_rows}{Maximum experimental query rows per batch.}
 
 \item{storage}{\code{"auto"}, \code{"resident"}, or \code{"file_backed"}. When omitted,
-uses \code{options(storage = ...)}. The input must match the selection.}
+uses \code{options(storage = ...)}. Explicit \code{"resident"} on a
+\code{\link[=massive_matrix]{massive_matrix()}} file descriptor loads float32 input after a RAM and
+\code{memory_limit} check; the limit does not bound the subsequent fit.}
 
 \item{memory_limit}{Conservative experimental RAM budget. When omitted for
 file-backed input, uses \code{options(memory_limit = ...)}, or

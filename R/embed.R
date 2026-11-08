@@ -302,6 +302,8 @@ fastembedr_metal_rsvd_pca <- function(data,
         x
     }
     dimensions <- fastembedr_matrix_dimensions(x)
+    if (fastembedr_metal_needs_blocking(dimensions)) return(
+        fastembedr_metal_blocked_pca(x, ncomp, center, scale, seed))
     tuning <- fastembedr_rsvd_tuning(
         dimensions[[1L]], dimensions[[2L]], as.integer(ncomp), "metal"
     )
@@ -664,6 +666,9 @@ fastembedr_cpu_rsvd_pca <- function(data,
                                     seed = 4L,
                                     n.cores = 1L) {
     input <- prepare_cpu_pca_input(data, ncomp)
+    if (fastembedr_cpu_needs_blocking(input$dimensions)) return(
+        fastembedr_cpu_blocked_pca(input$data, input$rank,
+            center, scale, seed, n.cores))
     sketch <- cpu_pca_sketch(input, seed)
     fit <- pca_rsvd_cpu_cpp(
         input$data,
@@ -724,11 +729,16 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' Wide, low-rank problems favor rSVD; smaller, narrower, or less-truncated
 #' problems favor TSVD. Without RAFT, CUDA uses native rSVD. CUDA requests
 #' fail explicitly when CUDA is unavailable; they never fall back to CPU PCA.
+#' For very tall resident float32 matrices beyond the native rSVD matrix-size
+#' limit, CPU and Metal use bounded-block covariance and projection. CPU
+#' covariance and projection use native parallel workers; Metal covariance
+#' and projection use native Metal blocks. The small covariance eigensystem is
+#' solved on CPU. Scores and loadings remain float32 without writing to disk.
 #'
 #' CPU matrix products use single-precision OpenBLAS when linked to R;
 #' otherwise the portable native kernels are used. QR and SVD
 #' use the BLAS/LAPACK linked to R. The returned `gemm_backend` reports the
-#' matrix-product implementation.
+#' matrix-product implementation on the rSVD route.
 #' Set `n.cores` to control their CPU core limit. The requested value is
 #' applied temporarily through standard BLAS/OpenMP environment variables and,
 #' when installed, `RhpcBLASctl`; the prior process settings are restored after
@@ -782,7 +792,9 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #'   `options(memory_limit = ...)`, or `"512MB"`.
 #'   This does not limit R itself or linked-library memory.
 #' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
-#'   uses `options(storage = ...)`. The input must match the selection;
+#'   uses `options(storage = ...)`. Explicit `"resident"` on a
+#'   [massive_matrix()] file descriptor loads float32 input after a RAM and
+#'   `memory_limit` check; the limit does not bound the subsequent fit.
 #'   `"file_backed"` forces out-of-core PCA, while conflicting `massive`
 #'   values fail before fitting.
 #' @param checkpoint Save the experimental out-of-core PCA model and
@@ -824,10 +836,11 @@ pca <- function(x, ncomp = 2L, xtest = NULL, center = TRUE,
         scale = FALSE, backend = NULL, n.cores = NULL, seed = 4L,
         tsne_init = FALSE, massive = "off", output = NULL,
         chunk_rows = NULL, memory_limit = "512MB", checkpoint = FALSE,
-        resume = FALSE, devices = NULL, landmarks = FALSE,
-        storage = NULL) {
+        resume = FALSE, devices = NULL, landmarks = FALSE, storage = NULL) {
     automatic <- missing(massive)
     memory_missing <- missing(memory_limit)
+    x <- fastembedr_pca_resident_data(x, storage, memory_limit,
+        memory_missing, massive, output, chunk_rows, checkpoint, resume)
     storage <- fastembedr_storage_option(x, storage)
     massive <- pca_resolve_massive(x, massive, automatic)
     massive <- fastembedr_pca_storage_mode(x, massive, storage)

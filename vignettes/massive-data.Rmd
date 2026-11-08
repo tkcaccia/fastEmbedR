@@ -70,6 +70,21 @@ first_scores <- massive_read_rows(fit_pca$scores, first = 1L, n = 6L)
 source is small, set `massive = "out_of_core"`. A large resident R matrix
 is not silently converted to a file-backed source.
 
+To load a file-backed matrix into RAM intentionally, set
+`storage = "resident"` and provide a memory limit that admits the float32
+input. The same choice works with `tsne()`, `umap()`, and
+`graph_cluster()`. The file is loaded once into a `float::float32`
+matrix before fitting. The limit checks input admission and does not
+bound the fit's later RAM or GPU allocations. Resident loading does not
+accept file-backed output, chunk, or resume controls. Leave `storage`
+unset to keep the file-backed route.
+
+```{r eval=FALSE}
+x <- massive_matrix("features.f32", nrow = 1000000L, ncol = 128L)
+fit <- pca(x, ncomp = 30L, backend = "cpu", n.cores = 16L,
+           storage = "resident", memory_limit = "4GB")
+```
+
 # Landmark embedding and clustering
 
 For a file-backed matrix, set `landmarks` to a positive integer count to

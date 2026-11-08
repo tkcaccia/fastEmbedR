@@ -383,6 +383,9 @@ class MatrixSource {
                          float* output) = 0;
 };
 
+template <typename Function>
+void parallel_rows(std::uint64_t rows, int requested, Function work);
+
 class MemoryMatrixSource final : public MatrixSource {
  public:
   explicit MemoryMatrixSource(NumericMatrix matrix) : matrix_(matrix) {}
@@ -406,6 +409,49 @@ class MemoryMatrixSource final : public MatrixSource {
 
  private:
   NumericMatrix matrix_;
+};
+
+class MemoryFloatMatrixSource final : public MatrixSource {
+ public:
+  explicit MemoryFloatMatrixSource(SEXP input, int threads = 1)
+      : matrix_(Rcpp::S4(input).slot("Data")), threads_(threads) {
+    if (!Rf_inherits(input, "float32") || threads < 1) {
+      Rcpp::stop("Resident memory source requires float32 input.");
+    }
+  }
+  std::uint64_t nrow() const override { return matrix_.nrow(); }
+  std::uint64_t ncol() const override { return matrix_.ncol(); }
+
+  void read_rows(std::uint64_t start,
+                 std::uint64_t count,
+                 float* output) override {
+    if (start > nrow() || count > nrow() - start) {
+      Rcpp::stop("Resident memory read exceeds input rows.");
+    }
+    const int* input = INTEGER(matrix_);
+    const auto rows = nrow();
+    const auto columns = ncol();
+    parallel_rows(count, threads_, [&](std::uint64_t begin,
+                                       std::uint64_t end, int) {
+      constexpr std::uint64_t tile_rows = 256;
+      for (auto first = begin; first < end; first += tile_rows) {
+        const auto take = std::min<std::uint64_t>(
+          tile_rows, end - first
+        );
+        for (std::uint64_t column = 0; column < columns; ++column) {
+          const int* input_column = input + column * rows + start + first;
+          for (std::uint64_t offset = 0; offset < take; ++offset) {
+            std::memcpy(output + (first + offset) * columns + column,
+                        input_column + offset, sizeof(float));
+          }
+        }
+      }
+    });
+  }
+
+ private:
+  Rcpp::IntegerMatrix matrix_;
+  int threads_;
 };
 
 class SyntheticMatrixSource final : public MatrixSource {
@@ -605,6 +651,13 @@ std::unique_ptr<MatrixSource> make_source(List spec) {
   if (format == "memory") {
     return std::unique_ptr<MatrixSource>(
       new MemoryMatrixSource(Rcpp::as<NumericMatrix>(spec["data"]))
+    );
+  }
+  if (format == "memory_float32") {
+    const int threads = spec.containsElementNamed("n_threads") ?
+      Rcpp::as<int>(spec["n_threads"]) : 1;
+    return std::unique_ptr<MatrixSource>(
+      new MemoryFloatMatrixSource(spec["data"], threads)
     );
   }
   if (format == "synthetic") {
@@ -2930,27 +2983,21 @@ SEXP massive_reference_buffer_cpp(List spec) {
 
 namespace {
 
-void copy_float_rows_to_r_matrix(const std::vector<float>& source,
-                                 Rcpp::IntegerMatrix& target) {
+void copy_float_tile_to_r_matrix(const float* source,
+                                 Rcpp::IntegerMatrix& target,
+                                 const int first_row,
+                                 const int tile_rows) {
   static_assert(sizeof(float) == sizeof(int), "float32 needs 32-bit integers");
-  const int rows = target.nrow();
   const int columns = target.ncol();
+  const int rows = target.nrow();
   int* output = INTEGER(target);
-  for (int row_start = 0; row_start < rows; row_start += 128) {
-    const int row_end = row_start + std::min(128, rows - row_start);
-    for (int column_start = 0; column_start < columns;
-         column_start += 32) {
-      const int column_end = column_start +
-        std::min(32, columns - column_start);
-      for (int column = column_start; column < column_end; ++column) {
-        int* destination = output +
-          static_cast<std::size_t>(column) * rows + row_start;
-        for (int row = row_start; row < row_end; ++row) {
-          const float value = source[
-            static_cast<std::size_t>(row) * columns + column];
-          std::memcpy(destination++, &value, sizeof(float));
-        }
-      }
+  for (int column = 0; column < columns; ++column) {
+    int* destination = output +
+      static_cast<std::size_t>(column) * rows + first_row;
+    for (int row = 0; row < tile_rows; ++row) {
+      const float value = source[
+        static_cast<std::size_t>(row) * columns + column];
+      std::memcpy(destination + row, &value, sizeof(float));
     }
   }
 }
@@ -2981,6 +3028,176 @@ void copy_float_rows_to_numeric_matrix(const std::vector<float>& source,
 }  // namespace
 
 // [[Rcpp::export]]
+Rcpp::RawVector resident_float32_row_major_block_cpp(SEXP input,
+                                                      double first_row,
+                                                      int count) {
+  if (!Rf_inherits(input, "float32")) {
+    Rcpp::stop("Resident Metal PCA blocks require float32 input.");
+  }
+  Rcpp::S4 object(input);
+  Rcpp::IntegerMatrix values(object.slot("Data"));
+  const int rows = values.nrow();
+  const int columns = values.ncol();
+  const auto first = whole_number(first_row, "first_row");
+  if (first < 1 || count < 1 || first > static_cast<std::uint64_t>(rows) ||
+      static_cast<std::uint64_t>(count) > rows - first + 1) {
+    Rcpp::stop("Resident Metal PCA block row range is invalid.");
+  }
+  const auto items = checked_product(count, columns);
+  if (items > (128u * 1024u * 1024u) / sizeof(float)) {
+    Rcpp::stop("Resident Metal PCA block exceeds 128 MiB.");
+  }
+  Rcpp::RawVector result(items * sizeof(float));
+  const int* source = INTEGER(values);
+  Rbyte* destination = RAW(result);
+  for (int row = 0; row < count; ++row) {
+    const std::size_t source_row = first - 1u + row;
+    for (int column = 0; column < columns; ++column) {
+      const std::size_t source_pos =
+        static_cast<std::size_t>(column) * rows + source_row;
+      const std::size_t target_pos =
+        static_cast<std::size_t>(row) * columns + column;
+      std::memcpy(destination + target_pos * sizeof(float),
+                  source + source_pos, sizeof(float));
+    }
+  }
+  result.attr("fastembed_row_major_float32") = true;
+  result.attr("nrow") = count;
+  result.attr("ncol") = columns;
+  return result;
+}
+
+// [[Rcpp::export]]
+SEXP resident_float32_score_matrix_cpp(int rows, int columns) {
+  if (rows < 1 || columns < 1 ||
+      checked_product(rows, columns) >
+        static_cast<std::uint64_t>(R_XLEN_T_MAX)) {
+    Rcpp::stop("Resident float32 score dimensions are invalid.");
+  }
+  Rcpp::IntegerMatrix payload(rows, columns);
+  Rcpp::S4 result("float32");
+  result.slot("Data") = payload;
+  return result;
+}
+
+// [[Rcpp::export]]
+SEXP resident_float32_score_assign_cpp(SEXP scores,
+                                      double first_row,
+                                      Rcpp::NumericMatrix block) {
+  if (!Rf_inherits(scores, "float32")) {
+    Rcpp::stop("Resident scores must be float32.");
+  }
+  Rcpp::S4 object(scores);
+  Rcpp::IntegerMatrix payload(object.slot("Data"));
+  const int rows = payload.nrow();
+  const int columns = payload.ncol();
+  const auto first = whole_number(first_row, "first_row");
+  if (first < 1 || block.nrow() < 1 ||
+      block.ncol() != columns ||
+      first > static_cast<std::uint64_t>(rows) ||
+      static_cast<std::uint64_t>(block.nrow()) > rows - first + 1) {
+    Rcpp::stop("Resident score block dimensions are invalid.");
+  }
+  int* destination = INTEGER(payload);
+  for (int column = 0; column < columns; ++column) {
+    for (int row = 0; row < block.nrow(); ++row) {
+      const double value = block(row, column);
+      if (!std::isfinite(value)) Rcpp::stop("Metal scores are nonfinite.");
+      const float rounded = static_cast<float>(value);
+      if (!std::isfinite(rounded)) Rcpp::stop("Metal scores overflow float32.");
+      const std::size_t index =
+        static_cast<std::size_t>(column) * rows + first - 1u + row;
+      std::memcpy(destination + index, &rounded, sizeof(float));
+    }
+  }
+  return scores;
+}
+
+// [[Rcpp::export]]
+Rcpp::List resident_float32_project_cpu_cpp(SEXP input,
+                                             Rcpp::NumericMatrix loadings,
+                                             Rcpp::NumericVector centers,
+                                             Rcpp::NumericVector scales,
+                                             int n_threads) {
+  if (!Rf_inherits(input, "float32")) {
+    Rcpp::stop("Resident CPU PCA projection needs float32 input.");
+  }
+  Rcpp::S4 object(input);
+  Rcpp::IntegerMatrix values(object.slot("Data"));
+  const int rows = values.nrow();
+  const int columns = values.ncol();
+  const int components = loadings.ncol();
+  if (rows < 2 || columns < 1 || components < 1 ||
+      loadings.nrow() != columns || centers.size() != columns ||
+      scales.size() != columns || n_threads < 1) {
+    Rcpp::stop("Resident CPU PCA projection dimensions are invalid.");
+  }
+  for (int column = 0; column < columns; ++column) {
+    if (!std::isfinite(centers[column]) ||
+        !std::isfinite(scales[column]) || scales[column] <= 0) {
+      Rcpp::stop("Resident CPU PCA scaling is invalid.");
+    }
+    for (int component = 0; component < components; ++component) {
+      if (!std::isfinite(loadings(column, component))) {
+        Rcpp::stop("Resident CPU PCA loadings are nonfinite.");
+      }
+    }
+  }
+  SEXP scores = resident_float32_score_matrix_cpp(rows, components);
+  Rcpp::S4 score_object(scores);
+  Rcpp::IntegerMatrix payload(score_object.slot("Data"));
+  const int* source = INTEGER(values);
+  int* destination = INTEGER(payload);
+  const int workers = std::min(rows, n_threads);
+  std::atomic<bool> invalid(false);
+  parallel_rows(rows, workers, [&](std::uint64_t begin,
+                                   std::uint64_t end, int) {
+    constexpr std::uint64_t tile_rows = 4096;
+    std::vector<double> totals(
+      static_cast<std::size_t>(tile_rows) * components
+    );
+    for (auto first = begin; first < end; first += tile_rows) {
+      const auto count = std::min<std::uint64_t>(tile_rows, end - first);
+      std::fill(totals.begin(),
+        totals.begin() + count * components, 0.0);
+      for (int column = 0; column < columns; ++column) {
+        const int* input_column = source +
+          static_cast<std::size_t>(column) * rows + first;
+        const double center = centers[column];
+        const double inverse_scale = 1.0 / scales[column];
+        for (std::uint64_t offset = 0; offset < count; ++offset) {
+          float value = 0.0f;
+          std::memcpy(&value, input_column + offset, sizeof(float));
+          const double adjusted =
+            (static_cast<double>(value) - center) * inverse_scale;
+          double* total = totals.data() + offset * components;
+          for (int component = 0; component < components; ++component) {
+            total[component] += adjusted * loadings(column, component);
+          }
+        }
+      }
+      for (std::uint64_t offset = 0; offset < count; ++offset) {
+        const auto row = first + offset;
+        for (int component = 0; component < components; ++component) {
+          const float rounded = static_cast<float>(
+            totals[offset * components + component]
+          );
+          if (!std::isfinite(rounded)) invalid.store(true);
+          const auto position =
+            static_cast<std::size_t>(component) * rows + row;
+          std::memcpy(destination + position, &rounded, sizeof(float));
+        }
+      }
+    }
+  });
+  if (invalid.load()) Rcpp::stop("Resident CPU PCA scores are nonfinite.");
+  return Rcpp::List::create(
+    Rcpp::Named("scores") = scores,
+    Rcpp::Named("n_threads_effective") = workers
+  );
+}
+
+// [[Rcpp::export]]
 SEXP massive_read_rows_cpp(List spec,
                            double first_row,
                            int count,
@@ -3006,6 +3223,27 @@ SEXP massive_read_rows_cpp(List spec,
         std::floor(max_bytes / bytes_per_item))) {
     Rcpp::stop("Massive row read exceeds its byte limit.");
   }
+  if (float32 && !row_major) {
+    const int columns = static_cast<int>(source->ncol());
+    const auto tile_bytes = static_cast<std::uint64_t>(4 * 1024 * 1024);
+    const auto row_bytes = static_cast<std::uint64_t>(columns) *
+      sizeof(float);
+    const int tile_rows = static_cast<int>(std::min<std::uint64_t>(
+      count, std::max<std::uint64_t>(1, tile_bytes / row_bytes)));
+    std::vector<float> tile(
+      static_cast<std::size_t>(tile_rows) * columns);
+    Rcpp::IntegerMatrix payload(count, columns);
+    for (int offset = 0; offset < count;) {
+      const int take = std::min(tile_rows, count - offset);
+      source->read_rows(start - 1 + offset, take, tile.data());
+      copy_float_tile_to_r_matrix(tile.data(), payload, offset, take);
+      Rcpp::checkUserInterrupt();
+      offset += take;
+    }
+    Rcpp::S4 result("float32");
+    result.slot("Data") = payload;
+    return result;
+  }
   std::vector<float> buffer(static_cast<std::size_t>(items));
   source->read_rows(start - 1, count, buffer.data());
   if (row_major) {
@@ -3016,13 +3254,6 @@ SEXP massive_read_rows_cpp(List spec,
     payload.attr("nrow") = count;
     payload.attr("ncol") = static_cast<int>(source->ncol());
     return payload;
-  }
-  if (float32) {
-    Rcpp::IntegerMatrix payload(count, static_cast<int>(source->ncol()));
-    copy_float_rows_to_r_matrix(buffer, payload);
-    Rcpp::S4 result("float32");
-    result.slot("Data") = payload;
-    return result;
   }
   NumericMatrix result(count, static_cast<int>(source->ncol()));
   copy_float_rows_to_numeric_matrix(buffer, result);

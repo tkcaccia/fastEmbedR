@@ -57,7 +57,8 @@ test_that("public API is KNN and t-SNE focused", {
     expect_identical(
         names(formals(precompute_knn)),
         c("data", "k", "metric", "backend", "n.cores", "storage",
-            "output", "memory_limit", "devices")
+            "output", "memory_limit", "devices", "checkpoint",
+            "resume", "checkpoint_every")
     )
     expect_true(all(vapply(
         list(pca, tsne, umap, graph_cluster),

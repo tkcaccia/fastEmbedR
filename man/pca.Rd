@@ -102,7 +102,9 @@ use CPU projection. Multi-GPU CUDA projects on the requested devices.
 The route is recorded in \code{projection_backend}.}
 
 \item{storage}{\code{"auto"}, \code{"resident"}, or \code{"file_backed"}. When omitted,
-uses \code{options(storage = ...)}. The input must match the selection;
+uses \code{options(storage = ...)}. Explicit \code{"resident"} on a
+\code{\link[=massive_matrix]{massive_matrix()}} file descriptor loads float32 input after a RAM and
+\code{memory_limit} check; the limit does not bound the subsequent fit.
 \code{"file_backed"} forces out-of-core PCA, while conflicting \code{massive}
 values fail before fitting.}
 }
@@ -126,12 +128,17 @@ from the matrix shape, requested rank, and estimated arithmetic cost.
 Wide, low-rank problems favor rSVD; smaller, narrower, or less-truncated
 problems favor TSVD. Without RAFT, CUDA uses native rSVD. CUDA requests
 fail explicitly when CUDA is unavailable; they never fall back to CPU PCA.
+For very tall resident float32 matrices beyond the native rSVD matrix-size
+limit, CPU and Metal use bounded-block covariance and projection. CPU
+covariance and projection use native parallel workers; Metal covariance
+and projection use native Metal blocks. The small covariance eigensystem is
+solved on CPU. Scores and loadings remain float32 without writing to disk.
 }
 \details{
 CPU matrix products use single-precision OpenBLAS when linked to R;
 otherwise the portable native kernels are used. QR and SVD
 use the BLAS/LAPACK linked to R. The returned \code{gemm_backend} reports the
-matrix-product implementation.
+matrix-product implementation on the rSVD route.
 Set \code{n.cores} to control their CPU core limit. The requested value is
 applied temporarily through standard BLAS/OpenMP environment variables and,
 when installed, \code{RhpcBLASctl}; the prior process settings are restored after

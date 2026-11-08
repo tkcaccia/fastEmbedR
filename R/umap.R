@@ -320,7 +320,9 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #'   file-backed input, uses `options(memory_limit = ...)`, or
 #'   `"8GB"`.
 #' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
-#'   uses `options(storage = ...)`. The input must match the selection.
+#'   uses `options(storage = ...)`. Explicit `"resident"` on a
+#'   [massive_matrix()] file descriptor loads float32 input after a RAM and
+#'   `memory_limit` check; the limit does not bound the subsequent fit.
 #' @param checkpoint Save experimental workflow stages and completed batches.
 #'   A one-call full fit records source-identified stages and uses the
 #'   restartable global graph sort, which needs more SSD space than the
@@ -368,22 +370,23 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #' @rdname umap
 #' @export
 umap <- function(data, n_neighbors = NULL, n_components = 2L,
-                    standardize = FALSE, pca_dims = NULL,
-                    metric = c("euclidean", "cosine", "correlation"),
-                    nn = NULL, seed = 4L, backend = NULL,
-                    n.cores = NULL, keep_knn = FALSE,
-                    graph_mode = c("fuzzy", "binary"), verbose = FALSE,
-                    landmarks = FALSE, transform_k = NULL,
-                    massive = "off", output = NULL, chunk_rows = NULL,
-                    memory_limit = "8GB", refinement_epochs = 0L,
-    local_refine = FALSE, local_neighbors = 15L, overlap_rows = 500L,
-    devices = NULL, landmark_method = "reservoir", init = NULL,
-    layout_storage = "memory", checkpoint = FALSE, resume = FALSE,
-    cpu_update = "sgd", ef_search = 0L, storage = NULL) {
+    standardize = FALSE, pca_dims = NULL,
+    metric = c("euclidean", "cosine", "correlation"), nn = NULL, seed = 4L,
+    backend = NULL, n.cores = NULL, keep_knn = FALSE,
+    graph_mode = c("fuzzy", "binary"), verbose = FALSE, landmarks = FALSE,
+    transform_k = NULL, massive = "off", output = NULL, chunk_rows = NULL,
+    memory_limit = "8GB", refinement_epochs = 0L, local_refine = FALSE,
+    local_neighbors = 15L, overlap_rows = 500L, devices = NULL,
+    landmark_method = "reservoir", init = NULL, layout_storage = "memory",
+    checkpoint = FALSE, resume = FALSE, cpu_update = "sgd", ef_search = 0L,
+    storage = NULL) {
     resident_epochs <- if (missing(refinement_epochs)) NULL else
         refinement_epochs
     storage <- fastembedr_embedding_storage(data, landmarks, massive,
-        missing(massive), memory_limit, missing(memory_limit), "UMAP", storage)
+        missing(massive), memory_limit, missing(memory_limit), "UMAP", storage,
+        fastembedr_resident_controls_ok(output, chunk_rows,
+            checkpoint, resume))
+    data <- storage$data
     massive <- storage$massive
     memory_limit <- storage$memory_limit
     massive <- massive_embedding_mode(massive, cpu_update)
@@ -395,7 +398,7 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
         landmark_method, init, layout_storage, checkpoint,
         resume, cpu_update, ef_search))
     validate_resident_umap_output_controls(devices, backend,
-        landmarks, output, chunk_rows, memory_limit,
+        landmarks, output, chunk_rows, storage$control_memory_limit,
         resident_epochs, local_refine, local_neighbors,
         overlap_rows, landmark_method, init, layout_storage,
         checkpoint, resume)
@@ -407,8 +410,7 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
             devices))
     }
     if (!identical(ef_search, 0L)) stop(
-        "`ef_search` requires massive landmark UMAP.",
-        call. = FALSE)
+        "`ef_search` requires massive landmark UMAP.", call. = FALSE)
     state <- validate_umap_request(backend, graph_mode,
         n_components, n.cores, keep_knn)
     if (is_knn_input(data))

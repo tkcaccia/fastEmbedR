@@ -2109,6 +2109,59 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// resident_float32_row_major_block_cpp
+Rcpp::RawVector resident_float32_row_major_block_cpp(SEXP input, double first_row, int count);
+RcppExport SEXP _fastEmbedR_resident_float32_row_major_block_cpp(SEXP inputSEXP, SEXP first_rowSEXP, SEXP countSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type input(inputSEXP);
+    Rcpp::traits::input_parameter< double >::type first_row(first_rowSEXP);
+    Rcpp::traits::input_parameter< int >::type count(countSEXP);
+    rcpp_result_gen = Rcpp::wrap(resident_float32_row_major_block_cpp(input, first_row, count));
+    return rcpp_result_gen;
+END_RCPP
+}
+// resident_float32_score_matrix_cpp
+SEXP resident_float32_score_matrix_cpp(int rows, int columns);
+RcppExport SEXP _fastEmbedR_resident_float32_score_matrix_cpp(SEXP rowsSEXP, SEXP columnsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type rows(rowsSEXP);
+    Rcpp::traits::input_parameter< int >::type columns(columnsSEXP);
+    rcpp_result_gen = Rcpp::wrap(resident_float32_score_matrix_cpp(rows, columns));
+    return rcpp_result_gen;
+END_RCPP
+}
+// resident_float32_score_assign_cpp
+SEXP resident_float32_score_assign_cpp(SEXP scores, double first_row, Rcpp::NumericMatrix block);
+RcppExport SEXP _fastEmbedR_resident_float32_score_assign_cpp(SEXP scoresSEXP, SEXP first_rowSEXP, SEXP blockSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type scores(scoresSEXP);
+    Rcpp::traits::input_parameter< double >::type first_row(first_rowSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type block(blockSEXP);
+    rcpp_result_gen = Rcpp::wrap(resident_float32_score_assign_cpp(scores, first_row, block));
+    return rcpp_result_gen;
+END_RCPP
+}
+// resident_float32_project_cpu_cpp
+Rcpp::List resident_float32_project_cpu_cpp(SEXP input, Rcpp::NumericMatrix loadings, Rcpp::NumericVector centers, Rcpp::NumericVector scales, int n_threads);
+RcppExport SEXP _fastEmbedR_resident_float32_project_cpu_cpp(SEXP inputSEXP, SEXP loadingsSEXP, SEXP centersSEXP, SEXP scalesSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type input(inputSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type loadings(loadingsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type centers(centersSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type scales(scalesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(resident_float32_project_cpu_cpp(input, loadings, centers, scales, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
 // massive_read_rows_cpp
 SEXP massive_read_rows_cpp(List spec, double first_row, int count, double max_bytes, bool float32, bool row_major);
 RcppExport SEXP _fastEmbedR_massive_read_rows_cpp(SEXP specSEXP, SEXP first_rowSEXP, SEXP countSEXP, SEXP max_bytesSEXP, SEXP float32SEXP, SEXP row_majorSEXP) {
@@ -3452,6 +3505,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_leiden_cuda_refine_cpp", (DL_FUNC) &_fastEmbedR_massive_leiden_cuda_refine_cpp, 12},
     {"_fastEmbedR_massive_leiden_refine_cpp", (DL_FUNC) &_fastEmbedR_massive_leiden_refine_cpp, 13},
     {"_fastEmbedR_massive_reference_buffer_cpp", (DL_FUNC) &_fastEmbedR_massive_reference_buffer_cpp, 1},
+    {"_fastEmbedR_resident_float32_row_major_block_cpp", (DL_FUNC) &_fastEmbedR_resident_float32_row_major_block_cpp, 3},
+    {"_fastEmbedR_resident_float32_score_matrix_cpp", (DL_FUNC) &_fastEmbedR_resident_float32_score_matrix_cpp, 2},
+    {"_fastEmbedR_resident_float32_score_assign_cpp", (DL_FUNC) &_fastEmbedR_resident_float32_score_assign_cpp, 3},
+    {"_fastEmbedR_resident_float32_project_cpu_cpp", (DL_FUNC) &_fastEmbedR_resident_float32_project_cpu_cpp, 5},
     {"_fastEmbedR_massive_read_rows_cpp", (DL_FUNC) &_fastEmbedR_massive_read_rows_cpp, 6},
     {"_fastEmbedR_massive_read_knn_rows_cpp", (DL_FUNC) &_fastEmbedR_massive_read_knn_rows_cpp, 8},
     {"_fastEmbedR_massive_validate_graph_cpp", (DL_FUNC) &_fastEmbedR_massive_validate_graph_cpp, 6},
