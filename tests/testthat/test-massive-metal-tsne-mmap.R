@@ -65,11 +65,15 @@ test_that("file-backed Metal t-SNE runs a 3D graph without fallback", {
         "native_metal_fft_graph_stream")
     expect_identical(massive_read_rows(automatic, 1L, 16L),
         massive_read_rows(result, 1L, 16L))
-    expect_error(massive_tsne_optimize(graph, start, bad_path,
+    split <- massive_tsne_optimize(graph, start, bad_path,
         early_exaggeration_iter = 2L, n_iter = 3L,
         learning_rate = 1, memory_limit = "2GB",
         backend = "metal", graph_access = "stream",
-        edge_chunk_capacity = 1L), "row exceeds")
+        edge_chunk_capacity = 1L)
+    expect_identical(split$backend,
+        "native_metal_fft_graph_stream")
+    expect_identical(massive_read_rows(split, 1L, 16L),
+        massive_read_rows(result, 1L, 16L))
     commit <- fastEmbedR:::massive_tsne_checkpoint_commit
     pause_after_commit <- function(...) {
         commit(...)
@@ -101,7 +105,7 @@ test_that("file-backed Metal t-SNE runs a 3D graph without fallback", {
             stream_resume_path, early_exaggeration_iter = 2L,
             n_iter = 3L, learning_rate = 1,
             memory_limit = "2GB", backend = "metal",
-            graph_access = "stream", edge_chunk_capacity = 8L,
+            graph_access = "stream", edge_chunk_capacity = 1L,
             checkpoint = TRUE, checkpoint_every = 2L),
             "intentional pause"),
         massive_tsne_checkpoint_commit = pause_after_commit,
@@ -110,11 +114,11 @@ test_that("file-backed Metal t-SNE runs a 3D graph without fallback", {
         stream_resume_path, early_exaggeration_iter = 2L,
         n_iter = 3L, learning_rate = 1,
         memory_limit = "2GB", backend = "metal",
-        graph_access = "stream", edge_chunk_capacity = 8L,
+        graph_access = "stream", edge_chunk_capacity = 1L,
         checkpoint = TRUE, resume = TRUE,
         checkpoint_every = 2L)
     expect_identical(massive_read_rows(stream_resumed, 1L, 16L),
-        massive_read_rows(streamed, 1L, 16L))
+        massive_read_rows(split, 1L, 16L))
     expect_identical(stream_resumed$parameters$resumed_from_iteration,
         2L)
 })

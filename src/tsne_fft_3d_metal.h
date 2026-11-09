@@ -5,6 +5,8 @@
  * Metal kernels for cubic-grid three-dimensional t-SNE repulsion.
  */
 
+#include "metal_tsne_3d_tiles.h"
+
 const char* metal_tsne_3d_kernel_source() {
   return R"METAL(
 #include <metal_stdlib>
@@ -399,6 +401,50 @@ struct Update3d {
   float max_step_norm;
 };
 
+kernel void scale_repulsive_tsne_3d(
+  device float* gradient [[buffer(0)]],
+  device const float* inv_sum_q [[buffer(1)]],
+  constant uint& values [[buffer(2)]],
+  uint pos [[thread_position_in_grid]]
+) {
+  if (pos < values) gradient[pos] *= inv_sum_q[0];
+}
+
+kernel void attract_tsne_3d(
+  device const ulong* row_ptr [[buffer(0)]],
+  device const int* col [[buffer(1)]],
+  device const float* p [[buffer(2)]],
+  device const float* y [[buffer(3)]],
+  device float* gradient [[buffer(4)]],
+  constant uint& first_row [[buffer(5)]],
+  constant ulong& edge_base [[buffer(6)]],
+  constant uint& index_base [[buffer(7)]],
+  constant float& exaggeration [[buffer(8)]],
+  constant uint& count [[buffer(9)]],
+  uint local_row [[thread_position_in_grid]]
+) {
+  if (local_row >= count) return;
+  const uint row = first_row + local_row;
+  float3 total = float3(gradient[row * 3u],
+    gradient[row * 3u + 1u], gradient[row * 3u + 2u]);
+  for (ulong edge = row_ptr[local_row] - edge_base;
+       edge < row_ptr[local_row + 1u] - edge_base; ++edge) {
+    const uint neighbor = uint(col[edge]) - index_base;
+    const float3 diff = float3(
+      y[row * 3u] - y[neighbor * 3u],
+      y[row * 3u + 1u] - y[neighbor * 3u + 1u],
+      y[row * 3u + 2u] - y[neighbor * 3u + 2u]);
+    const float factor = exaggeration * p[edge] /
+      (1.0f + dot(diff, diff));
+    total.x += factor * diff.x;
+    total.y += factor * diff.y;
+    total.z += factor * diff.z;
+  }
+  gradient[row * 3u] = total.x;
+  gradient[row * 3u + 1u] = total.y;
+  gradient[row * 3u + 2u] = total.z;
+}
+
 kernel void update_tsne_3d(
   device const ulong* row_ptr [[buffer(0)]],
   device const int* col [[buffer(1)]],
@@ -413,6 +459,7 @@ kernel void update_tsne_3d(
   constant uint& first_row [[buffer(10)]],
   constant ulong& edge_base [[buffer(11)]],
   constant uint& index_base [[buffer(12)]],
+  constant uint& streamed [[buffer(13)]],
   uint local_row [[thread_position_in_grid]]
 ) {
   uint row = first_row + local_row;
@@ -420,22 +467,22 @@ kernel void update_tsne_3d(
   float grad[3];
   for (uint axis = 0u; axis < 3u; ++axis) {
     grad[axis] = repulsive[row * 3u + axis] *
-      inv_sum_q[0];
+      (streamed ? 1.0f : inv_sum_q[0]);
   }
-  for (ulong edge = row_ptr[local_row] - edge_base;
-       edge < row_ptr[local_row + 1u] - edge_base;
-       ++edge) {
-    uint neighbor = uint(col[edge]) - index_base;
-    float3 diff = float3(
-      y[row * 3u] - y[neighbor * 3u],
-      y[row * 3u + 1u] - y[neighbor * 3u + 1u],
-      y[row * 3u + 2u] - y[neighbor * 3u + 2u]
-    );
-    float factor = params.exaggeration * p[edge] /
-      (1.0f + dot(diff, diff));
-    grad[0] += factor * diff.x;
-    grad[1] += factor * diff.y;
-    grad[2] += factor * diff.z;
+  if (!streamed) {
+    for (ulong edge = row_ptr[local_row] - edge_base;
+         edge < row_ptr[local_row + 1u] - edge_base; ++edge) {
+      uint neighbor = uint(col[edge]) - index_base;
+      float3 diff = float3(
+        y[row * 3u] - y[neighbor * 3u],
+        y[row * 3u + 1u] - y[neighbor * 3u + 1u],
+        y[row * 3u + 2u] - y[neighbor * 3u + 2u]);
+      float factor = params.exaggeration * p[edge] /
+        (1.0f + dot(diff, diff));
+      grad[0] += factor * diff.x;
+      grad[1] += factor * diff.y;
+      grad[2] += factor * diff.z;
+    }
   }
   float step[3];
   float step2 = 0.0f;
@@ -486,12 +533,16 @@ struct MetalTsne3dPipelines {
   id<MTLComputePipelineState> gather = nil;
   id<MTLComputePipelineState> sum_blocks = nil;
   id<MTLComputePipelineState> sum = nil;
+  id<MTLComputePipelineState> scale = nil;
+  id<MTLComputePipelineState> attract = nil;
   id<MTLComputePipelineState> update = nil;
   id<MTLComputePipelineState> center = nil;
 
   ~MetalTsne3dPipelines() {
     [center release];
     [update release];
+    [attract release];
+    [scale release];
     [sum release];
     [sum_blocks release];
     [gather release];
@@ -545,6 +596,8 @@ MetalTsne3dPipelines& metal_tsne_3d_pipelines(
   kernels.gather = load("gather_fft_3d");
   kernels.sum_blocks = load("sum_q_blocks_3d");
   kernels.sum = load("sum_q_3d");
+  kernels.scale = load("scale_repulsive_tsne_3d");
+  kernels.attract = load("attract_tsne_3d");
   kernels.update = load("update_tsne_3d");
   kernels.center = load("center_tsne_3d");
   return kernels;
@@ -669,6 +722,7 @@ List run_metal_tsne_3d(
     SEXP checkpoint_callback = R_NilValue,
     const MetalTsne3dStream* stream = nullptr) {
   if (initial.size() != static_cast<std::size_t>(n) * 3u ||
+      initial.size() > std::numeric_limits<std::uint32_t>::max() ||
       start_iter < 0 || start_iter > early_iter + normal_iter ||
       (start_iter > 0 && state_path.empty()) ||
       (checkpoint_every > 0 &&
@@ -712,28 +766,19 @@ List run_metal_tsne_3d(
   id<MTLBuffer> tile_offsets = nil;
   id<MTLBuffer> tile_indices = nil;
   id<MTLBuffer> tile_weights = nil;
-  std::vector<std::pair<std::uint32_t, std::uint32_t>> tiles;
+  std::vector<MetalTsne3dTile> tiles;
   if (stream != nullptr) {
     const std::size_t capacity = std::min<std::size_t>(
-      stream->edge_capacity, stream->offsets[n]);
+      stream->edge_capacity,
+      std::max<std::uint64_t>(1u, stream->offsets[n]));
     tile_offsets = memory.make((row_capacity + 1u) *
                                 sizeof(std::uint64_t));
     tile_indices = memory.make(std::max<std::size_t>(1u, capacity) *
                                sizeof(std::uint32_t));
     tile_weights = memory.make(std::max<std::size_t>(1u, capacity) *
                                sizeof(float));
-    for (std::uint32_t begin = 0u; begin < rows;) {
-      std::uint32_t end = begin;
-      const std::uint64_t edge_start = stream->offsets[begin];
-      while (end < rows && end - begin < row_capacity &&
-             stream->offsets[end + 1u] - edge_start <= capacity) {
-        ++end;
-      }
-      if (end == begin) Rcpp::stop(
-        "Metal t-SNE graph row exceeds `edge_chunk_capacity`.");
-      tiles.emplace_back(begin, end);
-      begin = end;
-    }
+    tiles = metal_tsne_3d_tiles(stream->offsets, rows,
+      static_cast<std::uint32_t>(capacity), row_capacity);
   }
   id<MTLBuffer> current = memory.make(layout_bytes,
                                        initial.data());
@@ -861,6 +906,11 @@ List run_metal_tsne_3d(
                          {scalar(rows), scalar(block_size)});
     metal_tsne_3d_encode(optimize, pipe.sum, 1u,
                          {q_blocks, inv_sum_q}, {scalar(blocks)});
+    if (stream != nullptr) {
+      const auto values = static_cast<std::uint32_t>(initial.size());
+      metal_tsne_3d_encode(optimize, pipe.scale, values,
+                           {gradient, inv_sum_q}, {scalar(values)});
+    }
     const bool early = iteration < early_iter;
     const double phase_exaggeration = early ?
       early_exaggeration : exaggeration;
@@ -876,21 +926,31 @@ List run_metal_tsne_3d(
                          max_step_norm : FLT_MAX)
     };
     if (stream == nullptr) {
+      const std::uint32_t streamed = 0u;
       metal_tsne_3d_encode(optimize, pipe.update, rows,
                            {row_ptr, col, prob, current, gradient,
                             inv_sum_q, next, gains, updates},
                            {scalar(update_params), scalar(first_row),
-                            scalar(edge_base), scalar(index_base)});
+                            scalar(edge_base), scalar(index_base),
+                            scalar(streamed)});
     } else {
       metal_tsne_3d_wait(optimize, "repulsion");
       for (const auto& tile : tiles) {
-        const std::uint32_t begin = tile.first;
-        const std::uint32_t count = tile.second - begin;
-        const std::uint64_t base = stream->offsets[begin];
-        const std::size_t edges = stream->offsets[tile.second] - base;
-        std::memcpy([tile_offsets contents], stream->offsets + begin,
-                    (static_cast<std::size_t>(count) + 1u) *
-                      sizeof(std::uint64_t));
+        const std::uint32_t begin = tile.first_row;
+        const std::uint32_t count = tile.rows;
+        const std::uint64_t base = tile.first_edge;
+        const std::size_t edges = tile.last_edge - base;
+        if (tile.split_row) {
+          auto* offsets = static_cast<std::uint64_t*>(
+            [tile_offsets contents]);
+          offsets[0] = base;
+          offsets[1] = tile.last_edge;
+        } else {
+          std::memcpy([tile_offsets contents],
+            stream->offsets + begin,
+            (static_cast<std::size_t>(count) + 1u) *
+              sizeof(std::uint64_t));
+        }
         if (edges > 0) {
           std::memcpy([tile_indices contents], stream->indices + base,
                       edges * sizeof(std::uint32_t));
@@ -898,14 +958,20 @@ List run_metal_tsne_3d(
                       edges * sizeof(float));
         }
         id<MTLCommandBuffer> attraction = [state.queue commandBuffer];
-        metal_tsne_3d_encode(attraction, pipe.update, count,
-          {tile_offsets, tile_indices, tile_weights, current, gradient,
-           inv_sum_q, next, gains, updates},
-          {scalar(update_params), scalar(begin), scalar(base),
-           scalar(index_base)});
+        const float phase = update_params.exaggeration;
+        metal_tsne_3d_encode(attraction, pipe.attract, count,
+          {tile_offsets, tile_indices, tile_weights, current, gradient},
+          {scalar(begin), scalar(base), scalar(index_base),
+           scalar(phase), scalar(count)});
         metal_tsne_3d_wait(attraction, "streamed attraction");
       }
       optimize = [state.queue commandBuffer];
+      const std::uint32_t streamed = 1u;
+      metal_tsne_3d_encode(optimize, pipe.update, rows,
+        {tile_offsets, tile_indices, tile_weights, current, gradient,
+         inv_sum_q, next, gains, updates},
+        {scalar(update_params), scalar(first_row), scalar(edge_base),
+         scalar(index_base), scalar(streamed)});
     }
     metal_tsne_3d_encode(optimize, pipe.bounds, blocks,
                          {next, block_bounds},
