@@ -47,7 +47,8 @@ unit-weight sensitivity graph.}
 An embedding matrix with \code{nrow(indices)} rows and \code{n_components}
 columns. Float32 KNN input returns a \code{float::float32} layout; ordinary R
 input returns a numeric matrix. Resolved settings are stored in
-\code{attr(layout, "fastEmbedR_config")}.
+\code{attr(layout, "fastEmbedR_config")}. Prepared resident graphs may be
+reused for a new fit, but cannot checkpoint or resume optimizer epochs.
 }
 \description{
 Run UMAP from precomputed nearest neighbors

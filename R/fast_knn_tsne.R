@@ -831,12 +831,14 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #'   uses `options(storage = ...)`. Explicit `"resident"` on a
 #'   [massive_matrix()] file descriptor loads float32 input after a RAM and
 #'   `memory_limit` check; the limit does not bound the subsequent fit.
-#' @param checkpoint Save experimental workflow stages. Full-graph t-SNE
+#' @param checkpoint Save file-backed workflow stages. Resident t-SNE fits
+#'   cannot checkpoint or resume; interruption restarts the fit.
+#'   Full-graph file-backed t-SNE
 #'   also saves coordinates, momentum updates, and adaptive gains every
 #'   100 iterations and at the final iteration. One-call full fits use a
 #'   source-identified stage record and restartable global graph sorting,
 #'   which needs more SSD space than the default bucketed sort.
-#' @param resume Continue a matching interrupted experimental workflow.
+#' @param resume Continue a matching interrupted file-backed workflow.
 #'   Changed input, backend, or fit controls fail without recomputation.
 #'   One-call recovery requires a committed stage or native checkpoint;
 #'   an incomplete stage with no valid checkpoint fails closed.

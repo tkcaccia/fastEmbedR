@@ -338,6 +338,8 @@ fast_knn_umap_cuda_gpu_core <- function(
 #' `epochs_per_sample`.
 #'
 #' @inheritParams umap_knn
+#' @param .allow_wide Internal admission for a coordinated CUDA wide-CSR
+#'   route. Ordinary calls should leave this as `FALSE`.
 #' @return A prepared UMAP object containing the KNN, CSR graph, and resolved
 #'   UMAP graph schedule.
 #' @examples
@@ -1288,6 +1290,8 @@ fast_knn_umap_config <- function(n, k, backend) {
         init_scale = NA_real_,
         graph_mode = "native_csr_graph",
         optimizer_math = "clean_atomic_edge_sampler",
+        checkpoint_scope = "none",
+        resume_supported = FALSE,
         n = as.integer(n),
         k = as.integer(k),
         n_threads = as.integer(umap_default_threads(n, k)),
@@ -1710,7 +1714,8 @@ spectral_knn_init <- function(
 #' @return An embedding matrix with `nrow(indices)` rows and `n_components`
 #'   columns. Float32 KNN input returns a `float::float32` layout; ordinary R
 #'   input returns a numeric matrix. Resolved settings are stored in
-#'   `attr(layout, "fastEmbedR_config")`.
+#'   `attr(layout, "fastEmbedR_config")`. Prepared resident graphs may be
+#'   reused for a new fit, but cannot checkpoint or resume optimizer epochs.
 #' @examples
 #' x <- scale(as.matrix(iris[, 1:4]))
 #' d <- as.matrix(stats::dist(x))

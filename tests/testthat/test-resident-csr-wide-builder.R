@@ -239,9 +239,23 @@ test_that("prepared wide binary 3D stays on the CPU tile route", {
     expect_identical(dim(fit), c(rows, 3L))
     expect_true(all(is.finite(fit)))
     expect_identical(meta$optimizer_mode, "csr_wide_edge_tiles")
+    expect_identical(meta$checkpoint_scope, "none")
+    expect_false(meta$resume_supported)
     expect_error(fastEmbedR:::fast_knn_umap_prepared_core(
         prepared, n_components = 3L, backend = "cuda"),
         "qualified GPU tile optimizer")
+})
+
+test_that("public resident UMAP rejects checkpoint and resume", {
+    data <- matrix(seq_len(80L) / 80, 20L, 4L)
+    expect_error(umap(data, backend = "cpu", checkpoint = TRUE),
+        "Resident embeddings cannot checkpoint or resume")
+    expect_error(umap(data, backend = "cpu", checkpoint = TRUE,
+            resume = TRUE),
+        "Resident embeddings cannot checkpoint or resume")
+    fit <- umap(data, n_neighbors = 5L, backend = "cpu")
+    expect_identical(fit$parameters$checkpoint_scope, "none")
+    expect_false(fit$parameters$resume_supported)
 })
 
 test_that("wide binary 3D Metal routing keeps typed graph arrays", {

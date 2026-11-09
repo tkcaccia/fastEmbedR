@@ -149,7 +149,11 @@ KNN recall and embedding quality on each large dataset.
 Metal t-SNE bounds graph uploads when graph streaming is selected, but
 keeps coordinates, optimizer state, and FFT workspace in memory. The
 resident 2D Metal UMAP quality repair does not qualify file-backed UMAP.
-The checkpointed route uses a restartable global graph sort and needs
+Resident UMAP fits, including wide CSR and prepared resident graphs,
+do not checkpoint optimizer state. Interruption requires a new fit from
+the beginning; reusing a prepared graph only avoids rebuilding that graph.
+`checkpoint = TRUE` and `resume = TRUE` apply to the separate file-backed
+route. That route uses a restartable global graph sort and needs
 more SSD space. After an interruption, repeat the same call with
 `checkpoint = TRUE, resume = TRUE`; changed inputs or controls fail.
 An incomplete spectral output is rebuilt from the verified graph on resume.

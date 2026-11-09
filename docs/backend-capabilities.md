@@ -138,10 +138,14 @@ quality scoring after layout transfer is not reported as Metal computation.
 
 Real Deep1B 25M and 100M resident PCA fits completed on one M3 Ultra
 Mac, but this does not qualify 50M t-SNE or UMAP. Metal resident UMAP
-still needs a wide, row-spanning graph traversal; t-SNE also needs a
+has passed small 2D/3D fuzzy and binary wide graph traversal checks,
+including rows crossing bounded edge tiles. A 50M traversal and its
+memory budget remain unqualified; t-SNE also needs a
 measured affinity, FFT and optimizer memory budget. The file-backed
 Metal routes require their own large one-call, quality and recovery
-checks. No Metal multi-GPU path is claimed on this single-GPU Mac.
+checks. Resident wide UMAP has no optimizer checkpoint or mid-fit resume;
+the separate file-backed route supports validated recovery. No Metal
+multi-GPU path is claimed on this single-GPU Mac.
 
 Metal one-call KNN uses exact search below the internal size threshold and
 IVF-Flat above it. Large, high-dimensional IVF searches use a 128-dimensional

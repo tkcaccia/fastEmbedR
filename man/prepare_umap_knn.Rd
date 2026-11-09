@@ -9,7 +9,8 @@ prepare_umap_knn(
   distances = NULL,
   backend = NULL,
   n.cores = NULL,
-  graph_mode = c("fuzzy", "binary")
+  graph_mode = c("fuzzy", "binary"),
+  .allow_wide = FALSE
 )
 }
 \arguments{
@@ -31,6 +32,9 @@ default from one to four workers. Native GPU backends ignore this argument.}
 \item{graph_mode}{Graph weighting mode. \code{"fuzzy"} (the default) uses
 standard UMAP fuzzy graph weights. \code{"binary"} uses a symmetric
 unit-weight sensitivity graph.}
+
+\item{.allow_wide}{Internal admission for a coordinated CUDA wide-CSR
+route. Ordinary calls should leave this as \code{FALSE}.}
 }
 \value{
 A prepared UMAP object containing the KNN, CSR graph, and resolved

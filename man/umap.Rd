@@ -171,16 +171,20 @@ full-graph UMAP. Other routes do not accept this argument.}
 CPU mapping, or \code{"managed"} for CUDA managed-memory coordinates in
 experimental full-graph UMAP. CUDA rejects \code{"mmap"}.}
 
-\item{checkpoint}{Save experimental workflow stages and completed batches.
-A one-call full fit records source-identified stages and uses the
+\item{checkpoint}{Save file-backed workflow stages and completed batches.
+Resident fits, including wide CSR fits, cannot checkpoint or resume.
+An interrupted resident fit must restart from the beginning. A one-call
+file-backed fit records source-identified stages and uses the
 restartable global graph sort, which needs more SSD space than the
 default bucketed sort.}
 
-\item{resume}{Continue a matching interrupted experimental workflow.
+\item{resume}{Continue a matching interrupted file-backed workflow.
 Changed input, backend, or fit controls fail without recomputation.
 One-call recovery requires a committed stage or native checkpoint;
 an incomplete stage with no valid checkpoint fails closed, except that
-an incomplete owned spectral output is rebuilt from the verified graph.}
+an incomplete owned spectral output is rebuilt from the verified graph.
+Reusing a prepared resident graph starts a new fit; it does not resume
+completed optimizer epochs.}
 
 \item{cpu_update}{\code{"sgd"} (default) uses ordered single-worker updates.
 \code{"synchronized"} enables deterministic multicore CPU updates for

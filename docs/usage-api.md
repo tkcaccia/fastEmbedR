@@ -535,7 +535,14 @@ output path, and enough SSD space for KNN, graph, initialization, and final
 coordinates. It records separate stage times and intermediate descriptors.
 The ordinary route uses a lower-disk bucketed graph sort and releases
 intermediate KNN files by default. Set `keep_knn = TRUE` to retain them.
-With `checkpoint = TRUE`, a source-identified stage record uses the
+Resident UMAP, including the wide CSR route, has no optimizer checkpoint
+or mid-fit resume. An interrupted resident fit restarts from the beginning.
+A prepared resident graph can be reused to start a new fit, but it is not
+a recovery snapshot. The result reports `checkpoint_scope = "none"` and
+`resume_supported = FALSE`.
+
+Only the file-backed route accepts `checkpoint = TRUE`. Its
+source-identified stage record uses the
 restartable global graph sort and retains KNN files until the fit completes;
 this requires more SSD space. A matching call with `resume = TRUE` reuses
 completed stages and native checkpoints. Changed inputs or controls fail.

@@ -326,15 +326,19 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #'   uses `options(storage = ...)`. Explicit `"resident"` on a
 #'   [massive_matrix()] file descriptor loads float32 input after a RAM and
 #'   `memory_limit` check; the limit does not bound the subsequent fit.
-#' @param checkpoint Save experimental workflow stages and completed batches.
-#'   A one-call full fit records source-identified stages and uses the
+#' @param checkpoint Save file-backed workflow stages and completed batches.
+#'   Resident fits, including wide CSR fits, cannot checkpoint or resume.
+#'   An interrupted resident fit must restart from the beginning. A one-call
+#'   file-backed fit records source-identified stages and uses the
 #'   restartable global graph sort, which needs more SSD space than the
 #'   default bucketed sort.
-#' @param resume Continue a matching interrupted experimental workflow.
+#' @param resume Continue a matching interrupted file-backed workflow.
 #'   Changed input, backend, or fit controls fail without recomputation.
 #'   One-call recovery requires a committed stage or native checkpoint;
 #'   an incomplete stage with no valid checkpoint fails closed, except that
 #'   an incomplete owned spectral output is rebuilt from the verified graph.
+#'   Reusing a prepared resident graph starts a new fit; it does not resume
+#'   completed optimizer epochs.
 #' @param layout_storage `"memory"` (default), `"mmap"` for a writable
 #'   CPU mapping, or `"managed"` for CUDA managed-memory coordinates in
 #'   experimental full-graph UMAP. CUDA rejects `"mmap"`.
@@ -936,6 +940,7 @@ landmark_umap_parameters <- function(state, reference, projection,
         landmark_fraction = n_landmarks / state$n,
         landmark_selection = state$selection$method,
         graph_mode = state$graph_mode, metric = state$metric,
+        checkpoint_scope = "none", resume_supported = FALSE,
         transform_k = projection$transform_k,
         landmark_refinement = if (refinement$epochs > 0L) {
             "fixed_landmark_umap_rows"

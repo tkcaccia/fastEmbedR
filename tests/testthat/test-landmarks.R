@@ -60,6 +60,8 @@ test_that("landmark output retains float32 precision", {
         transform_iter = 0L, backend = "cpu", n.cores = 1L
     )
     expect_true(is_float32_matrix(umap_fit$layout))
+    expect_identical(umap_fit$parameters$checkpoint_scope, "none")
+    expect_false(umap_fit$parameters$resume_supported)
     expect_true(is_float32_matrix(tsne_fit$layout))
     expect_equal(dim(umap_fit$layout), c(40L, 2L))
     expect_equal(dim(tsne_fit$layout), c(40L, 2L))

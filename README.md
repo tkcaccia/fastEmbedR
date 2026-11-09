@@ -80,8 +80,9 @@ The file-backed result is a graph descriptor, not a resident KNN matrix;
 file-backed matrix in one experimental full-data call. Supply a new `.f32`
 output path and enough SSD space for the intermediate graph and
 initialization. Full-data UMAP computes a streamed spectral start from its
-fuzzy graph; full-data t-SNE uses PCA. Prepared graphs remain available for
-reuse and recovery.
+fuzzy graph; full-data t-SNE uses PCA. Prepared file-backed graphs can be
+reused, and their matching checkpoints support recovery. A prepared resident
+UMAP graph starts a new fit; it does not resume an interrupted optimizer.
 
 For the one-call functions `tsne()` and `umap()`, the embedding backend is
 deliberately limited to `backend = "cpu"`, `"metal"`, or `"cuda"`. Internal

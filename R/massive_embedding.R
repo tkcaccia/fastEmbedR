@@ -344,8 +344,9 @@ massive_embedding_off <- function(output, chunk_rows, memory_limit,
                                     checkpoint = FALSE, resume = FALSE,
                                     ef_search = 0L) {
     massive_checkpoint_validate_controls(checkpoint, resume)
-    if (checkpoint) stop("`checkpoint` requires massive mode.",
-        call. = FALSE)
+    if (checkpoint || resume) stop(
+        "Resident embeddings cannot checkpoint or resume; ",
+        "use a file-backed route for recovery.", call. = FALSE)
     if (!is.null(init)) stop("`init` requires full-graph UMAP.",
         call. = FALSE)
     if (!identical(layout_storage, "memory")) stop(
