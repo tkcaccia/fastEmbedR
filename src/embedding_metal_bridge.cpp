@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "csr_edge_tiles.h"
@@ -385,14 +386,17 @@ SEXP umap_metal_optimize_csr_wide_cpp(
   std::vector<int> negatives(edge_capacity);
   std::vector<std::uint64_t> ordinals(edge_capacity);
   const float min_weight = max_weight / n_epochs;
+  std::uint64_t positive_edges = 0;
+  std::uint64_t negative_samples = 0;
   for (int epoch = 0; epoch < n_epochs; ++epoch) {
     int active = 0;
     std::uint64_t sample_edge = 0;
     const auto flush = [&]() {
       if (active == 0) return;
-      fastembedr_massive_umap_metal_step(context.get(),
+      negative_samples += fastembedr_massive_umap_metal_step(context.get(),
         heads.data(), tails.data(), negatives.data(),
         ordinals.data(), active, epoch);
+      positive_edges += static_cast<std::uint64_t>(active);
       active = 0;
     };
     for (int row = 0; row < n; ++row) {
@@ -440,6 +444,10 @@ SEXP umap_metal_optimize_csr_wide_cpp(
   result.attr("csr_offset_dtype") = "uint64";
   result.attr("metal_graph_input") = "resident_csr_wide_tiles";
   result.attr("metal_gpu_epochs") = n_epochs;
+  result.attr("metal_positive_edges") =
+    std::to_string(positive_edges);
+  result.attr("metal_negative_samples") =
+    std::to_string(negative_samples);
   result.attr("metal_cpu_warm_epochs") = 0;
   result.attr("metal_optimizer_pipeline") =
     "metal_wide_edge_tiles";
