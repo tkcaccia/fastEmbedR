@@ -77,6 +77,7 @@ fastembedr_summary_fit <- function(x) {
     list(backend = backend$backend,
         backend_engine = backend$engine,
         graph_offset_dtype = x$graph_offset_dtype %||%
+            x$csr_offset_dtype %||%
             x$parameters$graph_offset_dtype %||%
             x$parameters$csr_offset_dtype %||% NA_character_,
         devices = x$gpu_devices %||% x$parameters$devices,

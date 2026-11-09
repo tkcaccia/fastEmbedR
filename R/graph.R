@@ -824,11 +824,16 @@ graph_check_resident_counts <- function(edges, vertices, backend,
         !is.finite(vertices) || vertices < 1) stop(
         "Resident graph counts must be finite and non-negative.",
         call. = FALSE)
-    if (resolve_embedding_backend(backend) != "cpu" &&
-        2 * edges > .Machine$integer.max) stop(
-        "Resident GPU clustering may exceed signed-32-bit CSR offsets; ",
-        "use a bounded file-backed graph.", call. = FALSE)
-    estimate <- 256 * 1024^2 + 128 * edges + 64 * vertices
+    if (edges > 2^52) stop(
+        "Resident CSR edge bound exceeds exact R counts.",
+        call. = FALSE)
+    positions <- 2 * edges
+    dtype <- if (positions > .Machine$integer.max) {
+        "uint64"
+    } else "int32"
+    offsets <- (vertices + 1) * if (dtype == "uint64") 8 else 4
+    estimate <- 256 * 1024^2 + 128 * edges +
+        64 * vertices + offsets
     limit <- massive_memory_bytes(memory_limit)
     if (!is.finite(available) || available <= 0 ||
         !is.finite(estimate) ||
@@ -836,15 +841,20 @@ graph_check_resident_counts <- function(edges, vertices, backend,
         "Resident clustering exceeds the RAM budget; use a bounded ",
         "file-backed graph or increase memory_limit when RAM permits.",
         call. = FALSE)
-    invisible(list(max_csr_edges = 2 * edges,
+    invisible(list(max_csr_edges = positions,
+        csr_offset_dtype = dtype,
         peak_ram_estimate_bytes = estimate))
 }
 
 graph_check_resident_vram <- function(graph, devices = NULL,
         free = massive_auto_cuda_free(devices, graph$n_vertices)) {
+    workers <- if (is.null(devices)) 1L else length(devices)
+    positions <- 2 * as.double(length(graph$from))
+    offset_width <- if (positions > .Machine$integer.max) 8 else 4
     required <- 128 * 1024^2 +
-        128 * as.double(length(graph$from)) +
-        256 * graph$n_vertices
+        8 * ceiling(positions / workers) +
+        offset_width * (ceiling(graph$n_vertices / workers) + 1) +
+        48 * graph$n_vertices
     if (!is.finite(free) || free <= 0 ||
         !is.finite(required) || required > 0.65 * free) stop(
         "Resident CUDA clustering exceeds the free-VRAM budget; ",

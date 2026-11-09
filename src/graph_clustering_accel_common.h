@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include "csr_edge_tiles.h"
+
 namespace fastembedr_graph_accel {
 
 struct Edge {
@@ -31,11 +33,21 @@ struct Graph {
   int n = 0;
   std::vector<Edge> edges;
   std::vector<int> row_ptr;
+  std::vector<std::uint64_t> row_ptr_wide;
   std::vector<int> col_idx;
   std::vector<float> weight;
   std::vector<float> degree;
   double total_edge_weight = 0.0;
   float volume = 0.0f;
+
+  bool wide_offsets() const { return !row_ptr_wide.empty(); }
+  std::uint64_t offset(std::size_t row) const {
+    return wide_offsets() ? row_ptr_wide[row] :
+      static_cast<std::uint64_t>(row_ptr[row]);
+  }
+  std::uint64_t positions() const {
+    return offset(static_cast<std::size_t>(n));
+  }
 };
 
 struct MoveResult {
@@ -86,49 +98,65 @@ inline int community_count(const std::vector<int>& membership) {
   return *std::max_element(membership.begin(), membership.end()) + 1;
 }
 
-inline Graph graph_from_edges(int n, std::vector<Edge> edges) {
+inline Graph graph_from_edges(int n, std::vector<Edge> edges,
+                             bool force_wide = false) {
   std::uint64_t positions = 0;
   for (const Edge& edge : edges) {
-    positions += edge.u == edge.v ? 1ULL : 2ULL;
-    if (positions > static_cast<std::uint64_t>(
-        std::numeric_limits<int>::max())) {
-      Rcpp::stop("Resident GPU clustering exceeds signed-32-bit CSR "
-                 "capacity; use a bounded file-backed route.");
-    }
+    const auto add = edge.u == edge.v ? 1ULL : 2ULL;
+    if (positions > std::numeric_limits<std::uint64_t>::max() - add)
+      Rcpp::stop("Resident clustering CSR edge count exceeds uint64.");
+    positions += add;
   }
   Graph graph;
   graph.n = n;
   graph.edges = std::move(edges);
   graph.degree.assign(static_cast<std::size_t>(n), 0.0f);
-  graph.row_ptr.assign(static_cast<std::size_t>(n) + 1U, 0);
+  std::vector<std::uint32_t> counts(static_cast<std::size_t>(n), 0);
 
   for (const Edge& edge : graph.edges) {
     graph.total_edge_weight += edge.weight;
     if (edge.u == edge.v) {
       graph.degree[static_cast<std::size_t>(edge.u)] += 2.0f * edge.weight;
-      ++graph.row_ptr[static_cast<std::size_t>(edge.u + 1)];
+      ++counts[static_cast<std::size_t>(edge.u)];
     } else {
       graph.degree[static_cast<std::size_t>(edge.u)] += edge.weight;
       graph.degree[static_cast<std::size_t>(edge.v)] += edge.weight;
-      ++graph.row_ptr[static_cast<std::size_t>(edge.u + 1)];
-      ++graph.row_ptr[static_cast<std::size_t>(edge.v + 1)];
+      ++counts[static_cast<std::size_t>(edge.u)];
+      ++counts[static_cast<std::size_t>(edge.v)];
     }
   }
   graph.volume = static_cast<float>(2.0 * graph.total_edge_weight);
-  std::partial_sum(graph.row_ptr.begin(), graph.row_ptr.end(), graph.row_ptr.begin());
-  graph.col_idx.resize(static_cast<std::size_t>(graph.row_ptr.back()));
-  graph.weight.resize(static_cast<std::size_t>(graph.row_ptr.back()));
-  std::vector<int> cursor = graph.row_ptr;
+  const bool wide = force_wide ||
+    positions > static_cast<std::uint64_t>(INT32_MAX);
+  if (wide) graph.row_ptr_wide.resize(static_cast<std::size_t>(n) + 1U);
+  else graph.row_ptr.resize(static_cast<std::size_t>(n) + 1U);
+  std::uint64_t prefix = 0;
+  for (int row = 0; row < n; ++row) {
+    if (wide) graph.row_ptr_wide[static_cast<std::size_t>(row)] = prefix;
+    else graph.row_ptr[static_cast<std::size_t>(row)] =
+      static_cast<int>(prefix);
+    prefix += counts[static_cast<std::size_t>(row)];
+  }
+  if (prefix != positions) Rcpp::stop("Resident CSR count mismatch.");
+  if (wide) graph.row_ptr_wide[static_cast<std::size_t>(n)] = prefix;
+  else graph.row_ptr[static_cast<std::size_t>(n)] =
+    static_cast<int>(prefix);
+  graph.col_idx.resize(static_cast<std::size_t>(positions));
+  graph.weight.resize(static_cast<std::size_t>(positions));
+  std::fill(counts.begin(), counts.end(), 0);
   for (const Edge& edge : graph.edges) {
     if (edge.u == edge.v) {
-      const int position = cursor[static_cast<std::size_t>(edge.u)]++;
+      const auto position = graph.offset(edge.u) +
+        counts[static_cast<std::size_t>(edge.u)]++;
       graph.col_idx[static_cast<std::size_t>(position)] = edge.u;
       graph.weight[static_cast<std::size_t>(position)] = 2.0f * edge.weight;
     } else {
-      int position = cursor[static_cast<std::size_t>(edge.u)]++;
+      auto position = graph.offset(edge.u) +
+        counts[static_cast<std::size_t>(edge.u)]++;
       graph.col_idx[static_cast<std::size_t>(position)] = edge.v;
       graph.weight[static_cast<std::size_t>(position)] = edge.weight;
-      position = cursor[static_cast<std::size_t>(edge.v)]++;
+      position = graph.offset(edge.v) +
+        counts[static_cast<std::size_t>(edge.v)]++;
       graph.col_idx[static_cast<std::size_t>(position)] = edge.u;
       graph.weight[static_cast<std::size_t>(position)] = edge.weight;
     }
@@ -139,18 +167,14 @@ inline Graph graph_from_edges(int n, std::vector<Edge> edges) {
 inline Graph graph_from_r(const Rcpp::IntegerVector& from,
                           const Rcpp::IntegerVector& to,
                           const Rcpp::NumericVector& weight,
-                          int n_vertices) {
+                          int n_vertices, bool force_wide = false) {
   if (n_vertices < 1) Rcpp::stop("`n_vertices` must be positive.");
   if (from.size() != to.size() || from.size() != weight.size()) {
     Rcpp::stop("Graph edge vectors must have equal lengths.");
   }
-  // A non-self input edge can occupy two CSR positions. Reject the
-  // worst case before allocating the raw and deduplicated edge copies.
   if (static_cast<std::uint64_t>(from.size()) >
-      static_cast<std::uint64_t>(std::numeric_limits<int>::max()) / 2ULL) {
-    Rcpp::stop("Resident GPU clustering exceeds signed-32-bit input "
-               "capacity; use a bounded file-backed route.");
-  }
+      std::numeric_limits<std::uint64_t>::max() / 2ULL)
+    Rcpp::stop("Resident clustering input exceeds uint64 CSR capacity.");
   std::vector<CandidateEdge> raw;
   raw.reserve(static_cast<std::size_t>(from.size()));
   for (R_xlen_t i = 0; i < from.size(); ++i) {
@@ -191,7 +215,7 @@ inline Graph graph_from_r(const Rcpp::IntegerVector& from,
     });
     begin = end;
   }
-  return graph_from_edges(n_vertices, std::move(edges));
+  return graph_from_edges(n_vertices, std::move(edges), force_wide);
 }
 
 inline Graph aggregate_graph(const Graph& graph,
@@ -283,8 +307,8 @@ inline bool communities_are_connected(const Graph& graph,
       const int u = stack.back();
       stack.pop_back();
       ++reached;
-      for (int position = graph.row_ptr[static_cast<std::size_t>(u)];
-           position < graph.row_ptr[static_cast<std::size_t>(u + 1)]; ++position) {
+      for (std::uint64_t position = graph.offset(u);
+           position < graph.offset(u + 1); ++position) {
         const int v = graph.col_idx[static_cast<std::size_t>(position)];
         if (!seen[static_cast<std::size_t>(v)] &&
             membership[static_cast<std::size_t>(v)] == community) {
@@ -313,8 +337,8 @@ inline std::vector<int> split_disconnected(
     while (!stack.empty()) {
       const int u = stack.back();
       stack.pop_back();
-      for (int position = graph.row_ptr[static_cast<std::size_t>(u)];
-           position < graph.row_ptr[static_cast<std::size_t>(u + 1)]; ++position) {
+      for (std::uint64_t position = graph.offset(u);
+           position < graph.offset(u + 1); ++position) {
         const int v = graph.col_idx[static_cast<std::size_t>(position)];
         if (out[static_cast<std::size_t>(v)] < 0 &&
             membership[static_cast<std::size_t>(v)] == parent) {
@@ -446,7 +470,8 @@ inline Rcpp::List cluster(
     int n_runs,
     double seed,
     const std::string& backend,
-    const MoveFunction& move) {
+    const MoveFunction& move,
+    bool force_wide = false) {
   if (method != "louvain" && method != "leiden") {
     Rcpp::stop("GPU graph clustering supports `louvain` and `leiden`.");
   }
@@ -456,7 +481,8 @@ inline Rcpp::List cluster(
   if (n_iterations < 1 || n_runs < 1) {
     Rcpp::stop("`n_iterations` and `n_runs` must be positive.");
   }
-  const Graph graph = graph_from_r(from, to, weight, n_vertices);
+  const Graph graph = graph_from_r(from, to, weight, n_vertices,
+    force_wide);
   std::vector<int> best(static_cast<std::size_t>(n_vertices));
   std::iota(best.begin(), best.end(), 0);
   double best_modularity = modularity(graph, best, resolution);
@@ -496,7 +522,10 @@ inline Rcpp::List cluster(
     Rcpp::Named("implementation") = method == "louvain" ?
       "native_parallel_multilevel_louvain" :
       "native_parallel_leiden_local_move_refine_aggregate",
-    Rcpp::Named("graph_storage") = "float32_csr",
+    Rcpp::Named("graph_storage") = graph.wide_offsets() ?
+      "float32_csr_uint64" : "float32_csr",
+    Rcpp::Named("csr_offset_dtype") = graph.wide_offsets() ?
+      "uint64" : "int32",
     Rcpp::Named("coarsening_backend") = "native_cpp"
   );
 }

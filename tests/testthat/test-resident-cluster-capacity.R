@@ -2,12 +2,14 @@ test_that("resident clustering checks CSR width and measured RAM", {
     check <- fastEmbedR:::graph_check_resident_counts
     plan <- check(100, 20, "cpu", "1GB", 2 * 1024^3)
     expect_equal(plan$max_csr_edges, 200)
+    expect_identical(plan$csr_offset_dtype, "int32")
     expect_error(check(100, 20, "cpu", "1MB", 2 * 1024^3),
         "exceeds the RAM budget")
     expect_error(check(100, 20, "cpu", "1GB", NA_real_),
         "exceeds the RAM budget")
-    expect_error(check(1.1e9, 100000000, "cuda", 1e12, 2 * 1024^4),
-        "signed-32-bit CSR offsets")
+    wide <- check(1.1e9, 100000000, "cuda", 1e12, 2 * 1024^4)
+    expect_equal(wide$max_csr_edges, 2.2e9)
+    expect_identical(wide$csr_offset_dtype, "uint64")
     expect_error(check(1e9, 100000000, "cpu", 1e12, 2 * 1024^3),
         "exceeds the RAM budget")
 })
@@ -27,7 +29,10 @@ test_that("KNN graph admission happens before neighbor search", {
 test_that("resident CUDA graph checks free VRAM", {
     check <- fastEmbedR:::graph_check_resident_vram
     graph <- list(from = seq_len(100L), n_vertices = 20L)
-    expect_no_error(check(graph, free = 2 * 1024^3))
+    one <- check(graph, free = 2 * 1024^3)
+    two <- check(graph, devices = c(0L, 1L), free = 2 * 1024^3)
+    expect_lt(two$peak_vram_estimate_bytes,
+        one$peak_vram_estimate_bytes)
     expect_error(check(graph, free = 16 * 1024^2),
         "exceeds the free-VRAM budget")
     expect_error(check(graph, free = NA_real_),

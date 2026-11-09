@@ -417,12 +417,12 @@ graph_clustering_cuda_available_cpp <- function() {
     .Call(`_fastEmbedR_graph_clustering_cuda_available_cpp`)
 }
 
-fastembedr_graph_cluster_cuda_cpp <- function(from, to, weight, n_vertices, method = "leiden", resolution = 1.0, n_iterations = 10L, n_runs = 1L, seed = 1) {
-    .Call(`_fastEmbedR_fastembedr_graph_cluster_cuda_cpp`, from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed)
+fastembedr_graph_cluster_cuda_cpp <- function(from, to, weight, n_vertices, method = "leiden", resolution = 1.0, n_iterations = 10L, n_runs = 1L, seed = 1, force_wide = FALSE) {
+    .Call(`_fastEmbedR_fastembedr_graph_cluster_cuda_cpp`, from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, force_wide)
 }
 
-fastembedr_graph_cluster_cuda_devices_cpp <- function(from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, devices) {
-    .Call(`_fastEmbedR_fastembedr_graph_cluster_cuda_devices_cpp`, from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, devices)
+fastembedr_graph_cluster_cuda_devices_cpp <- function(from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, devices, force_wide = FALSE) {
+    .Call(`_fastEmbedR_fastembedr_graph_cluster_cuda_devices_cpp`, from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, devices, force_wide)
 }
 
 graph_clustering_metal_available_cpp <- function() {
@@ -433,8 +433,8 @@ graph_clustering_metal_error_cpp <- function() {
     .Call(`_fastEmbedR_graph_clustering_metal_error_cpp`)
 }
 
-fastembedr_graph_cluster_metal_cpp <- function(from, to, weight, n_vertices, method = "leiden", resolution = 1.0, n_iterations = 10L, n_runs = 1L, seed = 1) {
-    .Call(`_fastEmbedR_fastembedr_graph_cluster_metal_cpp`, from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed)
+fastembedr_graph_cluster_metal_cpp <- function(from, to, weight, n_vertices, method = "leiden", resolution = 1.0, n_iterations = 10L, n_runs = 1L, seed = 1, force_wide = FALSE) {
+    .Call(`_fastEmbedR_fastembedr_graph_cluster_metal_cpp`, from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, force_wide)
 }
 
 massive_merge_knn_shard_cpp <- function(indices_path, distances_path, indices, distances, query_first, shard_first, shard_rows, n_vertices, k, first_shard, n_queries = -1.0, exclude_self = TRUE) {

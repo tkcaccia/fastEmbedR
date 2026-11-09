@@ -9,12 +9,41 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
 
 constexpr int kColorCount = 8;
 constexpr int kLocalCandidateCount = 64;
+constexpr std::uint32_t kEdgeTileSize = 64U;
+
+struct EdgeTileCursor {
+  std::uint64_t base;
+  std::uint64_t end;
+  std::uint32_t local = 0;
+  std::uint32_t count = 0;
+
+  __device__ EdgeTileCursor(std::uint64_t begin,
+                            std::uint64_t stop) : base(begin), end(stop) {
+    refill();
+  }
+  __device__ void refill() {
+    const auto remaining = end - base;
+    count = static_cast<std::uint32_t>(
+      remaining < kEdgeTileSize ? remaining : kEdgeTileSize);
+    local = 0;
+  }
+  __device__ bool valid() const { return base < end; }
+  __device__ std::uint64_t next() {
+    const auto position = base + local++;
+    if (local == count) {
+      base += count;
+      if (base < end) refill();
+    }
+    return position;
+  }
+};
 
 void check_cuda(cudaError_t status, const char* operation) {
   if (status == cudaSuccess) return;
@@ -65,8 +94,9 @@ __device__ __forceinline__ int vertex_color(
   ) & (kColorCount - 1));
 }
 
+template <typename Offset>
 __global__ void propose_moves_kernel(
-    const int* row_ptr,
+    const Offset* row_ptr,
     const int* col_idx,
     const float* edge_weight,
     const float* degree,
@@ -105,14 +135,15 @@ __global__ void propose_moves_kernel(
     if (cuts[old] + tolerance < threshold) return;
   }
 
-  const int begin = row_ptr[local];
-  const int end = row_ptr[local + 1];
+  const std::uint64_t begin = row_ptr[local];
+  const std::uint64_t end = row_ptr[local + 1];
   int candidate_labels[kLocalCandidateCount];
   float candidate_weights[kLocalCandidateCount];
   int unique_count = 0;
   bool overflow = false;
   float old_inside = 0.0f;
-  for (int position = begin; position < end; ++position) {
+  for (EdgeTileCursor tile(begin, end); tile.valid();) {
+    const auto position = tile.next();
     const int v = col_idx[position];
     if (v == u || (refinement && parent[v] != parent[u])) continue;
     const int candidate = labels[v];
@@ -165,8 +196,9 @@ __global__ void propose_moves_kernel(
       }
     }
   } else {
-    for (int candidate_position = begin;
-         candidate_position < end; ++candidate_position) {
+    for (EdgeTileCursor candidates(begin, end);
+         candidates.valid();) {
+      const auto candidate_position = candidates.next();
       const int neighbor = col_idx[candidate_position];
       if (neighbor == u) continue;
       if (refinement && parent[neighbor] != parent[u]) continue;
@@ -175,7 +207,9 @@ __global__ void propose_moves_kernel(
           (leiden_cuts &&
            vertex_color(candidate, seed) >= color)) continue;
       bool seen = false;
-      for (int previous = begin; previous < candidate_position; ++previous) {
+      for (EdgeTileCursor prior(begin, candidate_position);
+           prior.valid();) {
+        const auto previous = prior.next();
         const int previous_neighbor = col_idx[previous];
         if (previous_neighbor != u &&
             (!refinement || parent[previous_neighbor] == parent[u]) &&
@@ -186,7 +220,8 @@ __global__ void propose_moves_kernel(
       }
       if (seen) continue;
       float inside = 0.0f;
-      for (int position = begin; position < end; ++position) {
+      for (EdgeTileCursor tile(begin, end); tile.valid();) {
+        const auto position = tile.next();
         const int v = col_idx[position];
         if (v != u &&
             (!refinement || parent[v] == parent[u]) &&
@@ -219,6 +254,7 @@ __global__ void propose_moves_kernel(
   }
 }
 
+template <typename Offset>
 __global__ void apply_moves_kernel(
     const float* degree,
     int* labels,
@@ -232,7 +268,7 @@ __global__ void apply_moves_kernel(
     int color,
     unsigned int seed,
     int leiden_cuts,
-    const int* row_ptr,
+    const Offset* row_ptr,
     const int* col_idx,
     const float* edge_weight,
     float* cuts,
@@ -247,8 +283,9 @@ __global__ void apply_moves_kernel(
   if (leiden_cuts) {
     if (community_count[old] != 1) return;
     float simultaneous = 0.0f;
-    for (int position = row_ptr[local];
-         position < row_ptr[local + 1]; ++position) {
+    for (EdgeTileCursor tile(row_ptr[local], row_ptr[local + 1]);
+         tile.valid();) {
+      const auto position = tile.next();
       const int v = col_idx[position];
       if (v != u && v >= first && v < first + rows &&
           vertex_color(v, seed) == color && proposal[v] == next) {
@@ -502,7 +539,8 @@ bool graph_clustering_cuda_available_impl() {
   return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
 }
 
-fastembedr_graph_accel::MoveResult graph_local_move_cuda_impl(
+template <typename Offset>
+fastembedr_graph_accel::MoveResult graph_local_move_cuda_typed_impl(
     const fastembedr_graph_accel::Graph& graph,
     const std::vector<int>& initial,
     const std::vector<int>* parent,
@@ -517,6 +555,12 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_impl(
   if (initial.size() != static_cast<std::size_t>(graph.n)) {
     Rcpp::stop("Internal CUDA clustering membership size mismatch.");
   }
+  const std::vector<Offset>& host_row = [&]() ->
+      const std::vector<Offset>& {
+    if constexpr (std::is_same<Offset, int>::value)
+      return graph.row_ptr;
+    else return graph.row_ptr_wide;
+  }();
   if (refinement &&
       (parent == nullptr || parent->size() != initial.size())) {
     Rcpp::stop("Internal CUDA Leiden parent-partition size mismatch.");
@@ -540,7 +584,7 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_impl(
     parent = &parent_storage;
   }
 
-  DeviceBuffer<int> d_row_ptr(graph.row_ptr.size());
+  DeviceBuffer<Offset> d_row_ptr(host_row.size());
   DeviceBuffer<int> d_col_idx(graph.col_idx.size());
   DeviceBuffer<float> d_weight(graph.weight.size());
   DeviceBuffer<float> d_degree(graph.degree.size());
@@ -552,8 +596,8 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_impl(
   DeviceBuffer<unsigned int> d_moves(1);
 
   check_cuda(cudaMemcpy(
-    d_row_ptr.data(), graph.row_ptr.data(),
-    graph.row_ptr.size() * sizeof(int), cudaMemcpyHostToDevice
+    d_row_ptr.data(), host_row.data(),
+    host_row.size() * sizeof(Offset), cudaMemcpyHostToDevice
   ), "copy CSR row offsets");
   check_cuda(cudaMemcpy(
     d_col_idx.data(), graph.col_idx.data(),
@@ -609,7 +653,7 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_impl(
         nullptr, nullptr, nullptr
       );
       check_cuda(cudaGetLastError(), "launch CUDA graph proposal kernel");
-      apply_moves_kernel<<<blocks, threads>>>(
+      apply_moves_kernel<Offset><<<blocks, threads>>>(
         d_degree.data(), d_labels.data(), d_proposal.data(), d_volume.data(),
         d_count.data(), d_moves.data(), graph.n, 0, graph.n,
         color, device_seed, 0,
@@ -633,14 +677,28 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_impl(
   return result;
 }
 
+fastembedr_graph_accel::MoveResult graph_local_move_cuda_impl(
+    const fastembedr_graph_accel::Graph& graph,
+    const std::vector<int>& initial,
+    const std::vector<int>* parent, int max_passes,
+    float resolution, std::uint64_t seed, bool refinement) {
+  if (graph.wide_offsets())
+    return graph_local_move_cuda_typed_impl<std::uint64_t>(
+      graph, initial, parent, max_passes, resolution, seed, refinement);
+  return graph_local_move_cuda_typed_impl<int>(
+    graph, initial, parent, max_passes, resolution, seed, refinement);
+}
+
 namespace {
 
 struct CoordinatedDevice {
   int id;
   int first;
   int rows;
-  int edges;
+  std::uint64_t edges;
+  bool wide;
   DeviceBuffer<int> row;
+  DeviceBuffer<std::uint64_t> row_wide;
   DeviceBuffer<int> col;
   DeviceBuffer<float> weight;
   DeviceBuffer<float> degree;
@@ -654,20 +712,33 @@ struct CoordinatedDevice {
   CoordinatedDevice(int device, const fastembedr_graph_accel::Graph& graph,
       int begin, int end, const std::vector<int>& parents)
       : id(device), first(begin), rows(end - begin),
-        edges(graph.row_ptr[end] - graph.row_ptr[begin]),
-        row(static_cast<std::size_t>(rows) + 1), col(edges),
+        edges(graph.offset(end) - graph.offset(begin)),
+        wide(edges > static_cast<std::uint64_t>(INT_MAX)),
+        row(wide ? 0 : static_cast<std::size_t>(rows) + 1),
+        row_wide(wide ? static_cast<std::size_t>(rows) + 1 : 0),
+        col(static_cast<std::size_t>(edges)),
         weight(edges), degree(graph.n), labels(graph.n),
         parent(graph.n), volume(graph.n), count(graph.n),
         proposal(graph.n), moves(1) {
-    std::vector<int> local_row(static_cast<std::size_t>(rows) + 1);
-    const int offset = graph.row_ptr[begin];
-    for (int i = 0; i <= rows; ++i) {
-      local_row[static_cast<std::size_t>(i)] =
-        graph.row_ptr[begin + i] - offset;
+    const auto offset = graph.offset(begin);
+    if (wide) {
+      std::vector<std::uint64_t> local_row(
+        static_cast<std::size_t>(rows) + 1);
+      for (int i = 0; i <= rows; ++i)
+        local_row[static_cast<std::size_t>(i)] =
+          graph.offset(begin + i) - offset;
+      check_cuda(cudaMemcpy(row_wide.data(), local_row.data(),
+        local_row.size() * sizeof(std::uint64_t), cudaMemcpyHostToDevice),
+        "upload coordinated wide CSR rows");
+    } else {
+      std::vector<int> local_row(static_cast<std::size_t>(rows) + 1);
+      for (int i = 0; i <= rows; ++i)
+        local_row[static_cast<std::size_t>(i)] =
+          static_cast<int>(graph.offset(begin + i) - offset);
+      check_cuda(cudaMemcpy(row.data(), local_row.data(),
+        local_row.size() * sizeof(int), cudaMemcpyHostToDevice),
+        "upload coordinated CSR rows");
     }
-    check_cuda(cudaMemcpy(row.data(), local_row.data(),
-      local_row.size() * sizeof(int), cudaMemcpyHostToDevice),
-      "upload coordinated CSR rows");
     if (edges > 0) {
       check_cuda(cudaMemcpy(col.data(), graph.col_idx.data() + offset,
         static_cast<std::size_t>(edges) * sizeof(int),
@@ -750,8 +821,9 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_devices_impl(
       check_cuda(cudaMemGetInfo(&free_bytes, &total_bytes),
         "coordinated graph VRAM preflight");
       const double required = 28.0 * graph.n +
-        8.0 * (graph.row_ptr[end] - graph.row_ptr[begin]) +
-        4.0 * (end - begin + 1);
+        8.0 * (graph.offset(end) - graph.offset(begin)) +
+        (graph.offset(end) - graph.offset(begin) > INT_MAX ? 8.0 : 4.0) *
+          (end - begin + 1);
       if (required > 0.7 * static_cast<double>(free_bytes)) {
         Rcpp::stop("Coordinated graph exceeds a CUDA device VRAM budget.");
       }
@@ -792,8 +864,9 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_devices_impl(
           constexpr int threads = 256;
           const int blocks = (worker->rows + threads - 1) / threads;
           if (blocks == 0) continue;
-          propose_moves_kernel<<<blocks, threads>>>(
-            worker->row.data(), worker->col.data(),
+          const auto propose = [&](auto* row_ptr) {
+            propose_moves_kernel<<<blocks, threads>>>(
+            row_ptr, worker->col.data(),
             worker->weight.data(), worker->degree.data(),
             worker->labels.data(), worker->parent.data(),
             worker->volume.data(), worker->count.data(),
@@ -801,14 +874,21 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_devices_impl(
             worker->rows, graph.volume, resolution, tolerance,
             color, pass_seed, refinement ? 1 : 0, 0,
             nullptr, nullptr, nullptr);
+          };
+          if (worker->wide) propose(worker->row_wide.data());
+          else propose(worker->row.data());
           check_cuda(cudaGetLastError(), "coordinated CUDA proposal");
-          apply_moves_kernel<<<blocks, threads>>>(
+          const auto apply = [&](auto* row_ptr) {
+            apply_moves_kernel<<<blocks, threads>>>(
             worker->degree.data(), worker->labels.data(),
             worker->proposal.data(), worker->volume.data(),
             worker->count.data(), worker->moves.data(),
             graph.n, worker->first, worker->rows, color,
-            pass_seed, 0, nullptr, nullptr, nullptr,
+            pass_seed, 0, row_ptr, nullptr, nullptr,
             nullptr, nullptr);
+          };
+          if (worker->wide) apply(worker->row_wide.data());
+          else apply(worker->row.data());
           check_cuda(cudaGetLastError(), "coordinated CUDA apply");
         }
         for (const auto& worker : workers) {

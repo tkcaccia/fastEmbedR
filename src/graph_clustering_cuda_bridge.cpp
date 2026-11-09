@@ -32,7 +32,8 @@ Rcpp::List fastembedr_graph_cluster_cuda_cpp(
     double resolution = 1.0,
     int n_iterations = 10,
     int n_runs = 1,
-    double seed = 1) {
+    double seed = 1,
+    bool force_wide = false) {
   if (!graph_clustering_cuda_available_impl()) {
     Rcpp::stop(
       "CUDA graph clustering is unavailable. Reinstall fastEmbedR with "
@@ -41,7 +42,7 @@ Rcpp::List fastembedr_graph_cluster_cuda_cpp(
   }
   Rcpp::List result = fastembedr_graph_accel::cluster(
     from, to, weight, n_vertices, method, resolution, n_iterations, n_runs,
-    seed, "cuda", graph_local_move_cuda_impl
+    seed, "cuda", graph_local_move_cuda_impl, force_wide
   );
   result["repeatability"] = "not_bitwise_deterministic";
   return result;
@@ -58,7 +59,8 @@ Rcpp::List fastembedr_graph_cluster_cuda_devices_cpp(
     int n_iterations,
     int n_runs,
     double seed,
-    Rcpp::IntegerVector devices) {
+    Rcpp::IntegerVector devices,
+    bool force_wide = false) {
 #ifdef FASTEMBEDR_HAS_CUDA
   namespace accel = fastembedr_graph_accel;
   int count = 0;
@@ -80,7 +82,7 @@ Rcpp::List fastembedr_graph_cluster_cuda_devices_cpp(
     }
     seen[device] = true;
   }
-  std::vector<int> first_level_edges;
+  std::vector<double> first_level_edges;
   double sync_bytes = 0.0;
   int color_phases = 0;
   const auto move = [&](const accel::Graph& graph,
@@ -94,8 +96,8 @@ Rcpp::List fastembedr_graph_cluster_cuda_devices_cpp(
         const int end = static_cast<int>(
           static_cast<std::int64_t>(graph.n) * (i + 1) /
           selected.size());
-        first_level_edges.push_back(
-          graph.row_ptr[end] - graph.row_ptr[begin]);
+        first_level_edges.push_back(static_cast<double>(
+          graph.offset(end) - graph.offset(begin)));
       }
     }
     auto moved = graph_local_move_cuda_devices_impl(graph, initial, parent,
@@ -107,9 +109,14 @@ Rcpp::List fastembedr_graph_cluster_cuda_devices_cpp(
     return moved;
   };
   Rcpp::List result = accel::cluster(from, to, weight, n_vertices,
-    method, resolution, n_iterations, n_runs, seed, "cuda", move);
+    method, resolution, n_iterations, n_runs, seed, "cuda", move,
+    force_wide);
   result["implementation"] = "resident_cuda_coordinated_host_sync";
-  result["graph_storage"] = "partitioned_float32_csr";
+  const std::string dtype = Rcpp::as<std::string>(
+    result["csr_offset_dtype"]);
+  result["graph_storage"] = dtype == "uint64" ?
+    "partitioned_float32_csr_uint64" :
+    "partitioned_float32_csr";
   result["coarsening_backend"] = "native_cpp";
   result["repeatability"] = "not_bitwise_deterministic";
   result["effective_gpu_workers"] =

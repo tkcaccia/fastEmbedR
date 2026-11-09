@@ -107,6 +107,14 @@ graph builder and bounded coordinated edge-tile path are implemented,
 including automatic single-device selection, but still need device
 qualification and a measured large-memory admission before a 50M fit.
 
+Resident Metal and CUDA Louvain/Leiden select int32 or uint64 CSR row
+offsets from the checked edge count. The GPU move and refinement kernels
+read bounded edge tiles and retain one decision per complete row, even
+when a row spans tiles. A forced-wide 71-vertex Metal case passed
+partition and modularity parity for both methods; the CUDA source
+compiled in an isolated HPC compute job but still needs a real-device
+case. Large-graph memory, speed, and quality are unqualified.
+
 ## Metal
 
 Metal is implemented with Objective-C++ and Metal kernels. Public Metal and CUDA

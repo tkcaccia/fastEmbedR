@@ -23,7 +23,8 @@ Rcpp::List fastembedr_graph_cluster_metal_cpp(
     double resolution = 1.0,
     int n_iterations = 10,
     int n_runs = 1,
-    double seed = 1) {
+    double seed = 1,
+    bool force_wide = false) {
   if (!graph_clustering_metal_available_impl()) {
     Rcpp::stop(
       "Metal graph clustering is unavailable: " +
@@ -32,6 +33,6 @@ Rcpp::List fastembedr_graph_cluster_metal_cpp(
   }
   return fastembedr_graph_accel::cluster(
     from, to, weight, n_vertices, method, resolution, n_iterations, n_runs,
-    seed, "metal", graph_local_move_metal_impl
+    seed, "metal", graph_local_move_metal_impl, force_wide
   );
 }

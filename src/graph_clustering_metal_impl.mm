@@ -28,6 +28,7 @@ struct MetalParams {
   float tolerance;
   std::uint32_t first;
   std::uint32_t rows;
+  std::uint32_t wide_offsets;
 };
 
 struct MetalGraphState {
@@ -69,7 +70,38 @@ struct Params {
   float tolerance;
   uint first;
   uint rows;
+  uint wide_offsets;
 };
+
+struct EdgeTileCursor {
+  ulong base;
+  ulong end;
+  uint local;
+  uint count;
+  EdgeTileCursor(ulong begin, ulong stop) :
+      base(begin), end(stop), local(0), count(0) { refill(); }
+  void refill() {
+    const ulong remaining = end - base;
+    count = uint(min(remaining, ulong(64)));
+    local = 0;
+  }
+  bool valid() const { return base < end; }
+  ulong next() {
+    const ulong position = base + local++;
+    if (local == count) {
+      base += count;
+      if (base < end) refill();
+    }
+    return position;
+  }
+};
+
+inline ulong graph_row_offset(device const uchar* bytes,
+                              uint row, uint wide) {
+  if (wide)
+    return reinterpret_cast<device const ulong*>(bytes)[row];
+  return ulong(reinterpret_cast<device const int*>(bytes)[row]);
+}
 
 inline uint mix32(uint value) {
   value ^= value >> 16;
@@ -85,7 +117,7 @@ inline uint vertex_color(uint vertex_id, uint seed) {
 }
 
 kernel void graph_propose(
-    device const int* row_ptr [[buffer(0)]],
+    device const uchar* row_ptr [[buffer(0)]],
     device const int* col_idx [[buffer(1)]],
     device const float* edge_weight [[buffer(2)]],
     device const float* degree [[buffer(3)]],
@@ -119,14 +151,17 @@ kernel void graph_propose(
         params.tolerance < threshold) return;
   }
 
-  const int begin = row_ptr[local];
-  const int end = row_ptr[local + 1];
+  const ulong begin = graph_row_offset(row_ptr, local,
+    params.wide_offsets);
+  const ulong end = graph_row_offset(row_ptr, local + 1,
+    params.wide_offsets);
   int candidate_labels[local_candidate_count];
   float candidate_weights[local_candidate_count];
   int unique_count = 0;
   bool overflow = false;
   float old_inside = 0.0f;
-  for (int position = begin; position < end; ++position) {
+  for (EdgeTileCursor tile(begin, end); tile.valid();) {
+    const ulong position = tile.next();
     const int v = col_idx[position];
     if (v == int(u) ||
         (params.refinement && parent[v] != parent[u])) {
@@ -194,8 +229,9 @@ kernel void graph_propose(
       }
     }
   } else {
-    for (int candidate_position = begin;
-         candidate_position < end; ++candidate_position) {
+    for (EdgeTileCursor candidates(begin, end);
+         candidates.valid();) {
+      const ulong candidate_position = candidates.next();
       const int neighbor = col_idx[candidate_position];
       if (neighbor == int(u)) continue;
       if (params.refinement && parent[neighbor] != parent[u]) continue;
@@ -209,7 +245,9 @@ kernel void graph_propose(
         continue;
       }
       bool seen = false;
-      for (int previous = begin; previous < candidate_position; ++previous) {
+      for (EdgeTileCursor prior(begin, candidate_position);
+           prior.valid();) {
+        const ulong previous = prior.next();
         const int previous_neighbor = col_idx[previous];
         if (previous_neighbor != int(u) &&
             (!params.refinement || parent[previous_neighbor] == parent[u]) &&
@@ -220,7 +258,8 @@ kernel void graph_propose(
       }
       if (seen) continue;
       float inside = 0.0f;
-      for (int position = begin; position < end; ++position) {
+      for (EdgeTileCursor tile(begin, end); tile.valid();) {
+        const ulong position = tile.next();
         const int v = col_idx[position];
         if (v != int(u) &&
             (!params.refinement || parent[v] == parent[u]) &&
@@ -266,7 +305,7 @@ kernel void graph_apply(
     constant Params& params [[buffer(6)]],
     device atomic_float* cuts [[buffer(7)]],
     device const float* proposal_weight [[buffer(8)]],
-    device const int* row_ptr [[buffer(9)]],
+    device const uchar* row_ptr [[buffer(9)]],
     device const int* col_idx [[buffer(10)]],
     device const float* edge_weight [[buffer(11)]],
     uint local [[thread_position_in_grid]]) {
@@ -283,8 +322,11 @@ kernel void graph_apply(
   float old_cut = 0.0f;
   if (params.leiden_cuts) {
     float simultaneous = 0.0f;
-    for (int position = row_ptr[local];
-         position < row_ptr[local + 1]; ++position) {
+    for (EdgeTileCursor tile(
+           graph_row_offset(row_ptr, local, params.wide_offsets),
+           graph_row_offset(row_ptr, local + 1, params.wide_offsets));
+         tile.valid();) {
+      const ulong position = tile.next();
       const int v = col_idx[position];
       if (v != int(u) && v >= int(params.first) &&
           v < int(params.first + params.rows) &&
@@ -562,7 +604,9 @@ fastembedr_graph_accel::MoveResult graph_local_move_metal_impl(
     std::vector<int> proposal(initial.size(), 0);
     std::vector<std::uint32_t> moves(1, 0U);
 
-    id<MTLBuffer> row_buffer = shared_buffer(current.device, graph.row_ptr);
+    id<MTLBuffer> row_buffer = graph.wide_offsets() ?
+      shared_buffer(current.device, graph.row_ptr_wide) :
+      shared_buffer(current.device, graph.row_ptr);
     id<MTLBuffer> col_buffer = shared_buffer(current.device, graph.col_idx);
     id<MTLBuffer> weight_buffer = shared_buffer(current.device, graph.weight);
     id<MTLBuffer> degree_buffer = shared_buffer(current.device, graph.degree);
@@ -594,7 +638,8 @@ fastembedr_graph_accel::MoveResult graph_local_move_metal_impl(
       resolution,
       tolerance,
       0U,
-      static_cast<std::uint32_t>(graph.n)
+      static_cast<std::uint32_t>(graph.n),
+      graph.wide_offsets() ? 1U : 0U
     };
 
     for (int pass = 0; pass < max_passes; ++pass) {
