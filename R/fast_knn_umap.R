@@ -102,6 +102,16 @@ fast_knn_umap_core <- function(
     if (!is.null(devices)) return(run_resident_umap_multigpu(
         indices, distances, n_components, seed, backend, n_threads,
         n_epochs, graph_mode, devices))
+    if (resolve_embedding_backend(backend) == "cuda" &&
+            umap_cuda_wide_needed(indices, distances)) {
+        if (!isTRUE(massive_nccl_available_cpp())) stop(
+            "Wide resident CUDA UMAP requires NCCL.",
+            call. = FALSE)
+        selected <- as.integer(massive_cuda_memory_cpp()$device)
+        return(run_resident_umap_multigpu(
+            indices, distances, n_components, seed, backend,
+            n_threads, n_epochs, graph_mode, selected))
+    }
     prepared <- dispatch_prepared_umap_input(
         indices,
         distances,
@@ -129,6 +139,26 @@ fast_knn_umap_core <- function(
     dispatch_host_umap_core(indices, distances, settings)
 }
 
+umap_cuda_wide_needed <- function(indices, distances) {
+    if (inherits(indices, "fastEmbedR_umap_initialization")) {
+        indices <- indices$prepared
+    }
+    if (inherits(indices, "fastEmbedR_umap_prepared")) {
+        return(identical(indices$graph$offset_dtype, "uint64"))
+    }
+    if (fastembedr_is_gpu_knn(indices)) {
+        info <- fastembedr_gpu_knn_info(indices)
+        return(2 * as.double(info$n) * info$k > .Machine$integer.max)
+    }
+    matrix <- if (is.null(distances) && is.list(indices)) {
+        indices$indices
+    } else indices
+    dims <- dim(matrix)
+    length(dims) == 2L &&
+        2 * as.double(dims[[1L]]) * dims[[2L]] >
+            .Machine$integer.max
+}
+
 resident_umap_prepared <- function(indices, distances, backend,
                                     n_threads, graph_mode) {
     if (inherits(indices, "fastEmbedR_umap_initialization")) {
@@ -146,6 +176,10 @@ resident_umap_prepared <- function(indices, distances, backend,
     if (fastembedr_is_gpu_knn(indices)) {
         if (!is.null(distances)) stop(
             "Do not pass distances with GPU KNN.", call. = FALSE)
+        info <- fastembedr_gpu_knn_info(indices)
+        umap_check_resident_csr_capacity(
+            info$n, info$k, n_threads = n_threads %||% 1L,
+            allow_wide = TRUE)
         indices <- fastembedr_gpu_knn_to_host(indices)
     }
     prepare_umap_knn(indices, distances, backend = backend,
@@ -171,15 +205,15 @@ run_resident_umap_multigpu <- function(indices, distances,
         match.arg(graph_mode, c("fuzzy", "binary")))
     devices <- massive_validate_devices(devices, backend,
         nrow(prepared$knn$indices))
-    if (length(devices) < 2L) stop(
-        "Resident multi-GPU UMAP requires at least two devices.",
-        call. = FALSE)
     identity <- massive_cuda_device_uuids(devices)
     cfg <- configure_prepared_umap(prepared, backend,
         n_components, n_threads, n_epochs)
     init <- prepare_reusable_umap_init(prepared, cfg,
         n_components, seed)
     graph <- prepared$graph
+    cfg$graph_offset_dtype <- graph$offset_dtype
+    cfg$csr_offset_dtype <- graph$offset_dtype
+    cfg$graph_nnz <- as.double(graph$nnz)
     initial <- if (is_float32_matrix(init$value)) {
         float::dbl(init$value)
     } else {
@@ -338,8 +372,8 @@ fast_knn_umap_cuda_gpu_core <- function(
 #' `epochs_per_sample`.
 #'
 #' @inheritParams umap_knn
-#' @param .allow_wide Internal admission for a coordinated CUDA wide-CSR
-#'   route. Ordinary calls should leave this as `FALSE`.
+#' @param .allow_wide Internal wide-CSR admission override. Ordinary calls
+#'   should leave this as `FALSE`; supported backends select width themselves.
 #' @return A prepared UMAP object containing the KNN, CSR graph, and resolved
 #'   UMAP graph schedule.
 #' @examples
@@ -440,7 +474,7 @@ build_prepared_umap_graph <- function(knn, cfg, graph_mode,
         as.integer(knn$n_neighbors),
         as.integer(cfg$n_threads),
         graph_mode = graph_mode,
-        allow_wide = cfg$backend %in% c("cpu", "metal") ||
+        allow_wide = cfg$backend %in% c("cpu", "metal", "cuda") ||
             isTRUE(allow_wide)
     )
     cfg$graph_prep_backend <- paste0("cpu_", graph_mode, "_csr")

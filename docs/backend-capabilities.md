@@ -102,7 +102,10 @@ checked edge bound. The wide path passed small edge/step parity, synthetic
 offsets above 2^31, and forced-wide 1M/10M Deep1B development fits.
 The 10M graph stayed below 2^31 edges; a real overflow-sized graph,
 full 50M output, measured peak RAM and quality remain unqualified.
-This wide route is not yet available for resident CUDA or Metal UMAP.
+CPU and Metal wide UMAP have passed small graph checks. The CUDA wide
+graph builder and bounded coordinated edge-tile path are implemented,
+including automatic single-device selection, but still need device
+qualification and a measured large-memory admission before a 50M fit.
 
 ## Metal
 

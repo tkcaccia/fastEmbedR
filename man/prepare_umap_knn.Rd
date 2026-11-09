@@ -33,8 +33,8 @@ default from one to four workers. Native GPU backends ignore this argument.}
 standard UMAP fuzzy graph weights. \code{"binary"} uses a symmetric
 unit-weight sensitivity graph.}
 
-\item{.allow_wide}{Internal admission for a coordinated CUDA wide-CSR
-route. Ordinary calls should leave this as \code{FALSE}.}
+\item{.allow_wide}{Internal wide-CSR admission override. Ordinary calls
+should leave this as \code{FALSE}; supported backends select width themselves.}
 }
 \value{
 A prepared UMAP object containing the KNN, CSR graph, and resolved

@@ -55,6 +55,8 @@ test_that("resident UMAP materializes native GPU KNN in host RAM", {
     },
     fastembedr_is_gpu_knn = function(x)
         inherits(x, "fake_gpu_knn"),
+    fastembedr_gpu_knn_info = function(x)
+        list(n = n, k = 2L),
     fastembedr_gpu_knn_to_host = function(x) {
         conversions <<- conversions + 1L
         list(indices = indices, distances = distances)
@@ -123,4 +125,64 @@ test_that("coordinated CUDA receives wide binary 3D graph types", {
             delta_scale = 256,
             synchronization_seconds = 0.01)
     }, .package = "fastEmbedR")
+})
+
+test_that("wide prepared CUDA selects the current GPU automatically", {
+    skip_if_not_installed("float")
+    rows <- 36L
+    width <- 6L
+    indices <- outer(seq_len(rows), seq_len(width),
+        function(i, j) (i + 2L * j - 1L) %% rows + 1L)
+    distances <- matrix(rep(seq_len(width), each = rows),
+        rows, width)
+    prepared <- prepare_umap_knn(indices, distances,
+        graph_mode = "binary", backend = "cpu")
+    prepared$graph <- fastEmbedR:::umap_build_csr_graph(
+        indices, NULL, 0L, width, width, 1L,
+        graph_mode = "binary", allow_wide = TRUE,
+        force_wide = TRUE)
+    initial <- matrix(seq_len(rows * 3L) / 10000,
+        rows, 3L)
+    called <- FALSE
+    with_mocked_bindings({
+        fit <- umap_knn(prepared, n_components = 3L,
+            backend = "cuda")
+        cfg <- attr(fit, "fastEmbedR_config")
+        expect_true(called)
+        expect_identical(cfg$csr_offset_dtype, "uint64")
+        expect_identical(cfg$gpu_devices, 1L)
+        expect_identical(cfg$gpu_identity, "GPU-X")
+        expect_s4_class(fit, "float32")
+    },
+    massive_cuda_memory_cpp = function() list(device = 1L),
+    massive_nccl_available_cpp = function() TRUE,
+    massive_validate_devices = function(devices, ...) devices,
+    massive_cuda_device_uuids = function(...) "GPU-X",
+    umap_cuda_optimize_csr_multigpu_cpp = function(...) {
+        args <- list(...)
+        called <<- is.double(args[[1L]]) &&
+            inherits(args[[3L]], "float32") &&
+            identical(args[[11L]], 1L)
+        list(Y = float::fl(initial),
+            optimizer = "cuda_resident_umap_coordinated_nccl",
+            gpu_devices = 1L,
+            per_device_edge_visits = 10,
+            delta_scale = 256,
+            synchronization_seconds = 0.01)
+    }, .package = "fastEmbedR")
+})
+
+test_that("CUDA wide dispatch checks large edge bounds without allocation", {
+    small <- structure(list(n = 1000000L, k = 30L),
+        class = "fake_gpu_knn")
+    large <- structure(list(n = 50000000L, k = 30L),
+        class = "fake_gpu_knn")
+    with_mocked_bindings({
+        expect_false(fastEmbedR:::umap_cuda_wide_needed(small, NULL))
+        expect_true(fastEmbedR:::umap_cuda_wide_needed(large, NULL))
+    },
+    fastembedr_is_gpu_knn = function(x)
+        inherits(x, "fake_gpu_knn"),
+    fastembedr_gpu_knn_info = function(x) x,
+    .package = "fastEmbedR")
 })

@@ -547,7 +547,7 @@ List umap_cuda_optimize_csr_multigpu_cpp(
   const auto graph = resident_csr_view(offsets, neighbors,
     weights, n);
   if (n < 2 || (dimensions != 2 && dimensions != 3) ||
-      nnz < 1 || devices.size() < 2 || devices.size() > n ||
+      nnz < 1 || devices.size() < 1 || devices.size() > n ||
       n_epochs < 1 || negative_sample_rate < 0 ||
       !std::isfinite(learning_rate) || learning_rate <= 0 ||
       !std::isfinite(min_dist) || min_dist < 0 ||
