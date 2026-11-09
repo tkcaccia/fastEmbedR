@@ -691,6 +691,96 @@ std::string graph_clustering_metal_error_impl() {
   }
 }
 
+namespace {
+
+constexpr std::size_t kResidentMetalTileEdges = 1000000;
+
+void graph_resident_metal_tiles(
+    const fastembedr_graph_accel::Graph& graph, void* handle) {
+  if (graph.positions() != graph.col_idx.size() ||
+      graph.positions() != graph.weight.size()) {
+    Rcpp::stop("Resident Metal CSR edge arrays are inconsistent.");
+  }
+  std::vector<int> rows, columns;
+  std::vector<float> weights;
+  std::uint32_t first = 0;
+  const auto flush = [&]() {
+    if (!columns.empty()) {
+      graph_stream_metal_chunk(handle, rows, columns, weights, first);
+    }
+    rows.clear(); columns.clear(); weights.clear();
+  };
+  for (int u = 0; u < graph.n; ++u) {
+    const auto begin = graph.offset(u);
+    const auto end = graph.offset(u + 1);
+    if (end < begin || end > graph.positions()) {
+      Rcpp::stop("Resident Metal CSR offsets are not monotone.");
+    }
+    const auto degree = end - begin;
+    if (degree > kResidentMetalTileEdges) {
+      flush();
+      for (auto base = begin; base < end;) {
+        const auto count = std::min<std::uint64_t>(
+          kResidentMetalTileEdges, end - base);
+        const auto offset = static_cast<std::size_t>(base);
+        const auto stop = offset + static_cast<std::size_t>(count);
+        columns.assign(graph.col_idx.begin() + offset,
+          graph.col_idx.begin() + stop);
+        weights.assign(graph.weight.begin() + offset,
+          graph.weight.begin() + stop);
+        graph_stream_metal_fragment(handle, columns, weights,
+          static_cast<std::uint32_t>(u), base + count == end);
+        base += count;
+      }
+      columns.clear(); weights.clear();
+      continue;
+    }
+    if (!rows.empty() &&
+        (columns.size() + degree > kResidentMetalTileEdges ||
+         rows.size() > kResidentMetalTileEdges)) flush();
+    if (rows.empty()) {
+      first = static_cast<std::uint32_t>(u);
+      rows.push_back(0);
+    }
+    const auto offset = static_cast<std::size_t>(begin);
+    const auto stop = static_cast<std::size_t>(end);
+    columns.insert(columns.end(), graph.col_idx.begin() + offset,
+      graph.col_idx.begin() + stop);
+    weights.insert(weights.end(), graph.weight.begin() + offset,
+      graph.weight.begin() + stop);
+    rows.push_back(static_cast<int>(columns.size()));
+  }
+  flush();
+}
+
+fastembedr_graph_accel::MoveResult graph_resident_metal_move_tiled(
+    const fastembedr_graph_accel::Graph& graph,
+    const std::vector<int>& initial, const std::vector<int>* parent,
+    int max_passes, float resolution, std::uint64_t seed) {
+  using fastembedr_graph_accel::MoveResult;
+  MoveResult result;
+  result.membership = initial;
+  if (graph.n < 2 || !(graph.volume > 0.0f)) return result;
+  std::unique_ptr<void, decltype(&graph_stream_metal_destroy)> handle(
+    graph_stream_metal_create(graph.degree, initial, graph.volume,
+      resolution, seed, parent), graph_stream_metal_destroy);
+  for (int pass = 0; pass < max_passes; ++pass) {
+    graph_stream_metal_begin_pass(handle.get(), pass);
+    graph_resident_metal_tiles(graph, handle.get());
+    const auto moved = graph_stream_metal_end_pass(handle.get());
+    if (moved > static_cast<std::uint32_t>(INT_MAX - result.moves)) {
+      Rcpp::stop("Resident Metal clustering move count exceeds int32.");
+    }
+    result.moves += static_cast<int>(moved);
+    ++result.passes;
+    if (moved == 0) break;
+  }
+  result.membership = graph_stream_metal_labels(handle.get());
+  return result;
+}
+
+}  // namespace
+
 fastembedr_graph_accel::MoveResult graph_local_move_metal_impl(
     const fastembedr_graph_accel::Graph& graph,
     const std::vector<int>& initial,
@@ -715,6 +805,10 @@ fastembedr_graph_accel::MoveResult graph_local_move_metal_impl(
     if (refinement &&
         (parent == nullptr || parent->size() != initial.size())) {
       Rcpp::stop("Internal Metal Leiden parent-partition size mismatch.");
+    }
+    if (graph.wide_offsets()) {
+      return graph_resident_metal_move_tiled(
+        graph, initial, parent, max_passes, resolution, seed);
     }
 
     MoveResult result;
@@ -864,9 +958,11 @@ void* graph_stream_metal_create(const std::vector<float>& degree,
       Rcpp::stop("Invalid Metal streaming graph state.");
     }
     const bool refinement = parent != nullptr;
-    if (refinement && (cuts == nullptr || parent_volume == nullptr ||
-        parent->size() != degree.size() || cuts->size() != degree.size() ||
-        parent_volume->empty())) {
+    const bool constrained = cuts != nullptr;
+    if ((cuts == nullptr) != (parent_volume == nullptr) ||
+        (refinement && parent->size() != degree.size()) ||
+        (constrained && (!refinement ||
+          cuts->size() != degree.size() || parent_volume->empty()))) {
       Rcpp::stop("Invalid Metal streaming Leiden state.");
     }
     const auto n = degree.size();
@@ -875,7 +971,8 @@ void* graph_stream_metal_create(const std::vector<float>& degree,
       Rcpp::stop("Metal graph state exceeds the device buffer limit.");
     }
     const auto working_set = state().device.recommendedMaxWorkingSetSize;
-    const double buffers = refinement ? 9.0 : 5.0;
+    const double buffers = constrained ? 9.0 :
+      (refinement ? 6.0 : 5.0);
     if (working_set > 0 && buffers * bytes + 4.0 >
         0.7 * working_set) {
       Rcpp::stop("Metal graph state exceeds its working-set budget.");
@@ -897,7 +994,7 @@ void* graph_stream_metal_create(const std::vector<float>& degree,
     if (refinement) session->parent = shared_buffer(device, *parent);
     session->volume = shared_buffer(device, volume);
     session->count = shared_buffer(device, count);
-    if (refinement) {
+    if (constrained) {
       session->cuts = shared_buffer(device, *cuts);
       session->parent_volume = shared_buffer(device, *parent_volume);
       session->proposal_weight = [device newBufferWithLength:bytes
@@ -910,14 +1007,15 @@ void* graph_stream_metal_create(const std::vector<float>& degree,
     if (session->degree == nil || session->labels == nil ||
         session->volume == nil || session->count == nil ||
         session->proposal == nil || session->moves == nil ||
-        (refinement && (session->parent == nil || session->cuts == nil ||
+        (refinement && session->parent == nil) ||
+        (constrained && (session->cuts == nil ||
           session->parent_volume == nil ||
           session->proposal_weight == nil))) {
       Rcpp::stop("Metal streaming graph state allocation failed.");
     }
     session->params = {
       static_cast<std::uint32_t>(n), 0U, 0U,
-      refinement ? 1U : 0U, refinement ? 1U : 0U,
+      refinement ? 1U : 0U, constrained ? 1U : 0U,
       graph_volume, resolution,
       1e-7f * std::max(1.0f, graph_volume / (2.0f * n)),
       0U, 0U

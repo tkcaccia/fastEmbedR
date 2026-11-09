@@ -31,8 +31,12 @@ Rcpp::List fastembedr_graph_cluster_metal_cpp(
       graph_clustering_metal_error_impl()
     );
   }
-  return fastembedr_graph_accel::cluster(
+  auto result = fastembedr_graph_accel::cluster(
     from, to, weight, n_vertices, method, resolution, n_iterations, n_runs,
     seed, "metal", graph_local_move_metal_impl, force_wide
   );
+  result["metal_graph_input"] =
+    Rcpp::as<std::string>(result["csr_offset_dtype"]) == "uint64" ?
+    "bounded_resident_csr_tiles" : "resident_csr_full";
+  return result;
 }

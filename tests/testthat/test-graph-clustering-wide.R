@@ -26,6 +26,10 @@ test_that("GPU clustering makes one decision across wide edge tiles", {
             expect_identical(wide$csr_offset_dtype, "uint64")
             expect_identical(wide$graph_storage,
                 "float32_csr_uint64")
+            if (backend == "metal") {
+                expect_identical(wide$metal_graph_input,
+                    "bounded_resident_csr_tiles")
+            }
             expect_equal(wide$modularity, narrow$modularity,
                 tolerance = 1e-5)
             expect_identical(
