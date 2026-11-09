@@ -38,6 +38,9 @@ void graph_stream_cuda_chunk(void* handle,
   const std::vector<int>& row_ptr,
   const std::vector<int>& col_idx,
   const std::vector<float>& weight, int first);
+void graph_stream_cuda_fragment(void* handle,
+  const std::vector<int>& col_idx,
+  const std::vector<float>& weight, int row, bool last);
 std::uint32_t graph_stream_cuda_end_pass(void* handle);
 std::vector<int> graph_stream_cuda_labels(void* handle);
 std::vector<int> graph_stream_cuda_counts(void* handle);

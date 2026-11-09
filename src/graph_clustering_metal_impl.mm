@@ -37,6 +37,8 @@ struct MetalGraphState {
   id<MTLLibrary> library = nil;
   id<MTLComputePipelineState> proposal_pipeline = nil;
   id<MTLComputePipelineState> apply_pipeline = nil;
+  id<MTLComputePipelineState> fragment_pipeline = nil;
+  id<MTLComputePipelineState> finalize_pipeline = nil;
   std::string error;
   bool initialized = false;
 };
@@ -352,6 +354,112 @@ kernel void graph_apply(
   atomic_fetch_add_explicit(&community_count[next], 1, memory_order_relaxed);
   atomic_fetch_add_explicit(move_count, 1U, memory_order_relaxed);
 }
+
+kernel void graph_fragment_accumulate(
+    device const int* col [[buffer(0)]],
+    device const float* weight [[buffer(1)]],
+    device const int* labels [[buffer(2)]],
+    device const int* parent [[buffer(3)]],
+    device int* mark [[buffer(4)]],
+    device int* touched [[buffer(5)]],
+    device float* total [[buffer(6)]],
+    device int* count [[buffer(7)]],
+    constant Params& params [[buffer(8)]],
+    constant uint& edges [[buffer(9)]],
+    uint thread_id [[thread_position_in_grid]]) {
+  if (thread_id != 0) return;
+  const uint row = params.first;
+  for (uint edge = 0; edge < edges; ++edge) {
+    const int neighbor = col[edge];
+    if (neighbor == int(row) ||
+        (params.refinement && parent[neighbor] != parent[row])) continue;
+    const int label = labels[neighbor];
+    if (!mark[label]) {
+      mark[label] = 1;
+      touched[(*count)++] = label;
+      total[label] = 0.0f;
+    }
+    total[label] += weight[edge];
+  }
+}
+
+kernel void graph_fragment_finalize(
+    device const float* degree [[buffer(0)]],
+    device const int* labels [[buffer(1)]],
+    device const int* parent [[buffer(2)]],
+    device const atomic_float* volume [[buffer(3)]],
+    device const atomic_int* community_count [[buffer(4)]],
+    device int* proposal [[buffer(5)]],
+    device const atomic_float* cuts [[buffer(6)]],
+    device const float* parent_volume [[buffer(7)]],
+    device float* proposal_weight [[buffer(8)]],
+    device int* mark [[buffer(9)]],
+    device const int* touched [[buffer(10)]],
+    device const float* total [[buffer(11)]],
+    device int* count [[buffer(12)]],
+    constant Params& params [[buffer(13)]],
+    uint thread_id [[thread_position_in_grid]]) {
+  if (thread_id != 0) return;
+  const uint row = params.first;
+  const int old = labels[row];
+  proposal[row] = old;
+  const float node_degree = degree[row];
+  bool eligible = node_degree > 0.0f;
+  if (params.refinement && atomic_load_explicit(
+      &community_count[old], memory_order_relaxed) != 1) eligible = false;
+  if (params.leiden_cuts) {
+    const float parent_total = parent_volume[parent[row]];
+    const float threshold = params.resolution * node_degree *
+      (parent_total - node_degree) / params.graph_volume;
+    if (atomic_load_explicit(&cuts[old], memory_order_relaxed) +
+        params.tolerance < threshold) eligible = false;
+  }
+  const float old_inside = mark[old] ? total[old] : 0.0f;
+  const float old_total = atomic_load_explicit(
+    &volume[old], memory_order_relaxed);
+  const float old_volume = max(0.0f, old_total - node_degree);
+  const float old_score = old_inside - params.resolution * node_degree *
+    old_volume / params.graph_volume;
+  float best_score = params.leiden_cuts ? -INFINITY : old_score;
+  int best = old;
+  float best_weight = 0.0f;
+  if (eligible) {
+    for (int index = 0; index < *count; ++index) {
+      const int candidate = touched[index];
+      if (candidate == old ||
+          (params.leiden_cuts && vertex_color(candidate, params.seed) >=
+            params.color) ||
+          atomic_load_explicit(&community_count[candidate],
+            memory_order_relaxed) <= 0) continue;
+      const float candidate_volume = atomic_load_explicit(
+        &volume[candidate], memory_order_relaxed);
+      if (params.leiden_cuts) {
+        const float parent_total = parent_volume[parent[row]];
+        const float threshold = params.resolution * candidate_volume *
+          (parent_total - candidate_volume) / params.graph_volume;
+        if (atomic_load_explicit(&cuts[candidate],
+            memory_order_relaxed) + params.tolerance < threshold) continue;
+      }
+      const float score = total[candidate] - params.resolution *
+        node_degree * candidate_volume / params.graph_volume;
+      if (params.leiden_cuts && score < -params.tolerance) continue;
+      if (score > best_score + params.tolerance ||
+          (fabs(score - best_score) <= params.tolerance &&
+            candidate < best)) {
+        best = candidate;
+        best_score = score;
+        best_weight = total[candidate];
+      }
+    }
+    if (best != old && (params.leiden_cuts ||
+        best_score > old_score + params.tolerance)) {
+      proposal[row] = best;
+      if (params.leiden_cuts) proposal_weight[row] = best_weight;
+    }
+  }
+  for (int index = 0; index < *count; ++index) mark[touched[index]] = 0;
+  *count = 0;
+}
 )METAL";
 }
 
@@ -430,6 +538,20 @@ void initialize_state() {
   if (current.apply_pipeline == nil) {
     current.error = error == nil ? "Could not create Metal apply pipeline." :
       std::string([[error localizedDescription] UTF8String]);
+    return;
+  }
+  id<MTLFunction> fragment =
+    [current.library newFunctionWithName:@"graph_fragment_accumulate"];
+  id<MTLFunction> finalize =
+    [current.library newFunctionWithName:@"graph_fragment_finalize"];
+  current.fragment_pipeline = [current.device
+    newComputePipelineStateWithFunction:fragment error:&error];
+  current.finalize_pipeline = [current.device
+    newComputePipelineStateWithFunction:finalize error:&error];
+  if (current.fragment_pipeline == nil ||
+      current.finalize_pipeline == nil) {
+    current.error = error == nil ? "Metal fragment pipeline failed." :
+      std::string([[error localizedDescription] UTF8String]);
   }
 }
 
@@ -472,6 +594,11 @@ struct MetalStreamSession {
   id<MTLBuffer> proposal = nil;
   id<MTLBuffer> proposal_weight = nil;
   id<MTLBuffer> moves = nil;
+  id<MTLBuffer> fragment_mark = nil;
+  id<MTLBuffer> fragment_touched = nil;
+  id<MTLBuffer> fragment_total = nil;
+  id<MTLBuffer> fragment_count = nil;
+  std::int64_t fragment_row = -1;
   MetalParams params{};
   std::uint64_t seed = 0;
 
@@ -486,6 +613,10 @@ struct MetalStreamSession {
     [proposal release];
     [proposal_weight release];
     [moves release];
+    [fragment_mark release];
+    [fragment_touched release];
+    [fragment_total release];
+    [fragment_count release];
   }
 };
 
@@ -547,7 +678,9 @@ bool graph_clustering_metal_available_impl() {
     const MetalGraphState& current = state();
     return current.device != nil &&
       current.proposal_pipeline != nil &&
-      current.apply_pipeline != nil;
+      current.apply_pipeline != nil &&
+      current.fragment_pipeline != nil &&
+      current.finalize_pipeline != nil;
   }
 }
 
@@ -796,6 +929,9 @@ void* graph_stream_metal_create(const std::vector<float>& degree,
 
 void graph_stream_metal_begin_pass(void* handle, int pass) {
   auto& session = stream_session(handle);
+  if (session.fragment_row >= 0) {
+    Rcpp::stop("Metal clustering row fragment was not finalized.");
+  }
   session.params.seed = static_cast<std::uint32_t>(
     session.seed ^ (session.seed >> 32U)
   ) ^ (0x9e3779b9U * static_cast<std::uint32_t>(pass + 1));
@@ -804,7 +940,8 @@ void graph_stream_metal_begin_pass(void* handle, int pass) {
 
 void graph_stream_metal_set_color(void* handle, int color) {
   auto& session = stream_session(handle);
-  if (!session.params.leiden_cuts || color < 0 || color >= kColorCount) {
+  if (session.fragment_row >= 0 || !session.params.leiden_cuts ||
+      color < 0 || color >= kColorCount) {
     Rcpp::stop("Invalid Metal Leiden color phase.");
   }
   session.params.color = static_cast<std::uint32_t>(color);
@@ -817,6 +954,9 @@ void graph_stream_metal_chunk(void* handle,
                               std::uint32_t first) {
   @autoreleasepool {
     auto& session = stream_session(handle);
+    if (session.fragment_row >= 0) {
+      Rcpp::stop("Metal clustering row fragment was not finalized.");
+    }
     if (row_ptr.size() < 2 || col_idx.size() != weight.size() ||
         col_idx.size() > static_cast<std::size_t>(INT_MAX) ||
         row_ptr.back() != static_cast<int>(col_idx.size()) ||
@@ -853,13 +993,157 @@ void graph_stream_metal_chunk(void* handle,
   }
 }
 
+void graph_stream_metal_fragment(void* handle,
+                                 const std::vector<int>& col_idx,
+                                 const std::vector<float>& weight,
+                                 std::uint32_t row, bool last) {
+  @autoreleasepool {
+    auto& session = stream_session(handle);
+    auto device = state().device;
+    const auto edge_bytes = col_idx.size() * sizeof(int);
+    if (row >= session.params.n || col_idx.empty() ||
+        col_idx.size() != weight.size() ||
+        col_idx.size() > static_cast<std::size_t>(INT_MAX) ||
+        edge_bytes > device.maxBufferLength ||
+        (session.fragment_row >= 0 &&
+          session.fragment_row != static_cast<std::int64_t>(row))) {
+      Rcpp::stop("Invalid Metal clustering row fragment.");
+    }
+    if (session.fragment_mark == nil) {
+      const auto bytes = static_cast<NSUInteger>(session.params.n) *
+        sizeof(int);
+      const auto working_set = device.recommendedMaxWorkingSetSize;
+      const double base = (session.params.refinement ? 9.0 : 5.0) * bytes;
+      if (bytes > device.maxBufferLength ||
+          (working_set > 0 && base + 3.0 * bytes + edge_bytes * 2.0 >
+            0.7 * working_set)) {
+        Rcpp::stop("Metal fragment state exceeds working-set budget.");
+      }
+      session.fragment_mark = [device newBufferWithLength:bytes
+        options:MTLResourceStorageModeShared];
+      session.fragment_touched = [device newBufferWithLength:bytes
+        options:MTLResourceStorageModeShared];
+      session.fragment_total = [device newBufferWithLength:bytes
+        options:MTLResourceStorageModeShared];
+      session.fragment_count = [device newBufferWithLength:sizeof(int)
+        options:MTLResourceStorageModeShared];
+      if (session.fragment_mark == nil ||
+          session.fragment_touched == nil ||
+          session.fragment_total == nil ||
+          session.fragment_count == nil) {
+        Rcpp::stop("Metal fragment state allocation failed.");
+      }
+      std::memset(session.fragment_mark.contents, 0, bytes);
+      *static_cast<int*>(session.fragment_count.contents) = 0;
+    }
+    id<MTLBuffer> col = shared_buffer(device, col_idx);
+    id<MTLBuffer> weights = shared_buffer(device, weight);
+    if (col == nil || weights == nil) {
+      [col release]; [weights release];
+      Rcpp::stop("Metal fragment upload allocation failed.");
+    }
+    session.fragment_row = row;
+    session.params.first = row;
+    session.params.rows = 1;
+    session.params.wide_offsets = 0;
+    const auto edges = static_cast<std::uint32_t>(col_idx.size());
+    id<MTLCommandBuffer> command = [state().queue commandBuffer];
+    if (command == nil) Rcpp::stop("Metal fragment command failed.");
+    id<MTLComputeCommandEncoder> accumulate =
+      [command computeCommandEncoder];
+    [accumulate setBuffer:col offset:0 atIndex:0];
+    [accumulate setBuffer:weights offset:0 atIndex:1];
+    [accumulate setBuffer:session.labels offset:0 atIndex:2];
+    [accumulate setBuffer:session.parent == nil ? session.labels :
+      session.parent offset:0 atIndex:3];
+    [accumulate setBuffer:session.fragment_mark offset:0 atIndex:4];
+    [accumulate setBuffer:session.fragment_touched offset:0 atIndex:5];
+    [accumulate setBuffer:session.fragment_total offset:0 atIndex:6];
+    [accumulate setBuffer:session.fragment_count offset:0 atIndex:7];
+    [accumulate setBytes:&session.params length:sizeof(session.params)
+      atIndex:8];
+    [accumulate setBytes:&edges length:sizeof(edges) atIndex:9];
+    encode_pipeline(accumulate, state().fragment_pipeline, 1);
+    [accumulate endEncoding];
+    if (last) {
+      id<MTLComputeCommandEncoder> finalize =
+        [command computeCommandEncoder];
+      [finalize setBuffer:session.degree offset:0 atIndex:0];
+      [finalize setBuffer:session.labels offset:0 atIndex:1];
+      [finalize setBuffer:session.parent == nil ? session.labels :
+        session.parent offset:0 atIndex:2];
+      [finalize setBuffer:session.volume offset:0 atIndex:3];
+      [finalize setBuffer:session.count offset:0 atIndex:4];
+      [finalize setBuffer:session.proposal offset:0 atIndex:5];
+      [finalize setBuffer:session.cuts == nil ? session.volume :
+        session.cuts offset:0 atIndex:6];
+      [finalize setBuffer:session.parent_volume == nil ? session.volume :
+        session.parent_volume offset:0 atIndex:7];
+      [finalize setBuffer:session.proposal_weight == nil ? session.volume :
+        session.proposal_weight offset:0 atIndex:8];
+      [finalize setBuffer:session.fragment_mark offset:0 atIndex:9];
+      [finalize setBuffer:session.fragment_touched offset:0 atIndex:10];
+      [finalize setBuffer:session.fragment_total offset:0 atIndex:11];
+      [finalize setBuffer:session.fragment_count offset:0 atIndex:12];
+      [finalize setBytes:&session.params length:sizeof(session.params)
+        atIndex:13];
+      encode_pipeline(finalize, state().finalize_pipeline, 1);
+      [finalize endEncoding];
+      const std::vector<int> empty_row = {0, 0};
+      id<MTLBuffer> row_ptr = shared_buffer(device, empty_row);
+      if (row_ptr == nil) Rcpp::stop("Metal row offset allocation failed.");
+      const int first_color = session.params.leiden_cuts ?
+        static_cast<int>(session.params.color) : 0;
+      const int last_color = session.params.leiden_cuts ?
+        first_color + 1 : kColorCount;
+      for (int color = first_color; color < last_color; ++color) {
+        session.params.color = static_cast<std::uint32_t>(color);
+        id<MTLComputeCommandEncoder> apply =
+          [command computeCommandEncoder];
+        [apply setBuffer:session.degree offset:0 atIndex:0];
+        [apply setBuffer:session.labels offset:0 atIndex:1];
+        [apply setBuffer:session.proposal offset:0 atIndex:2];
+        [apply setBuffer:session.volume offset:0 atIndex:3];
+        [apply setBuffer:session.count offset:0 atIndex:4];
+        [apply setBuffer:session.moves offset:0 atIndex:5];
+        [apply setBytes:&session.params length:sizeof(session.params)
+          atIndex:6];
+        [apply setBuffer:session.cuts == nil ? session.volume :
+          session.cuts offset:0 atIndex:7];
+        [apply setBuffer:session.proposal_weight == nil ? session.volume :
+          session.proposal_weight offset:0 atIndex:8];
+        [apply setBuffer:row_ptr offset:0 atIndex:9];
+        [apply setBuffer:col offset:0 atIndex:10];
+        [apply setBuffer:weights offset:0 atIndex:11];
+        encode_pipeline(apply, state().apply_pipeline, 1);
+        [apply endEncoding];
+      }
+      [row_ptr release];
+    }
+    [command commit];
+    [command waitUntilCompleted];
+    [col release]; [weights release];
+    if (command.status == MTLCommandBufferStatusError) {
+      Rcpp::stop("Metal clustering fragment command failed: %s",
+        [[command.error localizedDescription] UTF8String]);
+    }
+    if (last) session.fragment_row = -1;
+  }
+}
+
 std::uint32_t graph_stream_metal_end_pass(void* handle) {
   auto& session = stream_session(handle);
+  if (session.fragment_row >= 0) {
+    Rcpp::stop("Metal clustering row fragment was not finalized.");
+  }
   return *static_cast<std::uint32_t*>(session.moves.contents);
 }
 
 std::vector<int> graph_stream_metal_labels(void* handle) {
   auto& session = stream_session(handle);
+  if (session.fragment_row >= 0) {
+    Rcpp::stop("Metal clustering row fragment was not finalized.");
+  }
   const auto n = session.params.n;
   const int* values = static_cast<const int*>(session.labels.contents);
   return std::vector<int>(values, values + n);
@@ -867,6 +1151,9 @@ std::vector<int> graph_stream_metal_labels(void* handle) {
 
 std::vector<int> graph_stream_metal_counts(void* handle) {
   auto& session = stream_session(handle);
+  if (session.fragment_row >= 0) {
+    Rcpp::stop("Metal clustering row fragment was not finalized.");
+  }
   const auto n = session.params.n;
   const int* values = static_cast<const int*>(session.count.contents);
   return std::vector<int>(values, values + n);

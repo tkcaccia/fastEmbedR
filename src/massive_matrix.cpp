@@ -1072,6 +1072,51 @@ class CsrGraphSource {
   GraphFile weights_;
 };
 
+template <typename Chunk, typename Fragment>
+void visit_clustering_uploads(CsrGraphSource& graph,
+    std::uint64_t n, std::uint64_t chunk_rows,
+    std::uint64_t edge_budget, Chunk upload_chunk,
+    Fragment upload_fragment) {
+  for (std::uint64_t first = 1; first <= n;) {
+    const auto rows = graph.bounded_rows(first, chunk_rows,
+      edge_budget, true);
+    const auto degree = graph.offset(first) - graph.offset(first - 1);
+    if (rows == 1 && degree > edge_budget) {
+      std::vector<int> col_idx;
+      std::vector<float> weight;
+      col_idx.reserve(static_cast<std::size_t>(edge_budget));
+      weight.reserve(static_cast<std::size_t>(edge_budget));
+      graph.visit(first, 1,
+        [&](std::uint64_t, std::uint32_t target,
+            double value, std::uint64_t) {
+          if (col_idx.size() == edge_budget) {
+            upload_fragment(col_idx, weight, first - 1, false);
+            col_idx.clear();
+            weight.clear();
+          }
+          col_idx.push_back(static_cast<int>(target - 1));
+          weight.push_back(static_cast<float>(value));
+        });
+      upload_fragment(col_idx, weight, first - 1, true);
+    } else {
+      std::vector<int> row_ptr(rows + 1, 0);
+      std::vector<int> col_idx;
+      std::vector<float> weight;
+      graph.visit(first, rows,
+        [&](std::uint64_t source, std::uint32_t target,
+            double value, std::uint64_t) {
+          ++row_ptr[source - first + 1];
+          col_idx.push_back(static_cast<int>(target - 1));
+          weight.push_back(static_cast<float>(value));
+        });
+      std::partial_sum(row_ptr.begin(), row_ptr.end(), row_ptr.begin());
+      upload_chunk(row_ptr, col_idx, weight, first - 1);
+    }
+    first += rows;
+    Rcpp::checkUserInterrupt();
+  }
+}
+
 #if defined(__unix__) || defined(__APPLE__)
 template <typename T>
 class MappedLouvainVector {
@@ -1930,7 +1975,8 @@ List massive_graph_modularity_cpp(std::string offsets_path,
   std::uint64_t pairs = 0;
   int next_percent = 10;
   for (std::uint64_t first = 1; first <= graph.vertices();) {
-    const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+    const auto rows = graph.bounded_rows(first, chunk_rows,
+      maximum, true);
     graph.visit(first, rows,
       [&](std::uint64_t source, std::uint32_t target,
           double weight, std::uint64_t) {
@@ -2177,7 +2223,8 @@ List massive_louvain_metal_level_cpp(std::string offsets_path,
   double initial_internal = 0.0;
   std::vector<double> initial_volume(n, 0.0);
   for (std::uint64_t first = 1; first <= n;) {
-    const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+    const auto rows = graph.bounded_rows(first, chunk_rows,
+      maximum, true);
     graph.visit(first, rows,
       [&](std::uint64_t source, std::uint32_t target, double weight,
           std::uint64_t) {
@@ -2210,25 +2257,17 @@ List massive_louvain_metal_level_cpp(std::string offsets_path,
   int passes = 0;
   for (int pass = 0; pass < max_passes; ++pass) {
     graph_stream_metal_begin_pass(handle.get(), pass);
-    for (std::uint64_t first = 1; first <= n;) {
-      const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
-      std::vector<int> row_ptr(rows + 1, 0);
-      std::vector<int> col_idx;
-      std::vector<float> weight;
-      graph.visit(first, rows,
-        [&](std::uint64_t source, std::uint32_t target,
-            double value, std::uint64_t) {
-          ++row_ptr[source - first + 1];
-          col_idx.push_back(static_cast<int>(target - 1));
-          weight.push_back(static_cast<float>(value));
-        });
-      std::partial_sum(row_ptr.begin(), row_ptr.end(),
-                       row_ptr.begin());
-      graph_stream_metal_chunk(handle.get(), row_ptr, col_idx,
-        weight, static_cast<std::uint32_t>(first - 1));
-      first += rows;
-      Rcpp::checkUserInterrupt();
-    }
+    visit_clustering_uploads(graph, n, chunk_rows, maximum,
+      [&](const std::vector<int>& row, const std::vector<int>& col,
+          const std::vector<float>& weight, std::uint64_t first) {
+        graph_stream_metal_chunk(handle.get(), row, col, weight,
+          static_cast<std::uint32_t>(first));
+      },
+      [&](const std::vector<int>& col, const std::vector<float>& weight,
+          std::uint64_t first, bool last) {
+        graph_stream_metal_fragment(handle.get(), col, weight,
+          static_cast<std::uint32_t>(first), last);
+      });
     const auto moved = graph_stream_metal_end_pass(handle.get());
     moves += moved;
     ++passes;
@@ -2257,7 +2296,8 @@ List massive_louvain_metal_level_cpp(std::string offsets_path,
   std::vector<double> final_volume(n, 0.0);
   double final_internal = 0.0;
   for (std::uint64_t first = 1; first <= n;) {
-    const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+    const auto rows = graph.bounded_rows(first, chunk_rows,
+      maximum, true);
     graph.visit(first, rows,
       [&](std::uint64_t source, std::uint32_t target,
           double weight, std::uint64_t) {
@@ -2372,7 +2412,8 @@ List massive_louvain_cuda_level_cpp(std::string offsets_path,
   double graph_volume = 0.0;
   double initial_internal = 0.0;
   for (std::uint64_t first = 1; first <= n;) {
-    const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+    const auto rows = graph.bounded_rows(first, chunk_rows,
+      maximum, true);
     graph.visit(first, rows,
       [&](std::uint64_t source, std::uint32_t target,
           double weight, std::uint64_t) {
@@ -2406,25 +2447,17 @@ List massive_louvain_cuda_level_cpp(std::string offsets_path,
   int passes = 0;
   for (int pass = 0; pass < max_passes; ++pass) {
     graph_stream_cuda_begin_pass(handle.get(), pass);
-    for (std::uint64_t first = 1; first <= n;) {
-      const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
-      std::vector<int> row_ptr(rows + 1, 0);
-      std::vector<int> col_idx;
-      std::vector<float> weight;
-      graph.visit(first, rows,
-        [&](std::uint64_t source, std::uint32_t target,
-            double value, std::uint64_t) {
-          ++row_ptr[source - first + 1];
-          col_idx.push_back(static_cast<int>(target - 1));
-          weight.push_back(static_cast<float>(value));
-        });
-      std::partial_sum(row_ptr.begin(), row_ptr.end(),
-                       row_ptr.begin());
-      graph_stream_cuda_chunk(handle.get(), row_ptr, col_idx,
-        weight, static_cast<int>(first - 1));
-      first += rows;
-      Rcpp::checkUserInterrupt();
-    }
+    visit_clustering_uploads(graph, n, chunk_rows, maximum,
+      [&](const std::vector<int>& row, const std::vector<int>& col,
+          const std::vector<float>& weight, std::uint64_t first) {
+        graph_stream_cuda_chunk(handle.get(), row, col, weight,
+          static_cast<int>(first));
+      },
+      [&](const std::vector<int>& col, const std::vector<float>& weight,
+          std::uint64_t first, bool last) {
+        graph_stream_cuda_fragment(handle.get(), col, weight,
+          static_cast<int>(first), last);
+      });
     const auto moved = graph_stream_cuda_end_pass(handle.get());
     moves += moved;
     ++passes;
@@ -2573,7 +2606,8 @@ List massive_leiden_metal_refine_cpp(std::string offsets_path,
   }
   double volume = 0.0;
   for (std::uint64_t first = 1; first <= n;) {
-    const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+    const auto rows = graph.bounded_rows(first, chunk_rows,
+      maximum, true);
     graph.visit(first, rows,
       [&](std::uint64_t source, std::uint32_t target, double weight,
           std::uint64_t) {
@@ -2604,24 +2638,17 @@ List massive_leiden_metal_refine_cpp(std::string offsets_path,
   graph_stream_metal_begin_pass(handle.get(), 0);
   for (int color = 1; color < 8; ++color) {
     graph_stream_metal_set_color(handle.get(), color);
-    for (std::uint64_t first = 1; first <= n;) {
-      const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
-      std::vector<int> row_ptr(rows + 1, 0);
-      std::vector<int> col_idx;
-      std::vector<float> weight;
-      graph.visit(first, rows,
-        [&](std::uint64_t source, std::uint32_t target,
-            double value, std::uint64_t) {
-          ++row_ptr[source - first + 1];
-          col_idx.push_back(static_cast<int>(target - 1));
-          weight.push_back(static_cast<float>(value));
-        });
-      std::partial_sum(row_ptr.begin(), row_ptr.end(), row_ptr.begin());
-      graph_stream_metal_chunk(handle.get(), row_ptr, col_idx,
-        weight, static_cast<std::uint32_t>(first - 1));
-      first += rows;
-      Rcpp::checkUserInterrupt();
-    }
+    visit_clustering_uploads(graph, n, chunk_rows, maximum,
+      [&](const std::vector<int>& row, const std::vector<int>& col,
+          const std::vector<float>& weight, std::uint64_t first) {
+        graph_stream_metal_chunk(handle.get(), row, col, weight,
+          static_cast<std::uint32_t>(first));
+      },
+      [&](const std::vector<int>& col, const std::vector<float>& weight,
+          std::uint64_t first, bool last) {
+        graph_stream_metal_fragment(handle.get(), col, weight,
+          static_cast<std::uint32_t>(first), last);
+      });
   }
   const auto moves = graph_stream_metal_end_pass(handle.get());
   const auto labels = graph_stream_metal_labels(handle.get());
@@ -2748,7 +2775,8 @@ List massive_leiden_cuda_refine_cpp(std::string offsets_path,
   }
   double volume = 0.0;
   for (std::uint64_t first = 1; first <= n;) {
-    const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
+    const auto rows = graph.bounded_rows(first, chunk_rows,
+      maximum, true);
     graph.visit(first, rows,
       [&](std::uint64_t source, std::uint32_t target, double weight,
           std::uint64_t) {
@@ -2780,24 +2808,17 @@ List massive_leiden_cuda_refine_cpp(std::string offsets_path,
   graph_stream_cuda_begin_pass(handle.get(), 0);
   for (int color = 1; color < 8; ++color) {
     graph_stream_cuda_set_color(handle.get(), color);
-    for (std::uint64_t first = 1; first <= n;) {
-      const auto rows = graph.bounded_rows(first, chunk_rows, maximum);
-      std::vector<int> row_ptr(rows + 1, 0);
-      std::vector<int> col_idx;
-      std::vector<float> weight;
-      graph.visit(first, rows,
-        [&](std::uint64_t source, std::uint32_t target,
-            double value, std::uint64_t) {
-          ++row_ptr[source - first + 1];
-          col_idx.push_back(static_cast<int>(target - 1));
-          weight.push_back(static_cast<float>(value));
-        });
-      std::partial_sum(row_ptr.begin(), row_ptr.end(), row_ptr.begin());
-      graph_stream_cuda_chunk(handle.get(), row_ptr, col_idx,
-        weight, static_cast<int>(first - 1));
-      first += rows;
-      Rcpp::checkUserInterrupt();
-    }
+    visit_clustering_uploads(graph, n, chunk_rows, maximum,
+      [&](const std::vector<int>& row, const std::vector<int>& col,
+          const std::vector<float>& weight, std::uint64_t first) {
+        graph_stream_cuda_chunk(handle.get(), row, col, weight,
+          static_cast<int>(first));
+      },
+      [&](const std::vector<int>& col, const std::vector<float>& weight,
+          std::uint64_t first, bool last) {
+        graph_stream_cuda_fragment(handle.get(), col, weight,
+          static_cast<int>(first), last);
+      });
   }
   const auto moves = graph_stream_cuda_end_pass(handle.get());
   const auto labels = graph_stream_cuda_labels(handle.get());

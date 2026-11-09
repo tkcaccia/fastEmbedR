@@ -32,6 +32,10 @@ void graph_stream_metal_chunk(void* handle,
                               const std::vector<int>& col_idx,
                               const std::vector<float>& weight,
                               std::uint32_t first);
+void graph_stream_metal_fragment(void* handle,
+                                 const std::vector<int>& col_idx,
+                                 const std::vector<float>& weight,
+                                 std::uint32_t row, bool last);
 std::uint32_t graph_stream_metal_end_pass(void* handle);
 std::vector<int> graph_stream_metal_labels(void* handle);
 std::vector<int> graph_stream_metal_counts(void* handle);

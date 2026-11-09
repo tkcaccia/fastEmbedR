@@ -304,6 +304,89 @@ __global__ void apply_moves_kernel(
   atomicAdd(move_count, 1U);
 }
 
+__global__ void accumulate_fragment_kernel(
+    const int* col, const float* weight, int edges, int row,
+    const int* labels, const int* parent, int refinement,
+    int* mark, int* touched, float* total, int* count) {
+  if (blockIdx.x || threadIdx.x) return;
+  for (int edge = 0; edge < edges; ++edge) {
+    const int neighbor = col[edge];
+    if (neighbor == row ||
+        (refinement && parent[neighbor] != parent[row])) continue;
+    const int label = labels[neighbor];
+    if (!mark[label]) {
+      mark[label] = 1;
+      touched[(*count)++] = label;
+      total[label] = 0.0f;
+    }
+    total[label] += weight[edge];
+  }
+}
+
+__global__ void finalize_fragment_kernel(
+    int row, const float* degree, const int* labels,
+    const int* parent, const float* volume,
+    const int* community_count, int* proposal,
+    float graph_volume, float resolution, float tolerance,
+    int color, unsigned int seed, int refinement,
+    const float* cuts, const float* parent_volume,
+    float* proposal_weight, int* mark, const int* touched,
+    const float* total, int* count) {
+  if (blockIdx.x || threadIdx.x) return;
+  const int old = labels[row];
+  proposal[row] = old;
+  const float node_degree = degree[row];
+  bool eligible = node_degree > 0.0f;
+  if (refinement && community_count[old] != 1) eligible = false;
+  if (refinement) {
+    const float parent_total = parent_volume[parent[row]];
+    const float threshold = resolution * node_degree *
+      (parent_total - node_degree) / graph_volume;
+    if (cuts[old] + tolerance < threshold) eligible = false;
+  }
+  const float old_inside = mark[old] ? total[old] : 0.0f;
+  const float old_volume = fmaxf(0.0f, volume[old] - node_degree);
+  const float old_score = old_inside - resolution * node_degree *
+    old_volume / graph_volume;
+  float best_score = refinement ? -INFINITY : old_score;
+  int best = old;
+  float best_weight = 0.0f;
+  if (eligible) {
+    for (int index = 0; index < *count; ++index) {
+      const int candidate = touched[index];
+      if (candidate == old || community_count[candidate] <= 0 ||
+          (refinement && vertex_color(candidate, seed) >= color)) {
+        continue;
+      }
+      const float candidate_volume = volume[candidate];
+      if (refinement) {
+        const float parent_total = parent_volume[parent[row]];
+        const float threshold = resolution * candidate_volume *
+          (parent_total - candidate_volume) / graph_volume;
+        if (cuts[candidate] + tolerance < threshold) continue;
+      }
+      const float score = total[candidate] - resolution * node_degree *
+        candidate_volume / graph_volume;
+      if (refinement && score < -tolerance) continue;
+      if (score > best_score + tolerance ||
+          (fabsf(score - best_score) <= tolerance && candidate < best)) {
+        best = candidate;
+        best_score = score;
+        best_weight = total[candidate];
+      }
+    }
+    if (best != old &&
+        (refinement || best_score > old_score + tolerance)) {
+      proposal[row] = best;
+      if (refinement) proposal_weight[row] = best_weight;
+    }
+  }
+  for (int index = 0; index < *count; ++index) {
+    mark[touched[index]] = 0;
+  }
+  *count = 0;
+}
+
 struct StreamSession {
   int n;
   int chunk_rows;
@@ -328,6 +411,11 @@ struct StreamSession {
   DeviceBuffer<float> cuts;
   DeviceBuffer<float> parent_volume;
   DeviceBuffer<float> proposal_weight;
+  std::unique_ptr<DeviceBuffer<int>> fragment_mark;
+  std::unique_ptr<DeviceBuffer<int>> fragment_touched;
+  std::unique_ptr<DeviceBuffer<float>> fragment_total;
+  std::unique_ptr<DeviceBuffer<int>> fragment_count;
+  int fragment_row = -1;
 
   StreamSession(int vertices, int rows, int edges, float total,
       float gamma, std::uint64_t run_seed, bool refinement)
@@ -432,6 +520,9 @@ void* graph_stream_cuda_create(const std::vector<float>& degree,
 
 void graph_stream_cuda_begin_pass(void* handle, int pass) {
   auto& session = stream_session(handle);
+  if (session.fragment_row >= 0) {
+    Rcpp::stop("CUDA clustering row fragment was not finalized.");
+  }
   session.pass_seed = static_cast<unsigned int>(
     session.seed ^ (session.seed >> 32U)) ^
     (0x9e3779b9U * static_cast<unsigned int>(pass + 1));
@@ -441,7 +532,8 @@ void graph_stream_cuda_begin_pass(void* handle, int pass) {
 
 void graph_stream_cuda_set_color(void* handle, int color) {
   auto& session = stream_session(handle);
-  if (!session.leiden || color < 0 || color >= kColorCount) {
+  if (session.fragment_row >= 0 || !session.leiden ||
+      color < 0 || color >= kColorCount) {
     Rcpp::stop("Invalid CUDA Leiden color phase.");
   }
   session.color = color;
@@ -452,6 +544,9 @@ void graph_stream_cuda_chunk(void* handle,
     const std::vector<int>& col_idx,
     const std::vector<float>& weight, int first) {
   auto& session = stream_session(handle);
+  if (session.fragment_row >= 0) {
+    Rcpp::stop("CUDA clustering row fragment was not finalized.");
+  }
   if (row_ptr.size() < 2 ||
       row_ptr.size() - 1 > static_cast<std::size_t>(INT_MAX)) {
     Rcpp::stop("Invalid CUDA streaming Louvain row count.");
@@ -504,8 +599,84 @@ void graph_stream_cuda_chunk(void* handle,
     "synchronize CUDA streaming Louvain chunk");
 }
 
+void graph_stream_cuda_fragment(void* handle,
+    const std::vector<int>& col_idx,
+    const std::vector<float>& weight, int row, bool last) {
+  auto& session = stream_session(handle);
+  if (row < 0 || row >= session.n || col_idx.empty() ||
+      col_idx.size() != weight.size() ||
+      col_idx.size() > static_cast<std::size_t>(session.edge_capacity) ||
+      (session.fragment_row >= 0 && session.fragment_row != row)) {
+    Rcpp::stop("Invalid CUDA clustering row fragment.");
+  }
+  if (!session.fragment_mark) {
+    std::size_t free_bytes = 0;
+    std::size_t total_bytes = 0;
+    check_cuda(cudaMemGetInfo(&free_bytes, &total_bytes),
+      "CUDA clustering fragment memory check");
+    const double required = 12.0 * session.n + sizeof(int);
+    if (required > 0.65 * free_bytes) {
+      Rcpp::stop("CUDA clustering fragment state exceeds VRAM budget.");
+    }
+    session.fragment_mark.reset(new DeviceBuffer<int>(session.n));
+    session.fragment_touched.reset(new DeviceBuffer<int>(session.n));
+    session.fragment_total.reset(new DeviceBuffer<float>(session.n));
+    session.fragment_count.reset(new DeviceBuffer<int>(1));
+    check_cuda(cudaMemset(session.fragment_mark->data(), 0,
+      session.n * sizeof(int)), "clear CUDA fragment markers");
+    check_cuda(cudaMemset(session.fragment_count->data(), 0,
+      sizeof(int)), "clear CUDA fragment count");
+  }
+  session.fragment_row = row;
+  check_cuda(cudaMemcpy(session.col.data(), col_idx.data(),
+    col_idx.size() * sizeof(int), cudaMemcpyHostToDevice),
+    "upload CUDA clustering fragment IDs");
+  check_cuda(cudaMemcpy(session.weight.data(), weight.data(),
+    weight.size() * sizeof(float), cudaMemcpyHostToDevice),
+    "upload CUDA clustering fragment weights");
+  accumulate_fragment_kernel<<<1, 1>>>(session.col.data(),
+    session.weight.data(), static_cast<int>(col_idx.size()), row,
+    session.labels.data(), session.parent.data(), session.leiden,
+    session.fragment_mark->data(), session.fragment_touched->data(),
+    session.fragment_total->data(), session.fragment_count->data());
+  check_cuda(cudaGetLastError(), "CUDA clustering fragment accumulation");
+  if (last) {
+    finalize_fragment_kernel<<<1, 1>>>(row, session.degree.data(),
+      session.labels.data(), session.parent.data(),
+      session.volume.data(), session.count.data(),
+      session.proposal.data(), session.graph_volume,
+      session.resolution, session.tolerance, session.color,
+      session.pass_seed, session.leiden, session.cuts.data(),
+      session.parent_volume.data(), session.proposal_weight.data(),
+      session.fragment_mark->data(), session.fragment_touched->data(),
+      session.fragment_total->data(), session.fragment_count->data());
+    check_cuda(cudaGetLastError(), "CUDA clustering fragment proposal");
+    check_cuda(cudaMemset(session.row.data(), 0, 2 * sizeof(int)),
+      "clear CUDA clustering one-row offsets");
+    const int first_color = session.leiden ? session.color : 0;
+    const int last_color = session.leiden ? session.color + 1 :
+      kColorCount;
+    for (int color = first_color; color < last_color; ++color) {
+      apply_moves_kernel<<<1, 1>>>(session.degree.data(),
+        session.labels.data(), session.proposal.data(),
+        session.volume.data(), session.count.data(),
+        session.moves.data(), session.n, row, 1, color,
+        session.pass_seed, session.leiden, session.row.data(),
+        session.col.data(), session.weight.data(),
+        session.cuts.data(), session.proposal_weight.data());
+      check_cuda(cudaGetLastError(), "CUDA clustering fragment apply");
+    }
+    session.fragment_row = -1;
+  }
+  check_cuda(cudaDeviceSynchronize(),
+    "synchronize CUDA clustering row fragment");
+}
+
 std::uint32_t graph_stream_cuda_end_pass(void* handle) {
   auto& session = stream_session(handle);
+  if (session.fragment_row >= 0) {
+    Rcpp::stop("CUDA clustering row fragment was not finalized.");
+  }
   std::uint32_t moves = 0;
   check_cuda(cudaMemcpy(&moves, session.moves.data(), sizeof(moves),
     cudaMemcpyDeviceToHost), "read CUDA streaming moves");
@@ -514,6 +685,9 @@ std::uint32_t graph_stream_cuda_end_pass(void* handle) {
 
 std::vector<int> graph_stream_cuda_labels(void* handle) {
   auto& session = stream_session(handle);
+  if (session.fragment_row >= 0) {
+    Rcpp::stop("CUDA clustering row fragment was not finalized.");
+  }
   std::vector<int> labels(session.n);
   check_cuda(cudaMemcpy(labels.data(), session.labels.data(),
     labels.size() * sizeof(int), cudaMemcpyDeviceToHost),
@@ -523,6 +697,9 @@ std::vector<int> graph_stream_cuda_labels(void* handle) {
 
 std::vector<int> graph_stream_cuda_counts(void* handle) {
   auto& session = stream_session(handle);
+  if (session.fragment_row >= 0) {
+    Rcpp::stop("CUDA clustering row fragment was not finalized.");
+  }
   std::vector<int> count(session.n);
   check_cuda(cudaMemcpy(count.data(), session.count.data(),
     count.size() * sizeof(int), cudaMemcpyDeviceToHost),
