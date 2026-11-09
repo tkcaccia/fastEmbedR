@@ -607,10 +607,10 @@ MetalTsne3dPipelines& metal_tsne_3d_pipelines(
 struct MetalTsne3dBuffers {
   id<MTLDevice> device;
   std::vector<id<MTLBuffer>> owned;
-  std::uint64_t working_set_cap;
+  std::uint64_t buffer_cap;
 
   explicit MetalTsne3dBuffers(id<MTLDevice> device,
-      std::uint64_t cap = 0) : device(device), working_set_cap(cap) {}
+      std::uint64_t cap = 0) : device(device), buffer_cap(cap) {}
   ~MetalTsne3dBuffers() {
     for (id<MTLBuffer> buffer : owned) [buffer release];
   }
@@ -618,9 +618,9 @@ struct MetalTsne3dBuffers {
     if (bytes == 0 || bytes > device.maxBufferLength) {
       Rcpp::stop("Metal 3D t-SNE buffer exceeds the device limit.");
     }
-    if (working_set_cap != 0 &&
-        (device.currentAllocatedSize > working_set_cap ||
-         bytes > working_set_cap - device.currentAllocatedSize)) {
+    if (buffer_cap != 0 &&
+        (device.currentAllocatedSize > buffer_cap ||
+         bytes > buffer_cap - device.currentAllocatedSize)) {
       Rcpp::stop("Metal t-SNE resident state exceeds its working-set cap.");
     }
     id<MTLBuffer> buffer = data == nullptr ?
@@ -630,6 +630,11 @@ struct MetalTsne3dBuffers {
                         options:MTLResourceStorageModeShared];
     if (buffer == nil) {
       Rcpp::stop("Metal 3D t-SNE buffer allocation failed.");
+    }
+    if (buffer_cap != 0 &&
+        device.currentAllocatedSize > buffer_cap) {
+      [buffer release];
+      Rcpp::stop("Metal t-SNE resident state exceeds its working-set cap.");
     }
     owned.push_back(buffer);
     return buffer;
@@ -682,6 +687,20 @@ struct MetalTsne3dStream {
   std::uint32_t edge_capacity;
 };
 
+struct MetalTsne3dObjects {
+  MPSGraph* graph = nil;
+  MPSGraphTensorData* mass = nil;
+  MPSGraphTensorData* kernel = nil;
+  MPSGraphTensorData* potential = nil;
+
+  ~MetalTsne3dObjects() {
+    [mass release];
+    [kernel release];
+    [potential release];
+    [graph release];
+  }
+};
+
 void metal_tsne_3d_write_buffers(
     const std::string& path,
     std::initializer_list<id<MTLBuffer>> buffers,
@@ -729,6 +748,7 @@ List run_metal_tsne_3d(
     int checkpoint_every = 0,
     SEXP checkpoint_callback = R_NilValue,
     const MetalTsne3dStream* stream = nullptr,
+    std::uint64_t resident_buffer_cap = 0,
     std::uint64_t working_set_cap = 0) {
   if (initial.size() != static_cast<std::size_t>(n) * 3u ||
       initial.size() > std::numeric_limits<std::uint32_t>::max() ||
@@ -739,7 +759,7 @@ List run_metal_tsne_3d(
     Rcpp::stop("Invalid Metal 3D t-SNE graph or checkpoint controls.");
   }
   MetalTsne3dPipelines& pipe = metal_tsne_3d_pipelines(state);
-  MetalTsne3dBuffers memory(state.device, working_set_cap);
+  MetalTsne3dBuffers memory(state.device, resident_buffer_cap);
   const std::uint32_t rows = static_cast<std::uint32_t>(n);
   const std::uint32_t first_row = 0u;
   const std::uint64_t edge_base = 0u;
@@ -771,7 +791,8 @@ List run_metal_tsne_3d(
       (row_ptr == nil || col == nil || prob == nil)) {
     Rcpp::stop("Metal t-SNE graph buffers are unavailable.");
   }
-  const std::uint32_t row_capacity = 262144u;
+  const std::uint32_t row_capacity =
+    std::min(rows, 262144u);
   id<MTLBuffer> tile_offsets = nil;
   id<MTLBuffer> tile_indices = nil;
   id<MTLBuffer> tile_weights = nil;
@@ -837,7 +858,8 @@ List run_metal_tsne_3d(
   id<MTLBuffer> center = memory.make(3u * sizeof(float));
 
   MPSShape* shape = @[@(side), @(side), @(side)];
-  MPSGraph* fft_graph = [[MPSGraph alloc] init];
+  MetalTsne3dObjects fft_owned;
+  MPSGraph* fft_graph = fft_owned.graph = [[MPSGraph alloc] init];
   MPSGraphTensor* mass_in = [fft_graph
     placeholderWithShape:shape dataType:MPSDataTypeFloat32
                     name:@"mass_3d"];
@@ -863,13 +885,13 @@ List run_metal_tsne_3d(
   MPSGraphTensor* result = [fft_graph
     HermiteanToRealFFTWithTensor:product axes:axes
                      descriptor:inverse name:@"potential_3d"];
-  MPSGraphTensorData* mass_data = [[MPSGraphTensorData alloc]
+  MPSGraphTensorData* mass_data = fft_owned.mass = [[MPSGraphTensorData alloc]
     initWithMTLBuffer:mass shape:shape
              dataType:MPSDataTypeFloat32];
-  MPSGraphTensorData* kernel_data = [[MPSGraphTensorData alloc]
+  MPSGraphTensorData* kernel_data = fft_owned.kernel = [[MPSGraphTensorData alloc]
     initWithMTLBuffer:kernel shape:shape
              dataType:MPSDataTypeFloat32];
-  MPSGraphTensorData* potential_data = [[MPSGraphTensorData alloc]
+  MPSGraphTensorData* potential_data = fft_owned.potential = [[MPSGraphTensorData alloc]
     initWithMTLBuffer:potential shape:shape
              dataType:MPSDataTypeFloat32];
   NSDictionary* feeds = @{mass_in: mass_data,
@@ -1027,10 +1049,6 @@ List run_metal_tsne_3d(
                                 layout_bytes);
     const double metal_allocated_bytes_observed =
       static_cast<double>(state.device.currentAllocatedSize);
-    [mass_data release];
-    [kernel_data release];
-    [potential_data release];
-    [fft_graph release];
     const double elapsed = std::chrono::duration<double>(
       std::chrono::steady_clock::now() - started).count();
     return List::create(
@@ -1060,10 +1078,6 @@ List run_metal_tsne_3d(
   }
   const double metal_allocated_bytes_observed =
     static_cast<double>(state.device.currentAllocatedSize);
-  [mass_data release];
-  [kernel_data release];
-  [potential_data release];
-  [fft_graph release];
   return List::create(
     Rcpp::Named("Y") = layout,
     Rcpp::Named("metal_allocated_bytes_observed") =

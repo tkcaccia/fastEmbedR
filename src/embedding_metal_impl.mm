@@ -9772,6 +9772,8 @@ List massive_tsne_optimize_metal_impl(
                  "70%% of the recommended device working set.");
     }
     const auto working_set_cap = recommended / 10 * 7;
+    const auto resident_buffer_cap =
+      working_set_cap - budget.fft_reserve_bytes;
     MetalTsneMappedFile offsets(offsets_path,
       (static_cast<std::size_t>(n) + 1) * sizeof(std::uint64_t),
       state.device, !stream);
@@ -9797,7 +9799,7 @@ List massive_tsne_optimize_metal_impl(
       min_gain, max_step_norm, offsets.buffer(), indices.buffer(),
       weights.buffer(), stream ? &tiles : nullptr,
       output_path, start_iter, state_path, checkpoint_every,
-      checkpoint_callback, working_set_cap);
+      checkpoint_callback, resident_buffer_cap, working_set_cap);
     else fit = run_metal_tsne_3d(state, nullptr, initial, n,
       early_iter, normal_iter, early_exaggeration, exaggeration,
       learning_rate, learning_rate_auto, initial_momentum,
@@ -9805,7 +9807,8 @@ List massive_tsne_optimize_metal_impl(
       offsets.buffer(), indices.buffer(), weights.buffer(),
       output_path, start_iter, state_path,
       checkpoint_every, checkpoint_callback,
-      stream ? &tiles : nullptr, working_set_cap);
+      stream ? &tiles : nullptr, resident_buffer_cap,
+      working_set_cap);
     fit["metal_state_admission_bytes"] =
       static_cast<double>(budget.total_bytes);
     fit["metal_working_set_cap_bytes"] =

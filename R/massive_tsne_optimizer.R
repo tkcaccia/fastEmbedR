@@ -195,7 +195,8 @@ massive_tsne_result_resources <- function(plan, graph, fit, saved) {
         resources$graph_access <- if (plan$graph_access == "stream")
             "bounded_stream" else "read_only_mmap"
     if (identical(plan$backend, "metal")) {
-        resources$streaming_scope <- "graph_upload_only"
+        resources$streaming_scope <- if (plan$graph_access ==
+            "stream") "graph_upload_only" else "none"
         resources$optimizer_state_residency <-
             "admission_bounded_resident"
         resources$fft_workspace_residency <-

@@ -30,8 +30,8 @@ struct MetalTsne2dFileWorkspace {
 
   MetalTsne2dFileWorkspace(MetalEmbeddingState& device,
                            const std::vector<float>& initial, int rows,
-                           std::uint64_t working_set_cap)
-    : state(device), owned(device.device, working_set_cap), n(rows),
+                           std::uint64_t buffer_cap)
+    : state(device), owned(device.device, buffer_cap), n(rows),
       grid(metal_tsne_fft_grid_size(rows)), fft(grid * 2u),
       log_fft(log2_power_of_two(fft)),
       grid_cells(grid * grid), fft_cells(fft * fft),
@@ -203,7 +203,8 @@ struct MetalTsne2dFileTiles {
   MetalTsne2dFileTiles(MetalTsne3dBuffers& owned,
                        const MetalTsne3dStream& graph,
                        std::uint32_t n) {
-    constexpr std::uint32_t row_capacity = 262144u;
+    const std::uint32_t row_capacity =
+      std::min(n, 262144u);
     const std::size_t capacity = std::min<std::size_t>(
       graph.edge_capacity, graph.offsets[n]);
     offsets = owned.make((row_capacity + 1u) * sizeof(std::uint64_t));
@@ -260,9 +261,10 @@ List run_metal_tsne_2d_file(
     id<MTLBuffer> prob, const MetalTsne3dStream* stream,
     const std::string& output_path, int start_iter,
     const std::string& state_path, int checkpoint_every,
-    SEXP checkpoint_callback, std::uint64_t working_set_cap) {
+    SEXP checkpoint_callback, std::uint64_t resident_buffer_cap,
+    std::uint64_t working_set_cap) {
   MetalTsne2dFileWorkspace work(state, initial, n,
-                                working_set_cap);
+                                resident_buffer_cap);
   const auto layout_bytes = initial.size() * sizeof(float);
   if (start_iter > 0) {
     if (!std::filesystem::exists(state_path) ||
