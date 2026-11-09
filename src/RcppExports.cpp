@@ -187,14 +187,14 @@ BEGIN_RCPP
 END_RCPP
 }
 // umap_cuda_optimize_csr_multigpu_cpp
-List umap_cuda_optimize_csr_multigpu_cpp(IntegerVector offsets, IntegerVector neighbors, NumericVector weights, NumericMatrix init, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, IntegerVector devices);
+List umap_cuda_optimize_csr_multigpu_cpp(SEXP offsets, IntegerVector neighbors, SEXP weights, NumericMatrix init, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, IntegerVector devices);
 RcppExport SEXP _fastEmbedR_umap_cuda_optimize_csr_multigpu_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP initSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP devicesSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< IntegerVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type offsets(offsetsSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type weights(weightsSEXP);
     Rcpp::traits::input_parameter< NumericMatrix >::type init(initSEXP);
     Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
     Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
@@ -762,6 +762,27 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type start_epoch(start_epochSEXP);
     Rcpp::traits::input_parameter< int >::type total_epochs(total_epochsSEXP);
     rcpp_result_gen = Rcpp::wrap(knn_embed_metal_csr_cpp(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, repulsion_strength, seed, sampler_mode, start_epoch, total_epochs));
+    return rcpp_result_gen;
+END_RCPP
+}
+// umap_metal_optimize_csr_wide_cpp
+SEXP umap_metal_optimize_csr_wide_cpp(NumericVector offsets, IntegerVector neighbors, SEXP weights, NumericMatrix init, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, int edge_capacity);
+RcppExport SEXP _fastEmbedR_umap_metal_optimize_csr_wide_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP initSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP edge_capacitySEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type init(initSEXP);
+    Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
+    Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
+    Rcpp::traits::input_parameter< double >::type min_dist(min_distSEXP);
+    Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< int >::type edge_capacity(edge_capacitySEXP);
+    rcpp_result_gen = Rcpp::wrap(umap_metal_optimize_csr_wide_cpp(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, edge_capacity));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1364,8 +1385,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // umap_graph_csr_binary_union_cpp
-Rcpp::List umap_graph_csr_binary_union_cpp(IntegerMatrix indices, int col_start, int n_cols, int n_threads);
-RcppExport SEXP _fastEmbedR_umap_graph_csr_binary_union_cpp(SEXP indicesSEXP, SEXP col_startSEXP, SEXP n_colsSEXP, SEXP n_threadsSEXP) {
+Rcpp::List umap_graph_csr_binary_union_cpp(IntegerMatrix indices, int col_start, int n_cols, int n_threads, bool force_wide);
+RcppExport SEXP _fastEmbedR_umap_graph_csr_binary_union_cpp(SEXP indicesSEXP, SEXP col_startSEXP, SEXP n_colsSEXP, SEXP n_threadsSEXP, SEXP force_wideSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1373,7 +1394,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type col_start(col_startSEXP);
     Rcpp::traits::input_parameter< int >::type n_cols(n_colsSEXP);
     Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
-    rcpp_result_gen = Rcpp::wrap(umap_graph_csr_binary_union_cpp(indices, col_start, n_cols, n_threads));
+    Rcpp::traits::input_parameter< bool >::type force_wide(force_wideSEXP);
+    rcpp_result_gen = Rcpp::wrap(umap_graph_csr_binary_union_cpp(indices, col_start, n_cols, n_threads, force_wide));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1647,8 +1669,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // fast_knn_umap_csr_wide_diffusion_cpp
-NumericMatrix fast_knn_umap_csr_wide_diffusion_cpp(NumericVector offsets, IntegerVector neighbors, SEXP weights, int n_iterations, int n_threads, int seed, double init_scale);
-RcppExport SEXP _fastEmbedR_fast_knn_umap_csr_wide_diffusion_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP n_iterationsSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP init_scaleSEXP) {
+NumericMatrix fast_knn_umap_csr_wide_diffusion_cpp(NumericVector offsets, IntegerVector neighbors, SEXP weights, int n_iterations, int n_threads, int seed, double init_scale, int n_components);
+RcppExport SEXP _fastEmbedR_fast_knn_umap_csr_wide_diffusion_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP n_iterationsSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP init_scaleSEXP, SEXP n_componentsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1659,13 +1681,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< double >::type init_scale(init_scaleSEXP);
-    rcpp_result_gen = Rcpp::wrap(fast_knn_umap_csr_wide_diffusion_cpp(offsets, neighbors, weights, n_iterations, n_threads, seed, init_scale));
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    rcpp_result_gen = Rcpp::wrap(fast_knn_umap_csr_wide_diffusion_cpp(offsets, neighbors, weights, n_iterations, n_threads, seed, init_scale, n_components));
     return rcpp_result_gen;
 END_RCPP
 }
 // fast_knn_umap_csr_wide_init_cpp
-NumericMatrix fast_knn_umap_csr_wide_init_cpp(NumericVector offsets, IntegerVector neighbors, SEXP weights, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, int edge_tile_capacity);
-RcppExport SEXP _fastEmbedR_fast_knn_umap_csr_wide_init_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP init_embeddingSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP edge_tile_capacitySEXP) {
+SEXP fast_knn_umap_csr_wide_init_cpp(NumericVector offsets, IntegerVector neighbors, SEXP weights, NumericMatrix init_embedding, int n_epochs, double min_dist, int negative_sample_rate, double learning_rate, double repulsion_strength, int n_threads, int seed, int edge_tile_capacity, bool return_float32);
+RcppExport SEXP _fastEmbedR_fast_knn_umap_csr_wide_init_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP init_embeddingSEXP, SEXP n_epochsSEXP, SEXP min_distSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP repulsion_strengthSEXP, SEXP n_threadsSEXP, SEXP seedSEXP, SEXP edge_tile_capacitySEXP, SEXP return_float32SEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1681,7 +1704,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< int >::type edge_tile_capacity(edge_tile_capacitySEXP);
-    rcpp_result_gen = Rcpp::wrap(fast_knn_umap_csr_wide_init_cpp(offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, edge_tile_capacity));
+    Rcpp::traits::input_parameter< bool >::type return_float32(return_float32SEXP);
+    rcpp_result_gen = Rcpp::wrap(fast_knn_umap_csr_wide_init_cpp(offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, edge_tile_capacity, return_float32));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3480,6 +3504,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_silhouette_score_metal_cpp", (DL_FUNC) &_fastEmbedR_silhouette_score_metal_cpp, 3},
     {"_fastEmbedR_knn_embed_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_metal_cpp, 9},
     {"_fastEmbedR_knn_embed_metal_csr_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_metal_csr_cpp, 14},
+    {"_fastEmbedR_umap_metal_optimize_csr_wide_cpp", (DL_FUNC) &_fastEmbedR_umap_metal_optimize_csr_wide_cpp, 11},
     {"_fastEmbedR_knn_umap_refine_rows_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_rows_metal_cpp, 10},
     {"_fastEmbedR_rsvd_multiply_metal_cpp", (DL_FUNC) &_fastEmbedR_rsvd_multiply_metal_cpp, 3},
     {"_fastEmbedR_pca_project_block_metal_cpp", (DL_FUNC) &_fastEmbedR_pca_project_block_metal_cpp, 4},
@@ -3518,7 +3543,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_umap_graph_csr_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_cpp, 6},
     {"_fastEmbedR_umap_graph_csr_float_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_float_cpp, 7},
     {"_fastEmbedR_umap_graph_csr_cuda_like_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_cuda_like_cpp, 6},
-    {"_fastEmbedR_umap_graph_csr_binary_union_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_binary_union_cpp, 4},
+    {"_fastEmbedR_umap_graph_csr_binary_union_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_binary_union_cpp, 5},
     {"_fastEmbedR_fast_knn_umap_range_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_range_cpp, 15},
     {"_fastEmbedR_fast_knn_umap_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_cpp, 13},
     {"_fastEmbedR_umap_cuda_diffusion_init_csr_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_diffusion_init_csr_cpp, 6},
@@ -3531,8 +3556,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_knn_umap_refine_masked_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_masked_cpp, 12},
     {"_fastEmbedR_knn_umap_refine_rows_cpp", (DL_FUNC) &_fastEmbedR_knn_umap_refine_rows_cpp, 12},
     {"_fastEmbedR_fast_knn_umap_csr_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_csr_cpp, 14},
-    {"_fastEmbedR_fast_knn_umap_csr_wide_diffusion_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_csr_wide_diffusion_cpp, 7},
-    {"_fastEmbedR_fast_knn_umap_csr_wide_init_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_csr_wide_init_cpp, 12},
+    {"_fastEmbedR_fast_knn_umap_csr_wide_diffusion_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_csr_wide_diffusion_cpp, 8},
+    {"_fastEmbedR_fast_knn_umap_csr_wide_init_cpp", (DL_FUNC) &_fastEmbedR_fast_knn_umap_csr_wide_init_cpp, 13},
     {"_fastEmbedR_umap_auto_parameters_cpp", (DL_FUNC) &_fastEmbedR_umap_auto_parameters_cpp, 3},
     {"_fastEmbedR_fastembedr_graph_from_knn_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_from_knn_cpp, 6},
     {"_fastEmbedR_fastembedr_graph_canonical_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_graph_canonical_cpp, 4},

@@ -75,6 +75,21 @@ int main() {
       counted_wide.kind() != FastembedrCsrOffsetKind::Uint64 ||
       counted_small.offset(3) != 10 ||
       counted_wide.offset(3) != wide_offsets.offset(3)) return 7;
+  auto moved_narrow = FastembedrCsrOffsetStorage::from_counts(
+    std::vector<int>{5, 0, 5});
+  const auto* narrow_data = moved_narrow.narrow().data();
+  const auto narrow_vector = std::move(moved_narrow).take_narrow();
+  if (narrow_vector.size() != 4 || narrow_vector[3] != 10 ||
+      narrow_vector.data() != narrow_data) return 12;
+  auto moved_wide = FastembedrCsrOffsetStorage::from_counts(
+    std::vector<std::uint64_t>{(std::uint64_t{1} << 31) - 2,
+                               0, 12});
+  const auto* wide_data = moved_wide.wide().data();
+  const auto moved = std::move(moved_wide).take_wide();
+  if (moved.size() != 4 || moved[3] != wide_offsets.offset(3) ||
+      moved.data() != wide_data) {
+    return 11;
+  }
   bool memory_rejected = false;
   try {
     FastembedrCsrOffsetStorage::from_counts(

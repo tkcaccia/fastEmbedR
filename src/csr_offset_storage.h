@@ -114,6 +114,14 @@ class FastembedrCsrOffsetStorage {
     return std::move(narrow_);
   }
 
+  std::vector<std::uint64_t> take_wide() && {
+    finish();
+    if (kind_ != FastembedrCsrOffsetKind::Uint64) {
+      throw std::logic_error("CSR offsets use the 32-bit path.");
+    }
+    return std::move(wide_);
+  }
+
  private:
   std::uint64_t rows_ = 0;
   std::uint64_t maximum_edges_ = 0;

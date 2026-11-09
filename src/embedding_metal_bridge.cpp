@@ -1,4 +1,15 @@
 #include <Rcpp.h>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <vector>
+
+#include "csr_edge_tiles.h"
+#include "massive_umap_metal.h"
+#include "resident_csr_view.h"
+#include "umap_optimizer_common.h"
 
 using Rcpp::IntegerMatrix;
 using Rcpp::IntegerVector;
@@ -302,6 +313,137 @@ NumericMatrix knn_embed_metal_csr_cpp(IntegerVector offsets,
     repulsion_strength, seed, sampler_mode,
     start_epoch, total_epochs
   );
+}
+
+namespace {
+
+bool resident_metal_due(int epoch, double period) {
+  return epoch > 0 &&
+    std::floor(epoch / period) >
+    std::floor((epoch - 1) / period);
+}
+
+int resident_metal_negatives(int epoch, double period, int rate) {
+  if (rate == 0) return 0;
+  const double sample = std::floor(epoch / period);
+  const int previous_epoch = sample <= 1.0 ? 0 :
+    static_cast<int>(std::ceil((sample - 1.0) * period));
+  const double negative_period = period / rate;
+  const double due = std::max(0.0,
+    std::floor(epoch / negative_period - 1.0));
+  const double previous = previous_epoch == 0 ? 0.0 :
+    std::max(0.0,
+      std::floor(previous_epoch / negative_period - 1.0));
+  return static_cast<int>(std::max(0.0, due - previous));
+}
+
+}  // namespace
+
+// [[Rcpp::export]]
+SEXP umap_metal_optimize_csr_wide_cpp(
+    NumericVector offsets, IntegerVector neighbors, SEXP weights,
+    NumericMatrix init, int n_epochs, int negative_sample_rate,
+    double learning_rate, double min_dist,
+    double repulsion_strength, int seed,
+    int edge_capacity = 1000000) {
+  if (!embedding_metal_available_impl()) Rcpp::stop(
+    "Native Metal UMAP is unavailable in this build.");
+  const int n = init.nrow();
+  const int dimensions = init.ncol();
+  if (n < 2 || (dimensions != 2 && dimensions != 3) ||
+      n_epochs < 1 || negative_sample_rate < 0 ||
+      !std::isfinite(learning_rate) || learning_rate <= 0 ||
+      !std::isfinite(min_dist) || min_dist < 0 ||
+      !std::isfinite(repulsion_strength) ||
+      repulsion_strength <= 0 || seed < 0 ||
+      edge_capacity < 1 || edge_capacity > 1000000) {
+    Rcpp::stop("Invalid wide resident Metal UMAP controls.");
+  }
+  const auto graph = resident_csr_view(offsets, neighbors,
+    weights, n);
+  const float max_weight = resident_csr_max_weight(graph);
+  const auto curve = fastembedr_umap_curve(min_dist);
+  std::vector<float> layout(
+    static_cast<std::size_t>(n) * dimensions);
+  for (int row = 0; row < n; ++row) {
+    for (int axis = 0; axis < dimensions; ++axis) {
+      const double value = init(row, axis);
+      if (!std::isfinite(value)) Rcpp::stop(
+        "Metal UMAP initialization must be finite.");
+      layout[static_cast<std::size_t>(row) * dimensions + axis] =
+        static_cast<float>(value);
+    }
+  }
+  using MetalContext = std::unique_ptr<void, decltype(
+    &fastembedr_massive_umap_metal_destroy)>;
+  MetalContext context(fastembedr_massive_umap_metal_create(
+    layout.data(), n, dimensions, n_epochs,
+    negative_sample_rate, learning_rate, curve.first,
+    curve.second, repulsion_strength, seed),
+    fastembedr_massive_umap_metal_destroy);
+  std::vector<int> heads(edge_capacity), tails(edge_capacity);
+  std::vector<int> negatives(edge_capacity);
+  std::vector<std::uint64_t> ordinals(edge_capacity);
+  const float min_weight = max_weight / n_epochs;
+  for (int epoch = 0; epoch < n_epochs; ++epoch) {
+    int active = 0;
+    std::uint64_t sample_edge = 0;
+    const auto flush = [&]() {
+      if (active == 0) return;
+      fastembedr_massive_umap_metal_step(context.get(),
+        heads.data(), tails.data(), negatives.data(),
+        ordinals.data(), active, epoch);
+      active = 0;
+    };
+    for (int row = 0; row < n; ++row) {
+      fastembedr_csr_edge_tiles(graph.offset(row),
+        graph.offset(row + 1),
+        static_cast<std::uint32_t>(edge_capacity),
+        [&](std::uint64_t base, std::uint32_t count) {
+        for (std::uint32_t local = 0; local < count; ++local) {
+          const auto edge = base + local;
+          const float weight = graph.weight(edge);
+          if (weight < min_weight) continue;
+          const auto ordinal = sample_edge++;
+          const double period = max_weight /
+            std::max(static_cast<double>(weight), 1e-6);
+          if (!resident_metal_due(epoch, period)) continue;
+          heads[active] = row;
+          tails[active] = graph.neighbors[edge];
+          negatives[active] = resident_metal_negatives(
+            epoch, period, negative_sample_rate);
+          ordinals[active] = ordinal;
+          if (++active == edge_capacity) flush();
+        }
+      });
+    }
+    flush();
+    Rcpp::checkUserInterrupt();
+  }
+  fastembedr_massive_umap_metal_download(
+    context.get(), layout.data());
+  context.reset();
+  Rcpp::IntegerMatrix payload(n, dimensions);
+  for (int row = 0; row < n; ++row) {
+    for (int axis = 0; axis < dimensions; ++axis) {
+      const float value = layout[
+        static_cast<std::size_t>(row) * dimensions + axis];
+      if (!std::isfinite(value)) Rcpp::stop(
+        "Metal UMAP returned nonfinite coordinates.");
+      int bits;
+      std::memcpy(&bits, &value, sizeof(bits));
+      payload(row, axis) = bits;
+    }
+  }
+  Rcpp::S4 result("float32");
+  result.slot("Data") = payload;
+  result.attr("csr_offset_dtype") = "uint64";
+  result.attr("metal_graph_input") = "resident_csr_wide_tiles";
+  result.attr("metal_gpu_epochs") = n_epochs;
+  result.attr("metal_cpu_warm_epochs") = 0;
+  result.attr("metal_optimizer_pipeline") =
+    "metal_wide_edge_tiles";
+  return result;
 }
 
 // [[Rcpp::export]]

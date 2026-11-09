@@ -1,6 +1,8 @@
 #include <Rcpp.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <cmath>
 #include <future>
 #include <limits>
@@ -9,6 +11,8 @@
 #include <vector>
 
 #include "massive_umap_cuda.h"
+#include "csr_edge_tiles.h"
+#include "resident_csr_view.h"
 #include "umap_optimizer_common.h"
 
 using Rcpp::IntegerMatrix;
@@ -475,10 +479,8 @@ void resident_umap_check(int status) {
     fastembedr_cuda_embedding_last_error());
 }
 
-int resident_umap_rank_epoch(
-    void* context, const std::vector<int>& offsets,
-    const std::vector<int>& neighbors,
-    const std::vector<float>& weights, int rank,
+std::uint64_t resident_umap_rank_epoch(
+    void* context, const ResidentCsrView& graph, int rank,
     int block_rows, int capacity, int epoch,
     float min_weight, float max_weight) {
   std::vector<int> heads, tails;
@@ -487,7 +489,7 @@ int resident_umap_rank_epoch(
   tails.reserve(capacity);
   active_weights.reserve(capacity);
   periods.reserve(capacity);
-  int visits = 0;
+  std::uint64_t visits = 0;
   const auto flush = [&]() {
     if (heads.empty()) return;
     const int status = fastembedr_massive_umap_multigpu_step(
@@ -502,20 +504,26 @@ int resident_umap_rank_epoch(
     active_weights.clear();
     periods.clear();
   };
-  const int n = static_cast<int>(offsets.size()) - 1;
+  const int n = graph.rows;
   const int first = rank * block_rows;
   const int last = std::min(n, first + block_rows);
   for (int row = first; row < last; ++row) {
-    for (int edge = offsets[row]; edge < offsets[row + 1]; ++edge) {
-      const float weight = weights[edge];
-      if (weight < min_weight) continue;
-      heads.push_back(row);
-      tails.push_back(neighbors[edge]);
-      active_weights.push_back(weight);
-      periods.push_back(max_weight /
-        std::max(weight, 1.0e-6f));
-      if (static_cast<int>(heads.size()) == capacity) flush();
-    }
+    fastembedr_csr_edge_tiles(graph.offset(row),
+      graph.offset(row + 1),
+      static_cast<std::uint32_t>(capacity),
+      [&](std::uint64_t base, std::uint32_t count) {
+      for (std::uint32_t local = 0; local < count; ++local) {
+        const auto edge = base + local;
+        const float weight = graph.weight(edge);
+        if (weight < min_weight) continue;
+        heads.push_back(row);
+        tails.push_back(graph.neighbors[edge]);
+        active_weights.push_back(weight);
+        periods.push_back(max_weight /
+          std::max(weight, 1.0e-6f));
+        if (static_cast<int>(heads.size()) == capacity) flush();
+      }
+    });
   }
   flush();
   return visits;
@@ -526,8 +534,8 @@ int resident_umap_rank_epoch(
 
 // [[Rcpp::export]]
 List umap_cuda_optimize_csr_multigpu_cpp(
-    IntegerVector offsets, IntegerVector neighbors,
-    NumericVector weights, NumericMatrix init,
+    SEXP offsets, IntegerVector neighbors,
+    SEXP weights, NumericMatrix init,
     int n_epochs, int negative_sample_rate,
     double learning_rate, double min_dist,
     double repulsion_strength, int seed,
@@ -535,9 +543,10 @@ List umap_cuda_optimize_csr_multigpu_cpp(
 #if defined(FASTEMBEDR_HAS_CUDA) && defined(FASTEMBEDR_HAS_NCCL)
   const int n = init.nrow();
   const int dimensions = init.ncol();
-  const int nnz = neighbors.size();
+  const auto nnz = static_cast<std::uint64_t>(neighbors.size());
+  const auto graph = resident_csr_view(offsets, neighbors,
+    weights, n);
   if (n < 2 || (dimensions != 2 && dimensions != 3) ||
-      offsets.size() != n + 1 || weights.size() != nnz ||
       nnz < 1 || devices.size() < 2 || devices.size() > n ||
       n_epochs < 1 || negative_sample_rate < 0 ||
       !std::isfinite(learning_rate) || learning_rate <= 0 ||
@@ -546,33 +555,7 @@ List umap_cuda_optimize_csr_multigpu_cpp(
       repulsion_strength <= 0 || seed < 0) {
     Rcpp::stop("Invalid resident multi-GPU UMAP request.");
   }
-  if (offsets[0] != 0 || offsets[n] != nnz) {
-    Rcpp::stop("Resident UMAP CSR offsets are inconsistent.");
-  }
-  float max_weight = 0.0f;
-  std::vector<int> row_ptr(offsets.begin(), offsets.end());
-  std::vector<int> col(neighbors.begin(), neighbors.end());
-  std::vector<float> edge_weights(nnz);
-  for (int row = 0; row < n; ++row) {
-    if (row_ptr[row] < 0 || row_ptr[row + 1] < row_ptr[row] ||
-        row_ptr[row + 1] > nnz) {
-      Rcpp::stop("Resident UMAP CSR offsets are not monotone.");
-    }
-  }
-  for (int edge = 0; edge < nnz; ++edge) {
-    if (col[edge] < 0 || col[edge] >= n ||
-        !std::isfinite(weights[edge]) || weights[edge] < 0) {
-      Rcpp::stop("Resident UMAP graph has invalid edges.");
-    }
-    edge_weights[edge] = static_cast<float>(weights[edge]);
-    if (!std::isfinite(edge_weights[edge])) {
-      Rcpp::stop("Resident UMAP weights exceed float32 range.");
-    }
-    max_weight = std::max(max_weight, edge_weights[edge]);
-  }
-  if (max_weight <= 0) {
-    Rcpp::stop("Resident UMAP graph has no positive edges.");
-  }
+  const float max_weight = resident_csr_max_weight(graph);
   const double contributions = static_cast<double>(nnz) *
     (1.0 + static_cast<double>(n_epochs) *
       negative_sample_rate);
@@ -585,7 +568,8 @@ List umap_cuda_optimize_csr_multigpu_cpp(
   const double delta_scale = std::exp2(std::floor(std::log2(
     std::min(scale_limit, std::ldexp(1.0, 24)))));
   const auto curve = fastembedr_umap_curve(min_dist);
-  const int capacity = std::min(1000000, nnz);
+  const int capacity = static_cast<int>(std::min(
+    std::uint64_t{1000000}, nnz));
   void* raw = fastembedr_massive_umap_multigpu_create(
     n, dimensions, capacity, n_epochs, negative_sample_rate,
     static_cast<float>(learning_rate),
@@ -624,12 +608,12 @@ List umap_cuda_optimize_csr_multigpu_cpp(
     resident_umap_check(
       fastembedr_massive_umap_multigpu_start_epoch(
         context.get()));
-    std::vector<std::future<int>> pending;
+    std::vector<std::future<std::uint64_t>> pending;
     for (int rank = 0; rank < devices.size(); ++rank) {
       pending.emplace_back(std::async(std::launch::async,
         [&, rank, epoch]() {
           return resident_umap_rank_epoch(context.get(),
-            row_ptr, col, edge_weights, rank, block_rows,
+            graph, rank, block_rows,
             capacity, epoch, min_weight, max_weight);
         }));
     }
@@ -648,12 +632,30 @@ List umap_cuda_optimize_csr_multigpu_cpp(
         context.get(), first, rows, layout.data() +
           static_cast<std::size_t>(first) * dimensions));
   }
-  NumericMatrix result(n, dimensions);
-  for (int row = 0; row < n; ++row) {
-    for (int axis = 0; axis < dimensions; ++axis) {
-      result(row, axis) = layout[
-        static_cast<std::size_t>(row) * dimensions + axis];
+  Rcpp::RObject result;
+  if (graph.wide_offsets) {
+    Rcpp::IntegerMatrix payload(n, dimensions);
+    for (int row = 0; row < n; ++row) {
+      for (int axis = 0; axis < dimensions; ++axis) {
+        const float value = layout[
+          static_cast<std::size_t>(row) * dimensions + axis];
+        int bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        payload(row, axis) = bits;
+      }
     }
+    Rcpp::S4 packed("float32");
+    packed.slot("Data") = payload;
+    result = packed;
+  } else {
+    Rcpp::NumericMatrix dense(n, dimensions);
+    for (int row = 0; row < n; ++row) {
+      for (int axis = 0; axis < dimensions; ++axis) {
+        dense(row, axis) = layout[
+          static_cast<std::size_t>(row) * dimensions + axis];
+      }
+    }
+    result = dense;
   }
   return List::create(
     Rcpp::Named("Y") = result,

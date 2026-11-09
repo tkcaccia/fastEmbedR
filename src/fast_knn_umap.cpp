@@ -463,6 +463,35 @@ std::vector<float> copy_float_vector_sexp(SEXP values,
   return out;
 }
 
+struct FloatVectorView {
+  IntegerVector bits;
+  NumericVector doubles;
+  bool is_float32;
+
+  FloatVectorView(SEXP values, const char* name) :
+      is_float32(is_float32_s4(values)) {
+    if (is_float32) {
+      bits = float32_payload_slot(values);
+    } else if (TYPEOF(values) == REALSXP) {
+      doubles = NumericVector(values);
+    } else {
+      Rcpp::stop("%s must be numeric or float32", name);
+    }
+  }
+
+  std::size_t size() const {
+    return static_cast<std::size_t>(is_float32 ?
+      bits.size() : doubles.size());
+  }
+
+  float operator[](const std::size_t index) const {
+    if (is_float32) {
+      return int_bits_to_float(bits[static_cast<R_xlen_t>(index)]);
+    }
+    return static_cast<float>(doubles[static_cast<R_xlen_t>(index)]);
+  }
+};
+
 std::pair<double, double> find_ab_params(const double spread, const double min_dist) {
   if (std::abs(spread - 1.0) < 1e-12 && std::abs(min_dist - 0.01) < 1e-12) {
     return {1.895605865596314, 0.8006377738365004};
@@ -1564,14 +1593,17 @@ CsrGraphNativeTyped<Offset> build_graph_csr_native_direct_values_typed(
                                                     const int index_offset,
                                                     const int col_start,
                                                     const int n_cols,
-                                                    const bool schedule = true) {
+                                                    const bool schedule = true,
+                                                    const bool binary = false) {
   const int n = indices.nrow();
   const int k = n_cols;
   const int kept_k = std::min(k, std::max(1, edge_budget));
   const FloatDistanceView distance_view{distance_values.data(), n, k, k};
   std::vector<float> sigmas;
   std::vector<float> rhos;
-  smooth_knn_dist(distance_view, sigmas, rhos, n_threads);
+  if (!binary) {
+    smooth_knn_dist(distance_view, sigmas, rhos, n_threads);
+  }
 
   std::vector<int> raw_counts(static_cast<std::size_t>(n), 0);
   std::vector<Offset> raw_offsets(static_cast<std::size_t>(n) + 1u, 0);
@@ -1589,7 +1621,7 @@ CsrGraphNativeTyped<Offset> build_graph_csr_native_direct_values_typed(
       for (int pos = 0; pos < edge_cols; ++pos) {
         const int col = kept_k < k ? chosen[static_cast<std::size_t>(pos)] : pos;
         const int neighbor = indices(i, col + col_start) - index_offset;
-        const float d = distance_view(i, col);
+        const float d = binary ? 0.0f : distance_view(i, col);
         if (neighbor < 0 || neighbor >= n || neighbor == i || !std::isfinite(d)) continue;
         ++count;
       }
@@ -1622,14 +1654,15 @@ CsrGraphNativeTyped<Offset> build_graph_csr_native_direct_values_typed(
         choose_budget_columns(indices, distance_view, i, kept_k, col_start, order, selected, chosen);
       }
       const int edge_cols = kept_k < k ? static_cast<int>(chosen.size()) : k;
-      const float rho = rhos[static_cast<std::size_t>(i)];
-      const float sigma = sigmas[static_cast<std::size_t>(i)];
+      const float rho = binary ? 0.0f : rhos[static_cast<std::size_t>(i)];
+      const float sigma = binary ? 1.0f : sigmas[static_cast<std::size_t>(i)];
       for (int pos = 0; pos < edge_cols; ++pos) {
         const int col = kept_k < k ? chosen[static_cast<std::size_t>(pos)] : pos;
         const int neighbor = indices(i, col + col_start) - index_offset;
-        const float d = distance_view(i, col);
+        const float d = binary ? 0.0f : distance_view(i, col);
         if (neighbor < 0 || neighbor >= n || neighbor == i || !std::isfinite(d)) continue;
-        const float weight = d <= rho ? 1.0f : std::exp(-(d - rho) / sigma);
+        const float weight = binary ? 1.0f :
+          (d <= rho ? 1.0f : std::exp(-(d - rho) / sigma));
         if (!std::isfinite(weight) || weight <= 0.0f) continue;
         const Offset out_pos = cursor[static_cast<std::size_t>(i)]++;
         directed_neighbors[static_cast<std::size_t>(out_pos)] = neighbor;
@@ -1776,10 +1809,22 @@ CsrGraphNativeTyped<Offset> build_graph_csr_native_direct_values_typed(
   if (offsets.edges() > std::numeric_limits<Offset>::max()) {
     Rcpp::stop("Symmetric CSR offsets exceed their selected width.");
   }
-  graph.offsets.resize(static_cast<std::size_t>(n) + 1u);
-  for (int i = 0; i <= n; ++i) {
-    graph.offsets[static_cast<std::size_t>(i)] =
-      static_cast<Offset>(offsets.offset(i));
+  release_vector(final_counts);
+  if constexpr (std::is_same<Offset, std::int32_t>::value) {
+    if (offsets.kind() == FastembedrCsrOffsetKind::Int32) {
+      graph.offsets = std::move(offsets).take_narrow();
+    }
+  } else if constexpr (std::is_same<Offset, std::uint64_t>::value) {
+    if (offsets.kind() == FastembedrCsrOffsetKind::Uint64) {
+      graph.offsets = std::move(offsets).take_wide();
+    }
+  }
+  if (graph.offsets.empty()) {
+    graph.offsets.resize(static_cast<std::size_t>(n) + 1u);
+    for (int i = 0; i <= n; ++i) {
+      graph.offsets[static_cast<std::size_t>(i)] =
+        static_cast<Offset>(offsets.offset(i));
+    }
   }
   const Offset nnz = graph.offsets[static_cast<std::size_t>(n)];
   graph.neighbors.resize(static_cast<std::size_t>(nnz));
@@ -1797,7 +1842,6 @@ CsrGraphNativeTyped<Offset> build_graph_csr_native_direct_values_typed(
   release_vector(incoming_weights);
   release_vector(directed_offsets);
   release_vector(incoming_offsets);
-  release_vector(final_counts);
   if (schedule) {
     attach_csr_epoch_schedule(graph);
   } else {
@@ -1830,10 +1874,18 @@ Rcpp::List wrap_wide_csr_graph(const CsrGraphNativeWide& graph,
     }
     offsets[static_cast<R_xlen_t>(row)] = static_cast<double>(value);
   }
+  Rcpp::IntegerVector weight_bits(graph.weights.size());
+  for (std::size_t edge = 0; edge < graph.weights.size(); ++edge) {
+    int bits;
+    std::memcpy(&bits, &graph.weights[edge], sizeof(bits));
+    weight_bits[static_cast<R_xlen_t>(edge)] = bits;
+  }
+  Rcpp::S4 weights("float32");
+  weights.slot("Data") = weight_bits;
   return Rcpp::List::create(
     Rcpp::Named("offsets") = offsets,
     Rcpp::Named("neighbors") = Rcpp::wrap(graph.neighbors),
-    Rcpp::Named("weights") = Rcpp::wrap(graph.weights),
+    Rcpp::Named("weights") = weights,
     Rcpp::Named("epochs_per_sample") = R_NilValue,
     Rcpp::Named("max_weight") = graph.max_weight,
     Rcpp::Named("n") = rows,
@@ -4407,14 +4459,14 @@ Rcpp::List umap_graph_csr_cuda_like_cpp(IntegerMatrix indices,
 Rcpp::List umap_graph_csr_binary_union_cpp(IntegerMatrix indices,
                                            int col_start,
                                            int n_cols,
-                                           int n_threads) {
+                                           int n_threads,
+                                           bool force_wide = false) {
   if (col_start < 0 || n_cols < 1 || col_start + n_cols > indices.ncol()) {
     Rcpp::stop("invalid KNN column range");
   }
   if (n_threads < 1) Rcpp::stop("n_threads must be positive");
   const int n = indices.nrow();
   if (n < 2) Rcpp::stop("indices must have at least two rows");
-  require_resident_csr_capacity(n, n_cols);
 
   int min_idx = std::numeric_limits<int>::max();
   int max_idx = std::numeric_limits<int>::min();
@@ -4426,6 +4478,19 @@ Rcpp::List umap_graph_csr_binary_union_cpp(IntegerMatrix indices,
     }
   }
   const int index_offset = (min_idx >= 1 && max_idx <= n) ? 1 : 0;
+  const auto plan = fastembedr_csr_offset_plan(n, n_cols);
+  if (force_wide || plan.kind == FastembedrCsrOffsetKind::Uint64) {
+    const std::vector<float> no_distances;
+    auto native = build_graph_csr_native_direct_values_typed<
+      std::uint64_t>(indices, no_distances, n_cols, n_threads,
+        index_offset, col_start, n_cols, false, true);
+    auto graph = wrap_wide_csr_graph(native, n, true);
+    graph["cuda_like_width"] = Rcpp::IntegerVector::create(NA_INTEGER);
+    graph["graph_builder"] =
+      "binary_symmetric_union_direct_csr_wide";
+    return graph;
+  }
+  require_resident_csr_capacity(n, n_cols);
 
   std::vector<int> raw_counts(static_cast<std::size_t>(n), 0);
   parallel_for_chunks(n, n_threads, [&](const int begin_row, const int end_row, const int) {
@@ -5543,6 +5608,62 @@ void umap_wide_edge_step(std::atomic<float>* layout, const int n,
   }
 }
 
+void umap_wide_edge_step_3d(std::atomic<float>* layout, const int n,
+    const int head, const int tail, const std::uint64_t edge,
+    const float period, const int epoch, const int negative_rate,
+    const float alpha, const float a, const float b,
+    const float repulsion, const int seed) {
+  if (positive_samples_this_epoch_umap_schedule(period, epoch) == 0) {
+    return;
+  }
+  const auto h = static_cast<std::size_t>(head) * 3u;
+  const auto t = static_cast<std::size_t>(tail) * 3u;
+  float delta[3];
+  float distance = 0.0f;
+  for (int c = 0; c < 3; ++c) {
+    delta[c] = layout[h + c].load(std::memory_order_relaxed) -
+      layout[t + c].load(std::memory_order_relaxed);
+    distance += delta[c] * delta[c];
+  }
+  distance = std::max(std::numeric_limits<float>::epsilon(),
+    distance);
+  const float power = umap_powf_fast(distance, b);
+  const float coefficient = -2.0f * a * b *
+    (power / distance) / (a * power + 1.0f);
+  for (int c = 0; c < 3; ++c) {
+    const float gradient = clip4f(coefficient * delta[c]) * alpha;
+    atomic_add_float(layout[h + c], gradient);
+    atomic_add_float(layout[t + c], -gradient);
+  }
+  const int negatives = negative_samples_this_epoch_umap_schedule(
+    period, negative_rate, epoch);
+  for (int sample = 0; sample < negatives; ++sample) {
+    const int other = deterministic_vertex_cuda_style(
+      n, seed, epoch, head, static_cast<std::size_t>(edge), sample);
+    if (other == head || other == tail) continue;
+    const auto p = static_cast<std::size_t>(other) * 3u;
+    float negative_delta[3];
+    float negative_distance = 0.0f;
+    for (int c = 0; c < 3; ++c) {
+      negative_delta[c] = layout[h + c].load(
+        std::memory_order_relaxed) -
+        layout[p + c].load(std::memory_order_relaxed);
+      negative_distance += negative_delta[c] * negative_delta[c];
+    }
+    negative_distance = std::max(
+      std::numeric_limits<float>::epsilon(), negative_distance);
+    const float negative_power = umap_powf_fast(
+      negative_distance, b);
+    const float force = repulsion * 2.0f * b /
+      ((0.001f + negative_distance) *
+       (a * negative_power + 1.0f));
+    for (int c = 0; c < 3; ++c) {
+      atomic_add_float(layout[h + c],
+        clip4f(force * negative_delta[c]) * alpha);
+    }
+  }
+}
+
 void validate_exact_wide_offsets(const NumericVector& offsets) {
   for (R_xlen_t row = 0; row < offsets.size(); ++row) {
     if (!std::isfinite(offsets[row]) || offsets[row] < 0.0 ||
@@ -5553,23 +5674,90 @@ void validate_exact_wide_offsets(const NumericVector& offsets) {
   }
 }
 
+template <typename WeightVec>
+NumericMatrix initialize_layout_csr_wide_3d(
+    const NumericVector& offsets, const IntegerVector& neighbors,
+    const WeightVec& weights, const int index_offset,
+    const int iterations, const int threads, const int seed) {
+  const int n = static_cast<int>(offsets.size() - 1);
+  auto xy = initialize_layout_csr_cuda_diffusion(
+    n, offsets, neighbors, weights, index_offset,
+    iterations, threads, seed);
+  std::vector<float> z(static_cast<std::size_t>(n));
+  std::vector<float> next(z.size());
+  for (int row = 0; row < n; ++row) {
+    z[static_cast<std::size_t>(row)] =
+      deterministic_unit(seed, row, 2);
+  }
+  for (int iter = 0; iter < iterations; ++iter) {
+    parallel_for_chunks(n, threads,
+      [&](const int first, const int last, const int) {
+      for (int row = first; row < last; ++row) {
+        double sum = 0.0;
+        double degree = 0.0;
+        const auto begin = static_cast<std::uint64_t>(offsets[row]);
+        const auto end = static_cast<std::uint64_t>(offsets[row + 1]);
+        fastembedr_csr_edge_tiles(begin, end, 65536,
+          [&](std::uint64_t base, std::uint32_t count) {
+          for (std::uint32_t local = 0; local < count; ++local) {
+            const auto pos = static_cast<std::size_t>(base + local);
+            const int tail = neighbors[pos] - index_offset;
+            const float weight = weights[pos];
+            if (tail < 0 || tail >= n || tail == row ||
+                !std::isfinite(weight) || weight <= 0.0f) continue;
+            sum += weight * z[static_cast<std::size_t>(tail)];
+            degree += weight;
+          }
+        });
+        next[static_cast<std::size_t>(row)] = degree > 0.0 ?
+          static_cast<float>(sum / degree) :
+          z[static_cast<std::size_t>(row)];
+      }
+    });
+    double mean = 0.0;
+    for (const float value : next) mean += value;
+    mean /= n;
+    double variance = 0.0;
+    for (const float value : next) {
+      const double delta = value - mean;
+      variance += delta * delta;
+    }
+    const double scale = std::sqrt(std::max(variance / n, 1e-12));
+    for (auto& value : next) {
+      value = static_cast<float>((value - mean) / scale);
+    }
+    z.swap(next);
+  }
+  NumericMatrix result(n, 3);
+  for (int row = 0; row < n; ++row) {
+    result(row, 0) = xy(row, 0);
+    result(row, 1) = xy(row, 1);
+    result(row, 2) = z[static_cast<std::size_t>(row)];
+  }
+  return result;
+}
+
 // [[Rcpp::export]]
 NumericMatrix fast_knn_umap_csr_wide_diffusion_cpp(
     NumericVector offsets, IntegerVector neighbors, SEXP weights,
     int n_iterations, int n_threads, int seed,
-    double init_scale = NA_REAL) {
-  if (offsets.size() < 3 || n_iterations < 1 || n_threads < 1) {
+    double init_scale = NA_REAL, int n_components = 2) {
+  if (offsets.size() < 3 || n_iterations < 1 || n_threads < 1 ||
+      (n_components != 2 && n_components != 3)) {
     Rcpp::stop("Invalid wide CSR diffusion controls.");
   }
   validate_exact_wide_offsets(offsets);
-  const auto weights_f = copy_float_vector_sexp(
-    weights, "CSR weights", true);
+  const FloatVectorView weights_f(weights, "CSR weights");
   const int index_offset = validate_csr_inputs(
     offsets, neighbors, weights_f);
   const int n = static_cast<int>(offsets.size() - 1);
-  NumericMatrix result = initialize_layout_csr_cuda_diffusion(
-    n, offsets, neighbors, weights_f, index_offset,
-    n_iterations, n_threads, seed);
+  NumericMatrix result = n_components == 2 ?
+    initialize_layout_csr_cuda_diffusion(
+      n, offsets, neighbors, weights_f, index_offset,
+      n_iterations, n_threads, seed) :
+    initialize_layout_csr_wide_3d(
+      offsets, neighbors, weights_f, index_offset,
+      n_iterations, n_threads, seed);
   if (std::isfinite(init_scale) && init_scale > 0.0) {
     scale_embedding_sdev(result, init_scale);
   }
@@ -5579,13 +5767,15 @@ NumericMatrix fast_knn_umap_csr_wide_diffusion_cpp(
 }
 
 // [[Rcpp::export]]
-NumericMatrix fast_knn_umap_csr_wide_init_cpp(
+SEXP fast_knn_umap_csr_wide_init_cpp(
     NumericVector offsets, IntegerVector neighbors, SEXP weights,
     NumericMatrix init_embedding, int n_epochs, double min_dist,
     int negative_sample_rate, double learning_rate,
     double repulsion_strength, int n_threads, int seed,
-    int edge_tile_capacity = 65536) {
-  if (init_embedding.ncol() != 2 || n_epochs < 1 ||
+    int edge_tile_capacity = 65536,
+    bool return_float32 = false) {
+  if ((init_embedding.ncol() != 2 &&
+       init_embedding.ncol() != 3) || n_epochs < 1 ||
       min_dist < 0.0 || negative_sample_rate < 0 ||
       learning_rate <= 0.0 || repulsion_strength <= 0.0 ||
       n_threads < 1 || edge_tile_capacity < 1 ||
@@ -5593,17 +5783,17 @@ NumericMatrix fast_knn_umap_csr_wide_init_cpp(
     Rcpp::stop("Invalid wide CSR UMAP controls.");
   }
   const int n = init_embedding.nrow();
+  const int components = init_embedding.ncol();
   if (offsets.size() != static_cast<R_xlen_t>(n) + 1) {
     Rcpp::stop("Wide CSR offsets do not match initialization rows.");
   }
   validate_exact_wide_offsets(offsets);
-  const auto weights_f = copy_float_vector_sexp(
-    weights, "CSR weights", true);
+  const FloatVectorView weights_f(weights, "CSR weights");
   const int index_offset = validate_csr_inputs(
     offsets, neighbors, weights_f);
   float max_weight = 0.0f;
-  for (const float value : weights_f) {
-    max_weight = std::max(max_weight, value);
+  for (std::size_t edge = 0; edge < weights_f.size(); ++edge) {
+    max_weight = std::max(max_weight, weights_f[edge]);
   }
   if (!(max_weight > 0.0f)) {
     Rcpp::stop("The wide CSR graph has no usable UMAP edges.");
@@ -5613,14 +5803,13 @@ NumericMatrix fast_knn_umap_csr_wide_init_cpp(
   const float b = static_cast<float>(curve.second);
   const float gamma = static_cast<float>(repulsion_strength);
   std::vector<std::atomic<float>> layout(
-    static_cast<std::size_t>(n) * 2u);
+    static_cast<std::size_t>(n) * components);
   for (int row = 0; row < n; ++row) {
-    layout[static_cast<std::size_t>(row) * 2u].store(
-      static_cast<float>(init_embedding(row, 0)),
-      std::memory_order_relaxed);
-    layout[static_cast<std::size_t>(row) * 2u + 1u].store(
-      static_cast<float>(init_embedding(row, 1)),
-      std::memory_order_relaxed);
+    for (int c = 0; c < components; ++c) {
+      layout[static_cast<std::size_t>(row) * components + c].store(
+        static_cast<float>(init_embedding(row, c)),
+        std::memory_order_relaxed);
+    }
   }
   const auto row_offset = [&](std::uint64_t row) {
     return static_cast<std::uint64_t>(offsets[
@@ -5647,20 +5836,45 @@ NumericMatrix fast_knn_umap_csr_wide_init_cpp(
             if (weight < max_weight / n_epochs) continue;
             const float period = max_weight /
               std::max(weight, 1.0e-6f);
-            umap_wide_edge_step(layout.data(), n, row, tail, edge,
-              period, epoch, negative_sample_rate, alpha, a, b,
-              gamma, seed);
+            if (components == 2) {
+              umap_wide_edge_step(layout.data(), n, row, tail, edge,
+                period, epoch, negative_sample_rate, alpha, a, b,
+                gamma, seed);
+            } else {
+              umap_wide_edge_step_3d(layout.data(), n, row,
+                tail, edge, period, epoch, negative_sample_rate,
+                alpha, a, b, gamma, seed);
+            }
           }
         });
       }
     });
   }
-  NumericMatrix output(n, 2);
+  if (return_float32) {
+    IntegerMatrix payload(n, components);
+    for (int row = 0; row < n; ++row) {
+      const auto pos = static_cast<std::size_t>(row) * components;
+      for (int c = 0; c < components; ++c) {
+        const float value = layout[pos + c].load(
+          std::memory_order_relaxed);
+        int bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        payload(row, c) = bits;
+      }
+    }
+    Rcpp::S4 output("float32");
+    output.slot("Data") = payload;
+    output.attr("csr_offset_dtype") = "uint64";
+    output.attr("optimizer_schedule") = "stateless_edge_tiles";
+    return output;
+  }
+  NumericMatrix output(n, components);
   for (int row = 0; row < n; ++row) {
-    const auto pos = static_cast<std::size_t>(row) * 2u;
-    output(row, 0) = layout[pos].load(std::memory_order_relaxed);
-    output(row, 1) = layout[pos + 1u].load(
-      std::memory_order_relaxed);
+    const auto pos = static_cast<std::size_t>(row) * components;
+    for (int c = 0; c < components; ++c) {
+      output(row, c) = layout[pos + c].load(
+        std::memory_order_relaxed);
+    }
   }
   output.attr("csr_offset_dtype") = "uint64";
   output.attr("optimizer_schedule") = "stateless_edge_tiles";

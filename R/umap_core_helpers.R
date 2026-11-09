@@ -254,8 +254,8 @@ build_umap_csr_state <- function(indices,
         as.integer(n_neighbors),
         as.integer(cfg$n_threads),
         graph_mode = graph_mode,
-        allow_wide = identical(cfg$backend, "cpu") &&
-            identical(graph_mode, "fuzzy") && n_components == 2L
+        allow_wide = cfg$backend %in% c("cpu", "metal") &&
+            n_components %in% c(2L, 3L)
     )
     if (is.null(init)) {
         init <- umap_init_from_csr_graph(
@@ -289,6 +289,8 @@ optimize_umap_gpu_csr <- function(graph, init, cfg, backend, seed) {
         )
         cfg$metal_allocated_bytes_observed <-
             attr(out, "metal_allocated_bytes_observed")
+        cfg$metal_effective_learning_rate <-
+            attr(out, "metal_effective_learning_rate")
         return(list(layout = out, cfg = cfg))
     }
 
@@ -489,13 +491,15 @@ run_umap_cpu_generic <- function(indices, distances, knn, cfg,
     layout
 }
 
-configure_umap_cpu_2d <- function(state, graph_mode) {
+configure_umap_cpu_2d <- function(state, graph_mode,
+        n_components = 2L) {
     return_float32 <- is_float32_matrix(state$distances)
     state <- build_umap_csr_state(
         state$indices, state$distances,
         col_start = state$knn$col_start,
         n_neighbors = state$knn$n_neighbors, cfg = state$cfg,
-        graph_mode = graph_mode, n_components = 2L, seed = state$seed
+        graph_mode = graph_mode, n_components = n_components,
+        seed = state$seed
     )
     state$return_float32 <- return_float32
     cfg <- state$cfg
@@ -555,7 +559,10 @@ run_umap_cpu_host_knn <- function(indices, distances, knn, cfg,
                                     n_components, graph_mode, seed,
                                     verbose) {
     cfg$graph_prep_backend <- "cpu"
-    if (n_components != 2L) {
+    wide_bound <- 2 * as.double(nrow(indices)) *
+        as.double(knn$n_neighbors) > .Machine$integer.max
+    if (n_components != 2L && !(
+        n_components == 3L && wide_bound)) {
         return(run_umap_cpu_generic(
             indices, distances, knn, cfg, n_components,
             graph_mode, seed, verbose
@@ -565,6 +572,7 @@ run_umap_cpu_host_knn <- function(indices, distances, knn, cfg,
         indices = indices, distances = distances, knn = knn,
         cfg = cfg, seed = seed
     )
-    state <- configure_umap_cpu_2d(state, graph_mode)
+    state <- configure_umap_cpu_2d(state, graph_mode,
+        n_components = n_components)
     run_umap_cpu_2d(state, seed, verbose)
 }

@@ -149,7 +149,8 @@ resident_umap_prepared <- function(indices, distances, backend,
         indices <- fastembedr_gpu_knn_to_host(indices)
     }
     prepare_umap_knn(indices, distances, backend = backend,
-        n.cores = n_threads, graph_mode = graph_mode)
+        n.cores = n_threads, graph_mode = graph_mode,
+        .allow_wide = TRUE)
 }
 
 run_resident_umap_multigpu <- function(indices, distances,
@@ -179,11 +180,14 @@ run_resident_umap_multigpu <- function(indices, distances,
     init <- prepare_reusable_umap_init(prepared, cfg,
         n_components, seed)
     graph <- prepared$graph
-    initial <- matrix(as.numeric(init$value),
-        nrow = nrow(prepared$knn$indices))
+    initial <- if (is_float32_matrix(init$value)) {
+        float::dbl(init$value)
+    } else {
+        init$value
+    }
     out <- umap_cuda_optimize_csr_multigpu_cpp(
         graph$offsets, graph$neighbors,
-        as.numeric(graph$weights), initial,
+        graph$weights, initial,
         as.integer(cfg$n_epochs),
         as.integer(cfg$negative_sample_rate),
         cfg$learning_rate, cfg$min_dist,
@@ -424,7 +428,8 @@ prepared_umap_metadata <- function(cfg, knn, graph_mode) {
     )
 }
 
-build_prepared_umap_graph <- function(knn, cfg, graph_mode) {
+build_prepared_umap_graph <- function(knn, cfg, graph_mode,
+    allow_wide = FALSE) {
     graph <- umap_build_csr_graph(
         knn$indices,
         knn$distances,
@@ -432,12 +437,15 @@ build_prepared_umap_graph <- function(knn, cfg, graph_mode) {
         as.integer(knn$n_neighbors),
         as.integer(knn$n_neighbors),
         as.integer(cfg$n_threads),
-        graph_mode = graph_mode
+        graph_mode = graph_mode,
+        allow_wide = cfg$backend %in% c("cpu", "metal") ||
+            isTRUE(allow_wide)
     )
     cfg$graph_prep_backend <- paste0("cpu_", graph_mode, "_csr")
     cfg$graph_storage <- cfg$graph_prep_backend
     cfg$graph_nnz <- as.double(graph$nnz)
     cfg$graph_offset_dtype <- graph$offset_dtype
+    cfg$csr_offset_dtype <- graph$offset_dtype
     cfg$graph_max_weight <- as.numeric(graph$max_weight)
     cfg$graph_cuda_like_width <- graph$cuda_like_width
     cfg$graph_builder <- graph$graph_builder
@@ -453,7 +461,8 @@ prepare_umap_knn <- function(indices,
                                 distances = NULL,
                                 backend = NULL,
                                 n.cores = NULL,
-                                graph_mode = c("fuzzy", "binary")) {
+                                graph_mode = c("fuzzy", "binary"),
+                                .allow_wide = FALSE) {
     backend <- resolve_embedding_backend(backend)
     graph_mode <- match.arg(graph_mode)
     knn <- coerce_knn_input(indices, distances)
@@ -469,7 +478,8 @@ prepare_umap_knn <- function(indices,
     cfg <- apply_prepared_umap_policy(cfg, policy)
     cfg <- apply_umap_thread_override(cfg, n.cores)
     cfg <- prepared_umap_metadata(cfg, knn, graph_mode)
-    built <- build_prepared_umap_graph(knn, cfg, graph_mode)
+    built <- build_prepared_umap_graph(knn, cfg, graph_mode,
+        allow_wide = .allow_wide)
     out <- list(
         knn = knn,
         graph = built$graph,
@@ -580,17 +590,30 @@ prepare_reusable_umap_init <- function(prepared, cfg, n_components, seed) {
     result
 }
 
+optimize_prepared_umap_metal_wide <- function(graph, init, cfg, seed) {
+    effective_rate <- cfg$learning_rate * 0.25
+    layout <- umap_metal_optimize_csr_wide_cpp(
+        graph$offsets, graph$neighbors, graph$weights,
+        init, as.integer(cfg$n_epochs),
+        as.integer(cfg$negative_sample_rate),
+        effective_rate, cfg$min_dist,
+        cfg$repulsion_strength, as.integer(seed))
+    attr(layout, "metal_effective_learning_rate") <- effective_rate
+    layout
+}
+
 optimize_prepared_umap_metal <- function(graph, init, cfg, seed) {
     if (!embedding_metal_available_cpp()) {
         stop("Native Metal UMAP optimizer is unavailable in this build.",
             call. = FALSE
         )
     }
-    warm_epochs <- if (cfg$n_components == 2L) {
-        as.integer(cfg$n_epochs %/% 2L)
-    } else {
-        0L
+    if (identical(graph$offset_dtype, "uint64")) {
+        return(optimize_prepared_umap_metal_wide(
+            graph, init, cfg, seed))
     }
+    warm_epochs <- if (cfg$n_components == 2L)
+        as.integer(cfg$n_epochs %/% 2L) else 0L
     if (warm_epochs > 0L) {
         init <- fast_knn_umap_csr_clean_atomic_cpp(
             graph$offsets, graph$neighbors, graph$weights,
@@ -652,6 +675,15 @@ optimize_prepared_umap_cuda <- function(graph, init, cfg, seed) {
 }
 
 optimize_prepared_umap_cpu <- function(graph, init, cfg, seed, verbose) {
+    if (identical(graph$offset_dtype, "uint64")) {
+        return(fast_knn_umap_csr_wide_init_cpp(
+            graph$offsets, graph$neighbors, graph$weights,
+            init, as.integer(cfg$n_epochs), cfg$min_dist,
+            as.integer(cfg$negative_sample_rate),
+            cfg$learning_rate, cfg$repulsion_strength,
+            as.integer(cfg$n_threads), as.integer(seed),
+            return_float32 = TRUE))
+    }
     fast_knn_umap_csr_init_cpp(
         graph$offsets,
         graph$neighbors,
@@ -669,6 +701,10 @@ optimize_prepared_umap_cpu <- function(graph, init, cfg, seed, verbose) {
 }
 
 run_prepared_umap_optimizer <- function(graph, init, cfg, seed, verbose) {
+    if (identical(graph$offset_dtype, "uint64") &&
+        !cfg$backend %in% c("cpu", "metal")) stop(
+        "Wide resident CSR needs a qualified GPU tile optimizer.",
+        call. = FALSE)
     if (cfg$backend == "metal") {
         return(optimize_prepared_umap_metal(graph, init, cfg, seed))
     }
@@ -681,12 +717,11 @@ run_prepared_umap_optimizer <- function(graph, init, cfg, seed, verbose) {
 finalize_prepared_umap <- function(layout, graph, init, cfg) {
     cfg$initialization_reuse_hit <- init$reused
     cfg$init_backend <- init$backend
-    cfg$optimizer_mode <- "csr_epoch_schedule"
-    cfg$optimizer_schedule <- paste0(
-        "epochs_per_sample_",
-        cfg$graph_mode,
-        "_csr"
-    )
+    wide <- identical(graph$offset_dtype, "uint64")
+    cfg$optimizer_mode <- if (wide) "csr_wide_edge_tiles" else
+        "csr_epoch_schedule"
+    cfg$optimizer_schedule <- if (wide) "stateless_edge_tiles" else
+        paste0("epochs_per_sample_", cfg$graph_mode, "_csr")
     if (cfg$backend == "metal") {
         cfg$metal_graph_input <- attr(layout, "metal_graph_input")
         cfg$metal_csr_width <- attr(layout, "metal_csr_width")
@@ -700,6 +735,8 @@ finalize_prepared_umap <- function(layout, graph, init, cfg) {
         )
         cfg$metal_allocated_bytes_observed <-
             attr(layout, "metal_allocated_bytes_observed")
+        cfg$metal_effective_learning_rate <-
+            attr(layout, "metal_effective_learning_rate")
     }
     layout <- finalize_embedding_layout(
         layout,
@@ -719,6 +756,10 @@ fast_knn_umap_prepared_core <- function(
     cfg <- configure_prepared_umap(
         prepared, backend, n_components, n_threads, n_epochs
     )
+    if (identical(prepared$graph$offset_dtype, "uint64") &&
+        !backend %in% c("cpu", "metal")) stop(
+        "Wide resident CSR needs a qualified GPU tile optimizer.",
+        call. = FALSE)
     init <- prepare_reusable_umap_init(
         prepared, cfg, n_components, seed
     )
@@ -789,6 +830,26 @@ umap_check_resident_csr_capacity <- function(rows, width,
     invisible(c(stages, list(peak_ram_estimate_bytes = estimate)))
 }
 
+umap_admit_wide_graph <- function(
+    rows, width, distances, graph_mode, allow_wide, force_wide
+) {
+    if (force_wide && !allow_wide) {
+        stop("Forced wide CSR requires wide-route admission.")
+    }
+    wide_needed <- isTRUE(force_wide) ||
+        (isTRUE(allow_wide) &&
+            2 * as.double(rows) * width > .Machine$integer.max)
+    if (wide_needed && !requireNamespace("float", quietly = TRUE)) {
+        stop("Wide resident CSR requires the float package.",
+            call. = FALSE)
+    }
+    if (wide_needed && identical(graph_mode, "fuzzy") &&
+        !is_float32_matrix(distances)) {
+        stop("Wide resident CSR requires float32 KNN distances.",
+            call. = FALSE)
+    }
+}
+
 umap_build_csr_graph <- function(indices,
                                     distances,
                                     col_start,
@@ -802,28 +863,19 @@ umap_build_csr_graph <- function(indices,
     rows <- nrow(indices)
     width <- if (identical(graph_mode, "binary")) n_cols else
         min(n_cols, edge_budget)
-    if (allow_wide && !identical(graph_mode, "fuzzy")) stop(
-        "Wide resident CSR requires the fuzzy graph mode.",
-        call. = FALSE)
-    if (force_wide && !allow_wide)
-        stop("Forced wide CSR requires wide-route admission.")
     umap_check_resident_csr_capacity(rows, width,
         n_threads = n_threads, allow_wide = allow_wide)
-    distance_is_float32 <- is_float32_matrix(distances)
-    if (allow_wide && (force_wide || 2 * as.double(rows) * width >
-        .Machine$integer.max) && (!distance_is_float32 ||
-        !requireNamespace("float", quietly = TRUE))) stop(
-        "Wide resident CSR requires float32 KNN distances.",
-        call. = FALSE)
+    umap_admit_wide_graph(rows, width, distances, graph_mode,
+        allow_wide, force_wide)
     if (identical(graph_mode, "binary")) {
         graph <- umap_graph_csr_binary_union_cpp(
             indices,
             as.integer(col_start),
             as.integer(n_cols),
-            as.integer(n_threads)
+            as.integer(n_threads), force_wide = force_wide
         )
         graph$graph_mode <- "binary"
-        graph$offset_dtype <- "int32"
+        graph$offset_dtype <- graph$offset_dtype %||% "int32"
         return(umap_graph_keep_float32(graph, TRUE))
     }
     graph <- umap_graph_csr_float_cpp(
@@ -869,14 +921,14 @@ umap_init_from_csr_graph <- function(graph,
                                         seed,
                                         verbose = FALSE) {
     if (identical(graph$offset_dtype, "uint64")) {
-        if (n_components != 2L) stop(
-            "Wide resident CSR initialization supports 2D only.",
+        if (!n_components %in% c(2L, 3L)) stop(
+            "Wide resident CSR initialization supports 2D or 3D.",
             call. = FALSE)
         init <- fast_knn_umap_csr_wide_diffusion_cpp(
             graph$offsets, graph$neighbors, graph$weights,
             as.integer(cfg$spectral_n_iter),
             as.integer(cfg$n_threads), as.integer(seed),
-            cfg$init_scale)
+            cfg$init_scale, as.integer(n_components))
         attr(init, "backend") <- "cpu_wide_csr_diffusion"
         return(init)
     }

@@ -169,6 +169,10 @@ knn_embed_metal_csr_cpp <- function(offsets, neighbors, weights, init, n_epochs,
     .Call(`_fastEmbedR_knn_embed_metal_csr_cpp`, offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, max_weight, repulsion_strength, seed, sampler_mode, start_epoch, total_epochs)
 }
 
+umap_metal_optimize_csr_wide_cpp <- function(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, edge_capacity = 1000000L) {
+    .Call(`_fastEmbedR_umap_metal_optimize_csr_wide_cpp`, offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, edge_capacity)
+}
+
 knn_umap_refine_rows_metal_cpp <- function(indices, distances, row_ids, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, seed) {
     .Call(`_fastEmbedR_knn_umap_refine_rows_metal_cpp`, indices, distances, row_ids, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, seed)
 }
@@ -321,8 +325,8 @@ umap_graph_csr_cuda_like_cpp <- function(indices, distances, col_start, n_cols, 
     .Call(`_fastEmbedR_umap_graph_csr_cuda_like_cpp`, indices, distances, col_start, n_cols, edge_budget, n_threads)
 }
 
-umap_graph_csr_binary_union_cpp <- function(indices, col_start, n_cols, n_threads) {
-    .Call(`_fastEmbedR_umap_graph_csr_binary_union_cpp`, indices, col_start, n_cols, n_threads)
+umap_graph_csr_binary_union_cpp <- function(indices, col_start, n_cols, n_threads, force_wide = FALSE) {
+    .Call(`_fastEmbedR_umap_graph_csr_binary_union_cpp`, indices, col_start, n_cols, n_threads, force_wide)
 }
 
 fast_knn_umap_range_cpp <- function(indices, distances, col_start, n_cols, n_components, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, spectral_n_iter, n_threads, init_scale, seed, verbose) {
@@ -373,12 +377,12 @@ fast_knn_umap_csr_cpp <- function(offsets, neighbors, weights, n_components, n_e
     .Call(`_fastEmbedR_fast_knn_umap_csr_cpp`, offsets, neighbors, weights, n_components, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, spectral_n_iter, n_threads, init_scale, seed, verbose)
 }
 
-fast_knn_umap_csr_wide_diffusion_cpp <- function(offsets, neighbors, weights, n_iterations, n_threads, seed, init_scale = NA_real_) {
-    .Call(`_fastEmbedR_fast_knn_umap_csr_wide_diffusion_cpp`, offsets, neighbors, weights, n_iterations, n_threads, seed, init_scale)
+fast_knn_umap_csr_wide_diffusion_cpp <- function(offsets, neighbors, weights, n_iterations, n_threads, seed, init_scale = NA_real_, n_components = 2L) {
+    .Call(`_fastEmbedR_fast_knn_umap_csr_wide_diffusion_cpp`, offsets, neighbors, weights, n_iterations, n_threads, seed, init_scale, n_components)
 }
 
-fast_knn_umap_csr_wide_init_cpp <- function(offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, edge_tile_capacity = 65536L) {
-    .Call(`_fastEmbedR_fast_knn_umap_csr_wide_init_cpp`, offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, edge_tile_capacity)
+fast_knn_umap_csr_wide_init_cpp <- function(offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, edge_tile_capacity = 65536L, return_float32 = FALSE) {
+    .Call(`_fastEmbedR_fast_knn_umap_csr_wide_init_cpp`, offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, edge_tile_capacity, return_float32)
 }
 
 umap_auto_parameters_cpp <- function(distances, n_neighbors, backend) {

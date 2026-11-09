@@ -81,3 +81,46 @@ test_that("resident UMAP devices reject a CPU backend", {
     expect_error(umap_knn(indices, distances, backend = "cpu",
         devices = c(0L, 1L)), "requires CUDA")
 })
+
+test_that("coordinated CUDA receives wide binary 3D graph types", {
+    skip_if_not_installed("float")
+    rows <- 36L
+    width <- 6L
+    indices <- outer(seq_len(rows), seq_len(width),
+        function(i, j) (i + 2L * j - 1L) %% rows + 1L)
+    distances <- matrix(rep(seq_len(width), each = rows),
+        rows, width)
+    prepared <- prepare_umap_knn(indices, distances,
+        graph_mode = "binary", backend = "cpu")
+    prepared$graph <- fastEmbedR:::umap_build_csr_graph(
+        indices, NULL, 0L, width, width, 1L,
+        graph_mode = "binary", allow_wide = TRUE,
+        force_wide = TRUE)
+    prepared$config$csr_offset_dtype <- "uint64"
+    prepared$config$graph_offset_dtype <- "uint64"
+    observed <- FALSE
+    with_mocked_bindings({
+        fit <- umap_knn(prepared, n_components = 3L,
+            backend = "cuda", devices = c(0L, 1L))
+        expect_true(observed)
+        expect_identical(dim(fit), c(rows, 3L))
+        expect_s4_class(fit, "float32")
+        expect_identical(attr(fit,
+            "fastEmbedR_config")$csr_offset_dtype, "uint64")
+    },
+    massive_nccl_available_cpp = function() TRUE,
+    massive_validate_devices = function(devices, ...) devices,
+    massive_cuda_device_uuids = function(...)
+        c("GPU-A", "GPU-B"),
+    umap_cuda_optimize_csr_multigpu_cpp = function(...) {
+        args <- list(...)
+        observed <<- is.double(args[[1L]]) &&
+            inherits(args[[3L]], "float32")
+        list(Y = float::fl(args[[4L]]),
+            optimizer = "cuda_resident_umap_coordinated_nccl",
+            gpu_devices = args[[11L]],
+            per_device_edge_visits = c(10, 10),
+            delta_scale = 256,
+            synchronization_seconds = 0.01)
+    }, .package = "fastEmbedR")
+})
