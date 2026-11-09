@@ -29,8 +29,9 @@ struct MetalTsne2dFileWorkspace {
   id<MTLBuffer> q_blocks = nil, inv_sum_q = nil;
 
   MetalTsne2dFileWorkspace(MetalEmbeddingState& device,
-                           const std::vector<float>& initial, int rows)
-    : state(device), owned(device.device), n(rows),
+                           const std::vector<float>& initial, int rows,
+                           std::uint64_t working_set_cap)
+    : state(device), owned(device.device, working_set_cap), n(rows),
       grid(metal_tsne_fft_grid_size(rows)), fft(grid * 2u),
       log_fft(log2_power_of_two(fft)),
       grid_cells(grid * grid), fft_cells(fft * fft),
@@ -259,8 +260,9 @@ List run_metal_tsne_2d_file(
     id<MTLBuffer> prob, const MetalTsne3dStream* stream,
     const std::string& output_path, int start_iter,
     const std::string& state_path, int checkpoint_every,
-    SEXP checkpoint_callback) {
-  MetalTsne2dFileWorkspace work(state, initial, n);
+    SEXP checkpoint_callback, std::uint64_t working_set_cap) {
+  MetalTsne2dFileWorkspace work(state, initial, n,
+                                working_set_cap);
   const auto layout_bytes = initial.size() * sizeof(float);
   if (start_iter > 0) {
     if (!std::filesystem::exists(state_path) ||
@@ -314,6 +316,9 @@ List run_metal_tsne_2d_file(
     }
     work.encode_center(command);
     metal_tsne_2d_wait(command, "optimizer update");
+    if (state.device.currentAllocatedSize > working_set_cap) {
+      Rcpp::stop("Metal t-SNE FFT exceeds its working-set cap.");
+    }
     std::swap(work.current, work.next);
     if (checkpoint_every > 0 &&
         ((iter + 1) % checkpoint_every == 0 ||

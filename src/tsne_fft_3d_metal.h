@@ -6,6 +6,7 @@
  */
 
 #include "metal_tsne_3d_tiles.h"
+#include "metal_tsne_state_budget.h"
 
 const char* metal_tsne_3d_kernel_source() {
   return R"METAL(
@@ -606,14 +607,21 @@ MetalTsne3dPipelines& metal_tsne_3d_pipelines(
 struct MetalTsne3dBuffers {
   id<MTLDevice> device;
   std::vector<id<MTLBuffer>> owned;
+  std::uint64_t working_set_cap;
 
-  explicit MetalTsne3dBuffers(id<MTLDevice> device) : device(device) {}
+  explicit MetalTsne3dBuffers(id<MTLDevice> device,
+      std::uint64_t cap = 0) : device(device), working_set_cap(cap) {}
   ~MetalTsne3dBuffers() {
     for (id<MTLBuffer> buffer : owned) [buffer release];
   }
   id<MTLBuffer> make(std::size_t bytes, const void* data = nullptr) {
     if (bytes == 0 || bytes > device.maxBufferLength) {
       Rcpp::stop("Metal 3D t-SNE buffer exceeds the device limit.");
+    }
+    if (working_set_cap != 0 &&
+        (device.currentAllocatedSize > working_set_cap ||
+         bytes > working_set_cap - device.currentAllocatedSize)) {
+      Rcpp::stop("Metal t-SNE resident state exceeds its working-set cap.");
     }
     id<MTLBuffer> buffer = data == nullptr ?
       [device newBufferWithLength:bytes
@@ -720,7 +728,8 @@ List run_metal_tsne_3d(
     const std::string& state_path = "",
     int checkpoint_every = 0,
     SEXP checkpoint_callback = R_NilValue,
-    const MetalTsne3dStream* stream = nullptr) {
+    const MetalTsne3dStream* stream = nullptr,
+    std::uint64_t working_set_cap = 0) {
   if (initial.size() != static_cast<std::size_t>(n) * 3u ||
       initial.size() > std::numeric_limits<std::uint32_t>::max() ||
       start_iter < 0 || start_iter > early_iter + normal_iter ||
@@ -730,7 +739,7 @@ List run_metal_tsne_3d(
     Rcpp::stop("Invalid Metal 3D t-SNE graph or checkpoint controls.");
   }
   MetalTsne3dPipelines& pipe = metal_tsne_3d_pipelines(state);
-  MetalTsne3dBuffers memory(state.device);
+  MetalTsne3dBuffers memory(state.device, working_set_cap);
   const std::uint32_t rows = static_cast<std::uint32_t>(n);
   const std::uint32_t first_row = 0u;
   const std::uint64_t edge_base = 0u;
@@ -897,6 +906,10 @@ List run_metal_tsne_3d(
     [fft_graph runWithMTLCommandQueue:state.queue feeds:feeds
                       targetOperations:nil
                     resultsDictionary:results];
+    if (working_set_cap != 0 &&
+        state.device.currentAllocatedSize > working_set_cap) {
+      Rcpp::stop("Metal t-SNE FFT exceeds its working-set cap.");
+    }
     id<MTLCommandBuffer> optimize = [state.queue commandBuffer];
     metal_tsne_3d_encode(optimize, pipe.gather, rows,
                          {current, potential, head, links,
@@ -983,6 +996,10 @@ List run_metal_tsne_3d(
     metal_tsne_3d_encode(optimize, pipe.center, rows,
                          {next, center}, {scalar(rows)});
     metal_tsne_3d_wait(optimize, "optimizer update");
+    if (working_set_cap != 0 &&
+        state.device.currentAllocatedSize > working_set_cap) {
+      Rcpp::stop("Metal t-SNE optimizer exceeds its working-set cap.");
+    }
     std::swap(current, next);
     if (checkpoint_every > 0 &&
         ((iteration + 1) % checkpoint_every == 0 ||

@@ -9759,6 +9759,19 @@ List massive_tsne_optimize_metal_impl(
     MetalEmbeddingState& state = metal_embedding_state();
     const auto edges = metal_tsne_graph_edges(indices_path);
     const bool stream = graph_access == "stream";
+    const auto budget = metal_tsne_state_budget(
+      static_cast<std::uint64_t>(n),
+      static_cast<std::uint32_t>(dims), edges,
+      static_cast<std::uint32_t>(edge_chunk_capacity), stream);
+    const auto recommended = static_cast<std::uint64_t>(
+      state.device.recommendedMaxWorkingSetSize);
+    const auto allocated = static_cast<std::uint64_t>(
+      state.device.currentAllocatedSize);
+    if (!metal_tsne_state_fits(budget, allocated, recommended)) {
+      Rcpp::stop("Metal t-SNE resident state and FFT reserve exceed "
+                 "70%% of the recommended device working set.");
+    }
+    const auto working_set_cap = recommended / 10 * 7;
     MetalTsneMappedFile offsets(offsets_path,
       (static_cast<std::size_t>(n) + 1) * sizeof(std::uint64_t),
       state.device, !stream);
@@ -9776,21 +9789,27 @@ List massive_tsne_optimize_metal_impl(
       static_cast<const float*>(weights.data()),
       static_cast<std::uint32_t>(edge_chunk_capacity)
     };
-    if (dims == 2) return run_metal_tsne_2d_file(
+    List fit;
+    if (dims == 2) fit = run_metal_tsne_2d_file(
       state, initial, n, early_iter, normal_iter,
       early_exaggeration, exaggeration, learning_rate,
       learning_rate_auto, initial_momentum, final_momentum,
       min_gain, max_step_norm, offsets.buffer(), indices.buffer(),
       weights.buffer(), stream ? &tiles : nullptr,
       output_path, start_iter, state_path, checkpoint_every,
-      checkpoint_callback);
-    return run_metal_tsne_3d(state, nullptr, initial, n,
+      checkpoint_callback, working_set_cap);
+    else fit = run_metal_tsne_3d(state, nullptr, initial, n,
       early_iter, normal_iter, early_exaggeration, exaggeration,
       learning_rate, learning_rate_auto, initial_momentum,
       final_momentum, min_gain, max_step_norm, false,
       offsets.buffer(), indices.buffer(), weights.buffer(),
       output_path, start_iter, state_path,
       checkpoint_every, checkpoint_callback,
-      stream ? &tiles : nullptr);
+      stream ? &tiles : nullptr, working_set_cap);
+    fit["metal_state_admission_bytes"] =
+      static_cast<double>(budget.total_bytes);
+    fit["metal_working_set_cap_bytes"] =
+      static_cast<double>(working_set_cap);
+    return fit;
   }
 }

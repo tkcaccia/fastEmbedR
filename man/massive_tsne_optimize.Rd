@@ -80,8 +80,9 @@ in RAM, reuses the package's 2D or 3D FFT repulsion, and writes the
 final coordinates to a file. CUDA streams affinities through a 2D or 3D
 FFT optimizer. Metal maps the complete read-only graph into shared memory
 for its 2D or 3D FFT optimizer, or streams bounded graph chunks from SSD.
-Metal retains coordinates, update state, and FFT workspace in memory;
-bounded graph upload is not a fully streamed fit.
+Metal retains coordinates and update state in memory and reserves space
+for its FFT workspace. It checks the device working-set budget before
+allocation and during fitting. Graph streaming is not a fully streamed fit.
 This is a full-graph fit, not landmark projection. Optimization uses
 fixed iteration counts, without automatic KL stopping. Disk reads can
 be substantial. All routes can checkpoint optimizer state.

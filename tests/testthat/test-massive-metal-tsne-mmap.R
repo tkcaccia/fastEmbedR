@@ -43,6 +43,13 @@ test_that("file-backed Metal t-SNE runs a 3D graph without fallback", {
     expect_identical(result$backend, "native_metal_fft_graph_mmap")
     expect_identical(result$resources$graph_access,
         "read_only_mmap")
+    expect_identical(result$resources$streaming_scope,
+        "graph_upload_only")
+    expect_identical(result$resources$optimizer_state_residency,
+        "admission_bounded_resident")
+    expect_gt(result$resources$metal_state_admission_bytes, 0)
+    expect_gt(result$resources$metal_working_set_cap_bytes,
+        result$resources$metal_state_admission_bytes)
     expect_identical(result$fft_grid_size, 16L)
     expect_true(all(is.finite(massive_read_rows(result, 1L, 16L))))
     expect_false(file.exists(paste0(output, ".checkpoint.rds")))
@@ -55,6 +62,8 @@ test_that("file-backed Metal t-SNE runs a 3D graph without fallback", {
         "native_metal_fft_graph_stream")
     expect_identical(streamed$resources$graph_access,
         "bounded_stream")
+    expect_lt(streamed$resources$graph_upload_peak_bytes_estimate,
+        result$resources$graph_upload_peak_bytes_estimate)
     expect_identical(massive_read_rows(streamed, 1L, 16L),
         massive_read_rows(result, 1L, 16L))
     automatic <- massive_tsne_optimize(graph, start, auto_path,

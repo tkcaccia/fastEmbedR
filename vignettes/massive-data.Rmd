@@ -147,7 +147,11 @@ record the work and memory estimates for each stage. A requested Metal
 optimizer does not imply Metal KNN or an all-GPU pipeline. Check sampled
 KNN recall and embedding quality on each large dataset.
 Metal t-SNE bounds graph uploads when graph streaming is selected, but
-keeps coordinates, optimizer state, and FFT workspace in memory. The
+keeps coordinates and optimizer state in memory and reserves FFT space.
+The device working-set admission rejects oversized fits before graph
+mapping; runtime checks stop a fit that exceeds the budget. Its existing
+atomic checkpoints preserve the completed iteration and optimizer state.
+This route streams the graph only, not the entire fit. The
 resident 2D Metal UMAP quality repair does not qualify file-backed UMAP.
 Resident UMAP fits, including wide CSR and prepared resident graphs,
 do not checkpoint optimizer state. Interruption requires a new fit from

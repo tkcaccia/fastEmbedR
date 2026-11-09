@@ -6,8 +6,9 @@
 #' final coordinates to a file. CUDA streams affinities through a 2D or 3D
 #' FFT optimizer. Metal maps the complete read-only graph into shared memory
 #' for its 2D or 3D FFT optimizer, or streams bounded graph chunks from SSD.
-#' Metal retains coordinates, update state, and FFT workspace in memory;
-#' bounded graph upload is not a fully streamed fit.
+#' Metal retains coordinates and update state in memory and reserves space
+#' for its FFT workspace. It checks the device working-set budget before
+#' allocation and during fitting. Graph streaming is not a fully streamed fit.
 #' This is a full-graph fit, not landmark projection. Optimization uses
 #' fixed iteration counts, without automatic KL stopping. Disk reads can
 #' be substantial. All routes can checkpoint optimizer state.
@@ -195,7 +196,14 @@ massive_tsne_result_resources <- function(plan, graph, fit, saved) {
             "bounded_stream" else "read_only_mmap"
     if (identical(plan$backend, "metal")) {
         resources$streaming_scope <- "graph_upload_only"
-        resources$optimizer_state_residency <- "resident"
+        resources$optimizer_state_residency <-
+            "admission_bounded_resident"
+        resources$fft_workspace_residency <-
+            "resident_with_reserved_headroom"
+        resources$metal_state_admission_bytes <-
+            fit$metal_state_admission_bytes %||% NA_real_
+        resources$metal_working_set_cap_bytes <-
+            fit$metal_working_set_cap_bytes %||% NA_real_
         resources$graph_upload_peak_bytes_estimate <-
             if (plan$graph_access == "stream")
                 min(graph$n_edges, plan$edge_chunk_capacity) * 8 +

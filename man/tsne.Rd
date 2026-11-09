@@ -97,8 +97,9 @@ CUDA optimizer; coordinated fits materialize KNN in host RAM.
 Unsupported GPU requests fail clearly and are not relabelled CPU runs.
 Above 5,000 rows, one-call file-backed Metal t-SNE prepares neighbors
 with CPU HNSW; the returned pipeline records that stage separately.
-Metal bounds graph uploads, but retains coordinates, optimizer state,
-and FFT workspace in memory. It is not a fully streamed fit.}
+Metal bounds graph uploads, but keeps coordinates and optimizer state
+resident and reserves space for the FFT workspace. It rejects fits
+outside the device working-set budget; it is not fully streamed.}
 
 \item{keep_knn}{If \code{TRUE}, retain KNN matrices or file-backed KNN files
 in the returned pipeline. One-call file-backed fits release KNN files

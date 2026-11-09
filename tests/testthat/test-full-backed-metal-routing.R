@@ -50,7 +50,9 @@ test_that("Metal t-SNE reports graph-only streaming scope", {
     expect_identical(resources$streaming_scope,
         "graph_upload_only")
     expect_identical(resources$optimizer_state_residency,
-        "resident")
+        "admission_bounded_resident")
+    expect_identical(resources$fft_workspace_residency,
+        "resident_with_reserved_headroom")
     expect_equal(resources$graph_upload_peak_bytes_estimate,
         65536 * 8 + (262144 + 1) * 8)
     expect_equal(resources$layout_state_bytes_estimate,
