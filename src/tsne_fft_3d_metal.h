@@ -942,6 +942,8 @@ List run_metal_tsne_3d(
   if (!output_path.empty()) {
     metal_tsne_3d_write_buffers(output_path, {current},
                                 layout_bytes);
+    const double metal_allocated_bytes_observed =
+      static_cast<double>(state.device.currentAllocatedSize);
     [mass_data release];
     [kernel_data release];
     [potential_data release];
@@ -953,6 +955,8 @@ List run_metal_tsne_3d(
         "native_metal_fft_graph_mmap" :
         "native_metal_fft_graph_stream",
       Rcpp::Named("repulsion") = "fft_grid_3d_metal",
+      Rcpp::Named("metal_allocated_bytes_observed") =
+        metal_allocated_bytes_observed,
       Rcpp::Named("fft_grid_size") = static_cast<int>(grid),
       Rcpp::Named("iterations") = early_iter + normal_iter,
       Rcpp::Named("resumed_from_iteration") = start_iter,

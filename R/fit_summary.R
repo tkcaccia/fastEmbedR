@@ -24,15 +24,21 @@ fastembedr_summary_memory <- function(x) {
     if (is.null(observed)) observed <- NA_real_
     component_names <- c("layout_ram_bytes", "graph_bytes",
         "delta_ram_bytes", "metal_buffer_bytes_estimate",
-        "device_buffer_bytes", "managed_layout_bytes")
+        "device_buffer_bytes", "managed_layout_bytes",
+        "graph_upload_peak_bytes_estimate",
+        "layout_state_bytes_estimate",
+        "fft_and_misc_reserve_bytes")
     components <- resources[intersect(component_names,
         names(resources))]
     if (!length(components)) components <- list()
+    scope <- if (is.null(x$pipeline$stage_resources))
+        "estimate" else "optimizer_estimate"
     list(ram_bytes = ram, vram_bytes = vram,
         metal_allocated_bytes_observed = observed,
-        ram_basis = if (is.na(ram)) "not_recorded" else "estimate",
-        vram_basis = if (is.na(vram)) "not_recorded" else "estimate",
-        component_estimates_bytes = components)
+        ram_basis = if (is.na(ram)) "not_recorded" else scope,
+        vram_basis = if (is.na(vram)) "not_recorded" else scope,
+        component_estimates_bytes = components,
+        stage_resources = x$pipeline$stage_resources)
 }
 
 fastembedr_summary_backend <- function(x) {
@@ -70,6 +76,9 @@ fastembedr_summary_fit <- function(x) {
     backend <- fastembedr_summary_backend(x)
     list(backend = backend$backend,
         backend_engine = backend$engine,
+        graph_offset_dtype = x$graph_offset_dtype %||%
+            x$parameters$graph_offset_dtype %||%
+            x$parameters$csr_offset_dtype %||% NA_character_,
         devices = x$gpu_devices %||% x$parameters$devices,
         device_identity = x$gpu_identity,
         scope = fastembedr_summary_scope(x),
@@ -85,7 +94,9 @@ fastembedr_summary_fit <- function(x) {
 #' Summarize a fastEmbedR fit without loading file-backed output
 #'
 #' Reports the actual recorded backend and devices, fit scope, stage times,
-#' and available memory estimates. Unknown memory is `NA`, never inferred
+#' and available memory estimates. One-call file-backed fits also retain
+#' per-stage resource plans in `memory_use$stage_resources`; these are not
+#' measured process peaks. Unknown memory is `NA`, never inferred
 #' from the input size. Use [massive_read_rows()] with explicit row bounds
 #' for file-backed output; PCA scores are stored in `fit$scores`.
 #'
@@ -93,7 +104,8 @@ fastembedr_summary_fit <- function(x) {
 #'   `graph_cluster()`.
 #' @param ... Unused.
 #' @return A list with canonical `backend`, detailed `backend_engine`,
-#'   `devices`, `device_identity`, `scope`, `stage_backend`,
+#'   `graph_offset_dtype`, `devices`, `device_identity`, `scope`,
+#'   `stage_backend`,
 #'   `stage_seconds`, `memory_use`, and `output_rows`. Missing total memory
 #'   estimates remain `NA`; available component estimates are reported
 #'   separately and are not an observed peak.

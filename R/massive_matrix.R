@@ -138,6 +138,37 @@ massive_read_rows <- function(x, first = 1, n = 6L) {
     massive_read_rows_cpp(x, first, as.integer(n), 128e6)
 }
 
+massive_validate_matrix_output <- function(x, max_bytes = 64e6) {
+    if (!inherits(x, "fastEmbedR_massive_matrix") ||
+        !x$format %in% c("f32", "fbin")) stop(
+        "Output validation requires a file-backed float32 matrix.",
+        call. = FALSE)
+    if (!is.numeric(max_bytes) || length(max_bytes) != 1L ||
+        !is.finite(max_bytes) || max_bytes < 16 * x$ncol ||
+        max_bytes > 128e6) stop(
+        "`max_bytes` must fit one row and not exceed 128 MB.",
+        call. = FALSE)
+    rows_per_chunk <- max(1L, floor(max_bytes / (16 * x$ncol)))
+    rows <- 0
+    maximum <- 0
+    for (first in seq.int(1, x$nrow, by = rows_per_chunk)) {
+        count <- min(rows_per_chunk, x$nrow - first + 1)
+        values <- massive_read_rows(x, first, count)
+        if (!identical(dim(values), c(as.integer(count),
+            as.integer(x$ncol))) || any(!is.finite(values))) stop(
+            "Output matrix has missing or non-finite rows.",
+            call. = FALSE)
+        maximum <- max(maximum, abs(values))
+        rows <- rows + count
+    }
+    if (rows != x$nrow) stop("Output row count is incomplete.",
+        call. = FALSE)
+    list(rows = rows, columns = x$ncol,
+        output_bytes = x$nrow * x$ncol * 4,
+        max_abs_coordinate = maximum, max_buffer_bytes = max_bytes,
+        finite = TRUE)
+}
+
 #' @export
 print.fastEmbedR_massive_matrix <- function(x, ...) {
     cat("EXPERIMENTAL fastEmbedR massive matrix\n")

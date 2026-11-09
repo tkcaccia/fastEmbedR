@@ -48,7 +48,7 @@ struct CandidateEdge {
 struct Graph {
   int n = 0;
   std::vector<Edge> edges;
-  std::vector<int> row_ptr;
+  std::vector<std::size_t> row_ptr;
   std::vector<int> col_idx;
   std::vector<double> adjacency_weight;
   std::vector<double> degree;
@@ -94,7 +94,7 @@ Graph graph_from_edges(int n, std::vector<Edge> edges) {
   graph.n = n;
   graph.edges = std::move(edges);
   graph.degree.assign(static_cast<std::size_t>(n), 0.0);
-  graph.row_ptr.assign(static_cast<std::size_t>(n + 1), 0);
+  graph.row_ptr.assign(static_cast<std::size_t>(n) + 1u, 0);
 
   for (const Edge& edge : graph.edges) {
     graph.total_edge_weight += edge.weight;
@@ -112,14 +112,14 @@ Graph graph_from_edges(int n, std::vector<Edge> edges) {
   std::partial_sum(graph.row_ptr.begin(), graph.row_ptr.end(), graph.row_ptr.begin());
   graph.col_idx.resize(static_cast<std::size_t>(graph.row_ptr.back()));
   graph.adjacency_weight.resize(static_cast<std::size_t>(graph.row_ptr.back()));
-  std::vector<int> cursor = graph.row_ptr;
+  std::vector<std::size_t> cursor = graph.row_ptr;
   for (const Edge& edge : graph.edges) {
     if (edge.u == edge.v) {
-      const int pos = cursor[static_cast<std::size_t>(edge.u)]++;
+      const auto pos = cursor[static_cast<std::size_t>(edge.u)]++;
       graph.col_idx[static_cast<std::size_t>(pos)] = edge.u;
       graph.adjacency_weight[static_cast<std::size_t>(pos)] = 2.0 * edge.weight;
     } else {
-      int pos = cursor[static_cast<std::size_t>(edge.u)]++;
+      auto pos = cursor[static_cast<std::size_t>(edge.u)]++;
       graph.col_idx[static_cast<std::size_t>(pos)] = edge.v;
       graph.adjacency_weight[static_cast<std::size_t>(pos)] = edge.weight;
       pos = cursor[static_cast<std::size_t>(edge.v)]++;
@@ -242,7 +242,7 @@ LocalMoveResult local_move(const Graph& graph,
       const double node_degree = graph.degree[static_cast<std::size_t>(u)];
       if (!(node_degree > 0.0)) continue;
       touched.clear();
-      for (int pos = graph.row_ptr[static_cast<std::size_t>(u)];
+      for (auto pos = graph.row_ptr[static_cast<std::size_t>(u)];
            pos < graph.row_ptr[static_cast<std::size_t>(u + 1)]; ++pos) {
         const int v = graph.col_idx[static_cast<std::size_t>(pos)];
         if (v == u) continue;
@@ -356,7 +356,7 @@ LocalMoveResult local_move_parallel(const Graph& graph,
             if (!(degree > 0.0)) continue;
             const int old = result.membership[static_cast<std::size_t>(u)];
             std::unordered_map<int, double> neighbor_weight;
-            for (int pos = graph.row_ptr[static_cast<std::size_t>(u)];
+            for (auto pos = graph.row_ptr[static_cast<std::size_t>(u)];
                  pos < graph.row_ptr[static_cast<std::size_t>(u + 1)];
                  ++pos) {
               const int v = graph.col_idx[static_cast<std::size_t>(pos)];
@@ -509,7 +509,7 @@ std::vector<int> refine_partition(const Graph& graph,
   std::vector<double> volume = graph.degree;
   std::vector<double> cut_to_parent(static_cast<std::size_t>(n), 0.0);
   for (int u = 0; u < n; ++u) {
-    for (int pos = graph.row_ptr[static_cast<std::size_t>(u)];
+    for (auto pos = graph.row_ptr[static_cast<std::size_t>(u)];
          pos < graph.row_ptr[static_cast<std::size_t>(u + 1)]; ++pos) {
       const int v = graph.col_idx[static_cast<std::size_t>(pos)];
       if (v != u && parent[static_cast<std::size_t>(v)] ==
@@ -540,7 +540,7 @@ std::vector<int> refine_partition(const Graph& graph,
     if (cut_to_parent[static_cast<std::size_t>(own)] + tolerance < r_threshold) continue;
 
     touched.clear();
-    for (int pos = graph.row_ptr[static_cast<std::size_t>(u)];
+    for (auto pos = graph.row_ptr[static_cast<std::size_t>(u)];
          pos < graph.row_ptr[static_cast<std::size_t>(u + 1)]; ++pos) {
       const int v = graph.col_idx[static_cast<std::size_t>(pos)];
       if (v == u || parent[static_cast<std::size_t>(v)] != parent_id) continue;
@@ -681,7 +681,7 @@ bool communities_are_connected(const Graph& graph,
       const int u = stack.back();
       stack.pop_back();
       ++reached;
-      for (int pos = graph.row_ptr[static_cast<std::size_t>(u)];
+      for (auto pos = graph.row_ptr[static_cast<std::size_t>(u)];
            pos < graph.row_ptr[static_cast<std::size_t>(u + 1)]; ++pos) {
         const int v = graph.col_idx[static_cast<std::size_t>(pos)];
         if (!seen[static_cast<std::size_t>(v)] &&

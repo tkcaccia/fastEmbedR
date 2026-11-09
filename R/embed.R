@@ -802,7 +802,7 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' @param resume Continue from a matching PCA checkpoint and partial score
 #'   file. Available when out-of-core processing is selected.
 #' @param devices Optional distinct CUDA device IDs. With resident matrix
-#'   input, two to four devices split covariance and score projection;
+#'   input, multiple devices split covariance and score projection;
 #'   the small eigendecomposition runs on CPU. Out-of-core CUDA PCA shards
 #'   file-backed fitting and score projection across devices.
 #' @param landmarks `FALSE` fits all rows. For resident PCA, a count,

@@ -2538,13 +2538,13 @@ test_that("four CUDA devices coordinate one t-SNE fit", {
         massive_read_rows(one, 1L, n), tolerance = 1e-3)
 })
 
-test_that("four-device t-SNE planning requires NCCL", {
+test_that("multi-device t-SNE planning requires NCCL", {
     select <- fastEmbedR:::massive_tsne_devices
     with_mocked_bindings(
         {
             expect_identical(select(0:3, "cuda", 17L), 0:3)
-            expect_error(select(0:4, "cuda", 17L),
-                "two to four")
+            expect_identical(select(0:4, "cuda", 17L), 0:4)
+            expect_identical(select(0:7, "cuda", 64L), 0:7)
         },
         massive_validate_devices = function(devices, ...) devices,
         massive_nccl_available_cpp = function() TRUE,
@@ -3709,7 +3709,9 @@ test_that("coordinated UMAP rejects unsupported device requests", {
             expect_identical(plan(0:3, "cuda",
                 list(n_vertices = 7L), init, "memory"), 0:3)
             expect_error(plan(0:4, "cuda", graph,
-                init, "memory"), "at most four")
+                init, "memory"), "rows on every device")
+            expect_identical(plan(0:7, "cuda",
+                list(n_vertices = 64L), init, "memory"), 0:7)
             expect_error(plan(c(0L, 1L), "cuda", graph,
                 init, "managed"), "device storage")
         },
@@ -3833,6 +3835,9 @@ test_that("coordinated UMAP budgets padded device layouts", {
                 3L, "memory", 0L), 20L)
             expect_equal(capacity(graph, 156, 3L, limit,
                 3L, "memory", 0:1), 10L)
+            graph$max_degree <- 100L
+            expect_equal(capacity(graph, 156, 3L, limit,
+                3L, "memory", 0L), 20L)
         },
         massive_auto_cuda_free = function(...) 1e12,
         .package = "fastEmbedR"

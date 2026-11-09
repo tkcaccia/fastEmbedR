@@ -253,7 +253,9 @@ build_umap_csr_state <- function(indices,
         as.integer(n_neighbors),
         as.integer(n_neighbors),
         as.integer(cfg$n_threads),
-        graph_mode = graph_mode
+        graph_mode = graph_mode,
+        allow_wide = identical(cfg$backend, "cpu") &&
+            identical(graph_mode, "fuzzy") && n_components == 2L
     )
     if (is.null(init)) {
         init <- umap_init_from_csr_graph(
@@ -265,7 +267,8 @@ build_umap_csr_state <- function(indices,
         )
         cfg$init_backend <- attr(init, "backend")
     }
-    cfg$graph_nnz <- as.integer(graph$nnz)
+    cfg$graph_nnz <- as.double(graph$nnz)
+    cfg$csr_offset_dtype <- graph$offset_dtype
     cfg$graph_max_weight <- as.numeric(graph$max_weight)
     cfg$graph_cuda_like_width <- graph$cuda_like_width
     cfg$graph_builder <- graph$graph_builder
@@ -462,7 +465,7 @@ run_umap_cpu_generic <- function(indices, distances, knn, cfg,
     cfg$init_backend <- paste0("cpu_", graph_mode, "_csr")
     cfg$graph_prep_backend <- cfg$init_backend
     cfg$graph_storage <- cfg$graph_prep_backend
-    cfg$graph_nnz <- as.integer(graph$nnz)
+    cfg$graph_nnz <- as.double(graph$nnz)
     cfg$graph_max_weight <- as.numeric(graph$max_weight)
     cfg$graph_cuda_like_width <- graph$cuda_like_width
     cfg$graph_builder <- graph$graph_builder
@@ -517,7 +520,15 @@ configure_umap_cpu_2d <- function(state, graph_mode) {
 
 run_umap_cpu_2d <- function(state, seed, verbose) {
     cfg <- state$cfg
-    layout <- fast_knn_umap_csr_init_cpp(
+    wide <- identical(state$graph$offset_dtype, "uint64")
+    optimizer <- if (wide) {
+        cfg$optimizer_mode <- "csr_wide_edge_tiles"
+        cfg$optimizer_schedule <- "stateless_edge_tiles"
+        fast_knn_umap_csr_wide_init_cpp
+    } else {
+        fast_knn_umap_csr_init_cpp
+    }
+    args <- list(
         state$graph$offsets,
         state$graph$neighbors,
         state$graph$weights,
@@ -528,9 +539,9 @@ run_umap_cpu_2d <- function(state, seed, verbose) {
         cfg$learning_rate,
         cfg$repulsion_strength,
         as.integer(cfg$n_threads),
-        as.integer(seed),
-        isTRUE(verbose)
-    )
+        as.integer(seed))
+    if (!wide) args <- c(args, list(isTRUE(verbose)))
+    layout <- do.call(optimizer, args)
     layout <- finalize_embedding_layout(
         layout,
         "UMAP",

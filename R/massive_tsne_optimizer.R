@@ -6,6 +6,8 @@
 #' final coordinates to a file. CUDA streams affinities through a 2D or 3D
 #' FFT optimizer. Metal maps the complete read-only graph into shared memory
 #' for its 2D or 3D FFT optimizer, or streams bounded graph chunks from SSD.
+#' Metal retains coordinates, update state, and FFT workspace in memory;
+#' bounded graph upload is not a fully streamed fit.
 #' This is a full-graph fit, not landmark projection. Optimization uses
 #' fixed iteration counts, without automatic KL stopping. Disk reads can
 #' be substantial. All routes can checkpoint optimizer state.
@@ -22,9 +24,9 @@
 #' @param memory_limit Host RAM budget. Coordinated CUDA fits reserve one
 #'   bounded attraction-edge buffer per requested device.
 #' @param backend `"cpu"`, `"cuda"`, or `"metal"`. CUDA supports
-#'   2D or 3D output on one to four devices with NCCL for multiple GPUs.
+#'   2D or 3D output with NCCL for multiple GPUs.
 #' @param n.cores CPU worker count for FFT, sparse attraction, and updates.
-#' @param devices CUDA device IDs. Two to four IDs run one coordinated fit.
+#' @param devices CUDA device IDs. Multiple IDs run one coordinated fit.
 #' @param graph_access Metal graph access: `"auto"`, `"mmap"`, or
 #'   `"stream"`. Auto streams graphs larger than one edge chunk.
 #' @param edge_chunk_capacity Maximum attraction edges per Metal SSD chunk.
@@ -140,6 +142,10 @@ massive_tsne_result <- function(plan, graph, init, fit, saved) {
     result$implementation_identity <-
         massive_checkpoint_implementation_identity()
     result$backend <- fit$backend_used
+    result$graph_index <- list(
+        offset_dtype = graph$offset_dtype,
+        row_id_dtype = graph$index_dtype,
+        edge_positions = as.double(graph$n_edges))
     result$optimizer <- fit$repulsion
     result$gpu_devices <- plan$devices
     result$gpu_identity <- plan$gpu_identity
@@ -148,6 +154,9 @@ massive_tsne_result <- function(plan, graph, init, fit, saved) {
     result$parameters$resumed_from_iteration <- saved$iteration
     result$resources <- massive_tsne_result_resources(
         plan, graph, fit, saved)
+    if (plan$backend == "metal")
+        result$metal_allocated_bytes_observed <-
+            fit$metal_allocated_bytes_observed %||% NA_real_
     result$elapsed_seconds_current_call <- fit$elapsed_seconds
     if (!is.null(fit$stage_seconds)) result$stage_seconds <- fit$stage_seconds
     if (!is.null(fit$repulsion_gpu_seconds))
@@ -184,6 +193,19 @@ massive_tsne_result_resources <- function(plan, graph, fit, saved) {
     if (identical(plan$backend, "metal"))
         resources$graph_access <- if (plan$graph_access == "stream")
             "bounded_stream" else "read_only_mmap"
+    if (identical(plan$backend, "metal")) {
+        resources$streaming_scope <- "graph_upload_only"
+        resources$optimizer_state_residency <- "resident"
+        resources$graph_upload_peak_bytes_estimate <-
+            if (plan$graph_access == "stream")
+                min(graph$n_edges, plan$edge_chunk_capacity) * 8 +
+                    (min(graph$n_vertices, 262144) + 1) * 8
+            else resources$graph_bytes
+        resources$layout_state_bytes_estimate <-
+            graph$n_vertices * plan$dimensions * 24 +
+                graph$n_vertices * 8
+        resources$fft_and_misc_reserve_bytes <- 1024 * 1024^2
+    }
     if (!is.null(fit$per_device_attraction_edges))
         resources$per_device_attraction_edges <-
             fit$per_device_attraction_edges
@@ -317,10 +339,9 @@ massive_tsne_devices <- function(devices, backend, rows) {
     if (backend != "cuda") return(NULL)
     if (is.null(selected)) selected <- as.integer(
         massive_cuda_memory_cpp()$device)
-    if (length(selected) > 4L ||
-        (length(selected) > 1L &&
-            !isTRUE(massive_nccl_available_cpp()))) stop(
-        "Multi-GPU t-SNE supports two to four CUDA devices with NCCL; ",
+    if (length(selected) > 1L &&
+            !isTRUE(massive_nccl_available_cpp())) stop(
+        "Multi-GPU t-SNE requires NCCL; ",
         "no fallback was used.", call. = FALSE)
     if (length(selected) > 1L && rows <=
         (length(selected) - 1L) * ceiling(rows / length(selected))) stop(
@@ -419,6 +440,9 @@ massive_tsne_optimize_plan <- function(graph, init, output,
     resources <- massive_tsne_resource_plan(graph, init, path,
         memory_limit, backend, selected, graph_access, capacity)
     controls$parameters$fft_grid_size <- resources$fft_grid_size
+    controls$parameters$graph_offset_dtype <- graph$offset_dtype
+    controls$parameters$graph_index_dtype <- graph$index_dtype
+    controls$parameters$graph_edge_positions <- as.double(graph$n_edges)
     paths <- c(graph$offsets_path, graph$indices_path,
         graph$weights_path, init$path)
     massive_checkpoint_validated_graph_identity(graph, paths[1:3])
@@ -433,7 +457,7 @@ massive_tsne_optimize_plan <- function(graph, init, output,
 massive_tsne_resource_plan <- function(graph, init, path,
         memory_limit, backend, devices, graph_access = "auto",
         edge_chunk_capacity = NULL) {
-    limit <- massive_memory_bytes(memory_limit)
+    limit <- massive_auto_memory_limit(memory_limit)
     coords <- graph$n_vertices * init$ncol
     feeders <- max(1L, length(devices))
     if (coords > .Machine$integer.max) stop(

@@ -94,7 +94,11 @@ Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
 cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
 that threshold. Single-GPU device pointers pass directly to the native
 CUDA optimizer; coordinated fits materialize KNN in host RAM.
-Unsupported GPU requests fail clearly and are not relabelled CPU runs.}
+Unsupported GPU requests fail clearly and are not relabelled CPU runs.
+Above 5,000 rows, one-call file-backed Metal t-SNE prepares neighbors
+with CPU HNSW; the returned pipeline records that stage separately.
+Metal bounds graph uploads, but retains coordinates, optimizer state,
+and FFT workspace in memory. It is not a fully streamed fit.}
 
 \item{keep_knn}{If \code{TRUE}, retain KNN matrices or file-backed KNN files
 in the returned pipeline. One-call file-backed fits release KNN files
@@ -184,9 +188,9 @@ file-backed input, uses \code{options(memory_limit = ...)}, or
 \code{"8GB"}.}
 
 \item{devices}{Optional CUDA device indices. In resident full-data mode,
-two to four devices coordinate one 2D or 3D fit with host KNN
+multiple devices coordinate one 2D or 3D fit with host KNN
 affinities and NCCL. The experimental file-backed full-graph route
-also accepts two to four CUDA devices.
+also accepts multiple CUDA devices.
 Resident landmark fits coordinate the reference optimizer across
 devices and shard the fixed-reference query transform across them.
 Query KNN is computed on one GPU and materialized in host RAM before

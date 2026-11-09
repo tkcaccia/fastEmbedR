@@ -51,7 +51,7 @@ massive_tsne_optimize(
 bounded attraction-edge buffer per requested device.}
 
 \item{backend}{\code{"cpu"}, \code{"cuda"}, or \code{"metal"}. CUDA supports
-2D or 3D output on one to four devices with NCCL for multiple GPUs.}
+2D or 3D output with NCCL for multiple GPUs.}
 
 \item{n.cores}{CPU worker count for FFT, sparse attraction, and updates.}
 
@@ -61,7 +61,7 @@ bounded attraction-edge buffer per requested device.}
 
 \item{checkpoint_every}{Iterations between state snapshots.}
 
-\item{devices}{CUDA device IDs. Two to four IDs run one coordinated fit.}
+\item{devices}{CUDA device IDs. Multiple IDs run one coordinated fit.}
 
 \item{graph_access}{Metal graph access: \code{"auto"}, \code{"mmap"}, or
 \code{"stream"}. Auto streams graphs larger than one edge chunk.}
@@ -80,6 +80,8 @@ in RAM, reuses the package's 2D or 3D FFT repulsion, and writes the
 final coordinates to a file. CUDA streams affinities through a 2D or 3D
 FFT optimizer. Metal maps the complete read-only graph into shared memory
 for its 2D or 3D FFT optimizer, or streams bounded graph chunks from SSD.
+Metal retains coordinates, update state, and FFT workspace in memory;
+bounded graph upload is not a fully streamed fit.
 This is a full-graph fit, not landmark projection. Optimization uses
 fixed iteration counts, without automatic KL stopping. Disk reads can
 be substantial. All routes can checkpoint optimizer state.

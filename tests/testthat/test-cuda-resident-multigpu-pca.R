@@ -34,7 +34,7 @@ test_that("resident PCA device requests do not fall back", {
     expect_error(pca(x, backend = "cpu", devices = c(0L, 1L)),
         "requires CUDA")
     expect_error(pca(x, backend = "cuda", devices = 0L),
-        "two to four")
+        "at least two")
     expect_error(pca(x, backend = "cuda", devices = c(0L, 1L),
         checkpoint = TRUE), "out_of_core")
 })

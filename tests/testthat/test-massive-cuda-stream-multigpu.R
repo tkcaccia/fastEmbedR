@@ -59,6 +59,24 @@ test_that("stream planner budgets host, disk, and GPU chunks", {
         "exceeds")
 })
 
+test_that("stream planner retains eight GPU identities and bounded work", {
+    graph <- structure(list(n_vertices = 80L, n_edges = 160L,
+        max_degree = 2L, storage = "csr",
+        weight_method = "umap_fuzzy_union", symmetrized = TRUE),
+        class = "fastEmbedR_massive_graph")
+    with_mocked_bindings({
+        plan <- fastEmbedR:::massive_cuda_stream_plan(graph,
+            tempfile(), 0:7, 10L, "2GB")
+        expect_identical(plan$devices, 0:7)
+        expect_identical(plan$uuids, paste0("GPU-", 0:7))
+        expect_gte(plan$edge_budget, graph$max_degree)
+    }, massive_validate_devices = function(devices, ...) devices,
+    massive_auto_cuda_free = function(...) 8 * 1024^3,
+    massive_louvain_output = function(output, ...) output,
+    massive_cuda_device_uuids = function(devices)
+        paste0("GPU-", devices), .package = "fastEmbedR")
+})
+
 test_that("streamed Leiden checks the prior parent map", {
     path <- tempfile()
     writeBin(c(1L, 2L), path, size = 4L,

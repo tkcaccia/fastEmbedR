@@ -140,6 +140,15 @@ fuzzy graph; t-SNE uses PCA. It records the KNN, graph, initialization,
 and optimization times separately. The KNN policy may choose approximate
 search for larger inputs; all rows are still optimized. Set
 `checkpoint = TRUE` to record completed stages and native progress.
+For a Metal one-call full fit above 5,000 rows, CPU HNSW prepares KNN
+before the Metal optimizer. This is an explicit mixed-stage route:
+`fit$pipeline$stage_backend`, `knn_method`, and `stage_resources`
+record the work and memory estimates for each stage. A requested Metal
+optimizer does not imply Metal KNN or an all-GPU pipeline. Check sampled
+KNN recall and embedding quality on each large dataset.
+Metal t-SNE bounds graph uploads when graph streaming is selected, but
+keeps coordinates, optimizer state, and FFT workspace in memory. The
+resident 2D Metal UMAP quality repair does not qualify file-backed UMAP.
 The checkpointed route uses a restartable global graph sort and needs
 more SSD space. After an interruption, repeat the same call with
 `checkpoint = TRUE, resume = TRUE`; changed inputs or controls fail.

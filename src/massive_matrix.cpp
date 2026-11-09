@@ -34,6 +34,7 @@
 #include "massive_graph_attraction.h"
 #include "massive_umap_cuda.h"
 #include "massive_umap_metal.h"
+#include "csr_edge_tiles.h"
 #include "massive_tsne_cuda.h"
 #include "louvain_objective.h"
 #include "native_knn_common.h"
@@ -60,9 +61,8 @@ struct ResidentPcaShard {
 
 std::vector<ResidentPcaShard> resident_pca_shards(
     const Rcpp::IntegerVector& devices, int rows) {
-  if (devices.size() < 1 || devices.size() > 4 ||
-      devices.size() > rows) {
-    Rcpp::stop("Resident CUDA PCA needs one to four row shards.");
+  if (devices.size() < 1 || devices.size() > rows) {
+    Rcpp::stop("Resident CUDA PCA needs a row on each device.");
   }
   std::vector<ResidentPcaShard> shards;
   shards.reserve(devices.size());
@@ -970,7 +970,8 @@ class CsrGraphSource {
 
   std::uint64_t bounded_rows(std::uint64_t first,
                              std::uint64_t limit_rows,
-                             std::uint64_t limit_edges) {
+                             std::uint64_t limit_edges,
+                             bool allow_spanning_row = false) {
     const auto rows = std::min(limit_rows, vertices_ - first + 1);
     const auto* offsets = offsets_.read(
       checked_product(first - 1, 8), checked_product(rows + 1, 8));
@@ -987,6 +988,7 @@ class CsrGraphSource {
       previous = current;
       count = row;
     }
+    if (count == 0 && allow_spanning_row) return 1;
     if (count == 0) Rcpp::stop("CSR graph row exceeds edge budget.");
     return count;
   }
@@ -1015,45 +1017,49 @@ class CsrGraphSource {
       }
       max_degree = std::max(max_degree, row_end - row_begin);
     }
+    auto row_offset = [&](std::uint64_t index) {
+      return read_u64(offsets + index * 8);
+    };
+    FastembedrCsrTileRow<decltype(row_offset)> cursor(count, row_offset);
     std::uint64_t row = 0;
-    std::uint64_t row_end = read_u64(offsets + 8);
     std::uint32_t previous = 0;
-    for (auto block = begin; block < end;) {
-      const auto items = std::min<std::uint64_t>(65536, end - block);
+    fastembedr_csr_edge_tiles(begin, end, 65536,
+      [&](std::uint64_t block, std::uint32_t items) {
       const auto* ids = indices_.read(checked_product(block, 4),
                                       checked_product(items, 4));
       const auto* values = weights_.read(
         checked_product(block, value_bytes),
         checked_product(items, value_bytes));
-      for (std::uint64_t local = 0; local < items; ++local) {
-        const auto edge = block + local;
-        while (edge >= row_end) {
-          ++row;
-          previous = 0;
-          row_end = read_u64(offsets + (row + 1) * 8);
-        }
-        const auto target = read_u32(ids + local * 4);
-        double weight = 0.0;
-        if (contracted_) {
-          std::memcpy(&weight, values + local * 8, 8);
-        } else {
-          float value = 0.0f;
-          std::memcpy(&value, values + local * 4, 4);
-          weight = value;
-        }
-        if (target <= previous || target > vertices_ ||
-            (!contracted_ && target == first + row) ||
-            !std::isfinite(weight) || weight < 0.0 ||
-            (contracted_ && weight == 0.0) ||
-            (!contracted_ && weight > 1.0)) {
-          Rcpp::stop("CSR graph has invalid targets or weights.");
-        }
-        previous = target;
-        consume(first + row, target, weight, edge - begin);
-      }
-      block += items;
-      if (block < end && interrupt) Rcpp::checkUserInterrupt();
-    }
+      fastembedr_csr_row_fragments(cursor, row_offset, block, items,
+        [&](std::uint32_t first_local, std::uint32_t length,
+            std::uint64_t next_row) {
+          if (next_row != row) previous = 0;
+          row = next_row;
+          for (std::uint32_t local = first_local;
+               local < first_local + length; ++local) {
+            const auto target = read_u32(ids + local * 4);
+            double weight = 0.0;
+            if (contracted_) {
+              std::memcpy(&weight, values + local * 8, 8);
+            } else {
+              float value = 0.0f;
+              std::memcpy(&value, values + local * 4, 4);
+              weight = value;
+            }
+            if (target <= previous || target > vertices_ ||
+                (!contracted_ && target == first + row) ||
+                !std::isfinite(weight) || weight < 0.0 ||
+                (contracted_ && weight == 0.0) ||
+                (!contracted_ && weight > 1.0)) {
+              Rcpp::stop("CSR graph has invalid targets or weights.");
+            }
+            previous = target;
+            consume(first + row, target, weight, block + local - begin);
+          }
+      });
+      if (block + items < end && interrupt)
+        Rcpp::checkUserInterrupt();
+    });
     return max_degree;
   }
 
@@ -1813,7 +1819,7 @@ void massive_csr_attraction(const std::string& offsets_path,
                              n, access);
         for (std::uint64_t first = begin + 1; first <= end;) {
           const auto count = std::min(graph.bounded_rows(
-            first, 8192, 1000000), end - first + 1);
+            first, 8192, 1000000, true), end - first + 1);
           graph.visit(first, count,
             [&](std::uint64_t source, std::uint32_t target,
                 double weight, std::uint64_t) {
@@ -5287,7 +5293,7 @@ massive_umap_synchronized_epoch(CsrGraphSource& graph,
         auto active_edge = worker_offsets[worker];
         for (auto first = begin + 1; first <= end;) {
           const auto rows = std::min(source.bounded_rows(first,
-            chunk_rows, max_edges), end - first + 1);
+            chunk_rows, max_edges, true), end - first + 1);
           source.visit(first, rows,
             [&](std::uint64_t head, std::uint32_t tail,
                 float weight, std::uint64_t) {
@@ -5336,7 +5342,8 @@ template <typename Function>
 void massive_umap_scan(CsrGraphSource& graph, int chunk_rows,
                        std::uint64_t max_edges, Function consume) {
   for (std::uint64_t first = 1; first <= graph.vertices();) {
-    const auto count = graph.bounded_rows(first, chunk_rows, max_edges);
+    const auto count = graph.bounded_rows(first, chunk_rows,
+                                          max_edges, true);
     const auto edge_start = graph.offset(first - 1);
     graph.visit(first, count,
       [&](std::uint64_t source, std::uint32_t target,
@@ -5718,7 +5725,7 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
     static_cast<std::uint64_t>(std::min(chunk_rows, 8192)) *
       n_components * 4;
   const double required = 128.0 * 1024 * 1024 +
-    bytes * 1.5 + staging_bytes + edge_capacity * 32.0;
+    bytes * 2.0 + staging_bytes + edge_capacity * 32.0;
   if (graph.vertices() > INT_MAX ||
       elements > std::numeric_limits<std::size_t>::max() ||
       !std::isfinite(memory_limit_bytes) ||
@@ -5763,7 +5770,7 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
     fastembedr_massive_umap_metal_destroy);
   std::vector<int> heads(edge_capacity), tails(edge_capacity);
   std::vector<int> negatives(edge_capacity);
-  std::vector<std::uint32_t> edge_ordinals(edge_capacity);
+  std::vector<std::uint64_t> edge_ordinals(edge_capacity);
   auto positive = initial_positive;
   auto negative = initial_negative;
   const double min_weight = max_weight / n_epochs;
@@ -5788,7 +5795,7 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
       if (!massive_umap_due(epoch, period)) return;
       heads[active] = static_cast<int>(head);
       tails[active] = static_cast<int>(tail);
-      edge_ordinals[active] = static_cast<std::uint32_t>(edge);
+      edge_ordinals[active] = edge;
       negatives[active] = massive_umap_negative_count(
         epoch, period, negative_sample_rate);
       ++positive;
@@ -5882,9 +5889,23 @@ UmapRankProgress massive_umap_rank_epoch(CsrGraphSource& graph,
     first_row + owner_rows - 1);
   for (auto first = first_row; first <= last_row;) {
     const auto rows = std::min(graph.bounded_rows(first,
-      chunk_rows, edge_capacity), last_row - first + 1);
+      chunk_rows, edge_capacity, true), last_row - first + 1);
     int active = 0;
+    auto flush = [&]() {
+      if (active == 0) return;
+      const auto started = std::chrono::steady_clock::now();
+      const int status = fastembedr_massive_umap_multigpu_step(
+        context, rank, heads.data(), tails.data(), weights.data(),
+        periods.data(), active, epoch);
+      if (status != 0) throw std::runtime_error(
+        fastembedr_cuda_embedding_last_error());
+      progress.step_seconds += std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - started).count();
+      progress.visits += active;
+      active = 0;
+    };
     const auto visit_started = std::chrono::steady_clock::now();
+    const auto before_steps = progress.step_seconds;
     graph.visit(first, rows,
       [&](std::uint64_t source, std::uint32_t target,
           float weight, std::uint64_t) {
@@ -5894,22 +5915,14 @@ UmapRankProgress massive_umap_rank_epoch(CsrGraphSource& graph,
         weights[active] = weight;
         periods[active] = max_weight /
           std::max(weight, 1.0e-6f);
-        ++active;
+        if (++active == edge_capacity) flush();
       }, false);
     progress.rows += rows;
-    progress.graph_seconds += std::chrono::duration<double>(
-      std::chrono::steady_clock::now() - visit_started).count();
-    if (active > 0) {
-      const auto step_started = std::chrono::steady_clock::now();
-      const int status = fastembedr_massive_umap_multigpu_step(
-        context, rank, heads.data(), tails.data(), weights.data(),
-        periods.data(), active, epoch);
-      if (status != 0) throw std::runtime_error(
-        fastembedr_cuda_embedding_last_error());
-      progress.step_seconds += std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - step_started).count();
-      progress.visits += active;
-    }
+    progress.graph_seconds += std::max(0.0,
+      std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - visit_started).count() -
+      (progress.step_seconds - before_steps));
+    flush();
     first += rows;
   }
   return progress;
@@ -6170,12 +6183,34 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
 #endif
     for (std::uint64_t first = 1; first <= graph.vertices();) {
       auto rows = graph.bounded_rows(first, chunk_rows,
-                                    edge_capacity);
+                                     edge_capacity, true);
       const auto rank = static_cast<int>((first - 1) / owner_rows);
       if (multi_device) rows = std::min<std::uint64_t>(rows,
         (static_cast<std::uint64_t>(rank) + 1) * owner_rows - first + 1);
       int active = 0;
+      auto flush = [&]() {
+        if (active == 0) return;
+        int status = 1;
+        const auto started = std::chrono::steady_clock::now();
+#ifdef FASTEMBEDR_HAS_NCCL
+        if (multi_device) status =
+          fastembedr_massive_umap_multigpu_step(context.get(), rank,
+            heads.data(), tails.data(), weights.data(),
+            periods.data(), active, epoch);
+        else
+#endif
+          status = fastembedr_massive_umap_cuda_step(
+            context.get(), heads.data(), tails.data(),
+            weights.data(), periods.data(), active, epoch);
+        massive_umap_cuda_check(status);
+        device_step_seconds += std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - started).count();
+        edge_visits += active;
+        if (device_ids.size() > 0) per_device_visits[rank] += active;
+        active = 0;
+      };
       const auto visit_started = std::chrono::steady_clock::now();
+      const auto before_steps = device_step_seconds;
       graph.visit(first, rows,
         [&](std::uint64_t source, std::uint32_t target,
             float weight, std::uint64_t) {
@@ -6185,30 +6220,13 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
           weights[active] = weight;
           periods[active] = max_weight /
             std::max(weight, 1.0e-6f);
-          ++active;
+          if (++active == edge_capacity) flush();
         });
-      graph_visit_seconds += std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - visit_started).count();
-      if (active > 0) {
-        int step_status = 1;
-        const auto step_started = std::chrono::steady_clock::now();
-#ifdef FASTEMBEDR_HAS_NCCL
-        if (multi_device) step_status =
-          fastembedr_massive_umap_multigpu_step(context.get(), rank,
-            heads.data(), tails.data(), weights.data(),
-            periods.data(), active, epoch);
-        else
-#endif
-          step_status = fastembedr_massive_umap_cuda_step(
-            context.get(), heads.data(), tails.data(),
-            weights.data(), periods.data(), active, epoch);
-        massive_umap_cuda_check(step_status);
-        device_step_seconds += std::chrono::duration<double>(
-          std::chrono::steady_clock::now() - step_started).count();
-        edge_visits += active;
-        if (device_ids.size() > 0)
-          per_device_visits[rank] += active;
-      }
+      graph_visit_seconds += std::max(0.0,
+        std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - visit_started).count() -
+        (device_step_seconds - before_steps));
+      flush();
       first += rows;
       Rcpp::checkUserInterrupt();
     }
@@ -6411,30 +6429,36 @@ TsneRankProgress massive_tsne_rank_attraction(
     first_row + owner_rows - 1);
   for (auto first = first_row; first <= last_row;) {
     const auto rows = std::min(graph.bounded_rows(first, 8192,
-      edge_capacity), last_row - first + 1);
+      edge_capacity, true), last_row - first + 1);
     int active = 0;
-    const auto read_started = std::chrono::steady_clock::now();
-    graph.visit(first, rows,
-      [&](std::uint64_t source, std::uint32_t target,
-          float weight, std::uint64_t) {
-        heads[active] = static_cast<int>(source - 1);
-        tails[active] = static_cast<int>(target - 1);
-        weights[active] = weight;
-        ++active;
-      }, false);
-    progress.graph_seconds += std::chrono::duration<double>(
-      std::chrono::steady_clock::now() - read_started).count();
-    if (active > 0) {
-      const auto attraction_started = std::chrono::steady_clock::now();
+    auto flush = [&]() {
+      if (active == 0) return;
+      const auto started = std::chrono::steady_clock::now();
       const int status = fastembedr_massive_tsne_multigpu_attract(
         context, rank, heads.data(), tails.data(), weights.data(),
         active, exaggeration);
       if (status != 0) throw std::runtime_error(
         fastembedr_cuda_embedding_last_error());
       progress.attraction_seconds += std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - attraction_started).count();
+        std::chrono::steady_clock::now() - started).count();
       progress.edges += active;
-    }
+      active = 0;
+    };
+    const auto read_started = std::chrono::steady_clock::now();
+    const auto before_attraction = progress.attraction_seconds;
+    graph.visit(first, rows,
+      [&](std::uint64_t source, std::uint32_t target,
+          float weight, std::uint64_t) {
+        heads[active] = static_cast<int>(source - 1);
+        tails[active] = static_cast<int>(target - 1);
+        weights[active] = weight;
+        if (++active == edge_capacity) flush();
+      }, false);
+    progress.graph_seconds += std::max(0.0,
+      std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - read_started).count() -
+      (progress.attraction_seconds - before_attraction));
+    flush();
     first += rows;
   }
   return progress;
@@ -6484,9 +6508,8 @@ List massive_tsne_optimize_cuda_cpp(
       (checkpoint_every == 0 && checkpoint_callback != R_NilValue)) {
     Rcpp::stop("Invalid massive CUDA t-SNE controls.");
   }
-  if (devices.size() < 1 || devices.size() > 4 ||
-      devices.size() > n) {
-    Rcpp::stop("CUDA t-SNE requires one to four distinct devices.");
+  if (devices.size() < 1 || devices.size() > n) {
+    Rcpp::stop("CUDA t-SNE needs a row on each device.");
   }
   for (int rank = 0; rank < devices.size(); ++rank) {
     const int device = devices[rank];
@@ -6614,28 +6637,33 @@ List massive_tsne_optimize_cuda_cpp(
     for (std::uint64_t first = 1; first <= graph.vertices();) {
       const auto read_started = std::chrono::steady_clock::now();
       const auto rows = graph.bounded_rows(first, 8192,
-        edge_capacity);
+        edge_capacity, true);
       int active = 0;
+      auto flush = [&]() {
+        if (active == 0) return;
+        const auto started = std::chrono::steady_clock::now();
+        massive_tsne_cuda_check(fastembedr_massive_tsne_cuda_attract(
+          context.get(), heads.data(), tails.data(),
+          weights.data(), active, phase_exag));
+        attraction_edges[0] += active;
+        attraction_sync_seconds += std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - started).count();
+        active = 0;
+      };
+      const auto before_attraction = attraction_sync_seconds;
       graph.visit(first, rows,
         [&](std::uint64_t source, std::uint32_t target,
             float weight, std::uint64_t) {
           heads[active] = static_cast<int>(source - 1);
           tails[active] = static_cast<int>(target - 1);
           weights[active] = weight;
-          ++active;
+          if (++active == edge_capacity) flush();
         });
-      graph_visit_seconds += std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - read_started).count();
-      if (active > 0) {
-        const auto attract_started = std::chrono::steady_clock::now();
-        const int status = fastembedr_massive_tsne_cuda_attract(
-          context.get(), heads.data(), tails.data(),
-          weights.data(), active, phase_exag);
-        massive_tsne_cuda_check(status);
-        attraction_edges[0] += active;
-        attraction_sync_seconds += std::chrono::duration<double>(
-          std::chrono::steady_clock::now() - attract_started).count();
-      }
+      graph_visit_seconds += std::max(0.0,
+        std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - read_started).count() -
+        (attraction_sync_seconds - before_attraction));
+      flush();
       first += rows;
       Rcpp::checkUserInterrupt();
     }

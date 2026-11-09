@@ -15,7 +15,7 @@ extern "C" void* fastembedr_massive_umap_metal_create(
 
 extern "C" std::uint64_t fastembedr_massive_umap_metal_step(
     void*, const int*, const int*, const int*,
-    const std::uint32_t*, int, int) {
+    const std::uint64_t*, int, int) {
   Rcpp::stop("Full-graph Metal UMAP requires macOS Metal.");
 }
 

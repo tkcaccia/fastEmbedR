@@ -773,6 +773,7 @@ void graph_stream_metal_chunk(void* handle,
   @autoreleasepool {
     auto& session = stream_session(handle);
     if (row_ptr.size() < 2 || col_idx.size() != weight.size() ||
+        col_idx.size() > static_cast<std::size_t>(INT_MAX) ||
         row_ptr.back() != static_cast<int>(col_idx.size()) ||
         first + row_ptr.size() - 1 > session.params.n) {
       Rcpp::stop("Invalid Metal streaming graph chunk.");

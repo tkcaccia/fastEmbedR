@@ -1,5 +1,6 @@
 test_that("fit summaries have a stable bounded-output schema", {
-    fields <- c("backend", "backend_engine", "devices",
+    fields <- c("backend", "backend_engine", "graph_offset_dtype",
+        "devices",
         "device_identity", "scope", "stage_backend",
         "stage_seconds", "memory_use", "output_rows")
     embedding <- structure(list(layout = matrix(0, 4L, 2L),
@@ -11,6 +12,9 @@ test_that("fit summaries have a stable bounded-output schema", {
     expect_identical(names(resident), fields)
     expect_identical(resident$backend, "cpu")
     expect_identical(resident$backend_engine, "cpu")
+    expect_true(is.na(resident$graph_offset_dtype))
+    embedding$parameters$csr_offset_dtype <- "uint64"
+    expect_identical(summary(embedding)$graph_offset_dtype, "uint64")
     expect_identical(resident$scope, "full")
     expect_identical(names(resident$stage_seconds), c("knn", "fit"))
     expect_identical(resident$memory_use$ram_basis, "not_recorded")

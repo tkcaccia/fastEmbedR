@@ -55,7 +55,7 @@ as a genuinely new query, even when its row count matches the training set.}
 
 \item{verbose}{Print optimizer progress.}
 
-\item{devices}{Optional two to four CUDA devices for held-out query
+\item{devices}{Optional multiple CUDA devices for held-out query
 projection. Query KNN is materialized in host RAM, then the fixed
 reference layout and query rows are sharded across the devices.}
 

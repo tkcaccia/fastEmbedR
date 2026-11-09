@@ -396,9 +396,6 @@ massive_cluster_landmark_controls <- function(method, backend, workers,
 
 massive_cluster_landmark_devices <- function(devices, backend, rows) {
     selected <- massive_validate_devices(devices, backend, rows)
-    if (length(selected) > 4L) stop(
-        "Landmark clustering supports at most four CUDA devices.",
-        call. = FALSE)
     selected
 }
 
@@ -426,7 +423,7 @@ massive_cluster_landmark_workers <- function(n.cores, parallel.mode) {
 #' @param backend `"cpu"` for all methods, or `"cuda"` or `"metal"` for
 #'   landmark-graph Louvain and Leiden. Streamed community voting remains
 #'   on CPU. GPU requests fail explicitly if unavailable.
-#' @param devices Optional one to four distinct CUDA devices. Two to four
+#' @param devices Optional distinct CUDA devices. Multiple
 #'   devices coordinate one resident landmark-graph fit; label voting remains
 #'   CPU-streamed.
 #' @param n.cores CPU workers for community voting and, when `n_runs > 1`,

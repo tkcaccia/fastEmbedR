@@ -313,8 +313,8 @@ umap_graph_csr_cpp <- function(indices, distances, col_start, n_cols, edge_budge
     .Call(`_fastEmbedR_umap_graph_csr_cpp`, indices, distances, col_start, n_cols, edge_budget, n_threads)
 }
 
-umap_graph_csr_float_cpp <- function(indices, distances, col_start, n_cols, edge_budget, n_threads) {
-    .Call(`_fastEmbedR_umap_graph_csr_float_cpp`, indices, distances, col_start, n_cols, edge_budget, n_threads)
+umap_graph_csr_float_cpp <- function(indices, distances, col_start, n_cols, edge_budget, n_threads, force_wide = FALSE) {
+    .Call(`_fastEmbedR_umap_graph_csr_float_cpp`, indices, distances, col_start, n_cols, edge_budget, n_threads, force_wide)
 }
 
 umap_graph_csr_cuda_like_cpp <- function(indices, distances, col_start, n_cols, edge_budget, n_threads) {
@@ -371,6 +371,14 @@ knn_umap_refine_rows_cpp <- function(indices, distances, row_ids, init_embedding
 
 fast_knn_umap_csr_cpp <- function(offsets, neighbors, weights, n_components, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, spectral_n_iter, n_threads, init_scale, seed, verbose) {
     .Call(`_fastEmbedR_fast_knn_umap_csr_cpp`, offsets, neighbors, weights, n_components, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, spectral_n_iter, n_threads, init_scale, seed, verbose)
+}
+
+fast_knn_umap_csr_wide_diffusion_cpp <- function(offsets, neighbors, weights, n_iterations, n_threads, seed, init_scale = NA_real_) {
+    .Call(`_fastEmbedR_fast_knn_umap_csr_wide_diffusion_cpp`, offsets, neighbors, weights, n_iterations, n_threads, seed, init_scale)
+}
+
+fast_knn_umap_csr_wide_init_cpp <- function(offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, edge_tile_capacity = 65536L) {
+    .Call(`_fastEmbedR_fast_knn_umap_csr_wide_init_cpp`, offsets, neighbors, weights, init_embedding, n_epochs, min_dist, negative_sample_rate, learning_rate, repulsion_strength, n_threads, seed, edge_tile_capacity)
 }
 
 umap_auto_parameters_cpp <- function(distances, n_neighbors, backend) {

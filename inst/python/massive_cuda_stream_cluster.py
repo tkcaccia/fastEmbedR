@@ -1,4 +1,4 @@
-"""Bounded two-to-four GPU local moves on a disk-backed symmetric CSR graph.
+"""Bounded multi-GPU local moves on a disk-backed symmetric CSR graph.
 
 The graph and partition remain in host storage. Each GPU only receives one
 bounded row/edge batch. This worker fits one local-moving level for the R
@@ -274,8 +274,8 @@ def fit(args):
     paths = args.paths
     offsets, edges = validate_graph(paths, args.vertices,
                                      args.edge_budget)
-    if args.devices < 2 or args.devices > 4:
-        raise ValueError("Two to four GPUs are required")
+    if args.devices < 2 or args.devices > args.vertices:
+        raise ValueError("At least two GPUs and one row per GPU are required")
     work = Path(args.output).parent
     prefix = Path(args.output).name
     state = {name: str(work / (prefix + "." + name + ".part"))

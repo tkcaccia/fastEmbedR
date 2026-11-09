@@ -49,17 +49,17 @@ label-file path in full-graph mode.}
 
 \item{backend}{\code{"cpu"}, \code{"cuda"}, or \code{"metal"} for landmarks;
 full-graph CUDA Louvain/Leiden with \code{devices = NULL} stream graph chunks.
-Two to four CUDA devices use cuGraph for resident multi-GPU clustering.}
+Multiple CUDA devices use cuGraph for resident clustering.}
 
 \item{n.cores}{CPU workers for graph building, landmark assignment,
 and bounded file-backed Leiden/Louvain candidate preparation.
 With \code{n_runs > 1}, automatic resident and landmark Leiden/Louvain fits
 also use up to \code{min(n.cores, n_runs)} parallel restart workers.}
 
-\item{devices}{Optional one to four CUDA devices for landmark clustering
+\item{devices}{Optional distinct CUDA devices for landmark clustering
 or in-memory auto mode. Two or more devices coordinate one graph fit;
 query KNN shards use the selected devices. Full-graph mode accepts
-two to four initial CUDA-visible devices.}
+at least two initial CUDA-visible devices.}
 
 \item{landmark_method}{\code{"reservoir"} or \code{"random"} landmark selection.}
 

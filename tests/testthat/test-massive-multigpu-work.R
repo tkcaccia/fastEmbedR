@@ -33,6 +33,22 @@ test_that("four GPU partitions cover every row and edge", {
         c(24, 24, 24, 24))
 })
 
+test_that("eight GPU partitions cover rows and 64-bit edge counts", {
+    offsets <- tempfile(fileext = ".offsets.u64")
+    on.exit(unlink(offsets))
+    counts <- rep(c(1, 3, 2, 4), 4L)
+    write_owner_offsets(offsets, c(0, cumsum(counts)))
+    graph <- list(n_vertices = 16L, n_edges = sum(counts),
+        offsets_path = offsets)
+    expect_equal(fastEmbedR:::massive_graph_owner_edge_counts(
+        graph, 0:7), as.numeric(colSums(matrix(counts, nrow = 2L))))
+    tasks <- fastEmbedR:::massive_row_shards(
+        tempfile(fileext = ".f32"), 16L, 2L, 0:7)
+    expect_equal(vapply(tasks, `[[`, 0, "device"), 0:7)
+    expect_equal(vapply(tasks, function(x) diff(x$row_range) + 1,
+        0), rep(2, 8L))
+})
+
 test_that("t-SNE rejects an empty CUDA owner before native allocation", {
     select <- function(rows) with_mocked_bindings(
         fastEmbedR:::massive_tsne_devices(0:3, "cuda", rows),
@@ -41,6 +57,12 @@ test_that("t-SNE rejects an empty CUDA owner before native allocation", {
         .package = "fastEmbedR")
     expect_error(select(9L), "needs rows on every device")
     expect_identical(select(12L), 0:3)
+    select_eight <- function(rows) with_mocked_bindings(
+        fastEmbedR:::massive_tsne_devices(0:7, "cuda", rows),
+        massive_validate_devices = function(devices, ...) devices,
+        massive_nccl_available_cpp = function() TRUE,
+        .package = "fastEmbedR")
+    expect_identical(select_eight(64L), 0:7)
 })
 
 test_that("coordinated t-SNE accounts for every edge after resume", {

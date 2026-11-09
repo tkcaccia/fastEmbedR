@@ -19,8 +19,8 @@ massive_cuda_stream_plan <- function(graph, output, devices,
         "Streamed multi-GPU clustering needs a symmetric fuzzy CSR graph.",
         call. = FALSE)
     devices <- massive_validate_devices(devices, "cuda", graph$n_vertices)
-    if (!(length(devices) %in% 2:4)) stop(
-        "Streamed clustering requires two to four CUDA GPUs.",
+    if (length(devices) < 2L) stop(
+        "Streamed clustering requires at least two CUDA GPUs.",
         call. = FALSE)
     rows <- integer_scalar(chunk_rows %||% 8192L)
     limit <- massive_memory_bytes(memory_limit)

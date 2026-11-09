@@ -57,6 +57,16 @@ full_backed_checkpoint_finish <- function(state) {
     invisible(NULL)
 }
 
+full_backed_knn_route <- function(data, backend, workers) {
+    if (backend == "metal" && data$nrow > 5000L) {
+        message("Large file-backed Metal fit: CPU HNSW prepares KNN; ",
+            "Metal remains the requested optimizer backend.")
+        return(list(backend = "cpu", workers = workers))
+    }
+    list(backend = backend,
+        workers = if (backend == "metal") 1L else workers)
+}
+
 full_backed_knn_stage <- function(data, k, backend, workers,
         paths, memory_limit, devices, state) {
     files <- paste0(paths$knn,
@@ -69,8 +79,10 @@ full_backed_knn_stage <- function(data, k, backend, workers,
         call. = FALSE)
     sidecar <- paste0(paths$knn, ".checkpoint.rds")
     started <- proc.time()[[3L]]
-    neighbors <- precompute_knn(data, k = k, backend = backend,
-        n.cores = workers, storage = "file_backed", output = paths$knn,
+    route <- full_backed_knn_route(data, backend, workers)
+    neighbors <- precompute_knn(data, k = k, backend = route$backend,
+        n.cores = route$workers, storage = "file_backed",
+        output = paths$knn,
         memory_limit = memory_limit, devices = devices,
         checkpoint = !is.null(state),
         resume = !is.null(state) && file.exists(sidecar))

@@ -101,7 +101,8 @@ full_backed_pipeline_init <- function(data, init, paths,
         devices = devices, tsne_init = tsne,
         checkpoint = checkpoint, resume = resume)
     list(layout = fit$tsne_init, fit = fit,
-        backend = backend, method = "pca")
+        backend = backend, method = "pca",
+        resources = fit$resources)
 }
 
 full_backed_validate_init <- function(data, init, dimensions,
@@ -124,7 +125,8 @@ full_backed_validate_init <- function(data, init, dimensions,
 full_backed_pipeline_record <- function(fit, data, neighbors, graph,
         prepared, knn_seconds, graph_seconds, init_seconds,
         fit_seconds,
-        graph_workers, fit_workers, backend, keep_knn) {
+        graph_workers, fit_workers, backend, keep_knn,
+        memory_limit) {
     optimize_backend <- if (is.null(fit$optimizer_backend_stages))
         backend else paste(fit$optimizer_backend_stages, collapse = "+")
     fit$pipeline <- list(input = data,
@@ -133,8 +135,17 @@ full_backed_pipeline_record <- function(fit, data, neighbors, graph,
         graph = graph, init = prepared$layout, pca = prepared$fit,
         initialization = prepared[c("method", "backend", "resources")],
         fit_scope = "all_rows_optimized",
-        stage_backend = c(knn = backend, graph = "cpu",
+        stage_backend = c(knn = neighbors$backend %||% backend,
+            graph = "cpu",
             init = prepared$backend, optimize = optimize_backend),
+        knn_method = neighbors$method %||% NA_character_,
+        stage_resources = list(knn = neighbors$resources,
+            graph = list(working_memory_budget_bytes =
+                    massive_memory_bytes(memory_limit),
+                peak_disk_bytes = graph$peak_graph_stage_bytes,
+                sort_disk_budget_bytes =
+                    graph$sort_resources$budget_bytes),
+            init = prepared$resources, optimize = fit$resources),
         graph_stage_cpu_workers = graph_workers,
         optimizer_cpu_workers = if (optimize_backend == "metal+cpu")
             1L else fit_workers,
@@ -242,10 +253,9 @@ run_full_backed_umap <- function(data, landmarks, n_neighbors,
         chunk_rows, memory_limit, devices, layout_storage,
         cpu_update, checkpoint)
     fit <- full_backed_pipeline_record(optimized$fit, data,
-        knn$object, graph,
-        prepared, knn$seconds, graph_stage$seconds,
+        knn$object, graph, prepared, knn$seconds, graph_stage$seconds,
         prepared_stage$seconds, optimized$seconds,
-        workers, fit_workers, backend, keep_knn)
+        workers, fit_workers, backend, keep_knn, memory_limit)
     full_backed_checkpoint_finalize(prepared_stage$state, fit,
         paths, keep_knn)
 }
@@ -346,7 +356,7 @@ run_full_backed_tsne <- function(data, nn, settings, extra, controls,
         knn$object, graph_stage$object, prepared_stage$object,
         knn$seconds, graph_stage$seconds, prepared_stage$seconds,
         optimized$seconds, workers, settings$n_threads,
-        backend, keep_knn)
+        backend, keep_knn, memory_limit)
     full_backed_checkpoint_finalize(prepared_stage$state, fit,
         paths, keep_knn)
 }

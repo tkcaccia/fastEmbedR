@@ -15,8 +15,8 @@ pca_resident_cuda_input <- function(x, ncomp, center, scale,
         rank >= nrow(x) || ncol(x) > 2048L) stop(
         "Resident multi-GPU PCA needs rank < nrow and <=2048 columns.",
         call. = FALSE)
-    if (length(devices) < 2L || length(devices) > 4L) stop(
-        "Resident multi-GPU PCA needs two to four CUDA devices.",
+    if (length(devices) < 2L) stop(
+        "Resident multi-GPU PCA needs at least two CUDA devices.",
         call. = FALSE)
     devices <- massive_validate_devices(devices, backend, nrow(x))
     list(rank = rank, devices = devices)

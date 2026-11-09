@@ -41,6 +41,9 @@
 #'   File-backed full-graph Metal UMAP runs its main optimizer on Metal,
 #'   followed by a bounded one-thread CPU refinement: 25 epochs in 2D or
 #'   50 epochs in 3D. Both stages and their times are recorded in the fit.
+#'   Above 5,000 rows, its one-call file-backed route prepares neighbors
+#'   with CPU HNSW; `fit$pipeline$stage_backend` and `knn_method` record
+#'   this mixed-stage computation explicitly.
 #' @param n.cores Requested CPU core count. For matrix input, the value is
 #'   passed to CPU PCA preprocessing, KNN, and UMAP. UMAP accepts up to 32
 #'   workers and records both requested and configured values; individual
@@ -339,12 +342,12 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #'   `"synchronized"` enables deterministic multicore CPU updates for
 #'   full-graph UMAP. Other modes and backends reject this choice.
 #' @param devices Optional CUDA device indices. In resident full-data mode,
-#'   two to four devices coordinate one 2D or 3D fit with host-RAM graph
+#'   multiple devices coordinate one 2D or 3D fit with host-RAM graph
 #'   construction. Native CUDA KNN is materialized in host RAM for this
 #'   route. In experimental landmark mode, devices distribute query
 #'   projection while reference fitting and KNN use the first device.
 #'   Resident landmark mode coordinates the reference fit and shards query
-#'   projection across two to four devices. Query KNN is materialized in
+#'   projection across the selected devices. Query KNN is materialized in
 #'   host RAM before sharding. Sharded refinement samples negative examples
 #'   from the fixed reference rows.
 #' @param refinement_epochs Fixed-reference UMAP projection epochs. In
@@ -463,11 +466,10 @@ run_landmark_umap <- function(data, landmarks, n_neighbors, n_components,
         devices <- massive_validate_devices(
             devices, state$backend,
             nrow(state$partition$query))
-        if (length(devices) > 4L ||
-            (length(devices) > 1L &&
-                !isTRUE(massive_nccl_available_cpp()))) stop(
-            "Resident landmark UMAP needs at most four CUDA ",
-            "devices and NCCL for multi-GPU use.", call. = FALSE)
+        if (length(devices) > 1L &&
+                !isTRUE(massive_nccl_available_cpp())) stop(
+            "Resident landmark UMAP needs NCCL for multi-GPU use.",
+            call. = FALSE)
         state$gpu_identity <- massive_cuda_device_uuids(devices)
         previous <- massive_cuda_memory_cpp()$device
         on.exit(massive_cuda_select_cpp(previous), add = TRUE)

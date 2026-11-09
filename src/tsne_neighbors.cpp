@@ -53,7 +53,7 @@ using Rcpp::NumericVector;
 namespace {
 
 struct SparseProbabilitiesF {
-  std::vector<int> row_ptr;
+  std::vector<std::uint64_t> row_ptr;
   std::vector<int> col;
   std::vector<float> val;
 };
@@ -569,32 +569,32 @@ SparseProbabilitiesF build_tsne_probabilities_float(const IntegerMatrix& indices
     }
   }
 
-  std::vector<std::vector<PackedEdgeF>> local_edges(static_cast<std::size_t>(n_threads));
-  parallel_for(n, n_threads, [&](const int begin, const int end, const int thread_id) {
+  const std::size_t edge_capacity = static_cast<std::size_t>(n) * k;
+  if (edge_capacity > std::vector<PackedEdgeF>().max_size()) {
+    Rcpp::stop("t-SNE affinity edge count exceeds host capacity.");
+  }
+  std::vector<PackedEdgeF> edges(edge_capacity);
+  const std::uint64_t invalid_key = std::numeric_limits<std::uint64_t>::max();
+  parallel_for(n, n_threads, [&](const int begin, const int end, const int) {
     std::vector<float> row_p(static_cast<std::size_t>(k), 0.0f);
-    std::vector<PackedEdgeF>& edges = local_edges[static_cast<std::size_t>(thread_id)];
-    edges.reserve(edges.size() + static_cast<std::size_t>(std::max(0, end - begin)) * k);
-
     for (int i = begin; i < end; ++i) {
       compute_row_probabilities_float(distances, i, k, perplexity, row_p.data());
       for (int j = 0; j < k; ++j) {
         const int nb = indices(i, j) - offset;
-        if (nb == i) continue;
+        const std::size_t slot = static_cast<std::size_t>(i) * k + j;
+        if (nb == i) {
+          edges[slot] = {invalid_key, 0.0f};
+          continue;
+        }
         const int a = std::min(i, nb);
         const int b = std::max(i, nb);
-        edges.push_back({pair_key(a, b), row_p[static_cast<std::size_t>(j)]});
+        edges[slot] = {pair_key(a, b), row_p[static_cast<std::size_t>(j)]};
       }
     }
   });
-
-  std::size_t edge_count = 0;
-  for (const auto& edges : local_edges) edge_count += edges.size();
-  std::vector<PackedEdgeF> edges;
-  edges.reserve(edge_count);
-  for (auto& local : local_edges) {
-    edges.insert(edges.end(), local.begin(), local.end());
-    std::vector<PackedEdgeF>().swap(local);
-  }
+  edges.erase(std::remove_if(edges.begin(), edges.end(),
+    [&](const PackedEdgeF& edge) { return edge.key == invalid_key; }),
+    edges.end());
 
   std::sort(edges.begin(), edges.end(), [](const PackedEdgeF& a, const PackedEdgeF& b) {
     return a.key < b.key;
@@ -633,7 +633,7 @@ SparseProbabilitiesF build_tsne_probabilities_float(const IntegerMatrix& indices
   }
   p.col.assign(static_cast<std::size_t>(p.row_ptr[static_cast<std::size_t>(n)]), 0);
   p.val.assign(p.col.size(), 0.0f);
-  std::vector<int> fill = p.row_ptr;
+  std::vector<std::uint64_t> fill = p.row_ptr;
 
   const float norm = static_cast<float>(0.5 / total_directed_mass);
   for (const PackedEdgeF& edge : edges) {
@@ -641,7 +641,7 @@ SparseProbabilitiesF build_tsne_probabilities_float(const IntegerMatrix& indices
     const int b = key_second(edge.key);
     const float value = edge.value * norm;
 
-    int pos = fill[static_cast<std::size_t>(a)]++;
+    std::uint64_t pos = fill[static_cast<std::size_t>(a)]++;
     p.col[static_cast<std::size_t>(pos)] = b;
     p.val[static_cast<std::size_t>(pos)] = value;
 
@@ -1003,9 +1003,9 @@ void add_sparse_attractive_gradient_f(const SparseProbabilitiesF& p,
   parallel_for(n, n_threads, [&](const int begin, const int end, const int) {
     for (int i = begin; i < end; ++i) {
       const std::size_t ib = static_cast<std::size_t>(i) * dims;
-      const int row_begin = p.row_ptr[static_cast<std::size_t>(i)];
-      const int row_end = p.row_ptr[static_cast<std::size_t>(i + 1)];
-      for (int pos = row_begin; pos < row_end; ++pos) {
+      const auto row_begin = p.row_ptr[static_cast<std::size_t>(i)];
+      const auto row_end = p.row_ptr[static_cast<std::size_t>(i + 1)];
+      for (auto pos = row_begin; pos < row_end; ++pos) {
         const int j = p.col[static_cast<std::size_t>(pos)];
         const std::size_t jb = static_cast<std::size_t>(j) * dims;
         float diff[3] = {0.0f, 0.0f, 0.0f};
@@ -1300,9 +1300,9 @@ double evaluate_kl_f(const SparseProbabilitiesF& p,
     double local = 0.0;
     for (int i = begin; i < end; ++i) {
       double row_total = 0.0;
-      const int row_begin = p.row_ptr[static_cast<std::size_t>(i)];
-      const int row_end = p.row_ptr[static_cast<std::size_t>(i + 1)];
-      for (int pos = row_begin; pos < row_end; ++pos) {
+      const auto row_begin = p.row_ptr[static_cast<std::size_t>(i)];
+      const auto row_end = p.row_ptr[static_cast<std::size_t>(i + 1)];
+      for (auto pos = row_begin; pos < row_end; ++pos) {
         const int j = p.col[static_cast<std::size_t>(pos)];
         const double p_ij = static_cast<double>(p.val[static_cast<std::size_t>(pos)]);
         const double q_ij = (1.0 / (1.0 + static_cast<double>(squared_distance_f(y, i, j, dims)))) / sum_q;
@@ -1630,9 +1630,9 @@ void resident_tsne_attract(void* context,
     weights.clear();
   };
   for (int row = begin; row < end; ++row) {
-    const int first = graph.row_ptr[static_cast<std::size_t>(row)];
-    const int last = graph.row_ptr[static_cast<std::size_t>(row + 1)];
-    for (int edge = first; edge < last; ++edge) {
+    const auto first = graph.row_ptr[static_cast<std::size_t>(row)];
+    const auto last = graph.row_ptr[static_cast<std::size_t>(row + 1)];
+    for (auto edge = first; edge < last; ++edge) {
       heads.push_back(row);
       tails.push_back(graph.col[static_cast<std::size_t>(edge)]);
       weights.push_back(graph.val[static_cast<std::size_t>(edge)]);
@@ -1660,7 +1660,7 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
   if (n < 2 || k < 1 || dims.first != n || dims.second != k ||
       init_dims.first != n || init_dims.second != n_components ||
       (n_components != 2 && n_components != 3) ||
-      devices.size() < 2 || devices.size() > 4 ||
+      devices.size() < 2 || devices.size() > n ||
       static_cast<std::size_t>(n) * k > INT_MAX / 2 ||
       early_iter < 0 || normal_iter < 0 ||
       early_iter + normal_iter < 1 || perplexity <= 0 ||
@@ -1698,7 +1698,7 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
   double fft_seconds = 0.0;
   const int total = early_iter + normal_iter;
   const int block_rows = (n - 1) / devices.size() + 1;
-  IntegerVector attraction_edges(devices.size());
+  NumericVector attraction_edges(devices.size());
   for (int rank = 0; rank < devices.size(); ++rank) {
     const int first = rank * block_rows;
     const int last = std::min(n, first + block_rows);
@@ -1914,7 +1914,8 @@ List opentsne_force_diagnostic_cpp(IntegerMatrix indices,
     return std::sqrt(sum);
   };
 
-  IntegerVector row_ptr(probabilities.row_ptr.begin(), probabilities.row_ptr.end());
+  NumericVector row_ptr(probabilities.row_ptr.begin(),
+                        probabilities.row_ptr.end());
   IntegerVector col(probabilities.col.size());
   NumericVector weight(probabilities.val.size());
   for (std::size_t i = 0; i < probabilities.col.size(); ++i) {
@@ -2163,6 +2164,8 @@ List knn_tsne_opentsne_float_cpp(IntegerMatrix indices,
   FftGridWorkspaceT<float> fft_workspace;
   TsneFft3dWorkspace fft_3d_workspace;
   const int requested_total_iter = early_exaggeration_iter + n_iter;
+  const bool profile_3d = repulsion_mode == "fft_grid_3d" &&
+    std::getenv("FASTEMBEDR_TSNE_3D_PROFILE") != nullptr;
   const bool auto_kld_stop = auto_config && n <= 5000;
   const bool should_record_costs = record_costs || verbose;
   NumericVector iter_costs(should_record_costs ?
@@ -2207,15 +2210,42 @@ List knn_tsne_opentsne_float_cpp(IntegerMatrix indices,
     int phase_completed = 0;
     for (int iter = 0; iter < phase_iter; ++iter) {
       if (((completed_iter + iter) & 7) == 0) Rcpp::checkUserInterrupt();
+      const auto iteration_start = std::chrono::steady_clock::now();
+      const double fft_before = fft_3d_workspace.fft_elapsed_sec;
+      const double correction_before =
+        fft_3d_workspace.correction_elapsed_sec;
       compute_gradient_f(
         p, y, n, n_components, phase_exag_f, threads, repulsion_mode,
         &fft_workspace, &fft_3d_workspace, grad
       );
+      const auto gradient_end = std::chrono::steady_clock::now();
       apply_open_tsne_update_f(
         y, update, gains, grad, n, n_components, phase_lr, phase_momentum_f,
         min_gain_f, max_step_norm_f, threads
       );
       zero_mean_f(y, n, n_components);
+      if (profile_3d) {
+        const auto update_end = std::chrono::steady_clock::now();
+        const auto seconds = [](const auto first, const auto last) {
+          return std::chrono::duration<double>(last - first).count();
+        };
+        Rcpp::Rcout << "TSNE3D_PROFILE iter=" << completed_iter + iter + 1
+                    << " phase=" << phase_name
+                    << " gradient_s=" << seconds(iteration_start,
+                                                      gradient_end)
+                    << " update_s=" << seconds(gradient_end, update_end)
+                    << " fft_s=" << fft_3d_workspace.fft_elapsed_sec -
+                                          fft_before
+                    << " correction_s=" <<
+                      fft_3d_workspace.correction_elapsed_sec -
+                        correction_before
+                    << " span=" << fft_3d_workspace.profile_span
+                    << " cutoff=" << fft_3d_workspace.profile_cutoff
+                    << " near=" << fft_3d_workspace.profile_correct_near
+                    << " max_bin=" <<
+                      fft_3d_workspace.profile_max_bin_occupancy
+                    << std::endl;
+      }
 
       const int global_iter = completed_iter + iter + 1;
       const bool need_auto_error = auto_kld_stop && ((iter + 1) % auto_pollrate == 0);

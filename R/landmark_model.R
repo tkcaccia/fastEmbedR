@@ -576,7 +576,7 @@ project_landmark_model_tsne_host <- function(model, query, knn, perplexity,
 #' @param keep_knn Retain query-to-reference KNN output.
 #' @param n.cores Number of CPU cores.
 #' @param verbose Print optimizer progress.
-#' @param devices Optional two to four CUDA devices for held-out query
+#' @param devices Optional multiple CUDA devices for held-out query
 #'   projection. Query KNN is materialized in host RAM, then the fixed
 #'   reference layout and query rows are sharded across the devices.
 #' @param ... Low-level t-SNE transform controls.
@@ -641,9 +641,9 @@ prepare_landmark_projection <- function(model, data, query_indices,
     if (!is.null(devices)) {
         devices <- massive_validate_devices(
             devices, model$backend, nrow(query_info$data))
-        if (length(devices) < 2L || length(devices) > 4L ||
+        if (length(devices) < 2L ||
             !isTRUE(massive_nccl_available_cpp())) stop(
-            "Held-out multi-GPU projection requires two to four ",
+            "Held-out multi-GPU projection requires at least two ",
             "CUDA devices and NCCL.", call. = FALSE)
     }
     gpu_identity <- if (length(devices) > 1L) {

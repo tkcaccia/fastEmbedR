@@ -591,7 +591,7 @@ massive_umap_fuzzy_preflight <- function(x, output, memory_limit,
         is.na(output) || !nzchar(output)) {
         stop("`output` must be one new graph prefix.", call. = FALSE)
     }
-    limit <- massive_memory_bytes(memory_limit)
+    limit <- massive_auto_memory_limit(memory_limit)
     if (limit < 64 * 1024^2) stop(
         "Graph sorting needs at least 64 MB RAM budget.",
         call. = FALSE)

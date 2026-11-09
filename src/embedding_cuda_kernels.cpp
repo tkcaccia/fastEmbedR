@@ -6915,7 +6915,7 @@ extern "C" void* fastembedr_massive_umap_multigpu_create(
   embedding_last_error.clear();
   if (vertices < 2 || (dimensions != 2 && dimensions != 3) ||
       edge_capacity < 1 || devices == nullptr ||
-      device_count < 1 || device_count > 4 ||
+      device_count < 1 || device_count > vertices ||
       !std::isfinite(delta_scale) || delta_scale < 256.0) {
     set_embedding_error("invalid multi-GPU UMAP device request");
     return nullptr;
@@ -7815,7 +7815,7 @@ extern "C" void* fastembedr_massive_tsne_multigpu_create(
   if (n < 2 || (dimensions != 2 && dimensions != 3) ||
       n > INT_MAX / dimensions ||
       edge_capacity < 1 ||
-      devices == nullptr || device_count < 2 || device_count > 4) {
+      devices == nullptr || device_count < 2 || device_count > n) {
     set_embedding_error("invalid multi-GPU t-SNE request");
     return nullptr;
   }
@@ -7839,7 +7839,8 @@ extern "C" void* fastembedr_massive_tsne_multigpu_create(
   }
   const int block = (n - 1) / device_count + 1;
   const auto padded = static_cast<std::int64_t>(block) * device_count;
-  if (n <= (device_count - 1) * block ||
+  if (static_cast<std::int64_t>(n) <=
+        static_cast<std::int64_t>(device_count - 1) * block ||
       padded > INT_MAX / dimensions) {
     set_embedding_error("multi-GPU t-SNE needs rows on every device");
     return nullptr;

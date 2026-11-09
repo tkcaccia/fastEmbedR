@@ -40,7 +40,7 @@ test_that("cuGraph plan rejects insufficient GPU capacity", {
             expect_identical(selected$uuids, c("GPU-C", "GPU-A"))
             expect_error(fastEmbedR:::massive_cugraph_plan(graph,
                 tempfile(), 0L, 2L, "1GB"),
-                "two to four")
+                "at least two")
             stale <- tempfile()
             on.exit(unlink(paste0(stale, ".part")), add = TRUE)
             writeBin(1L, paste0(stale, ".part"), size = 4L)
@@ -77,6 +77,23 @@ test_that("cuGraph RAM admission includes concurrent GPU workers", {
             paste0("GPU-", devices),
         .package = "fastEmbedR"
     )
+})
+
+test_that("cuGraph planner carries all eight requested GPU identities", {
+    graph <- structure(list(n_vertices = 80L, n_edges = 160L,
+        max_degree = 2L, storage = "csr",
+        weight_method = "umap_fuzzy_union", symmetrized = TRUE),
+        class = "fastEmbedR_massive_graph")
+    with_mocked_bindings({
+        plan <- fastEmbedR:::massive_cugraph_plan(graph,
+            tempfile(), 0:7, 10L, "2GB")
+        expect_identical(plan$devices, 0:7)
+        expect_identical(plan$uuids, paste0("GPU-", 0:7))
+    }, massive_validate_devices = function(devices, ...) devices,
+    massive_auto_cuda_free = function(...) 8 * 1024^3,
+    massive_louvain_output = function(output, ...) output,
+    massive_cuda_device_uuids = function(devices)
+        paste0("GPU-", devices), .package = "fastEmbedR")
 })
 
 test_that("cuGraph reports the requested fit controls", {

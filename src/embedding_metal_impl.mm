@@ -1319,10 +1319,12 @@ uint deterministic_vertex(uint n, uint seed, uint epoch, uint i, uint edge, uint
 }
 
 uint deterministic_edge_vertex(uint n, uint seed, uint epoch,
-                               uint edge, uint sample) {
+                               uint edge_low, uint edge_high,
+                               uint sample) {
   uint x = seed;
   x ^= epoch * 0x9e3779b9u;
-  x ^= (edge + 1u) * 0x85ebca6bu;
+  x ^= (edge_low + 1u) * 0x85ebca6bu;
+  x ^= edge_high * 0x7feb352du;
   x ^= (sample + 1u) * 0xc2b2ae35u;
   return mix_uint(x) % n;
 }
@@ -1946,7 +1948,8 @@ kernel void massive_umap_batch_snapshot(
   uint done = 0u;
   for (int sample = 0; sample < negative_counts[gid]; ++sample) {
     const uint neg = deterministic_edge_vertex(p.n, p.seed,
-      epoch, edge_ordinals[gid], uint(sample));
+      epoch, edge_ordinals[2u * gid],
+      edge_ordinals[2u * gid + 1u], uint(sample));
     if (neg == head) continue;
     const uint nb = dimensions * neg;
     float negative_d2 = 0.0f;
@@ -9480,7 +9483,7 @@ extern "C" void* fastembedr_massive_umap_metal_create(
 
 extern "C" std::uint64_t fastembedr_massive_umap_metal_step(
     void* raw, const int* heads, const int* tails,
-    const int* negative_counts, const std::uint32_t* edge_ordinals,
+    const int* negative_counts, const std::uint64_t* edge_ordinals,
     int count, int epoch) {
   if (raw == nullptr || count < 0) {
     Rcpp::stop("Invalid Metal UMAP edge batch.");
@@ -9496,8 +9499,10 @@ extern "C" std::uint64_t fastembedr_massive_umap_metal_step(
       length:bytes options:MTLResourceStorageModeShared];
     id<MTLBuffer> neg = [state.device newBufferWithBytes:negative_counts
       length:bytes options:MTLResourceStorageModeShared];
+    const auto edge_bytes = static_cast<std::size_t>(count) *
+      sizeof(std::uint64_t);
     id<MTLBuffer> edge = [state.device newBufferWithBytes:edge_ordinals
-      length:bytes options:MTLResourceStorageModeShared];
+      length:edge_bytes options:MTLResourceStorageModeShared];
     id<MTLBuffer> done = [state.device newBufferWithLength:bytes
       options:MTLResourceStorageModeShared];
     if (h == nil || t == nil || neg == nil || edge == nil || done == nil) {

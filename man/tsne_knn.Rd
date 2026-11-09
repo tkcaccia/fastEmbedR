@@ -108,7 +108,7 @@ C++ opt-SNE-inspired policy. The policy uses \code{n / early_exaggeration} for
 KLD-based early stopping on small CPU runs where the monitor is not
 prohibitively expensive. Explicit user-supplied values are respected.}
 
-\item{devices}{Optional two to four CUDA device indices for one resident
+\item{devices}{Optional distinct CUDA device indices for one resident
 2D or 3D fit with NCCL. KNN affinities remain in host RAM.}
 
 \item{...}{Additional low-level optimizer controls, including \code{theta} and

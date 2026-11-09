@@ -12,6 +12,10 @@ struct TsneFft3dWorkspace {
   double sum_q = 0.0;
   double fft_elapsed_sec = 0.0;
   double correction_elapsed_sec = 0.0;
+  float profile_span = 0.0f;
+  float profile_cutoff = 0.0f;
+  bool profile_correct_near = false;
+  int profile_max_bin_occupancy = 0;
   std::vector<float> mass;
   std::vector<float> potential;
   std::vector<std::complex<float>> mass_fft;
@@ -274,6 +278,13 @@ void compute_gradient_fft_3d_f(const SparseProbabilitiesF* p,
   const float q_cutoff = 1.0f / (1.0f + cutoff_squared);
   // Below this cutoff, the Taylor kernel error is at most 0.008.
   const bool correct_near = cutoff_squared > 0.25f;
+  const bool profile = std::getenv("FASTEMBEDR_TSNE_3D_PROFILE") != nullptr;
+  if (profile) {
+    ws.profile_span = span;
+    ws.profile_cutoff = cutoff;
+    ws.profile_correct_near = correct_near;
+    ws.profile_max_bin_occupancy = 0;
+  }
   for (int axis = 0; axis < 3; ++axis) {
     lower[axis] = 0.5f * (lower[axis] + upper[axis]) - half -
       2.0f * spacing;
@@ -371,6 +382,15 @@ void compute_gradient_fft_3d_f(const SparseProbabilitiesF* p,
     std::max(1, static_cast<int>(std::ceil(grid * spacing / cutoff)));
   if (correct_near) {
     tsne_fft_3d_bins(y, n, lower, cutoff, bin_count, ws);
+    if (profile) {
+      for (const int head : ws.bin_head) {
+        int count = 0;
+        for (int j = head; j >= 0;
+             j = ws.bin_next[static_cast<std::size_t>(j)]) ++count;
+        ws.profile_max_bin_occupancy =
+          std::max(ws.profile_max_bin_occupancy, count);
+      }
+    }
   }
   std::fill(ws.partial_sum.begin(), ws.partial_sum.end(), 0.0);
   parallel_for(n, n_threads, [&](int begin, int end, int thread_id) {

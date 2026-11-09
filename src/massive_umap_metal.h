@@ -10,7 +10,7 @@ void* fastembedr_massive_umap_metal_create(const float* init,
     int seed);
 std::uint64_t fastembedr_massive_umap_metal_step(void* context,
     const int* heads, const int* tails, const int* negative_counts,
-    const std::uint32_t* edge_ordinals, int count, int epoch);
+    const std::uint64_t* edge_ordinals, int count, int epoch);
 void fastembedr_massive_umap_metal_download(void* context,
     float* output);
 void fastembedr_massive_umap_metal_destroy(void* context);

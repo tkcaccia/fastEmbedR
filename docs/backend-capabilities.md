@@ -116,7 +116,12 @@ Metal output. File-backed full-graph Metal UMAP also supports 2D and 3D.
 The experimental Metal t-SNE file-backed route supports 2D and 3D. Mapped mode
 exposes complete read-only CSR files as Metal buffers. Streamed mode maps
 the files on the host and uploads bounded graph chunks to Metal; its
-layout and optimizer state remain in shared memory. A 70,000-row Mac
+layout, optimizer state, and FFT workspace remain in memory. This is
+bounded graph upload, not a fully streamed fit. Large file-backed Metal
+one-call UMAP and t-SNE use CPU HNSW for KNN preparation above 5,000 rows;
+the public result records the actual backend, method, and resource estimates
+by stage. File-backed UMAP quality must be tested separately from the
+resident 2D UMAP repair. A 70,000-row Mac
 mapped/streamed comparison and small checkpoint-resume tests passed;
 the 2D route also passed paired 5,000-row quality checks on three seeds;
 large-data quality and speed remain unqualified. The capability

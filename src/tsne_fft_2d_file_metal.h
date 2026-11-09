@@ -337,6 +337,8 @@ List run_metal_tsne_2d_file(
   }
   metal_tsne_3d_write_buffers(output_path, {work.current},
                               layout_bytes);
+  const double metal_allocated_bytes_observed =
+    static_cast<double>(state.device.currentAllocatedSize);
   const double elapsed = std::chrono::duration<double>(
     std::chrono::steady_clock::now() - started).count();
   return List::create(
@@ -344,6 +346,8 @@ List run_metal_tsne_2d_file(
       "native_metal_fft_graph_mmap" :
       "native_metal_fft_graph_stream",
     Rcpp::Named("repulsion") = "fft_grid_2d_metal",
+    Rcpp::Named("metal_allocated_bytes_observed") =
+      metal_allocated_bytes_observed,
     Rcpp::Named("fft_grid_size") = static_cast<int>(work.grid),
     Rcpp::Named("iterations") = early_iter + normal_iter,
     Rcpp::Named("resumed_from_iteration") = start_iter,

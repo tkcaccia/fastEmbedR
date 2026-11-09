@@ -174,6 +174,8 @@ knn_graph <- function(x,
         k, backend, metric, weight, mutual, prune, n.cores
     )
     source <- graph_input_source(x)
+    graph_check_knn_capacity(source$value, settings$k,
+        settings$backend)
     input <- compute_graph_input_knn(
         source$value,
         source$name,
@@ -754,6 +756,7 @@ graph_cluster_resident <- function(graph, method, backend,
         resolution, n_iterations, n_runs, steps, seed,
         layout_merge, projection, small_groups, n.cores,
         devices, parallel.mode) {
+    graph_check_resident_capacity(graph, backend)
     graph <- validate_fastembedr_graph(graph)
     settings <- graph_cluster_settings(
         method, backend, resolution, n_iterations, n_runs, steps, seed,
@@ -775,6 +778,9 @@ graph_cluster_resident <- function(graph, method, backend,
         settings$devices <- massive_validate_devices(devices,
             settings$backend, graph$n_vertices)
     }
+    if (settings$backend == "cuda" &&
+        isTRUE(graph_clustering_cuda_available_cpp()))
+        graph_check_resident_vram(graph, settings$devices)
     options <- list(projection = projection, small_groups = small_groups)
     if (!is.null(layout_merge) && (settings$consensus ||
         any(!vapply(options, is.null, FALSE)))) {
@@ -789,6 +795,62 @@ graph_cluster_resident <- function(graph, method, backend,
         result <- graph_cluster_layout_merge(result, graph, layout_merge)
     }
     result
+}
+
+graph_check_resident_capacity <- function(graph, backend,
+        memory_limit = fastembedr_memory_option("8GB"),
+        available = massive_available_ram_bytes()) {
+    if (!is.list(graph) || is.null(graph$from) ||
+        is.null(graph$n_vertices)) return(invisible(NULL))
+    graph_check_resident_counts(length(graph$from), graph$n_vertices,
+        backend, memory_limit, available)
+}
+
+graph_check_knn_capacity <- function(x, k, backend,
+        memory_limit = fastembedr_memory_option("8GB"),
+        available = massive_available_ram_bytes()) {
+    rows <- nrow(x)
+    if (is.null(rows) && is.list(x)) rows <- nrow(x$indices)
+    if (is.null(rows) || rows < 2L) return(invisible(NULL))
+    graph_check_resident_counts(as.double(rows) *
+        min(k, rows - 1), rows, backend, memory_limit, available)
+}
+
+graph_check_resident_counts <- function(edges, vertices, backend,
+        memory_limit, available) {
+    edges <- as.double(edges)
+    vertices <- as.double(vertices)
+    if (!is.finite(edges) || edges < 0 ||
+        !is.finite(vertices) || vertices < 1) stop(
+        "Resident graph counts must be finite and non-negative.",
+        call. = FALSE)
+    if (resolve_embedding_backend(backend) != "cpu" &&
+        2 * edges > .Machine$integer.max) stop(
+        "Resident GPU clustering may exceed signed-32-bit CSR offsets; ",
+        "use a bounded file-backed graph.", call. = FALSE)
+    estimate <- 256 * 1024^2 + 128 * edges + 64 * vertices
+    limit <- massive_memory_bytes(memory_limit)
+    if (!is.finite(available) || available <= 0 ||
+        !is.finite(estimate) ||
+        estimate > 0.7 * min(limit, available)) stop(
+        "Resident clustering exceeds the RAM budget; use a bounded ",
+        "file-backed graph or increase memory_limit when RAM permits.",
+        call. = FALSE)
+    invisible(list(max_csr_edges = 2 * edges,
+        peak_ram_estimate_bytes = estimate))
+}
+
+graph_check_resident_vram <- function(graph, devices = NULL,
+        free = massive_auto_cuda_free(devices, graph$n_vertices)) {
+    required <- 128 * 1024^2 +
+        128 * as.double(length(graph$from)) +
+        256 * graph$n_vertices
+    if (!is.finite(free) || free <= 0 ||
+        !is.finite(required) || required > 0.65 * free) stop(
+        "Resident CUDA clustering exceeds the free-VRAM budget; ",
+        "use a bounded file-backed graph.", call. = FALSE)
+    invisible(list(peak_vram_estimate_bytes = required,
+        free_vram_bytes = free))
 }
 
 graph_cluster_data_input <- function(graph, method, backend,

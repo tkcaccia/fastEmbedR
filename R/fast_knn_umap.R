@@ -14,7 +14,7 @@
 #' @param graph_mode Graph weighting mode. `"fuzzy"` (the default) uses
 #'   standard UMAP fuzzy graph weights. `"binary"` uses a symmetric
 #'   unit-weight sensitivity graph.
-#' @param devices Optional two to four CUDA device indices for one
+#' @param devices Optional distinct CUDA device indices for one
 #'   resident coordinated fit. Its KNN graph is built in host RAM.
 #' @return A numeric matrix with `nrow(indices)` rows and `n_components`
 #'   columns.
@@ -170,8 +170,8 @@ run_resident_umap_multigpu <- function(indices, distances,
         match.arg(graph_mode, c("fuzzy", "binary")))
     devices <- massive_validate_devices(devices, backend,
         nrow(prepared$knn$indices))
-    if (length(devices) < 2L || length(devices) > 4L) stop(
-        "Resident multi-GPU UMAP requires two to four devices.",
+    if (length(devices) < 2L) stop(
+        "Resident multi-GPU UMAP requires at least two devices.",
         call. = FALSE)
     identity <- massive_cuda_device_uuids(devices)
     cfg <- configure_prepared_umap(prepared, backend,
@@ -436,7 +436,8 @@ build_prepared_umap_graph <- function(knn, cfg, graph_mode) {
     )
     cfg$graph_prep_backend <- paste0("cpu_", graph_mode, "_csr")
     cfg$graph_storage <- cfg$graph_prep_backend
-    cfg$graph_nnz <- as.integer(graph$nnz)
+    cfg$graph_nnz <- as.double(graph$nnz)
+    cfg$graph_offset_dtype <- graph$offset_dtype
     cfg$graph_max_weight <- as.numeric(graph$max_weight)
     cfg$graph_cuda_like_width <- graph$cuda_like_width
     cfg$graph_builder <- graph$graph_builder
@@ -729,15 +730,91 @@ fast_knn_umap_prepared_core <- function(
     )
 }
 
+umap_resident_csr_stage_bytes <- function(rows, width,
+        n_threads = 1L) {
+    directed <- as.double(rows) * width
+    symmetric <- 2 * directed
+    offset_width <- if (symmetric > .Machine$integer.max) 8 else 4
+    offsets <- (as.double(rows) + 1) * offset_width
+    input <- 8 * directed
+    copy <- 4 * directed
+    counts <- 4 * as.double(rows)
+    workers <- offset_width * as.double(rows) * n_threads
+    stages <- c(
+        knn_input = input,
+        directed_build = input + copy + 8 * directed +
+            3 * offsets + 3 * counts,
+        reverse_build = input + copy + 16 * directed +
+            3 * offsets + counts + workers,
+        symmetrize = input + copy + 16 * directed +
+            8 * symmetric + 3 * offsets + counts,
+        r_export = input + copy + 24 * symmetric +
+            offsets + counts,
+        optimizer_base = 12 * symmetric +
+            12 * as.double(rows) * 3,
+        optimizer_active = input + copy +
+            44 * symmetric + 24 * as.double(rows),
+        # Per-worker incoming counts are released inside graph construction.
+        # They cannot overlap the later spectral initialization workspace.
+        optimizer_spectral = input + copy +
+            52 * symmetric + 168 * as.double(rows)
+    )
+    list(stages = stages, max_edges = symmetric,
+        offset_bytes = offsets,
+        offset_dtype = if (symmetric > .Machine$integer.max)
+            "uint64" else "int32")
+}
+
+umap_check_resident_csr_capacity <- function(rows, width,
+        memory_limit = getOption("memory_limit", "8GB"),
+        available = massive_available_ram_bytes(), n_threads = 1L,
+        allow_wide = FALSE) {
+    if (!is.finite(rows) || !is.finite(width) || rows < 2 ||
+        width < 1 || (!allow_wide && 2 * as.double(rows) * width >
+            .Machine$integer.max)) stop(
+        "Resident UMAP CSR may exceed signed 32-bit offsets; ",
+        "use a file-backed full graph with bounded reads.",
+        call. = FALSE)
+    budget <- massive_memory_bytes(memory_limit)
+    stages <- umap_resident_csr_stage_bytes(rows, width, n_threads)
+    estimate <- max(stages$stages,
+        256 * 1024^2 + 96 * rows +
+            128 * as.double(rows) * width)
+    if (!is.finite(available) || available <= 0 ||
+        !is.finite(estimate) ||
+        estimate > 0.7 * min(budget, available)) stop(
+        "Resident UMAP graph construction exceeds the RAM budget; ",
+        "increase options(memory_limit=...) only when RAM permits, ",
+        "or use a file-backed graph.", call. = FALSE)
+    invisible(c(stages, list(peak_ram_estimate_bytes = estimate)))
+}
+
 umap_build_csr_graph <- function(indices,
                                     distances,
                                     col_start,
                                     n_cols,
                                     edge_budget,
                                     n_threads,
-                                    graph_mode = c("fuzzy", "binary")) {
+                                    graph_mode = c("fuzzy", "binary"),
+                                    allow_wide = FALSE,
+                                    force_wide = FALSE) {
     graph_mode <- match.arg(graph_mode)
+    rows <- nrow(indices)
+    width <- if (identical(graph_mode, "binary")) n_cols else
+        min(n_cols, edge_budget)
+    if (allow_wide && !identical(graph_mode, "fuzzy")) stop(
+        "Wide resident CSR requires the fuzzy graph mode.",
+        call. = FALSE)
+    if (force_wide && !allow_wide)
+        stop("Forced wide CSR requires wide-route admission.")
+    umap_check_resident_csr_capacity(rows, width,
+        n_threads = n_threads, allow_wide = allow_wide)
     distance_is_float32 <- is_float32_matrix(distances)
+    if (allow_wide && (force_wide || 2 * as.double(rows) * width >
+        .Machine$integer.max) && (!distance_is_float32 ||
+        !requireNamespace("float", quietly = TRUE))) stop(
+        "Wide resident CSR requires float32 KNN distances.",
+        call. = FALSE)
     if (identical(graph_mode, "binary")) {
         graph <- umap_graph_csr_binary_union_cpp(
             indices,
@@ -746,6 +823,7 @@ umap_build_csr_graph <- function(indices,
             as.integer(n_threads)
         )
         graph$graph_mode <- "binary"
+        graph$offset_dtype <- "int32"
         return(umap_graph_keep_float32(graph, TRUE))
     }
     graph <- umap_graph_csr_float_cpp(
@@ -754,9 +832,11 @@ umap_build_csr_graph <- function(indices,
         as.integer(col_start),
         as.integer(n_cols),
         as.integer(edge_budget),
-        as.integer(n_threads)
+        as.integer(n_threads),
+        force_wide = force_wide
     )
     graph$graph_mode <- "fuzzy"
+    graph$offset_dtype <- graph$offset_dtype %||% "int32"
     umap_graph_keep_float32(graph, TRUE)
 }
 
@@ -788,6 +868,18 @@ umap_init_from_csr_graph <- function(graph,
                                         cfg,
                                         seed,
                                         verbose = FALSE) {
+    if (identical(graph$offset_dtype, "uint64")) {
+        if (n_components != 2L) stop(
+            "Wide resident CSR initialization supports 2D only.",
+            call. = FALSE)
+        init <- fast_knn_umap_csr_wide_diffusion_cpp(
+            graph$offsets, graph$neighbors, graph$weights,
+            as.integer(cfg$spectral_n_iter),
+            as.integer(cfg$n_threads), as.integer(seed),
+            cfg$init_scale)
+        attr(init, "backend") <- "cpu_wide_csr_diffusion"
+        return(init)
+    }
     init <- fast_knn_umap_csr_cpp(
         graph$offsets,
         graph$neighbors,
@@ -1160,6 +1252,7 @@ apply_fast_knn_umap_distance_profile_rule <- function(cfg, distances) {
 
     profile <- fast_knn_umap_distance_profile(distances)
     cfg$knn_distance_cv <- profile$cv
+    cfg$knn_distance_profile_rows <- profile$sampled_rows
     cfg$knn_distance_ratio_50_15 <- profile$ratio_50_15
     cfg$knn_distance_ratio_30_15 <- profile$ratio_30_15
     cfg$knn_distance_profile_rule <- "large_default"
@@ -1219,14 +1312,24 @@ umap_distance_ratio <- function(numerator, denominator) {
     numerator / denominator
 }
 
+umap_profile_row_indices <- function(n, max_rows = 100000L) {
+    stopifnot(length(n) == 1L, is.finite(n), n >= 1,
+        length(max_rows) == 1L, is.finite(max_rows), max_rows >= 2L)
+    if (n <= max_rows) return(seq_len(n))
+    unique(as.integer(round(seq.int(1, n, length.out = max_rows))))
+}
+
 fast_knn_umap_distance_profile <- function(distances) {
-    sampled <- umap_distance_profile_matrix(distances)
+    rows <- umap_profile_row_indices(nrow(distances))
+    selected <- distances[rows, , drop = FALSE]
+    sampled <- umap_distance_profile_matrix(selected)
     finite <- is.finite(sampled)
     if (!any(finite)) {
         return(list(
             cv = NA_real_,
             ratio_50_15 = NA_real_,
-            ratio_30_15 = NA_real_
+            ratio_30_15 = NA_real_,
+            sampled_rows = length(rows)
         ))
     }
     mean_distance <- mean(sampled[finite])
@@ -1235,17 +1338,18 @@ fast_knn_umap_distance_profile <- function(distances) {
     } else {
         NA_real_
     }
-    d15 <- umap_distance_rank(distances, 15L)
+    d15 <- umap_distance_rank(selected, 15L)
     list(
         cv = cv,
         ratio_50_15 = umap_distance_ratio(
-            umap_distance_rank(distances, 50L),
+            umap_distance_rank(selected, 50L),
             d15
         ),
         ratio_30_15 = umap_distance_ratio(
-            umap_distance_rank(distances, 30L),
+            umap_distance_rank(selected, 30L),
             d15
-        )
+        ),
+        sampled_rows = length(rows)
     )
 }
 
@@ -1315,7 +1419,7 @@ record_umap_connectivity <- function(cfg, stats) {
     )
     cfg$graph_largest_component_size <- as.integer(stats$largest_component_size)
     cfg$graph_singleton_count <- as.integer(stats$singleton_count)
-    cfg$graph_invalid_edge_count <- as.integer(stats$invalid_edge_count)
+    cfg$graph_invalid_edge_count <- as.double(stats$invalid_edge_count)
     cfg
 }
 

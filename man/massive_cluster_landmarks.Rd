@@ -66,7 +66,7 @@ independent Leiden/Louvain fitting restarts.}
 
 \item{resume}{Continue from matching partial outputs and checkpoint.}
 
-\item{devices}{Optional one to four distinct CUDA devices. Two to four
+\item{devices}{Optional distinct CUDA devices. Multiple
 devices coordinate one resident landmark-graph fit; label voting remains
 CPU-streamed.}
 

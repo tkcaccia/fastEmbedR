@@ -38,7 +38,7 @@
 #'   storage may page between host and GPU and requires a supporting GPU.
 #'   Metal `"mmap"` maps the host staging/output file, but still requires
 #'   one complete 2D or 3D layout in Metal shared memory.
-#' @param devices Optional one to four CUDA device IDs. Explicit devices
+#' @param devices Optional distinct CUDA device IDs. Explicit devices
 #'   use NCCL to reduce edge updates to coordinate owners at each epoch;
 #'   fixed-point accumulation makes the reduction order-independent.
 #'   Omitting this argument retains the in-place single-GPU optimizer.
@@ -173,8 +173,8 @@ massive_umap_layout_ram <- function(plan, init, layout_storage) {
         min(plan$chunk_rows, 8192L) * init$ncol * 4 +
         plan$edge_capacity * 16 * max(1L, length(plan$devices)))
     if (plan$backend == "metal") return(
-        (if (layout_storage == "memory") 2 * plan$layout_bytes
-        else plan$layout_bytes + min(plan$chunk_rows, 8192L) *
+        (if (layout_storage == "memory") 3 * plan$layout_bytes
+        else 2 * plan$layout_bytes + min(plan$chunk_rows, 8192L) *
             init$ncol * 4) + plan$edge_capacity * 32)
     if (layout_storage == "memory") return(plan$layout_bytes)
     min(plan$chunk_rows, 8192L) * init$ncol * 4
@@ -188,6 +188,10 @@ massive_umap_result <- function(plan, graph, init, built, saved,
     result$implementation_identity <-
         massive_checkpoint_implementation_identity()
     result$backend <- plan$backend
+    result$graph_index <- list(
+        offset_dtype = graph$offset_dtype,
+        row_id_dtype = graph$index_dtype,
+        edge_positions = as.double(graph$n_edges))
     result$optimizer <- if (plan$backend == "cpu" &&
         plan$cpu_update == "synchronized")
         "synchronized_cpu_fixed_point" else if (plan$backend == "metal")
@@ -201,6 +205,7 @@ massive_umap_result <- function(plan, graph, init, built, saved,
     result$parameters$resumed_from_epoch <- saved$epoch
     layout_ram <- massive_umap_layout_ram(plan, init, layout_storage)
     result$resources <- list(layout_ram_bytes = layout_ram,
+        estimated_peak_ram_bytes = plan$peak_ram_estimate,
         layout_mmap_bytes = plan$layout_bytes * (layout_storage == "mmap"),
         graph_bytes = graph$n_edges * 8 + (graph$n_vertices + 1) * 8,
         effective_cpu_workers = if (plan$backend == "cpu") plan$n.cores
@@ -424,12 +429,12 @@ massive_umap_checkpoint_commit <- function(plan, sidecar, signature,
 massive_umap_plan_layout <- function(graph, init, controls,
         memory_limit, backend, layout_storage, cpu_update) {
     bytes <- graph$n_vertices * init$ncol * 4
-    limit <- massive_memory_bytes(memory_limit)
+    limit <- massive_auto_memory_limit(memory_limit)
     capacity <- if (backend == "metal") as.integer(
         min(1e6, max(65536, graph$max_degree))) else NULL
     staged <- min(controls$chunk_rows, 8192L) * init$ncol * 4
     resident <- if (backend == "metal") {
-        1.5 * bytes + capacity * 36 +
+        2 * bytes + capacity * 36 +
             if (layout_storage == "memory") bytes else staged
     } else if (layout_storage == "managed" ||
         (layout_storage == "memory" && backend == "cpu"))
@@ -441,7 +446,7 @@ massive_umap_plan_layout <- function(graph, init, controls,
     if (!is.finite(bytes) || required > limit) stop(
         "UMAP layout exceeds `memory_limit`.", call. = FALSE)
     list(bytes = bytes, limit = limit, metal_capacity = capacity,
-        delta_bytes = delta)
+        delta_bytes = delta, peak_ram_estimate = required)
 }
 
 massive_umap_optimize_plan <- function(graph, init, output,
@@ -474,6 +479,7 @@ massive_umap_optimize_plan <- function(graph, init, output,
     } else layout$metal_capacity
     list(output = path, layout_bytes = layout_bytes, backend = backend,
         delta_bytes = layout$delta_bytes,
+        peak_ram_estimate = layout$peak_ram_estimate,
         edge_capacity = edge_capacity, limit = limit,
         devices = devices, gpu_identity = identity,
         n.cores = as.integer(n.cores), cpu_update = cpu_update,
@@ -486,6 +492,9 @@ massive_umap_optimize_plan <- function(graph, init, output,
             min_dist = min_dist, repulsion_strength = repulsion_strength,
             n.cores = as.integer(n.cores),
             cpu_update = cpu_update,
+            graph_offset_dtype = graph$offset_dtype,
+            graph_index_dtype = graph$index_dtype,
+            graph_edge_positions = as.double(graph$n_edges),
             layout_storage = layout_storage),
             if (!is.null(devices)) list(devices = devices,
                 gpu_identity = identity)))
@@ -495,10 +504,9 @@ massive_umap_plan_storage <- function(devices, backend, graph,
         init, layout_storage) {
     devices <- massive_validate_devices(devices, backend,
         graph$n_vertices)
-    if (!is.null(devices) && (length(devices) > 4L ||
-        layout_storage != "memory")) stop(
-        "Coordinated CUDA UMAP supports at most four devices, ",
-        "2D/3D output, and device storage.", call. = FALSE)
+    if (!is.null(devices) && layout_storage != "memory") stop(
+        "Coordinated CUDA UMAP needs device storage.",
+        call. = FALSE)
     if (length(devices) > 1L && graph$n_vertices <=
         (length(devices) - 1L) *
             ceiling(graph$n_vertices / length(devices))) stop(
@@ -549,8 +557,8 @@ massive_umap_cuda_capacity <- function(graph, layout_bytes,
         (limit - 128 * 1024^2 - host_layout -
             min(chunk_rows, 8192L) * dimensions * 4) /
             (16 * host_batches)))
-    if (!is.finite(capacity) || capacity < max(1, graph$max_degree)) {
-        stop("CUDA layout or one graph row exceeds the RAM/VRAM ",
+    if (!is.finite(capacity) || capacity < 1) {
+        stop("CUDA layout or edge batch exceeds the RAM/VRAM ",
             "budget; no CPU fallback was used.", call. = FALSE)
     }
     as.integer(capacity)

@@ -42,14 +42,17 @@
 }
 \value{
 A list with canonical \code{backend}, detailed \code{backend_engine},
-\code{devices}, \code{device_identity}, \code{scope}, \code{stage_backend},
+\code{graph_offset_dtype}, \code{devices}, \code{device_identity},
+\code{scope}, \code{stage_backend},
 \code{stage_seconds}, \code{memory_use}, and \code{output_rows}. Missing total memory
 estimates remain \code{NA}; available component estimates are reported
 separately and are not an observed peak.
 }
 \description{
 Reports the actual recorded backend and devices, fit scope, stage times,
-and available memory estimates. Unknown memory is \code{NA}, never inferred
+and available memory estimates. One-call file-backed fits also retain
+per-stage resource plans in \code{memory_use$stage_resources}; these are not
+measured process peaks. Unknown memory is \code{NA}, never inferred
 from the input size. Use \code{\link[=massive_read_rows]{massive_read_rows()}} with explicit row bounds
 for file-backed output; PCA scores are stored in \code{fit$scores}.
 }

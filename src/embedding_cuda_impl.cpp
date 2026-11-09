@@ -3050,7 +3050,7 @@ List landmark_tsne_transform_cuda_devices_impl(
     Rcpp::stop("Multi-GPU landmark t-SNE input dimensions differ.");
   }
   const int nd = devices.size();
-  if (nd < 2 || nd > 4 || nd > nq || perplexity <= 0 ||
+  if (nd < 2 || nd > nq || perplexity <= 0 ||
       n_iter < 0 || early_exaggeration_iter < 0 ||
       learning_rate <= 0 || early_exaggeration <= 0 ||
       exaggeration <= 0 || initial_momentum < 0 ||
@@ -3334,7 +3334,7 @@ List landmark_umap_project_refine_cuda_devices_impl(
       ld.first != nr || (dims != 2 && dims != 3) ||
       indices.nrow() != nq || distances.nrow() != nq ||
       distances.ncol() != k || k < 1 ||
-      k > kMaxCudaProjectionNeighbors || nd < 2 || nd > 4 ||
+      k > kMaxCudaProjectionNeighbors || nd < 2 ||
       n_epochs < 0 || min_dist < 0 || negative_sample_rate < 0 ||
       learning_rate <= 0 || repulsion_strength <= 0) {
     Rcpp::stop("Invalid multi-GPU landmark UMAP inputs or controls.");

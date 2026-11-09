@@ -73,7 +73,7 @@ storage may page between host and GPU and requires a supporting GPU.
 Metal \code{"mmap"} maps the host staging/output file, but still requires
 one complete 2D or 3D layout in Metal shared memory.}
 
-\item{devices}{Optional one to four CUDA device IDs. Explicit devices
+\item{devices}{Optional distinct CUDA device IDs. Explicit devices
 use NCCL to reduce edge updates to coordinate owners at each epoch;
 fixed-point accumulation makes the reduction order-independent.
 Omitting this argument retains the in-place single-GPU optimizer.

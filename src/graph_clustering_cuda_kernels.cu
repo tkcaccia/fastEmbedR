@@ -415,6 +415,10 @@ void graph_stream_cuda_chunk(void* handle,
     const std::vector<int>& col_idx,
     const std::vector<float>& weight, int first) {
   auto& session = stream_session(handle);
+  if (row_ptr.size() < 2 ||
+      row_ptr.size() - 1 > static_cast<std::size_t>(INT_MAX)) {
+    Rcpp::stop("Invalid CUDA streaming Louvain row count.");
+  }
   const int rows = static_cast<int>(row_ptr.size()) - 1;
   if (rows < 1 || rows > session.chunk_rows || first < 0 ||
       first > session.n - rows ||

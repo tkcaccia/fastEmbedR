@@ -46,9 +46,6 @@ massive_cluster_auto_plan <- function(x, landmarks, k, backend,
     rows <- if (source) x$nrow else nrow(x)
     cols <- if (source) x$ncol else ncol(x)
     devices <- massive_validate_devices(devices, backend, rows)
-    if (length(devices) > 4L) stop(
-        "Landmark clustering supports at most four CUDA devices.",
-        call. = FALSE)
     if (is.na(k) || k < 1L || k >= rows) stop(
         "`k` must be smaller than the source row count.",
         call. = FALSE)
@@ -387,11 +384,11 @@ massive_cluster_auto_result <- function(result, massive, plan) {
 #'   label-file path in full-graph mode.
 #' @param backend `"cpu"`, `"cuda"`, or `"metal"` for landmarks;
 #'   full-graph CUDA Louvain/Leiden with `devices = NULL` stream graph chunks.
-#'   Two to four CUDA devices use cuGraph for resident multi-GPU clustering.
-#' @param devices Optional one to four CUDA devices for landmark clustering
+#'   Multiple CUDA devices use cuGraph for resident clustering.
+#' @param devices Optional distinct CUDA devices for landmark clustering
 #'   or in-memory auto mode. Two or more devices coordinate one graph fit;
 #'   query KNN shards use the selected devices. Full-graph mode accepts
-#'   two to four initial CUDA-visible devices.
+#'   at least two initial CUDA-visible devices.
 #' @param gpu_storage `"resident"` for cuGraph or `"stream"` for
 #'   bounded multi-GPU Louvain or Leiden local moves in full-graph CUDA mode.
 #' @param n.cores CPU workers for graph building, landmark assignment,

@@ -87,11 +87,20 @@ inline int community_count(const std::vector<int>& membership) {
 }
 
 inline Graph graph_from_edges(int n, std::vector<Edge> edges) {
+  std::uint64_t positions = 0;
+  for (const Edge& edge : edges) {
+    positions += edge.u == edge.v ? 1ULL : 2ULL;
+    if (positions > static_cast<std::uint64_t>(
+        std::numeric_limits<int>::max())) {
+      Rcpp::stop("Resident GPU clustering exceeds signed-32-bit CSR "
+                 "capacity; use a bounded file-backed route.");
+    }
+  }
   Graph graph;
   graph.n = n;
   graph.edges = std::move(edges);
   graph.degree.assign(static_cast<std::size_t>(n), 0.0f);
-  graph.row_ptr.assign(static_cast<std::size_t>(n + 1), 0);
+  graph.row_ptr.assign(static_cast<std::size_t>(n) + 1U, 0);
 
   for (const Edge& edge : graph.edges) {
     graph.total_edge_weight += edge.weight;
@@ -134,6 +143,13 @@ inline Graph graph_from_r(const Rcpp::IntegerVector& from,
   if (n_vertices < 1) Rcpp::stop("`n_vertices` must be positive.");
   if (from.size() != to.size() || from.size() != weight.size()) {
     Rcpp::stop("Graph edge vectors must have equal lengths.");
+  }
+  // A non-self input edge can occupy two CSR positions. Reject the
+  // worst case before allocating the raw and deduplicated edge copies.
+  if (static_cast<std::uint64_t>(from.size()) >
+      static_cast<std::uint64_t>(std::numeric_limits<int>::max()) / 2ULL) {
+    Rcpp::stop("Resident GPU clustering exceeds signed-32-bit input "
+               "capacity; use a bounded file-backed route.");
   }
   std::vector<CandidateEdge> raw;
   raw.reserve(static_cast<std::size_t>(from.size()));

@@ -131,12 +131,12 @@ fastembedr_knn_output_type <- function(data, backend) {
 }
 
 knn_index_base <- function(indices, n = nrow(indices)) {
-    observed <- indices[!is.na(indices)]
-    if (!length(observed)) {
+    bounds <- suppressWarnings(range(indices, na.rm = TRUE))
+    if (!all(is.finite(bounds))) {
         return("zero")
     }
-    min_idx <- min(observed)
-    max_idx <- max(observed)
+    min_idx <- bounds[[1L]]
+    max_idx <- bounds[[2L]]
     if (is.finite(min_idx) && is.finite(max_idx) && min_idx >= 1L && max_idx <=
         n) {
         return("one")

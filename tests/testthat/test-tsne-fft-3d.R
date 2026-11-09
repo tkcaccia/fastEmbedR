@@ -48,6 +48,26 @@ test_that("3D FFT near correction stays accurate on large grids", {
     }
 })
 
+test_that("large-grid 3D forces remain accurate after the cost gate", {
+    set.seed(424L)
+    n <- 1000L
+    k <- 12L
+    indices <- outer(seq_len(n), seq_len(k),
+        function(i, j) (i + j - 1L) %% n + 1L)
+    distances <- matrix(rep(seq_len(k) / 10, each = n), n, k)
+    for (spread in c(1, 25, 50, 100)) {
+        layout <- matrix(rnorm(n * 3L, sd = spread), n, 3L)
+        result <- fastEmbedR:::tsne_fft_3d_force_diagnostic_cpp(
+            indices, distances, layout, 5, 1, 128L, 4L)
+        error <- sqrt(sum((result$repulsive_fft -
+            result$repulsive_exact)^2)) /
+            sqrt(sum(result$repulsive_exact^2))
+        expect_lt(error, 0.04)
+        expect_lt(abs(result$sum_q_fft /
+            result$sum_q_exact - 1), 0.003)
+    }
+})
+
 test_that("large resident CPU 3D fits select the finer FFT grid", {
     n <- 100000L
     k <- 6L

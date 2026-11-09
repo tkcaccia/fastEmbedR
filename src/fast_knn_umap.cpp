@@ -20,11 +20,15 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "umap_membership.h"
 #include "umap_optimizer_common.h"
+#include "csr_offset_plan.h"
+#include "csr_offset_storage.h"
+#include "csr_edge_tiles.h"
 
 using Rcpp::IntegerMatrix;
 using Rcpp::IntegerVector;
@@ -242,13 +246,26 @@ struct FloatDistanceView {
   }
 };
 
-struct CsrGraphNative {
-  std::vector<int> offsets;
+template <typename Offset>
+struct CsrGraphNativeTyped {
+  std::vector<Offset> offsets;
   std::vector<int> neighbors;
   std::vector<float> weights;
   std::vector<float> epochs_per_sample;
   float max_weight = 0.0f;
 };
+
+using CsrGraphNative = CsrGraphNativeTyped<int>;
+using CsrGraphNativeWide = CsrGraphNativeTyped<std::uint64_t>;
+
+void require_resident_csr_capacity(const int rows, const int width) {
+  if (rows < 2 || width < 1 ||
+      fastembedr_csr_offset_plan(rows, width).kind ==
+        FastembedrCsrOffsetKind::Uint64) {
+    Rcpp::stop("Resident UMAP CSR may exceed signed 32-bit offsets; "
+               "use a file-backed full graph with bounded reads.");
+  }
+}
 
 struct CsrCandidateEdge {
   int head;
@@ -414,11 +431,13 @@ std::vector<float> copy_distances_float_sexp(SEXP distances,
 }
 
 std::vector<float> copy_float_vector_sexp(SEXP values,
-                                          const char* name) {
+                                          const char* name,
+                                          const bool allow_long = false) {
   if (is_float32_s4(values)) {
     IntegerVector payload = float32_payload_slot(values);
     const R_xlen_t n = payload.size();
-    if (n > static_cast<R_xlen_t>(std::numeric_limits<int>::max())) {
+    if (!allow_long && n > static_cast<R_xlen_t>(
+        std::numeric_limits<int>::max())) {
       Rcpp::stop("%s is too large", name);
     }
     std::vector<float> out(static_cast<std::size_t>(n));
@@ -433,7 +452,8 @@ std::vector<float> copy_float_vector_sexp(SEXP values,
   }
   NumericVector numeric(values);
   const R_xlen_t n = numeric.size();
-  if (n > static_cast<R_xlen_t>(std::numeric_limits<int>::max())) {
+  if (!allow_long && n > static_cast<R_xlen_t>(
+      std::numeric_limits<int>::max())) {
     Rcpp::stop("%s is too large", name);
   }
   std::vector<float> out(static_cast<std::size_t>(n));
@@ -546,6 +566,7 @@ int deterministic_vertex(const int n,
   std::uint32_t x = static_cast<std::uint32_t>(seed);
   x ^= static_cast<std::uint32_t>(epoch * 0x9e3779b9u);
   x ^= static_cast<std::uint32_t>((edge + 1u) * 0x85ebca6bu);
+  x ^= static_cast<std::uint32_t>(edge >> 32) * 0x7feb352du;
   x ^= static_cast<std::uint32_t>((sample + 1) * 0xc2b2ae35u);
   return static_cast<int>(mix_seed(x) % static_cast<std::uint32_t>(n));
 }
@@ -740,44 +761,59 @@ int deterministic_non_neighbor(const int n,
   return anchor == 0 ? 1 % n : 0;
 }
 
-int infer_csr_index_offset(const int n, const IntegerVector& neighbors) {
-  const int nnz = neighbors.size();
+template <typename NeighborVec>
+int infer_csr_index_offset(const int n, const NeighborVec& neighbors) {
+  const std::size_t nnz = neighbors.size();
   if (nnz == 0) return 0;
   int min_neighbor = std::numeric_limits<int>::max();
   int max_neighbor = std::numeric_limits<int>::min();
-  for (int i = 0; i < nnz; ++i) {
+  for (std::size_t i = 0; i < nnz; ++i) {
     min_neighbor = std::min(min_neighbor, neighbors[i]);
     max_neighbor = std::max(max_neighbor, neighbors[i]);
   }
   return (min_neighbor >= 1 && max_neighbor <= n) ? 1 : 0;
 }
 
-template <typename WeightVec>
-int validate_csr_inputs(const IntegerVector& offsets,
-                        const IntegerVector& neighbors,
+template <typename OffsetVec, typename NeighborVec,
+          typename WeightVec>
+int validate_csr_inputs(const OffsetVec& offsets,
+                        const NeighborVec& neighbors,
                         const WeightVec& weights) {
   if (offsets.size() < 2) Rcpp::stop("CSR offsets must have length at least two");
   if (static_cast<std::size_t>(neighbors.size()) != weights.size()) {
     Rcpp::stop("CSR neighbors and weights must have the same length");
   }
 
-  const int n = offsets.size() - 1;
-  int previous = offsets[0];
+  if (static_cast<std::size_t>(offsets.size() - 1) >
+      static_cast<std::size_t>(
+      std::numeric_limits<int>::max())) {
+    Rcpp::stop("CSR row count exceeds 32-bit row IDs.");
+  }
+  const int n = static_cast<int>(offsets.size() - 1);
+  std::uint64_t previous = offsets[0];
   if (previous != 0) Rcpp::stop("First CSR offset must be zero");
   for (int i = 1; i <= n; ++i) {
-    const int value = offsets[i];
+    if constexpr (std::is_signed<
+        typename OffsetVec::value_type>::value) {
+      if (offsets[i] < 0) {
+        Rcpp::stop("CSR offsets must be non-negative");
+      }
+    }
+    const std::uint64_t value = offsets[i];
     if (value < previous) Rcpp::stop("CSR offsets must be non-decreasing");
     previous = value;
   }
-  const int nnz = offsets[n];
-  if (nnz != neighbors.size()) Rcpp::stop("Last CSR offset must equal length of neighbors");
+  const std::size_t nnz = static_cast<std::size_t>(offsets[n]);
+  if (nnz != static_cast<std::size_t>(neighbors.size())) {
+    Rcpp::stop("Last CSR offset must equal length of neighbors");
+  }
 
   const int index_offset = infer_csr_index_offset(n, neighbors);
   for (int row = 0; row < n; ++row) {
-    const int begin = offsets[row];
-    const int end = offsets[row + 1];
+    const auto begin = static_cast<std::size_t>(offsets[row]);
+    const auto end = static_cast<std::size_t>(offsets[row + 1]);
     int last = -1;
-    for (int pos = begin; pos < end; ++pos) {
+    for (std::size_t pos = begin; pos < end; ++pos) {
       const int nb = neighbors[pos] - index_offset;
       if (nb < 0 || nb >= n) Rcpp::stop("CSR neighbor index out of range");
       if (nb == row) Rcpp::stop("CSR graph must not contain self-neighbors");
@@ -799,10 +835,10 @@ bool csr_contains(const OffsetVec& offsets,
                   const int row,
                   const int value) {
   const int target = value + index_offset;
-  int lo = offsets[row];
-  int hi = offsets[row + 1];
+  std::size_t lo = static_cast<std::size_t>(offsets[row]);
+  std::size_t hi = static_cast<std::size_t>(offsets[row + 1]);
   while (lo < hi) {
-    const int mid = lo + (hi - lo) / 2;
+    const std::size_t mid = lo + (hi - lo) / 2;
     const int current = neighbors[mid];
     if (current < target) {
       lo = mid + 1;
@@ -810,7 +846,8 @@ bool csr_contains(const OffsetVec& offsets,
       hi = mid;
     }
   }
-  return lo < offsets[row + 1] && neighbors[lo] == target;
+  return lo < static_cast<std::size_t>(offsets[row + 1]) &&
+    neighbors[lo] == target;
 }
 
 template <typename OffsetVec, typename NeighborVec>
@@ -829,10 +866,10 @@ float csr_lookup_weight(const OffsetVec& offsets,
                         const WeightVec& weights,
                         const int row,
                         const int value) {
-  int lo = offsets[row];
-  int hi = offsets[row + 1];
+  std::size_t lo = static_cast<std::size_t>(offsets[row]);
+  std::size_t hi = static_cast<std::size_t>(offsets[row + 1]);
   while (lo < hi) {
-    const int mid = lo + (hi - lo) / 2;
+    const std::size_t mid = lo + (hi - lo) / 2;
     const int current = neighbors[mid];
     if (current < value) {
       lo = mid + 1;
@@ -840,7 +877,8 @@ float csr_lookup_weight(const OffsetVec& offsets,
       hi = mid;
     }
   }
-  if (lo < offsets[row + 1] && neighbors[lo] == value) {
+  if (lo < static_cast<std::size_t>(offsets[row + 1]) &&
+      neighbors[lo] == value) {
     return static_cast<float>(weights[lo]);
   }
   return 0.0f;
@@ -1180,16 +1218,19 @@ std::vector<char> adaptive_prune_edges_with_rescue(const int n,
   return keep;
 }
 
-void sort_csr_graph_rows(CsrGraphNative& graph) {
+template <typename Offset>
+void sort_csr_graph_rows(CsrGraphNativeTyped<Offset>& graph) {
   const int n = static_cast<int>(graph.offsets.size()) - 1;
   std::vector<std::pair<int, float>> row;
   for (int i = 0; i < n; ++i) {
-    const int begin = graph.offsets[static_cast<std::size_t>(i)];
-    const int end = graph.offsets[static_cast<std::size_t>(i + 1)];
+    const auto begin = static_cast<std::size_t>(
+      graph.offsets[static_cast<std::size_t>(i)]);
+    const auto end = static_cast<std::size_t>(
+      graph.offsets[static_cast<std::size_t>(i + 1)]);
     if (end - begin < 2) continue;
     row.clear();
     row.reserve(static_cast<std::size_t>(end - begin));
-    for (int pos = begin; pos < end; ++pos) {
+    for (std::size_t pos = begin; pos < end; ++pos) {
       row.emplace_back(
         graph.neighbors[static_cast<std::size_t>(pos)],
         graph.weights[static_cast<std::size_t>(pos)]
@@ -1198,15 +1239,16 @@ void sort_csr_graph_rows(CsrGraphNative& graph) {
     std::sort(row.begin(), row.end(), [](const auto& a, const auto& b) {
       return a.first < b.first;
     });
-    for (int pos = begin; pos < end; ++pos) {
-      const auto& item = row[static_cast<std::size_t>(pos - begin)];
-      graph.neighbors[static_cast<std::size_t>(pos)] = item.first;
-      graph.weights[static_cast<std::size_t>(pos)] = item.second;
+    for (std::size_t pos = begin; pos < end; ++pos) {
+      const auto& item = row[pos - begin];
+      graph.neighbors[pos] = item.first;
+      graph.weights[pos] = item.second;
     }
   }
 }
 
-void attach_csr_epoch_schedule(CsrGraphNative& graph) {
+template <typename Offset>
+void attach_csr_epoch_schedule(CsrGraphNativeTyped<Offset>& graph) {
   graph.max_weight = 0.0f;
   for (const float w : graph.weights) {
     if (std::isfinite(w) && w > graph.max_weight) graph.max_weight = w;
@@ -1226,11 +1268,13 @@ void attach_csr_epoch_schedule(CsrGraphNative& graph) {
   }
 }
 
-int compact_directed_rows_inplace(const std::vector<int>& raw_offsets,
-                                  const std::vector<int>& row_ends,
+template <typename Offset>
+Offset compact_directed_rows_inplace(
+                                  const std::vector<Offset>& raw_offsets,
+                                  const std::vector<Offset>& row_ends,
                                   std::vector<int>& neighbors,
                                   std::vector<float>& weights,
-                                  std::vector<int>& offsets,
+                                  std::vector<Offset>& offsets,
                                   const int n_threads) {
   const int n = static_cast<int>(raw_offsets.size()) - 1;
   offsets.assign(static_cast<std::size_t>(n) + 1u, 0);
@@ -1238,13 +1282,13 @@ int compact_directed_rows_inplace(const std::vector<int>& raw_offsets,
 
   auto sort_count_worker = [&](const int begin_row, const int end_row, const int) {
     for (int row_id = begin_row; row_id < end_row; ++row_id) {
-      const int begin = raw_offsets[static_cast<std::size_t>(row_id)];
-      const int end = row_ends[static_cast<std::size_t>(row_id)];
+      const Offset begin = raw_offsets[static_cast<std::size_t>(row_id)];
+      const Offset end = row_ends[static_cast<std::size_t>(row_id)];
 
-      for (int pos = begin + 1; pos < end; ++pos) {
+      for (Offset pos = begin + 1; pos < end; ++pos) {
         const int nb = neighbors[static_cast<std::size_t>(pos)];
         const float w = weights[static_cast<std::size_t>(pos)];
-        int cursor = pos;
+        Offset cursor = pos;
         while (cursor > begin &&
                neighbors[static_cast<std::size_t>(cursor - 1)] > nb) {
           neighbors[static_cast<std::size_t>(cursor)] =
@@ -1258,7 +1302,7 @@ int compact_directed_rows_inplace(const std::vector<int>& raw_offsets,
       }
 
       int count = 0;
-      int read = begin;
+      Offset read = begin;
       while (read < end) {
         const int nb = neighbors[static_cast<std::size_t>(read)];
         ++read;
@@ -1273,21 +1317,28 @@ int compact_directed_rows_inplace(const std::vector<int>& raw_offsets,
 
   parallel_for_chunks(n, n_threads, sort_count_worker);
 
+  std::uint64_t total = 0;
   for (int row_id = 0; row_id < n; ++row_id) {
+    const auto count = static_cast<std::uint64_t>(
+      counts[static_cast<std::size_t>(row_id)]);
+    if (count > std::numeric_limits<Offset>::max() - total) {
+      Rcpp::stop("Compacted CSR offsets exceed their selected width.");
+    }
+    total += count;
     offsets[static_cast<std::size_t>(row_id + 1)] =
-      offsets[static_cast<std::size_t>(row_id)] + counts[static_cast<std::size_t>(row_id)];
+      static_cast<Offset>(total);
   }
-  const int write = offsets[static_cast<std::size_t>(n)];
+  const Offset write = offsets[static_cast<std::size_t>(n)];
   std::vector<int> compact_neighbors(static_cast<std::size_t>(write));
   std::vector<float> compact_weights(static_cast<std::size_t>(write));
 
   auto fill_worker = [&](const int begin_row, const int end_row, const int) {
     for (int row_id = begin_row; row_id < end_row; ++row_id) {
-      int write_pos = offsets[static_cast<std::size_t>(row_id)];
-      const int begin = raw_offsets[static_cast<std::size_t>(row_id)];
-      const int end = row_ends[static_cast<std::size_t>(row_id)];
+      Offset write_pos = offsets[static_cast<std::size_t>(row_id)];
+      const Offset begin = raw_offsets[static_cast<std::size_t>(row_id)];
+      const Offset end = row_ends[static_cast<std::size_t>(row_id)];
 
-      int read = begin;
+      Offset read = begin;
       while (read < end) {
         const int nb = neighbors[static_cast<std::size_t>(read)];
         float w = weights[static_cast<std::size_t>(read)];
@@ -1504,24 +1555,26 @@ int compact_directed_rows_inplace_unit_weight(const std::vector<int>& raw_offset
   return graph;
 }
 
-CsrGraphNative build_graph_csr_native_direct_values(const IntegerMatrix& indices,
+template <typename Offset>
+CsrGraphNativeTyped<Offset> build_graph_csr_native_direct_values_typed(
+                                                    const IntegerMatrix& indices,
                                                     const std::vector<float>& distance_values,
                                                     const int edge_budget,
                                                     const int n_threads,
                                                     const int index_offset,
                                                     const int col_start,
-                                                    const int n_cols) {
+                                                    const int n_cols,
+                                                    const bool schedule = true) {
   const int n = indices.nrow();
   const int k = n_cols;
   const int kept_k = std::min(k, std::max(1, edge_budget));
-
   const FloatDistanceView distance_view{distance_values.data(), n, k, k};
   std::vector<float> sigmas;
   std::vector<float> rhos;
   smooth_knn_dist(distance_view, sigmas, rhos, n_threads);
 
   std::vector<int> raw_counts(static_cast<std::size_t>(n), 0);
-  std::vector<int> raw_offsets(static_cast<std::size_t>(n) + 1u, 0);
+  std::vector<Offset> raw_offsets(static_cast<std::size_t>(n) + 1u, 0);
   auto count_directed_worker = [&](const int begin_row, const int end_row, const int) {
     std::vector<int> order(static_cast<std::size_t>(k));
     std::vector<char> selected(static_cast<std::size_t>(k), 0);
@@ -1545,13 +1598,20 @@ CsrGraphNative build_graph_csr_native_direct_values(const IntegerMatrix& indices
   };
   parallel_for_chunks(n, n_threads, count_directed_worker);
   for (int i = 0; i < n; ++i) {
+    const auto previous = static_cast<std::uint64_t>(
+      raw_offsets[static_cast<std::size_t>(i)]);
+    const auto count = static_cast<std::uint64_t>(
+      raw_counts[static_cast<std::size_t>(i)]);
+    if (count > std::numeric_limits<Offset>::max() - previous) {
+      Rcpp::stop("Directed CSR offsets exceed their selected width.");
+    }
     raw_offsets[static_cast<std::size_t>(i + 1)] =
-      raw_offsets[static_cast<std::size_t>(i)] + raw_counts[static_cast<std::size_t>(i)];
+      static_cast<Offset>(previous + count);
   }
 
   std::vector<int> directed_neighbors(static_cast<std::size_t>(raw_offsets[static_cast<std::size_t>(n)]));
   std::vector<float> directed_weights(static_cast<std::size_t>(raw_offsets[static_cast<std::size_t>(n)]));
-  std::vector<int> cursor = raw_offsets;
+  std::vector<Offset> cursor = raw_offsets;
   auto fill_directed_worker = [&](const int begin_row, const int end_row, const int) {
     std::vector<int> order(static_cast<std::size_t>(k));
     std::vector<char> selected(static_cast<std::size_t>(k), 0);
@@ -1571,7 +1631,7 @@ CsrGraphNative build_graph_csr_native_direct_values(const IntegerMatrix& indices
         if (neighbor < 0 || neighbor >= n || neighbor == i || !std::isfinite(d)) continue;
         const float weight = d <= rho ? 1.0f : std::exp(-(d - rho) / sigma);
         if (!std::isfinite(weight) || weight <= 0.0f) continue;
-        const int out_pos = cursor[static_cast<std::size_t>(i)]++;
+        const Offset out_pos = cursor[static_cast<std::size_t>(i)]++;
         directed_neighbors[static_cast<std::size_t>(out_pos)] = neighbor;
         directed_weights[static_cast<std::size_t>(out_pos)] = weight;
       }
@@ -1579,8 +1639,8 @@ CsrGraphNative build_graph_csr_native_direct_values(const IntegerMatrix& indices
   };
   parallel_for_chunks(n, n_threads, fill_directed_worker);
 
-  std::vector<int> directed_offsets(static_cast<std::size_t>(n) + 1u, 0);
-  const int write = compact_directed_rows_inplace(
+  std::vector<Offset> directed_offsets(static_cast<std::size_t>(n) + 1u, 0);
+  const Offset write = compact_directed_rows_inplace(
     raw_offsets, cursor, directed_neighbors, directed_weights, directed_offsets, n_threads
   );
   release_vector(sigmas);
@@ -1589,16 +1649,16 @@ CsrGraphNative build_graph_csr_native_direct_values(const IntegerMatrix& indices
   release_vector(raw_offsets);
 
   const int graph_threads = effective_cpu_threads(n_threads, n);
-  std::vector<std::vector<int>> incoming_counts(
+  std::vector<std::vector<Offset>> incoming_counts(
     static_cast<std::size_t>(graph_threads),
-    std::vector<int>(static_cast<std::size_t>(n), 0)
+    std::vector<Offset>(static_cast<std::size_t>(n), 0)
   );
   auto count_incoming_worker = [&](const int begin_row, const int end_row, const int thread_id) {
     auto& local_counts = incoming_counts[static_cast<std::size_t>(thread_id)];
     for (int i = begin_row; i < end_row; ++i) {
-      const int begin = directed_offsets[static_cast<std::size_t>(i)];
-      const int end = directed_offsets[static_cast<std::size_t>(i + 1)];
-      for (int pos = begin; pos < end; ++pos) {
+      const Offset begin = directed_offsets[static_cast<std::size_t>(i)];
+      const Offset end = directed_offsets[static_cast<std::size_t>(i + 1)];
+      for (Offset pos = begin; pos < end; ++pos) {
         const int target = directed_neighbors[static_cast<std::size_t>(pos)];
         ++local_counts[static_cast<std::size_t>(target)];
       }
@@ -1606,20 +1666,26 @@ CsrGraphNative build_graph_csr_native_direct_values(const IntegerMatrix& indices
   };
   parallel_for_chunks(n, graph_threads, count_incoming_worker);
 
-  std::vector<int> incoming_offsets(static_cast<std::size_t>(n) + 1u, 0);
+  std::vector<Offset> incoming_offsets(static_cast<std::size_t>(n) + 1u, 0);
   for (int i = 0; i < n; ++i) {
-    int row_count = 0;
+    std::uint64_t row_count = 0;
     for (int t = 0; t < graph_threads; ++t) {
       row_count += incoming_counts[static_cast<std::size_t>(t)][static_cast<std::size_t>(i)];
     }
+    const auto previous = static_cast<std::uint64_t>(
+      incoming_offsets[static_cast<std::size_t>(i)]);
+    if (row_count > std::numeric_limits<Offset>::max() - previous) {
+      Rcpp::stop("Incoming CSR offsets exceed their selected width.");
+    }
     incoming_offsets[static_cast<std::size_t>(i + 1)] =
-      incoming_offsets[static_cast<std::size_t>(i)] + row_count;
+      static_cast<Offset>(previous + row_count);
   }
 
   for (int i = 0; i < n; ++i) {
-    int start = incoming_offsets[static_cast<std::size_t>(i)];
+    Offset start = incoming_offsets[static_cast<std::size_t>(i)];
     for (int t = 0; t < graph_threads; ++t) {
-      const int count = incoming_counts[static_cast<std::size_t>(t)][static_cast<std::size_t>(i)];
+      const Offset count = incoming_counts[
+        static_cast<std::size_t>(t)][static_cast<std::size_t>(i)];
       incoming_counts[static_cast<std::size_t>(t)][static_cast<std::size_t>(i)] = start;
       start += count;
     }
@@ -1630,11 +1696,12 @@ CsrGraphNative build_graph_csr_native_direct_values(const IntegerMatrix& indices
   auto fill_incoming_worker = [&](const int begin_row, const int end_row, const int thread_id) {
     auto& local_cursor = incoming_counts[static_cast<std::size_t>(thread_id)];
     for (int i = begin_row; i < end_row; ++i) {
-      const int begin = directed_offsets[static_cast<std::size_t>(i)];
-      const int end = directed_offsets[static_cast<std::size_t>(i + 1)];
-      for (int pos = begin; pos < end; ++pos) {
+      const Offset begin = directed_offsets[static_cast<std::size_t>(i)];
+      const Offset end = directed_offsets[static_cast<std::size_t>(i + 1)];
+      for (Offset pos = begin; pos < end; ++pos) {
         const int target = directed_neighbors[static_cast<std::size_t>(pos)];
-        const int out_pos = local_cursor[static_cast<std::size_t>(target)]++;
+        const Offset out_pos = local_cursor[
+          static_cast<std::size_t>(target)]++;
         incoming_neighbors[static_cast<std::size_t>(out_pos)] = i;
         incoming_weights[static_cast<std::size_t>(out_pos)] =
           directed_weights[static_cast<std::size_t>(pos)];
@@ -1646,12 +1713,12 @@ CsrGraphNative build_graph_csr_native_direct_values(const IntegerMatrix& indices
 
   auto merge_union_row = [&](const int i,
                              const bool write_output,
-                             int& output_pos,
-                             CsrGraphNative& graph) {
-    int out_pos = directed_offsets[static_cast<std::size_t>(i)];
-    const int out_end = directed_offsets[static_cast<std::size_t>(i + 1)];
-    int in_pos = incoming_offsets[static_cast<std::size_t>(i)];
-    const int in_end = incoming_offsets[static_cast<std::size_t>(i + 1)];
+                             Offset& output_pos,
+                             CsrGraphNativeTyped<Offset>& graph) {
+    Offset out_pos = directed_offsets[static_cast<std::size_t>(i)];
+    const Offset out_end = directed_offsets[static_cast<std::size_t>(i + 1)];
+    Offset in_pos = incoming_offsets[static_cast<std::size_t>(i)];
+    const Offset in_end = incoming_offsets[static_cast<std::size_t>(i + 1)];
     int count = 0;
     while (out_pos < out_end || in_pos < in_end) {
       const int out_nb = out_pos < out_end ?
@@ -1695,33 +1762,95 @@ CsrGraphNative build_graph_csr_native_direct_values(const IntegerMatrix& indices
 
   std::vector<int>& final_counts = raw_counts;
   std::fill(final_counts.begin(), final_counts.end(), 0);
-  CsrGraphNative dummy_graph;
+  CsrGraphNativeTyped<Offset> dummy_graph;
   parallel_for_chunks(n, n_threads, [&](const int begin_row, const int end_row, const int) {
     for (int i = begin_row; i < end_row; ++i) {
-      int ignored_output_pos = 0;
+      Offset ignored_output_pos = 0;
       final_counts[static_cast<std::size_t>(i)] =
         merge_union_row(i, false, ignored_output_pos, dummy_graph);
     }
   });
 
-  CsrGraphNative graph;
-  graph.offsets.resize(static_cast<std::size_t>(n) + 1u, 0);
-  for (int i = 0; i < n; ++i) {
-    graph.offsets[static_cast<std::size_t>(i + 1)] =
-      graph.offsets[static_cast<std::size_t>(i)] + final_counts[static_cast<std::size_t>(i)];
+  CsrGraphNativeTyped<Offset> graph;
+  auto offsets = FastembedrCsrOffsetStorage::from_counts(final_counts);
+  if (offsets.edges() > std::numeric_limits<Offset>::max()) {
+    Rcpp::stop("Symmetric CSR offsets exceed their selected width.");
   }
-  const int nnz = graph.offsets[static_cast<std::size_t>(n)];
+  graph.offsets.resize(static_cast<std::size_t>(n) + 1u);
+  for (int i = 0; i <= n; ++i) {
+    graph.offsets[static_cast<std::size_t>(i)] =
+      static_cast<Offset>(offsets.offset(i));
+  }
+  const Offset nnz = graph.offsets[static_cast<std::size_t>(n)];
   graph.neighbors.resize(static_cast<std::size_t>(nnz));
   graph.weights.resize(static_cast<std::size_t>(nnz));
   parallel_for_chunks(n, n_threads, [&](const int begin_row, const int end_row, const int) {
     for (int i = begin_row; i < end_row; ++i) {
-      int output_pos = graph.offsets[static_cast<std::size_t>(i)];
+      Offset output_pos = graph.offsets[static_cast<std::size_t>(i)];
       merge_union_row(i, true, output_pos, graph);
     }
   });
 
-  attach_csr_epoch_schedule(graph);
+  release_vector(directed_neighbors);
+  release_vector(directed_weights);
+  release_vector(incoming_neighbors);
+  release_vector(incoming_weights);
+  release_vector(directed_offsets);
+  release_vector(incoming_offsets);
+  release_vector(final_counts);
+  if (schedule) {
+    attach_csr_epoch_schedule(graph);
+  } else {
+    for (const float weight : graph.weights) {
+      graph.max_weight = std::max(graph.max_weight, weight);
+    }
+  }
   return graph;
+}
+
+CsrGraphNative build_graph_csr_native_direct_values(
+    const IntegerMatrix& indices,
+    const std::vector<float>& distance_values,
+    const int edge_budget, const int n_threads,
+    const int index_offset, const int col_start, const int n_cols) {
+  const int kept_k = std::min(n_cols, std::max(1, edge_budget));
+  require_resident_csr_capacity(indices.nrow(), kept_k);
+  return build_graph_csr_native_direct_values_typed<int>(
+    indices, distance_values, edge_budget, n_threads,
+    index_offset, col_start, n_cols);
+}
+
+Rcpp::List wrap_wide_csr_graph(const CsrGraphNativeWide& graph,
+                              const int rows, const bool float_input) {
+  Rcpp::NumericVector offsets(graph.offsets.size());
+  for (std::size_t row = 0; row < graph.offsets.size(); ++row) {
+    const auto value = graph.offsets[row];
+    if (value > (std::uint64_t{1} << 53)) {
+      Rcpp::stop("CSR offsets exceed exact R numeric representation.");
+    }
+    offsets[static_cast<R_xlen_t>(row)] = static_cast<double>(value);
+  }
+  return Rcpp::List::create(
+    Rcpp::Named("offsets") = offsets,
+    Rcpp::Named("neighbors") = Rcpp::wrap(graph.neighbors),
+    Rcpp::Named("weights") = Rcpp::wrap(graph.weights),
+    Rcpp::Named("epochs_per_sample") = R_NilValue,
+    Rcpp::Named("max_weight") = graph.max_weight,
+    Rcpp::Named("n") = rows,
+    Rcpp::Named("nnz") = static_cast<double>(graph.neighbors.size()),
+    Rcpp::Named("offset_dtype") = "uint64",
+    Rcpp::Named("distance_type") = float_input ? "float32" : "double"
+  );
+}
+
+Rcpp::List build_wide_csr_graph(const IntegerMatrix& indices,
+    const std::vector<float>& distances, const int edge_budget,
+    const int n_threads, const int index_offset,
+    const int col_start, const int n_cols, const bool float_input) {
+  auto graph = build_graph_csr_native_direct_values_typed<
+    std::uint64_t>(indices, distances, edge_budget, n_threads,
+                   index_offset, col_start, n_cols, false);
+  return wrap_wide_csr_graph(graph, indices.nrow(), float_input);
 }
 
 CsrGraphNative build_graph_csr_native_direct(const IntegerMatrix& indices,
@@ -1752,6 +1881,7 @@ CsrGraphNative build_graph_csr_native(const IntegerMatrix& indices,
   }
   const int k = n_cols;
   const int kept_k = std::min(k, std::max(1, edge_budget));
+  require_resident_csr_capacity(n, kept_k);
   int min_idx = std::numeric_limits<int>::max();
   int max_idx = std::numeric_limits<int>::min();
   for (int i = 0; i < n; ++i) {
@@ -2568,9 +2698,9 @@ NumericMatrix initialize_layout_csr_cuda_diffusion(const int n,
         float sx = 0.0f;
         float sy = 0.0f;
         float sw = 0.0f;
-        const int begin = offsets[row];
-        const int end = offsets[row + 1];
-        for (int pos = begin; pos < end; ++pos) {
+        const auto begin = static_cast<std::size_t>(offsets[row]);
+        const auto end = static_cast<std::size_t>(offsets[row + 1]);
+        for (std::size_t pos = begin; pos < end; ++pos) {
           const int nb = neighbors[pos] - index_offset;
           const float w = static_cast<float>(weights[pos]);
           if (nb < 0 || nb >= n || nb == row || w <= 0.0f || !std::isfinite(w)) continue;
@@ -3050,8 +3180,12 @@ NumericMatrix optimize_layout_csr(const int n,
                                   const bool use_init_embedding = false,
                                   const std::vector<float>* precomputed_epochs_per_sample = nullptr,
                                   const float precomputed_max_weight = 0.0f) {
-  const int nnz = offsets[n];
+  const std::size_t nnz = static_cast<std::size_t>(offsets[n]);
   if (nnz == 0) Rcpp::stop("The CSR graph has no usable UMAP edges.");
+  if (!use_init_embedding && nnz > static_cast<std::size_t>(
+      std::numeric_limits<int>::max())) {
+    Rcpp::stop("Wide CSR spectral initialization is not qualified.");
+  }
 
   const bool has_precomputed_schedule =
     precomputed_epochs_per_sample != nullptr &&
@@ -3064,9 +3198,9 @@ NumericMatrix optimize_layout_csr(const int n,
     0.0;
   if (!has_precomputed_schedule) {
     for (int row = 0; row < n; ++row) {
-      const int begin = offsets[row];
-      const int end = offsets[row + 1];
-      for (int pos = begin; pos < end; ++pos) {
+      const auto begin = static_cast<std::size_t>(offsets[row]);
+      const auto end = static_cast<std::size_t>(offsets[row + 1]);
+      for (std::size_t pos = begin; pos < end; ++pos) {
         const int nb = neighbors[pos] - index_offset;
         if (nb >= 0 && nb < n && nb != row) {
           max_weight = std::max(max_weight, static_cast<double>(weights[pos]));
@@ -3079,35 +3213,48 @@ NumericMatrix optimize_layout_csr(const int n,
   const double min_sample_weight = n_epochs > 0 ?
     max_weight / static_cast<double>(n_epochs) :
     0.0;
+  using OffsetValue = typename OffsetVec::value_type;
+  using EdgePosition = typename std::conditional<
+    sizeof(OffsetValue) <= 4, int, std::uint64_t>::type;
   std::vector<int> spectral_rows;
   std::vector<int> spectral_pos;
   std::vector<int> active_rows;
-  std::vector<int> active_pos;
-  spectral_rows.reserve(static_cast<std::size_t>(std::max(1, nnz / 2)));
-  spectral_pos.reserve(static_cast<std::size_t>(std::max(1, nnz / 2)));
-  active_rows.reserve(static_cast<std::size_t>(std::max(1, nnz)));
-  active_pos.reserve(static_cast<std::size_t>(std::max(1, nnz)));
-  for (int row = 0; row < n; ++row) {
-    const int begin = offsets[row];
-    const int end = offsets[row + 1];
-    for (int pos = begin; pos < end; ++pos) {
-      const int nb = neighbors[pos] - index_offset;
-      if (nb >= 0 && nb < n && nb != row) {
-        if (row < nb) {
+  std::vector<EdgePosition> active_pos;
+  if (!use_init_embedding) {
+    spectral_rows.reserve(std::max<std::size_t>(1, nnz / 2));
+    spectral_pos.reserve(std::max<std::size_t>(1, nnz / 2));
+  }
+  active_rows.reserve(std::max<std::size_t>(1, nnz));
+  active_pos.reserve(std::max<std::size_t>(1, nnz));
+  const auto row_offset = [&](std::uint64_t row) {
+    return static_cast<std::uint64_t>(offsets[
+      static_cast<std::size_t>(row)]);
+  };
+  fastembedr_csr_row_tiles(n, row_offset, 0, nnz, 65536,
+    [&](std::uint64_t base, std::uint32_t local,
+        std::uint32_t count, std::uint64_t row_id) {
+      const int row = static_cast<int>(row_id);
+      for (std::uint32_t item = 0; item < count; ++item) {
+        const auto pos = static_cast<std::size_t>(base + local + item);
+        const int nb = neighbors[pos] - index_offset;
+        if (nb < 0 || nb >= n || nb == row) continue;
+        if (!use_init_embedding && row < nb) {
           spectral_rows.push_back(row);
-          spectral_pos.push_back(pos);
+          spectral_pos.push_back(static_cast<int>(pos));
         }
         if (weights[pos] >= min_sample_weight) {
           active_rows.push_back(row);
-          active_pos.push_back(pos);
+          active_pos.push_back(static_cast<EdgePosition>(pos));
         }
       }
-    }
-  }
+    });
   if (active_pos.empty()) Rcpp::stop("The CSR graph has no edges sampled by n_epochs.");
-  if (spectral_pos.empty()) {
+  if (!use_init_embedding && spectral_pos.empty()) {
     spectral_rows = active_rows;
-    spectral_pos = active_pos;
+    spectral_pos.reserve(active_pos.size());
+    for (const auto pos : active_pos) {
+      spectral_pos.push_back(static_cast<int>(pos));
+    }
   }
 
   std::vector<int> active_tails(active_pos.size());
@@ -3151,6 +3298,10 @@ NumericMatrix optimize_layout_csr(const int n,
       scale_embedding_sdev(embedding, init_scale);
     }
   }
+  const std::size_t active_edge_count = active_pos.size();
+  release_vector(active_pos);
+  release_vector(spectral_rows);
+  release_vector(spectral_pos);
   if (n_epochs == 0) {
     return embedding;
   }
@@ -3167,7 +3318,9 @@ NumericMatrix optimize_layout_csr(const int n,
   double* emb_y = emb + n;
   double* emb_z = n_components == 3 ? emb + 2 * n : nullptr;
 
-  const int threads = effective_cpu_threads(n_threads, static_cast<int>(active_pos.size()));
+  const int threads = effective_cpu_threads(n_threads,
+    static_cast<int>(std::min(active_edge_count,
+      static_cast<std::size_t>(std::numeric_limits<int>::max()))));
   if ((n_components == 2 || n_components == 3) && threads > 1 && n >= 10000) {
     const int* active_rows_ptr = active_rows.data();
     const int* active_tails_ptr = active_tails.data();
@@ -3208,11 +3361,11 @@ NumericMatrix optimize_layout_csr(const int n,
     ReusableBarrier barrier(threads);
     std::vector<std::size_t> worker_begin(static_cast<std::size_t>(threads) + 1u, 0u);
     worker_begin[0] = 0u;
-    worker_begin[static_cast<std::size_t>(threads)] = active_pos.size();
+    worker_begin[static_cast<std::size_t>(threads)] = active_edge_count;
     for (int t = 1; t < threads; ++t) {
       std::size_t boundary =
-        active_pos.size() * static_cast<std::size_t>(t) / threads;
-      while (boundary < active_pos.size() &&
+        active_edge_count * static_cast<std::size_t>(t) / threads;
+      while (boundary < active_edge_count &&
              active_rows_ptr[boundary] == active_rows_ptr[boundary - 1u]) {
         ++boundary;
       }
@@ -3341,9 +3494,9 @@ NumericMatrix optimize_layout_csr(const int n,
           std::fill(delta.begin(), delta.end(), 0.0f);
 
           const std::size_t batch_begin =
-            active_pos.size() * static_cast<std::size_t>(batch) / sync_batches;
+            active_edge_count * static_cast<std::size_t>(batch) / sync_batches;
           const std::size_t batch_end =
-            active_pos.size() * static_cast<std::size_t>(batch + 1) / sync_batches;
+            active_edge_count * static_cast<std::size_t>(batch + 1) / sync_batches;
           const std::size_t batch_size = batch_end - batch_begin;
           const std::size_t begin =
             batch_begin + batch_size * static_cast<std::size_t>(t) / threads;
@@ -3430,7 +3583,7 @@ NumericMatrix optimize_layout_csr(const int n,
 
   for (int epoch = 0; epoch < n_epochs; ++epoch) {
     const double alpha = learning_rate * (1.0 - static_cast<double>(epoch) / n_epochs);
-    for (std::size_t i = 0; i < active_pos.size(); ++i) {
+    for (std::size_t i = 0; i < active_edge_count; ++i) {
       if (epoch_of_next_sample[i] > epoch) continue;
       const int j = active_rows[i];
       const int k = active_tails[i];
@@ -3892,9 +4045,9 @@ Rcpp::List knn_connectivity_range_cpp(IntegerMatrix indices,
   const int index_offset = (min_idx >= 1 && max_idx <= n) ? 1 : 0;
 
   DisjointSet dsu(n);
-  int valid_edges = 0;
-  int self_edges = 0;
-  int invalid_edges = 0;
+  std::uint64_t valid_edges = 0;
+  std::uint64_t self_edges = 0;
+  std::uint64_t invalid_edges = 0;
   for (int i = 0; i < n; ++i) {
     for (int j = 0; j < k; ++j) {
       const int neighbor = indices(i, j + col_start) - index_offset;
@@ -3935,9 +4088,12 @@ Rcpp::List knn_connectivity_range_cpp(IntegerMatrix indices,
     Rcpp::Named("largest_component_size") = largest_component_size,
     Rcpp::Named("largest_component_fraction") = largest_fraction,
     Rcpp::Named("singleton_count") = singleton_count,
-    Rcpp::Named("valid_edge_count") = valid_edges,
-    Rcpp::Named("self_edge_count") = self_edges,
-    Rcpp::Named("invalid_edge_count") = invalid_edges,
+    Rcpp::Named("valid_edge_count") =
+      static_cast<double>(valid_edges),
+    Rcpp::Named("self_edge_count") =
+      static_cast<double>(self_edges),
+    Rcpp::Named("invalid_edge_count") =
+      static_cast<double>(invalid_edges),
     Rcpp::Named("index_offset") = index_offset
   );
 }
@@ -3984,7 +4140,8 @@ Rcpp::List umap_graph_csr_float_cpp(IntegerMatrix indices,
                                     int col_start,
                                     int n_cols,
                                     int edge_budget,
-                                    int n_threads) {
+                                    int n_threads,
+                                    bool force_wide = false) {
   const auto dims = distance_sexp_dims(distances);
   if (indices.nrow() != dims.first || indices.ncol() != dims.second) {
     Rcpp::stop("indices and distances must have the same dimensions");
@@ -4020,6 +4177,13 @@ Rcpp::List umap_graph_csr_float_cpp(IntegerMatrix indices,
   std::vector<float> distance_values = copy_distances_float_sexp(
     distances, n_threads, col_start, n_cols
   );
+  const auto offset_plan = fastembedr_csr_offset_plan(n, kept_k);
+  if (force_wide || offset_plan.kind ==
+      FastembedrCsrOffsetKind::Uint64) {
+    return build_wide_csr_graph(indices, distance_values, edge_budget,
+      n_threads, index_offset, col_start, n_cols,
+      is_float32_s4(distances));
+  }
   CsrGraphNative graph = build_graph_csr_native_direct_values(
     indices, distance_values, edge_budget, n_threads, index_offset, col_start, n_cols
   );
@@ -4032,6 +4196,7 @@ Rcpp::List umap_graph_csr_float_cpp(IntegerMatrix indices,
     Rcpp::Named("max_weight") = graph.max_weight,
     Rcpp::Named("n") = indices.nrow(),
     Rcpp::Named("nnz") = static_cast<int>(graph.neighbors.size()),
+    Rcpp::Named("offset_dtype") = "int32",
     Rcpp::Named("distance_type") = is_float32_s4(distances) ? "float32" : "double"
   );
 }
@@ -4055,6 +4220,7 @@ Rcpp::List umap_graph_csr_cuda_like_cpp(IntegerMatrix indices,
   const int n = indices.nrow();
   const int k = n_cols;
   const int kept_k = std::min(k, std::max(1, edge_budget));
+  require_resident_csr_capacity(n, kept_k);
   const int width = std::min(256, std::max(kept_k, 2 * kept_k));
   int min_idx = std::numeric_limits<int>::max();
   int max_idx = std::numeric_limits<int>::min();
@@ -4248,6 +4414,7 @@ Rcpp::List umap_graph_csr_binary_union_cpp(IntegerMatrix indices,
   if (n_threads < 1) Rcpp::stop("n_threads must be positive");
   const int n = indices.nrow();
   if (n < 2) Rcpp::stop("indices must have at least two rows");
+  require_resident_csr_capacity(n, n_cols);
 
   int min_idx = std::numeric_limits<int>::max();
   int max_idx = std::numeric_limits<int>::min();
@@ -5202,6 +5369,13 @@ NumericMatrix knn_umap_refine_rows_cpp(IntegerMatrix indices,
   if (n < 2) Rcpp::stop("init_embedding must have at least two rows");
   if (m < 1) return Rcpp::clone(init_embedding);
   if (k < 1) Rcpp::stop("indices must have at least one neighbor column");
+  if (static_cast<std::uint64_t>(m) *
+      static_cast<std::uint64_t>(k) >
+      static_cast<std::uint64_t>(
+        std::numeric_limits<int>::max())) {
+    Rcpp::stop("Masked resident UMAP CSR exceeds signed 32-bit "
+               "offset capacity.");
+  }
 
   std::vector<int> rows(static_cast<std::size_t>(m));
   std::vector<unsigned char> update_mask(static_cast<std::size_t>(n), 0u);
@@ -5317,6 +5491,180 @@ NumericMatrix fast_knn_umap_csr_cpp(IntegerVector offsets,
     negative_sample_rate, learning_rate, repulsion_strength, spectral_n_iter,
     n_threads, init_scale, seed, verbose
   );
+}
+
+void umap_wide_edge_step(std::atomic<float>* layout, const int n,
+    const int head, const int tail, const std::uint64_t edge,
+    const float period, const int epoch, const int negative_rate,
+    const float alpha, const float a, const float b,
+    const float repulsion, const int seed) {
+  if (positive_samples_this_epoch_umap_schedule(period, epoch) == 0) {
+    return;
+  }
+  const auto h = static_cast<std::size_t>(head) * 2u;
+  const auto t = static_cast<std::size_t>(tail) * 2u;
+  const float hx = layout[h].load(std::memory_order_relaxed);
+  const float hy = layout[h + 1].load(std::memory_order_relaxed);
+  const float tx = layout[t].load(std::memory_order_relaxed);
+  const float ty = layout[t + 1].load(std::memory_order_relaxed);
+  const float dx = hx - tx;
+  const float dy = hy - ty;
+  const float d2 = std::max(std::numeric_limits<float>::epsilon(),
+                            dx * dx + dy * dy);
+  const float power = umap_powf_fast(d2, b);
+  const float coefficient = -2.0f * a * b *
+    (power / d2) / (a * power + 1.0f);
+  const float gx = clip4f(coefficient * dx) * alpha;
+  const float gy = clip4f(coefficient * dy) * alpha;
+  atomic_add_float(layout[h], gx);
+  atomic_add_float(layout[h + 1], gy);
+  atomic_add_float(layout[t], -gx);
+  atomic_add_float(layout[t + 1], -gy);
+
+  const int negatives = negative_samples_this_epoch_umap_schedule(
+    period, negative_rate, epoch);
+  for (int sample = 0; sample < negatives; ++sample) {
+    const int other = deterministic_vertex_cuda_style(
+      n, seed, epoch, head, static_cast<std::size_t>(edge), sample);
+    if (other == head || other == tail) continue;
+    const auto p = static_cast<std::size_t>(other) * 2u;
+    const float current_x = layout[h].load(std::memory_order_relaxed);
+    const float current_y = layout[h + 1].load(std::memory_order_relaxed);
+    const float ndx = current_x - layout[p].load(std::memory_order_relaxed);
+    const float ndy = current_y - layout[p + 1].load(
+      std::memory_order_relaxed);
+    const float nd2 = std::max(
+      std::numeric_limits<float>::epsilon(), ndx * ndx + ndy * ndy);
+    const float nd2b = umap_powf_fast(nd2, b);
+    const float force = repulsion * 2.0f * b /
+      ((0.001f + nd2) * (a * nd2b + 1.0f));
+    atomic_add_float(layout[h], clip4f(force * ndx) * alpha);
+    atomic_add_float(layout[h + 1], clip4f(force * ndy) * alpha);
+  }
+}
+
+void validate_exact_wide_offsets(const NumericVector& offsets) {
+  for (R_xlen_t row = 0; row < offsets.size(); ++row) {
+    if (!std::isfinite(offsets[row]) || offsets[row] < 0.0 ||
+        offsets[row] != std::floor(offsets[row]) ||
+        offsets[row] > 9007199254740992.0) {
+      Rcpp::stop("Wide CSR offsets must be exact non-negative integers.");
+    }
+  }
+}
+
+// [[Rcpp::export]]
+NumericMatrix fast_knn_umap_csr_wide_diffusion_cpp(
+    NumericVector offsets, IntegerVector neighbors, SEXP weights,
+    int n_iterations, int n_threads, int seed,
+    double init_scale = NA_REAL) {
+  if (offsets.size() < 3 || n_iterations < 1 || n_threads < 1) {
+    Rcpp::stop("Invalid wide CSR diffusion controls.");
+  }
+  validate_exact_wide_offsets(offsets);
+  const auto weights_f = copy_float_vector_sexp(
+    weights, "CSR weights", true);
+  const int index_offset = validate_csr_inputs(
+    offsets, neighbors, weights_f);
+  const int n = static_cast<int>(offsets.size() - 1);
+  NumericMatrix result = initialize_layout_csr_cuda_diffusion(
+    n, offsets, neighbors, weights_f, index_offset,
+    n_iterations, n_threads, seed);
+  if (std::isfinite(init_scale) && init_scale > 0.0) {
+    scale_embedding_sdev(result, init_scale);
+  }
+  result.attr("csr_offset_dtype") = "uint64";
+  result.attr("init_backend") = "cpu_wide_csr_diffusion";
+  return result;
+}
+
+// [[Rcpp::export]]
+NumericMatrix fast_knn_umap_csr_wide_init_cpp(
+    NumericVector offsets, IntegerVector neighbors, SEXP weights,
+    NumericMatrix init_embedding, int n_epochs, double min_dist,
+    int negative_sample_rate, double learning_rate,
+    double repulsion_strength, int n_threads, int seed,
+    int edge_tile_capacity = 65536) {
+  if (init_embedding.ncol() != 2 || n_epochs < 1 ||
+      min_dist < 0.0 || negative_sample_rate < 0 ||
+      learning_rate <= 0.0 || repulsion_strength <= 0.0 ||
+      n_threads < 1 || edge_tile_capacity < 1 ||
+      edge_tile_capacity > std::numeric_limits<int>::max()) {
+    Rcpp::stop("Invalid wide CSR UMAP controls.");
+  }
+  const int n = init_embedding.nrow();
+  if (offsets.size() != static_cast<R_xlen_t>(n) + 1) {
+    Rcpp::stop("Wide CSR offsets do not match initialization rows.");
+  }
+  validate_exact_wide_offsets(offsets);
+  const auto weights_f = copy_float_vector_sexp(
+    weights, "CSR weights", true);
+  const int index_offset = validate_csr_inputs(
+    offsets, neighbors, weights_f);
+  float max_weight = 0.0f;
+  for (const float value : weights_f) {
+    max_weight = std::max(max_weight, value);
+  }
+  if (!(max_weight > 0.0f)) {
+    Rcpp::stop("The wide CSR graph has no usable UMAP edges.");
+  }
+  const auto curve = find_ab_params(1.0, min_dist);
+  const float a = static_cast<float>(curve.first);
+  const float b = static_cast<float>(curve.second);
+  const float gamma = static_cast<float>(repulsion_strength);
+  std::vector<std::atomic<float>> layout(
+    static_cast<std::size_t>(n) * 2u);
+  for (int row = 0; row < n; ++row) {
+    layout[static_cast<std::size_t>(row) * 2u].store(
+      static_cast<float>(init_embedding(row, 0)),
+      std::memory_order_relaxed);
+    layout[static_cast<std::size_t>(row) * 2u + 1u].store(
+      static_cast<float>(init_embedding(row, 1)),
+      std::memory_order_relaxed);
+  }
+  const auto row_offset = [&](std::uint64_t row) {
+    return static_cast<std::uint64_t>(offsets[
+      static_cast<R_xlen_t>(row)]);
+  };
+  const int threads = effective_cpu_threads(n_threads, n);
+  for (int epoch = 0; epoch < n_epochs; ++epoch) {
+    const float alpha = static_cast<float>(learning_rate) *
+      (1.0f - static_cast<float>(epoch) /
+        static_cast<float>(n_epochs));
+    parallel_for_chunks(n, threads,
+      [&](const int begin_row, const int end_row, const int) {
+      for (int row = begin_row; row < end_row; ++row) {
+        fastembedr_csr_edge_tiles(row_offset(row),
+          row_offset(static_cast<std::uint64_t>(row) + 1u),
+          static_cast<std::uint32_t>(edge_tile_capacity),
+          [&](std::uint64_t base, std::uint32_t count) {
+          for (std::uint32_t local = 0; local < count; ++local) {
+            const auto edge = base + local;
+            const int tail = neighbors[static_cast<R_xlen_t>(edge)] -
+              index_offset;
+            const float weight = weights_f[
+              static_cast<std::size_t>(edge)];
+            if (weight < max_weight / n_epochs) continue;
+            const float period = max_weight /
+              std::max(weight, 1.0e-6f);
+            umap_wide_edge_step(layout.data(), n, row, tail, edge,
+              period, epoch, negative_sample_rate, alpha, a, b,
+              gamma, seed);
+          }
+        });
+      }
+    });
+  }
+  NumericMatrix output(n, 2);
+  for (int row = 0; row < n; ++row) {
+    const auto pos = static_cast<std::size_t>(row) * 2u;
+    output(row, 0) = layout[pos].load(std::memory_order_relaxed);
+    output(row, 1) = layout[pos + 1u].load(
+      std::memory_order_relaxed);
+  }
+  output.attr("csr_offset_dtype") = "uint64";
+  output.attr("optimizer_schedule") = "stateless_edge_tiles";
+  return output;
 }
 
 // [[Rcpp::export]]
