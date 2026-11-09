@@ -23,11 +23,11 @@ unavailable explicit accelerator request raises an error.
 | --- | --- | --- | --- | --- |
 | `precompute_knn()` / internal one-call KNN | native float32 exact below 5,000 rows; faissR HNSW otherwise | native exact or recall-tuned IVF-Flat | cuVS brute-force exact or IVF-Flat | KNN selection remains internal; the public function exposes only `k`, metric, backend, and CPU thread count. CUDA results stay device-resident. |
 | `umap_init()` | native sparse graph initialization | native Metal initialization from prepared graph state | native CUDA initialization when compiled | Returns reusable graph and initial coordinates; a raw CUDA diagnostic call may materialize KNN on the host, whereas ordinary one-call CUDA UMAP remains resident. |
-| `umap_knn()` | native C++ CSR graph and optimizer | 2D: ordered CPU half followed by native Metal `atomic_inplace` half; 3D: native Metal optimizer | native CUDA pure-atomic optimizer; experimental resident NCCL route on two to four GPUs | The 2D Metal CPU and GPU epoch counts are returned in metadata. Coordinated CUDA builds the CSR graph in host RAM and keeps layouts and updates on GPUs. Small two-A10G 2D/3D device checks passed; performance remains unqualified. |
+| `umap_knn()` | native C++ CSR graph and optimizer | 2D: ordered CPU half followed by native Metal `atomic_inplace` half; 3D: native Metal optimizer | native CUDA pure-atomic optimizer; experimental resident NCCL multi-GPU route | The 2D Metal CPU and GPU epoch counts are returned in metadata. Coordinated CUDA builds the CSR graph in host RAM and keeps layouts and updates on GPUs. Small 5-8-device routing checks passed; large-data quality and speed remain unqualified. |
 | `umap()` | native exact/faissR HNSW, then `umap_knn()` | native exact/IVF-Flat KNN, then staged 2D or native 3D Metal UMAP | native cuVS device KNN, then native CUDA UMAP; experimental resident NCCL fit with explicit devices | Coordinated CUDA materializes native KNN in host RAM; no SSD graph or optimizer state is used. Other CUDA KNN fits stay on device. Metal IVF exact-reranks candidates in the original dimensions. |
-| `tsne_knn()` | native C++ FFT-grid optimizer | native Metal FFT-grid optimizer | native CUDA FFT-grid optimizer using cuFFT; experimental resident NCCL route on two to four GPUs | Use `Y_init` or `init_data` for explicit PCA initialization. Coordinated CUDA builds sparse affinities in host RAM and keeps optimizer state on the GPUs. Small two-A10G 2D/3D device checks passed; larger quality, memory, and speed remain unqualified. |
+| `tsne_knn()` | native C++ FFT-grid optimizer | native Metal FFT-grid optimizer | native CUDA FFT-grid optimizer using cuFFT; experimental resident NCCL multi-GPU route | Use `Y_init` or `init_data` for explicit PCA initialization. Coordinated CUDA builds sparse affinities in host RAM and keeps optimizer state on the GPUs. Small 5-8-device routing checks passed; larger quality, memory, and speed remain unqualified. |
 | `tsne()` | native exact/faissR HNSW, then `tsne_knn()` | native exact/IVF-Flat, then Metal t-SNE | native cuVS device KNN, then CUDA t-SNE; experimental resident NCCL fit with explicit devices | CPU uses exact search below 5,000 rows. Coordinated CUDA materializes native KNN in host RAM; no SSD graph or optimizer state is used. The package does not call Python openTSNE in public functions. |
-| `pca()` / t-SNE PCA init | float32 blocked rSVD with OpenBLAS or native products | native float32 MPS block-subspace rSVD; resident landmark score projection uses native Metal multiplication | package-native rSVD; optional RAPIDS RAFT TSVD; experimental resident two to four GPU covariance PCA | Resident and file-backed `landmarks` fit selected rows and project all input rows. File-backed PCA now accepts a count, fraction or `TRUE` through `pca()` with bounded score access; explicit row indices and partial-landmark resume are pending. CPU and single-device CUDA projection use CPU; multi-GPU CUDA projects on the requested devices. Resident multi-GPU PCA accepts a double matrix with at most 2,048 columns. GPUs split covariance and score projection; CPU solves the small eigensystem. Small two-A10G PCA and landmark projections passed. Metal landmark projection matched CPU on a 100-row device check (maximum difference `5.23e-7`); larger quality and speed remain unqualified. GPU requests never silently fall back to CPU. |
+| `pca()` / t-SNE PCA init | float32 blocked rSVD with OpenBLAS or native products | native float32 MPS block-subspace rSVD; resident landmark score projection uses native Metal multiplication | package-native rSVD; optional RAPIDS RAFT TSVD; experimental resident multi-GPU covariance PCA | Resident and file-backed `landmarks` fit selected rows and project all input rows. File-backed PCA accepts a count, fraction or `TRUE` through `pca()` with bounded score access; explicit row indices and partial-landmark resume are pending. CPU and single-device CUDA projection use CPU; multi-GPU CUDA projects on requested devices. Resident multi-GPU PCA accepts a double matrix with at most 2,048 columns. GPUs split covariance and score projection; CPU solves the small eigensystem. Small 5-8-device routing checks passed; large-data quality and speed remain unqualified. Metal landmark projection matched CPU on a 100-row device check (maximum difference `5.23e-7`). GPU requests never silently fall back to CPU. |
 | `transform_tsne()` | native fixed-reference transform | native Metal projection/transform kernels where available | native CUDA projection/transform kernels where built | Used by t-SNE landmarking. |
 | `select_landmarks()` | native selection | shared selection | shared selection | Selection is independent of the embedding method and can be reused. |
 | `precompute_query_knn()` | native exact below 5,000 reference rows; faissR HNSW otherwise | native exact/recall-tuned IVF-Flat reference-query search | native exact/IVF-Flat reference-query search | Searches only the fixed reference; CUDA output remains device resident. |
@@ -36,9 +36,9 @@ unavailable explicit accelerator request raises an error.
 | `tsne(..., landmarks = ...)` | landmark embed plus transform | native Metal path | native CUDA path | Projection quality is tracked separately. |
 | `knn_graph()` | native C++ graph construction | Metal KNN followed by native CPU graph construction | CUDA KNN followed by native CPU graph construction | A GPU label applies to neighbor search only; graph conversion is never reported as GPU work. |
 | `graph_cluster(..., landmarks = ...)` | resident reference KNN, native graph fit, all-row label vote | Metal reference KNN and native graph fit; CPU assembly and vote | CUDA reference KNN and native graph fit; CPU assembly and vote | Explicit landmark approximation with fixed reference labels and all-row membership/confidence. CPU `parallel.mode = "fit"` supports one shared multicore fit. GPU routes still need device qualification; no SSD files are used. |
-| `graph_cluster()` | native C++ Louvain, Leiden, and Pons-Latapy Walktrap; experimental coordinated CPU fit threads | native Metal Louvain and Leiden | native CUDA Louvain and Leiden; experimental coordinated two-to-four-GPU fit | CPU `parallel.mode = "fit"` shares one partition across local-move workers; its coarsening and Leiden refinement remain serial. Landmark clustering uses the same public call with `landmarks = ...`. GPU local moving/refinement uses float32 CSR; graph compaction/coarsening is package-owned C++. Multiple GPUs split graph rows and synchronize one global partition through host RAM after each color phase. The landmark graph fit can use these devices while file-backed query KNN and label voting remain streamed on CPU. Consensus and graph weighting use coordinated fits with explicit host stages. Small two-A10G Louvain/Leiden checks and a 300-row MNIST quality check passed; scaling remains unqualified. Walktrap is CPU-only. Unsupported requests fail without fallback. |
-| `umap(file_graph, ...)` | file-backed full-graph 2D/3D | file-backed full-graph 2D/3D | file-backed full-graph 2D/3D | CUDA supports explicit one to four GPUs; large-data Metal quality and speed remain under qualification. |
-| `tsne(affinity_graph, ...)` | file-backed full-graph 2D/3D | experimental mapped or bounded-stream graph 2D/3D | experimental file-backed full-graph 2D/3D | Metal streams graph chunks when selected or when auto exceeds one chunk; its layout and optimizer state remain resident. FashionMNIST 5,000 and 70,000-row 2D comparisons and checkpoint resume passed; broader quality and scale remain unqualified. CUDA accepts one to four GPUs in 2D/3D; a 17-row two-A10G 3D parity/resume check passed outside the UCT HPC, while larger-data quality and scale remain unqualified. |
+| `graph_cluster()` | native C++ Louvain, Leiden, and Pons-Latapy Walktrap; experimental coordinated CPU fit threads | native Metal Louvain and Leiden | native CUDA Louvain and Leiden; experimental coordinated multi-GPU fit | CPU `parallel.mode = "fit"` shares one partition across local-move workers; its coarsening and Leiden refinement remain serial. Landmark clustering uses the same public call with `landmarks = ...`. GPUs split graph rows and synchronize one global partition through host RAM after each color phase. The landmark graph fit can use these devices while file-backed query KNN and label voting remain streamed on CPU. Small 5-8-device Louvain routing checks and two-A10G Louvain/Leiden checks passed; large-data quality and scaling remain unqualified. Walktrap is CPU-only. Unsupported requests fail without fallback. |
+| `umap(file_graph, ...)` | file-backed full-graph 2D/3D | file-backed full-graph 2D/3D | file-backed full-graph 2D/3D | CUDA accepts explicit device lists; 5-8-device file-backed execution remains unqualified. Large-data Metal quality and speed remain under qualification. |
+| `tsne(affinity_graph, ...)` | file-backed full-graph 2D/3D | experimental mapped or bounded-stream graph 2D/3D | experimental file-backed full-graph 2D/3D | Metal streams graph chunks when selected or when auto exceeds one chunk; its layout and optimizer state remain resident. FashionMNIST 5,000 and 70,000-row 2D comparisons and checkpoint resume passed; broader quality and scale remain unqualified. CUDA accepts explicit device lists in 2D/3D; a 17-row two-A10G 3D parity/resume check passed outside the UCT HPC. A 5-8-device file-backed fit remains unqualified. |
 | `graph_cluster(file_graph, ...)` | file-backed multilevel Louvain and Leiden | file-backed multilevel Louvain and Leiden with native Metal local moves and Leiden refinement | experimental file-backed Louvain and Leiden with native CUDA local moves and refinement | Metal and CUDA stream bounded CSR chunks from SSD; CPU handles contraction, modularity, and Leiden connectivity audits. Separate multi-GPU cuGraph/Dask full-graph clustering loads the graph into GPU memory and is not SSD streaming. CUDA streaming clustering needs device qualification. |
 | `evaluate_embedding()` | native/R quality metrics | CPU metrics after final layout transfer | CPU metrics after final layout transfer | Metrics are not labelled as GPU work. |
 
@@ -50,11 +50,11 @@ backend. Precomputed KNN routes use `n_neighbors` for the same control.
 Resident landmark t-SNE applies this width to its reference fit. File-backed
 routes do not accept the explicit width control.
 
-Resident partial-landmark `tsne()` and `umap()` accept two to four CUDA
-devices for a coordinated reference fit and sharded query projection. A
-160-row two-A10G 2D/3D t-SNE device check passed. Multi-GPU landmark UMAP
-has CPU-side routing checks; its device execution and real-data quality
-remain unqualified. Neither route has established useful scaling or the
+Resident partial-landmark `tsne()` and `umap()` accept multiple CUDA
+devices for a coordinated reference fit and sharded query projection.
+Small eight-A100 routing checks passed for both methods, but large
+real-data quality and memory remain unqualified. Neither route has
+established useful scaling or the
 ability to exceed combined GPU memory. The file-backed landmark routes
 are separate implementations and must be tested outside UCT HPC.
 
@@ -97,6 +97,13 @@ coordinates can vary with scheduling even at a fixed seed; assess
 quality over repeated runs. The `n.cores_effective` field records the
 configured maximum, not a per-stage thread measurement.
 
+Resident CPU 2D fuzzy UMAP chooses int32 or uint64 CSR offsets from a
+checked edge bound. The wide path passed small edge/step parity, synthetic
+offsets above 2^31, and forced-wide 1M/10M Deep1B development fits.
+The 10M graph stayed below 2^31 edges; a real overflow-sized graph,
+full 50M output, measured peak RAM and quality remain unqualified.
+This wide route is not yet available for resident CUDA or Metal UMAP.
+
 ## Metal
 
 Metal is implemented with Objective-C++ and Metal kernels. Public Metal and CUDA
@@ -128,6 +135,13 @@ large-data quality and speed remain unqualified. The capability
 matrix labels mixed operations explicitly: Metal KNN followed by
 CPU graph assembly is not described as a fully Metal graph workflow, and CPU
 quality scoring after layout transfer is not reported as Metal computation.
+
+Real Deep1B 25M and 100M resident PCA fits completed on one M3 Ultra
+Mac, but this does not qualify 50M t-SNE or UMAP. Metal resident UMAP
+still needs a wide, row-spanning graph traversal; t-SNE also needs a
+measured affinity, FFT and optimizer memory budget. The file-backed
+Metal routes require their own large one-call, quality and recovery
+checks. No Metal multi-GPU path is claimed on this single-GPU Mac.
 
 Metal one-call KNN uses exact search below the internal size threshold and
 IVF-Flat above it. Large, high-dimensional IVF searches use a 128-dimensional
