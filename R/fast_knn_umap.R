@@ -638,16 +638,42 @@ optimize_prepared_umap_metal_wide <- function(graph, init, cfg, seed) {
     layout
 }
 
+metal_csr_needs_edge_tiles <- function(graph) {
+    if (!identical(graph$offset_dtype, "int32")) return(FALSE)
+    any(diff(graph$offsets) > 256L)
+}
+
+record_metal_tiled_policy <- function(cfg, layout) {
+    if (!identical(attr(layout, "metal_optimizer_pipeline"),
+        "metal_wide_edge_tiles")) return(cfg)
+    cfg$graph_storage <- "cpu_csr_uploaded_to_metal_tiles"
+    cfg$gpu_optimizer_mode <- "csr_edge_tiles"
+    cfg$gpu_optimizer_update_rule <- "native_metal_csr_edge_tiles"
+    cfg$gpu_optimizer_schedule <- "stateless_edge_tiles"
+    cfg
+}
+
+optimize_prepared_umap_metal_tiled <- function(graph, init, cfg, seed) {
+    tiled <- graph
+    tiled$offsets <- as.numeric(graph$offsets)
+    layout <- optimize_prepared_umap_metal_wide(
+        tiled, init, cfg, seed)
+    attr(layout, "metal_graph_input") <-
+        "resident_csr_int32_edge_tiles"
+    attr(layout, "metal_truncated_edges") <- 0L
+    layout
+}
+
 optimize_prepared_umap_metal <- function(graph, init, cfg, seed) {
     if (!embedding_metal_available_cpp()) {
         stop("Native Metal UMAP optimizer is unavailable in this build.",
             call. = FALSE
         )
     }
-    if (identical(graph$offset_dtype, "uint64")) {
-        return(optimize_prepared_umap_metal_wide(
-            graph, init, cfg, seed))
-    }
+    if (identical(graph$offset_dtype, "uint64"))
+        return(optimize_prepared_umap_metal_wide(graph, init, cfg, seed))
+    if (metal_csr_needs_edge_tiles(graph))
+        return(optimize_prepared_umap_metal_tiled(graph, init, cfg, seed))
     warm_epochs <- if (cfg$n_components == 2L)
         as.integer(cfg$n_epochs %/% 2L) else 0L
     if (warm_epochs > 0L) {
@@ -754,9 +780,12 @@ finalize_prepared_umap <- function(layout, graph, init, cfg) {
     cfg$initialization_reuse_hit <- init$reused
     cfg$init_backend <- init$backend
     wide <- identical(graph$offset_dtype, "uint64")
+    tiled <- identical(attr(layout, "metal_optimizer_pipeline"),
+        "metal_wide_edge_tiles")
     cfg$optimizer_mode <- if (wide) "csr_wide_edge_tiles" else
-        "csr_epoch_schedule"
-    cfg$optimizer_schedule <- if (wide) "stateless_edge_tiles" else
+        if (tiled) "csr_edge_tiles" else "csr_epoch_schedule"
+    cfg$optimizer_schedule <- if (wide || tiled)
+        "stateless_edge_tiles" else
         paste0("epochs_per_sample_", cfg$graph_mode, "_csr")
     if (cfg$backend == "metal") {
         cfg$metal_graph_input <- attr(layout, "metal_graph_input")

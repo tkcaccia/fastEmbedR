@@ -8786,19 +8786,8 @@ void pack_umap_csr_for_metal(const IntegerVector& offsets,
       row.push_back({nb, static_cast<float>(wd)});
     }
     if (static_cast<int>(row.size()) > kMaxMetalNeighbors) {
-      auto row_less = [](const auto& a, const auto& b) {
-        if (a.second == b.second) return a.first < b.first;
-        return a.second > b.second;
-      };
-      std::nth_element(
-        row.begin(),
-        row.begin() + kMaxMetalNeighbors,
-        row.end(),
-        row_less
-      );
-      truncated_edges += static_cast<int>(row.size()) - kMaxMetalNeighbors;
-      row.resize(kMaxMetalNeighbors);
-      std::sort(row.begin(), row.end(), row_less);
+      Rcpp::stop(
+        "Metal CSR row exceeds 256 dense neighbors; use tiled traversal.");
     }
     const int row_size = static_cast<int>(row.size());
     for (int j = 0; j < width; ++j) {

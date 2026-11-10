@@ -291,6 +291,7 @@ optimize_umap_gpu_csr <- function(graph, init, cfg, backend, seed) {
             attr(out, "metal_allocated_bytes_observed")
         cfg$metal_effective_learning_rate <-
             attr(out, "metal_effective_learning_rate")
+        cfg <- record_metal_tiled_policy(cfg, out)
         return(list(layout = out, cfg = cfg))
     }
 
