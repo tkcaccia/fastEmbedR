@@ -219,10 +219,10 @@ This run used:
 
 The benchmark intentionally does not show `graph_mode = "binary"`.
 
-### MNIST 70k Results
+### Historical MNIST 70k Results
 
-The following presentation view summarizes the publication benchmark rather
-than the single run shown below. It reports median end-to-end public-function
+The following August 2026 presentation view is exploratory and does not
+measure the current package source. It reports median public-function
 runtime and interquartile range over three seeds on linear axes with a true
 zero baseline. Bar-end labels state how many times faster the fastest method
 in each panel was (`1x` marks the fastest method). CPU and CUDA measurements

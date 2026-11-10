@@ -19,13 +19,14 @@ benchmark data. Provider-controlled or restricted datasets must be obtained
 independently under their original terms; missing data are recorded as
 unavailable rather than silently replaced.
 
-The GitHub documentation keeps one small sanity-check dataset (`iris`) and one
-large benchmark dataset (`MNIST70k`). This avoids mixing current package
-results with historical exploratory benchmarks.
+The GitHub documentation keeps one small sanity-check dataset (`iris`) and
+one historical MNIST70k example. Its source and audit status are described
+on the [Examples](examples.md) page; it is not a current-source performance
+claim or a replacement for the manuscript cohort.
 
-## Current Public Benchmark
+## Historical Public Example
 
-The current public benchmark is MNIST70k from flattened 28 x 28 images. The
+The public MNIST70k example uses flattened 28 x 28 images. Its
 results, machine specification, runtime bar plot, embedding plot, and source
 CSV are shown on the [Examples](examples.md) page.
 
@@ -77,9 +78,11 @@ The parameter table records the settings needed to interpret benchmark
 fairness: `n_neighbors`/`k`, perplexity, iterations or epochs, early
 exaggeration, learning-rate policy, initialization, distance metric, thread
 count, random seed, approximate versus exact or package-internal KNN, and
-whether KNN was precomputed or computed internally. The manuscript compares
-total elapsed runtime because Rtsne, FIt-SNE, umap, uwot, and fastEmbedR expose
-different computational boundaries.
+whether KNN was precomputed or computed internally. Complete-call
+comparisons require the same input-to-output boundary. Direct-Python fit
+times and complete R-call times are reported separately; their ratio is
+not a speedup estimate. Search accuracy, affinity support, output scope,
+and embedding quality must be shown beside timing.
 
 See [Reproducibility](reproducibility.md) for the exact commit, release-tag
 policy, archival DOI field, hardware/session metadata, CUDA/cuVS probes,

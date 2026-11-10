@@ -748,8 +748,8 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' decomposition method menu and does not call Python. Explicit unavailable GPU
 #' requests fail instead of being reported as GPU work.
 #'
-#' @param x Numeric matrix/data frame or `float::float32` matrix with
-#'   observations in rows.
+#' @param x Numeric matrix/data frame, `float::float32` matrix, or
+#'   [massive_matrix()] file descriptor with observations in rows.
 #' @param ncomp Number of principal components.
 #' @param xtest Optional test/query matrix with the same columns as `x`.
 #'   In out-of-core mode, supply a matching [massive_matrix()] descriptor;

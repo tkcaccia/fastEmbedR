@@ -326,8 +326,8 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' by fastEmbedR for the requested backend and is deliberately not a user
 #' parameter.
 #'
-#' @param data Numeric matrix, numeric data frame, or a `float::float32` matrix
-#'   with observations in rows.
+#' @param data Numeric matrix, numeric data frame, `float::float32` matrix,
+#'   or [massive_matrix()] file descriptor with observations in rows.
 #' @param k Number of non-self nearest neighbors to return.
 #' @param metric Distance metric: `"euclidean"`, `"cosine"`, or
 #'   `"correlation"`.

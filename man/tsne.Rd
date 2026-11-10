@@ -228,8 +228,12 @@ a prepared affinity graph is supplied.}
 \item{...}{Additional low-level parameters passed to \code{\link[=tsne_knn]{tsne_knn()}}.}
 }
 \value{
-A \code{fastEmbedR_embedding} object. Landmark fits also contain \code{model},
-which can be passed to \code{\link[=project_landmark_model]{project_landmark_model()}} for new observations.
+Resident fits return a \code{fastEmbedR_embedding}; landmark fits
+also contain \code{model} for \code{\link[=project_landmark_model]{project_landmark_model()}}. File-backed full
+fits return a \code{\link[=massive_matrix]{massive_matrix()}} descriptor with output and stage
+metadata. File-backed landmark projection may return a
+\code{fastEmbedR_massive_projection}. Use \code{\link[=massive_read_rows]{massive_read_rows()}} to inspect
+bounded output rows without loading the full result.
 }
 \description{
 \code{tsne()} computes or reuses a KNN graph, then runs the package-native

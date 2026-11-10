@@ -20,8 +20,8 @@ precompute_knn(
 )
 }
 \arguments{
-\item{data}{Numeric matrix, numeric data frame, or a \code{float::float32} matrix
-with observations in rows.}
+\item{data}{Numeric matrix, numeric data frame, \code{float::float32} matrix,
+or \code{\link[=massive_matrix]{massive_matrix()}} file descriptor with observations in rows.}
 
 \item{k}{Number of non-self nearest neighbors to return.}
 

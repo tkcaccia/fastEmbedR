@@ -26,8 +26,8 @@ pca(
 )
 }
 \arguments{
-\item{x}{Numeric matrix/data frame or \code{float::float32} matrix with
-observations in rows.}
+\item{x}{Numeric matrix/data frame, \code{float::float32} matrix, or
+\code{\link[=massive_matrix]{massive_matrix()}} file descriptor with observations in rows.}
 
 \item{ncomp}{Number of principal components.}
 

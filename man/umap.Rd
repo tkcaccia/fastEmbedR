@@ -40,8 +40,9 @@ umap(
 )
 }
 \arguments{
-\item{data}{Numeric matrix/data frame, or a list containing KNN \code{indices}
-and \code{distances}.}
+\item{data}{Numeric matrix/data frame, \code{float::float32} matrix,
+\code{\link[=massive_matrix]{massive_matrix()}} descriptor, prepared file-backed fuzzy graph,
+or a list containing KNN \code{indices} and \code{distances}.}
 
 \item{n_neighbors}{Number of non-self neighbors. \code{NULL} chooses the package
 default for the data size.}
@@ -74,8 +75,9 @@ uses native exact search below 5,000 rows, compiled FAISS HNSW for larger
 Euclidean searches, and native HNSW for other supported metrics.
 Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
 cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
-that threshold. The KNN result stays on the device through graph
-construction and optimization.
+that threshold. Resident CUDA KNN can stay on the device through
+graph construction and optimization; other routes record their
+actual backend by stage.
 A resident 2D Metal fit uses one CPU thread for the first half of the
 optimizer epochs, then a native Metal kernel for the remaining epochs.
 The stage counts are recorded in \code{fit$parameters}. Resident 3D Metal
@@ -200,8 +202,12 @@ uses \code{options(storage = ...)}. Explicit \code{"resident"} on a
 \code{memory_limit} check; the limit does not bound the subsequent fit.}
 }
 \value{
-A \code{fastEmbedR_embedding} object. Landmark fits also contain \code{model},
-which can be passed to \code{\link[=project_landmark_model]{project_landmark_model()}} for new observations.
+Resident fits return a \code{fastEmbedR_embedding}; landmark fits
+also contain \code{model} for \code{\link[=project_landmark_model]{project_landmark_model()}}. File-backed full
+fits return a \code{\link[=massive_matrix]{massive_matrix()}} descriptor with output and stage
+metadata. File-backed landmark projection may return a
+\code{fastEmbedR_massive_projection}. Use \code{\link[=massive_read_rows]{massive_read_rows()}} to inspect
+bounded output rows without loading the full result.
 }
 \description{
 \code{umap()} is a small convenience wrapper. If \code{data} is already a list of KNN

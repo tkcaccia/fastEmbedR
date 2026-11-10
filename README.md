@@ -47,9 +47,9 @@ files.
 
 Hardware evidence is reported at three distinct levels: full benchmark
 validation, strict real-device smoke/correctness testing, and build-level
-architectural compatibility. Metal performance has been benchmarked only on
-one Apple M3 system; other Apple Silicon systems are compatibility targets and
-do not inherit the M3 performance results. CUDA architecture flags and a
+architectural compatibility. The older full Metal performance cohort used an
+Apple M3 MacBook Pro; newer M3 Ultra development fits are reported separately
+and do not inherit its validation status. CUDA architecture flags and a
 successful build likewise do not constitute runtime or performance evidence
 for an untested GPU. See the [hardware evidence contract][validation].
 

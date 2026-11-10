@@ -97,15 +97,16 @@ coordinates can vary with scheduling even at a fixed seed; assess
 quality over repeated runs. The `n.cores_effective` field records the
 configured maximum, not a per-stage thread measurement.
 
-Resident CPU 2D fuzzy UMAP chooses int32 or uint64 CSR offsets from a
-checked edge bound. The wide path passed small edge/step parity, synthetic
-offsets above 2^31, and forced-wide 1M/10M Deep1B development fits.
+Resident CPU 2D/3D fuzzy and binary UMAP chooses int32 or uint64 CSR
+offsets from a checked edge bound. The wide path passed small edge/step
+parity and synthetic offsets above 2^31; the forced-wide 1M/10M Deep1B
+development fits exercised 2D fuzzy UMAP.
 The 10M graph stayed below 2^31 edges; a real overflow-sized graph,
 full 50M output, measured peak RAM and quality remain unqualified.
-CPU and Metal wide UMAP have passed small graph checks. The CUDA wide
-graph builder and bounded coordinated edge-tile path are implemented,
-including automatic single-device selection, but still need device
-qualification and a measured large-memory admission before a 50M fit.
+CPU and Metal wide UMAP have passed small graph checks. CUDA wide graph
+construction and bounded edge-tile code exist, but the public resident
+route still guards unsupported wide combinations. They need a real-device
+case and measured large-memory admission before a 50M fit.
 
 Resident Metal and CUDA Louvain/Leiden select int32 or uint64 CSR row
 offsets from the checked edge count. The GPU move and refinement kernels
@@ -121,11 +122,12 @@ Metal is implemented with Objective-C++ and Metal kernels. Public Metal and CUDA
 UMAP/t-SNE paths do not call Python, Torch, MLX, or `reticulate`.
 
 The build-supported target is Apple Silicon with macOS 14 or newer and a full
-Xcode 15 or newer toolchain. Full Metal performance benchmarking has been
-performed only on an Apple M3 MacBook Pro with macOS 14.5, Xcode 16.2, and
-8 GB unified memory. Other Apple Silicon generations are compatibility targets:
-they require a strict real-device smoke/correctness artifact before being
-called tested, and they do not inherit the M3 performance results. Intel Macs
+Xcode 15 or newer toolchain. The older full Metal performance cohort used an
+Apple M3 MacBook Pro with macOS 14.5, Xcode 16.2, and 8 GB unified memory.
+Newer M3 Ultra development fits are described below; they do not turn the
+older cohort into an M3 Ultra performance benchmark. Other Apple Silicon
+generations need their own real-device checks and do not inherit either
+machine's results. Intel Macs
 are not a supported Metal target. The CPU backend remains available on Intel
 macOS.
 

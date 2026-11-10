@@ -5,8 +5,9 @@
 #' preprocesses the data, computes KNN once with fastEmbedR's native backend,
 #' and embeds from that KNN graph.
 #'
-#' @param data Numeric matrix/data frame, or a list containing KNN `indices`
-#'   and `distances`.
+#' @param data Numeric matrix/data frame, `float::float32` matrix,
+#'   [massive_matrix()] descriptor, prepared file-backed fuzzy graph,
+#'   or a list containing KNN `indices` and `distances`.
 #' @param n_neighbors Number of non-self neighbors. `NULL` chooses the package
 #'   default for the data size.
 #' @param n_components Output dimensionality. The CPU backend supports positive
@@ -31,8 +32,9 @@
 #'   Euclidean searches, and native HNSW for other supported metrics.
 #'   Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
 #'   cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
-#'   that threshold. The KNN result stays on the device through graph
-#'   construction and optimization.
+#'   that threshold. Resident CUDA KNN can stay on the device through
+#'   graph construction and optimization; other routes record their
+#'   actual backend by stage.
 #'   A resident 2D Metal fit uses one CPU thread for the first half of the
 #'   optimizer epochs, then a native Metal kernel for the remaining epochs.
 #'   The stage counts are recorded in `fit$parameters`. Resident 3D Metal
@@ -84,8 +86,12 @@
 #' optimizer-mode sweeps should use a
 #' general-purpose UMAP implementation; fastEmbedR does not claim API or
 #' parameter interchangeability with those packages.
-#' @return A `fastEmbedR_embedding` object. Landmark fits also contain `model`,
-#'   which can be passed to [project_landmark_model()] for new observations.
+#' @return Resident fits return a `fastEmbedR_embedding`; landmark fits
+#'   also contain `model` for [project_landmark_model()]. File-backed full
+#'   fits return a [massive_matrix()] descriptor with output and stage
+#'   metadata. File-backed landmark projection may return a
+#'   `fastEmbedR_massive_projection`. Use [massive_read_rows()] to inspect
+#'   bounded output rows without loading the full result.
 #' @examples
 #' x <- scale(as.matrix(iris[, 1:4]))
 #' fit <- umap(x, n_neighbors = 15, seed = 1)
