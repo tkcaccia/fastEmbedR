@@ -69,6 +69,22 @@ KNN construction, real-data embedding quality, eight-GPU scaling, or a
 100-million-row fit. The result is an incremental improvement; graph
 preparation and repeated layout replication remain scaling work.
 
+## Native coordinated CUDA t-SNE attraction staging
+
+The multi-GPU t-SNE optimizer also uses two pinned host and device edge
+batches per GPU. Each GPU's stream orders its attraction kernels before the
+NCCL gradient reduction, so the input buffer can be prepared while the
+previous batch runs. Memory admission includes the additional buffers.
+
+On the same 10-million-row synthetic graph, five unchanged t-SNE iterations
+took 5.756 seconds median with staging and 6.193 seconds median without it
+(three runs of each). The largest coordinate difference was below 1e-9 in
+those paired runs. A small public 3D t-SNE fit also passed two-GPU finite
+output and baseline agreement. This check covers optimizer time only. FFT
+repulsion is still owned by one GPU, and layout state is still replicated;
+the result does not establish useful eight-GPU scaling or 100-million-row
+capacity.
+
 ## Component Ownership And Data Flow
 
 The public one-call functions combine nearest-neighbor search and embedding;

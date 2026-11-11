@@ -7846,6 +7846,13 @@ extern "C" int fastembedr_massive_tsne_cuda_download(
 }
 
 #ifdef FASTEMBEDR_HAS_NCCL
+struct MassiveTsneStageSlot {
+  void* host = nullptr;
+  void* device = nullptr;
+  cudaEvent_t done = nullptr;
+  bool submitted = false;
+};
+
 struct MassiveTsneMultiCudaContext {
   int n = 0;
   int dimensions = 2;
@@ -7854,6 +7861,8 @@ struct MassiveTsneMultiCudaContext {
   std::vector<int> devices;
   std::vector<MassiveTsneCudaContext*> workers;
   std::vector<ncclComm_t> comms;
+  std::vector<MassiveTsneStageSlot> staged;
+  std::vector<std::uint64_t> batch_sequence;
 };
 
 extern "C" void fastembedr_massive_tsne_multigpu_destroy(void* raw) {
@@ -7861,6 +7870,14 @@ extern "C" void fastembedr_massive_tsne_multigpu_destroy(void* raw) {
   if (ctx == nullptr) return;
   for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
     cudaSetDevice(ctx->devices[rank]);
+    if (ctx->workers[rank] != nullptr)
+      cudaStreamSynchronize(ctx->workers[rank]->stream);
+    for (int slot = 0; slot < 2; ++slot) {
+      auto& batch = ctx->staged[2 * rank + slot];
+      if (batch.done != nullptr) cudaEventDestroy(batch.done);
+      if (batch.device != nullptr) cudaFree(batch.device);
+      if (batch.host != nullptr) cudaFreeHost(batch.host);
+    }
     if (ctx->comms[rank] != nullptr)
       ncclCommDestroy(ctx->comms[rank]);
     fastembedr_massive_tsne_cuda_destroy(ctx->workers[rank]);
@@ -7914,6 +7931,8 @@ extern "C" void* fastembedr_massive_tsne_multigpu_create(
   ctx->devices.assign(devices, devices + device_count);
   ctx->workers.resize(device_count, nullptr);
   ctx->comms.resize(device_count, nullptr);
+  ctx->staged.resize(2 * device_count);
+  ctx->batch_sequence.resize(device_count, 0);
   for (int rank = 0; rank < device_count; ++rank) {
     if (check_cuda(cudaSetDevice(devices[rank]),
           "cudaSetDevice(t-SNE create)")) {
@@ -7926,6 +7945,26 @@ extern "C" void* fastembedr_massive_tsne_multigpu_create(
     if (ctx->workers[rank] == nullptr) {
       fastembedr_massive_tsne_multigpu_destroy(ctx);
       return nullptr;
+    }
+    const auto batch_bytes = static_cast<std::size_t>(
+      edge_capacity) * 3u * sizeof(float);
+    if (check_embedding_memory_available(2u * batch_bytes,
+          "multi-GPU t-SNE staged batches")) {
+      fastembedr_massive_tsne_multigpu_destroy(ctx);
+      return nullptr;
+    }
+    for (int slot = 0; slot < 2; ++slot) {
+      auto& batch = ctx->staged[2 * rank + slot];
+      if (check_cuda(cudaHostAlloc(&batch.host, batch_bytes,
+            cudaHostAllocDefault), "cudaHostAlloc(t-SNE batch)") ||
+          check_cuda(cudaMalloc(&batch.device, batch_bytes),
+            "cudaMalloc(t-SNE batch)") ||
+          check_cuda(cudaEventCreateWithFlags(&batch.done,
+            cudaEventDisableTiming),
+            "cudaEventCreate(t-SNE batch)")) {
+        fastembedr_massive_tsne_multigpu_destroy(ctx);
+        return nullptr;
+      }
     }
   }
   if (massive_umap_nccl_check(ncclCommInitAll(
@@ -8007,8 +8046,15 @@ extern "C" int fastembedr_massive_tsne_multigpu_attract(
   auto* ctx = static_cast<MassiveTsneMultiCudaContext*>(raw);
   if (ctx == nullptr || rank < 0 ||
       rank >= static_cast<int>(ctx->devices.size()) ||
-      heads == nullptr || tails == nullptr || edges < 1) {
+      heads == nullptr || tails == nullptr || weights == nullptr ||
+      edges < 1 || !std::isfinite(exaggeration) ||
+      exaggeration <= 0.0f) {
     set_embedding_error("invalid multi-GPU t-SNE edge batch");
+    return 1;
+  }
+  auto* worker = ctx->workers[rank];
+  if (edges > worker->capacity) {
+    set_embedding_error("multi-GPU t-SNE edge batch exceeds capacity");
     return 1;
   }
   for (int i = 0; i < edges; ++i) {
@@ -8021,9 +8067,38 @@ extern "C" int fastembedr_massive_tsne_multigpu_attract(
     }
   }
   if (check_cuda(cudaSetDevice(ctx->devices[rank]),
-        "cudaSetDevice(t-SNE attraction)") ||
-      fastembedr_massive_tsne_cuda_attract(ctx->workers[rank],
-        heads, tails, weights, edges, exaggeration)) return 1;
+        "cudaSetDevice(t-SNE attraction)")) return 1;
+  auto& batch = ctx->staged[2 * rank +
+    (ctx->batch_sequence[rank]++ % 2)];
+  if (batch.submitted && check_cuda(cudaEventSynchronize(batch.done),
+        "cudaEventSynchronize(t-SNE batch reuse)")) return 1;
+  const auto bytes = static_cast<std::size_t>(edges) * sizeof(float);
+  auto* host = static_cast<char*>(batch.host);
+  std::memcpy(host, heads, bytes);
+  std::memcpy(host + bytes, tails, bytes);
+  std::memcpy(host + 2 * bytes, weights, bytes);
+  auto* device = static_cast<char*>(batch.device);
+  auto* d_heads = reinterpret_cast<int*>(device);
+  auto* d_tails = reinterpret_cast<int*>(device + bytes);
+  auto* d_weights = reinterpret_cast<float*>(device + 2 * bytes);
+  if (check_cuda(cudaMemcpyAsync(batch.device, batch.host,
+        3 * bytes, cudaMemcpyHostToDevice, worker->stream),
+        "cudaMemcpyAsync(t-SNE staged batch)")) return 1;
+  const int blocks = (edges - 1) / 256 + 1;
+  if (ctx->dimensions == 3) {
+    massive_tsne_attractive_3d_kernel<<<blocks, 256, 0,
+      worker->stream>>>(d_heads, d_tails, d_weights,
+      worker->current, worker->gradient, edges, exaggeration);
+  } else {
+    massive_tsne_attractive_kernel<<<blocks, 256, 0,
+      worker->stream>>>(d_heads, d_tails, d_weights,
+      worker->current, worker->gradient, edges, exaggeration);
+  }
+  if (check_cuda(cudaGetLastError(),
+        "multi-GPU t-SNE attraction launch") ||
+      check_cuda(cudaEventRecord(batch.done, worker->stream),
+        "cudaEventRecord(t-SNE batch)")) return 1;
+  batch.submitted = true;
   return check_cuda(cudaSetDevice(ctx->previous_device),
     "cudaSetDevice(t-SNE restore)");
 }

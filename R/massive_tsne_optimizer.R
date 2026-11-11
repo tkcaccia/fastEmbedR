@@ -35,8 +35,8 @@
 #' @param resume Continue a matching interrupted fit.
 #' @param checkpoint_every Iterations between state snapshots.
 #' @return An experimental file-backed `fastEmbedR_massive_matrix`.
-#'   CUDA results include host-call stage times. `attraction_sync`
-#'   can include previously queued FFT work.
+#'   CUDA results include host-call stage times. In coordinated CUDA fits,
+#'   `attraction_sync` includes batch packing, enqueue, and slot waits.
 #' @keywords internal
 massive_tsne_optimize <- function(graph, init, output,
         early_exaggeration_iter = 250L, n_iter = 500L,
@@ -190,6 +190,11 @@ massive_tsne_result_resources <- function(plan, graph, fit, saved) {
         resources$graph_feeder <-
             if (length(plan$devices) > 1L) "concurrent_owner" else "serial"
         resources$edge_batch_capacity <- plan$edge_capacity
+        resources$pinned_batch_bytes <- if (length(plan$devices) > 1L)
+            24 * plan$edge_capacity else 0
+        resources$attraction_timing_scope <-
+            if (length(plan$devices) > 1L)
+                "host_pack_enqueue_and_slot_wait" else "kernel_wait"
     }
     if (identical(plan$backend, "metal"))
         resources$graph_access <- if (plan$graph_access == "stream")
@@ -472,12 +477,14 @@ massive_tsne_resource_plan <- function(graph, init, path,
     if (coords > .Machine$integer.max) stop(
         "FFT coordinate count exceeds the native integer limit.",
         call. = FALSE)
+    staged <- backend == "cuda" && length(devices) > 1L
+    per_edge <- if (staged) 36 else 12
     capacity <- if (backend == "cuda") {
         max(65536L, min(1000000L,
-            floor((0.8 * limit - 64 * 1024^2) / (12 * feeders))))
+            floor((0.8 * limit - 64 * 1024^2) / (per_edge * feeders))))
     } else NULL
     peak <- if (backend == "cuda") {
-        64 * 1024^2 + capacity * 12 * feeders
+        64 * 1024^2 + capacity * per_edge * feeders
     } else if (backend == "metal") {
         graph_bytes <- if (graph_access == "stream")
             min(graph$n_edges, edge_chunk_capacity) * 8 +
@@ -501,7 +508,7 @@ massive_tsne_resource_plan <- function(graph, init, path,
         fft_bytes <- if (init$ncol == 3L)
             2 * (2 * grid)^3 * 8 else 9 * (2 * grid)^2 * 8
         coords * 16 + graph$n_vertices * 8 +
-            fft_bytes + capacity * 12 + 256 * 1024^2
+            fft_bytes + capacity * per_edge + 256 * 1024^2
     } else NA_real_
     if (backend == "cuda" &&
         vram > 0.8 * massive_auto_cuda_free(devices,
