@@ -253,9 +253,8 @@ print.fastEmbedR_massive_louvain_level <- function(x, ...) {
     cat("EXPERIMENTAL fastEmbedR ", x$method, "\n", sep = "")
     cat("  vertices: ", format(x$n_vertices, scientific = FALSE),
         "; communities: ", x$n_communities, "\n", sep = "")
-    label <- if (!is.null(x$cugraph)) "max levels" else "passes"
     cat("  modularity: ", signif(x$modularity_final, 6),
-        "; ", label, ": ", x$passes, "\n", sep = "")
+        "; passes: ", x$passes, "\n", sep = "")
     invisible(x)
 }
 

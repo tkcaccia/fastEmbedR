@@ -133,12 +133,11 @@ in the build and hardware-validation manifest.
   Apache-2.0/LLVM-exception, BSD, and Boost terms.
 * NVIDIA CUDA Toolkit: external cudart, cuFFT, cuBLAS, cuSOLVER, cuSPARSE,
   cuRAND, and nvJitLink libraries under the NVIDIA CUDA Toolkit license.
-* RAPIDS cuGraph (Apache-2.0): optional external Python/Dask runtime for
-  full-graph multi-GPU Leiden and Louvain. No cuGraph source or binary is
-  redistributed or linked into the package.
+* RAPIDS cuGraph (Apache-2.0): graph-partition design reference. No
+  cuGraph source or binary is redistributed or linked into the package.
 
-No cuML library or Python module is called by the installed package.
-Ordinary clustering uses package-owned native kernels, not cuGraph.
+No cuML, cuGraph, or Python module is called by the installed package.
+Clustering uses package-owned native kernels.
 
 Apple system frameworks
 -----------------------

@@ -49,7 +49,7 @@ label-file path in full-graph mode.}
 
 \item{backend}{\code{"cpu"}, \code{"cuda"}, or \code{"metal"} for landmarks;
 full-graph CUDA Louvain/Leiden with \code{devices = NULL} stream graph chunks.
-Multiple CUDA devices use cuGraph for resident clustering.}
+Multiple CUDA devices use native coordinated clustering.}
 
 \item{n.cores}{CPU workers for graph building, landmark assignment,
 and bounded file-backed Leiden/Louvain candidate preparation.
@@ -74,7 +74,7 @@ Louvain defaults to 8,192 rows on CPU/CUDA and 65,536 on Metal.}
 
 \item{checkpoint, resume}{Save or reuse completed landmark workflow stages,
 label batches, or completed CPU/CUDA/Metal Louvain and CPU Leiden stages.
-cuGraph and Walktrap do not support checkpoints.}
+Multi-GPU CUDA and Walktrap do not support checkpoints.}
 
 \item{checkpoint_every}{Landmark label batches between checkpoints.}
 
@@ -88,7 +88,7 @@ selection and query KNN should be reused instead of recomputed.}
 resident fits; \code{"fit"} uses them within one CPU Louvain/Leiden fit.
 File-backed full-graph fits require \code{"fit"} when \code{n.cores > 1}.}
 
-\item{gpu_storage}{\code{"resident"} for cuGraph or \code{"stream"} for
+\item{gpu_storage}{\code{"resident"} for GPU-held CSR shards or \code{"stream"} for
 bounded multi-GPU Louvain or Leiden local moves in full-graph CUDA mode.}
 }
 \value{
@@ -109,20 +109,19 @@ CUDA and Metal local moves
 run on the GPU while contraction and objective audits run on the CPU.
 Full-graph Leiden runs one
 hierarchy with \code{n_iterations} local-move passes per level on CPU.
-In cuGraph, \code{n_iterations} instead caps levels; cuGraph Louvain has no
-seed control and only accepts the default \code{seed = 1} request. Full-graph
+The native multi-GPU routes use \code{n_iterations} as a local-move pass
+limit per level and accept \code{seed}. Full-graph
 Walktrap runs exact walks within bounded blocks and contracts communities;
 it is an explicit approximation when more than one block is needed.
-Multi-GPU CUDA full-graph clustering uses optional Python RAPIDS cuGraph,
-Dask-CUDA, gpuinfo >= 0.2.0, and jsonlite. It needs the complete graph
-to fit across the selected GPUs, fails explicitly if memory is
-insufficient, and has no checkpoint or initial-label support. It is
-not a billion-row out-of-core clustering algorithm. An experimental
+Native multi-GPU CUDA resident clustering keeps graph shards on the
+selected GPUs and checks host RAM and per-device VRAM before fitting.
+It fails explicitly if memory is insufficient and has no checkpoint
+or initial-label support. An experimental
 \code{gpu_storage = "stream"} route runs bounded multi-GPU Louvain
 local-moving levels with graph and labels on host storage, and CPU
 graph contraction between levels. Leiden also uses bounded multi-GPU
 local moves, with CPU Leiden refinement and CPU graph contraction.
-It requires CuPy.
+Both routes use package-owned C++ and CUDA kernels.
 \code{massive = "auto"} uses
 ordinary in-memory graph clustering when resource estimates permit it.
 Exact Walktrap is CPU-only and limited to 4,000 landmark vertices;

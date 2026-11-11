@@ -57,7 +57,7 @@ SystemRequirements: C++17; FAISS CPU library for the imported faissR package.
     later), or an NVIDIA CUDA Toolkit. RAPIDS cuVS is needed only for CUDA
     nearest-neighbor search from matrix inputs. RAPIDS RAFT/RMM is an optional
     extension, not a core installation requirement. Full-graph multi-GPU
-    Leiden/Louvain additionally require Python RAPIDS cuGraph and Dask-CUDA.
+    Leiden/Louvain use package-owned C++ and CUDA kernels.
 VignetteBuilder: knitr
 Roxygen: list(markdown = TRUE)
 Config/roxygen2/version: 8.1.0

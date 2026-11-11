@@ -477,6 +477,14 @@ massive_louvain_metal_level_cpp <- function(offsets_path, indices_path, weights_
     .Call(`_fastEmbedR_massive_louvain_metal_level_cpp`, offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted, initial_path, initial_count)
 }
 
+massive_cluster_cuda_resident_csr_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, output, method, devices, n_iterations, resolution, chunk_rows, edge_budget, memory_limit, seed, contracted = FALSE) {
+    .Call(`_fastEmbedR_massive_cluster_cuda_resident_csr_cpp`, offsets_path, indices_path, weights_path, n_vertices, output, method, devices, n_iterations, resolution, chunk_rows, edge_budget, memory_limit, seed, contracted)
+}
+
+massive_louvain_cuda_devices_level_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, output, devices, max_passes, resolution, chunk_rows, edge_budget, seed, contracted = FALSE, initial_path = "", initial_count = 0L) {
+    .Call(`_fastEmbedR_massive_louvain_cuda_devices_level_cpp`, offsets_path, indices_path, weights_path, n_vertices, output, devices, max_passes, resolution, chunk_rows, edge_budget, seed, contracted, initial_path, initial_count)
+}
+
 massive_louvain_cuda_level_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted = FALSE, initial_path = "", initial_count = 0L) {
     .Call(`_fastEmbedR_massive_louvain_cuda_level_cpp`, offsets_path, indices_path, weights_path, n_vertices, output, max_passes, resolution, chunk_rows, edge_budget, seed, contracted, initial_path, initial_count)
 }

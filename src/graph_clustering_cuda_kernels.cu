@@ -329,12 +329,20 @@ __global__ void finalize_fragment_kernel(
     const int* community_count, int* proposal,
     float graph_volume, float resolution, float tolerance,
     int color, unsigned int seed, int refinement,
+    int enforce_color,
     const float* cuts, const float* parent_volume,
     float* proposal_weight, int* mark, const int* touched,
     const float* total, int* count) {
   if (blockIdx.x || threadIdx.x) return;
   const int old = labels[row];
   proposal[row] = old;
+  if (enforce_color && vertex_color(row, seed) != color) {
+    for (int index = 0; index < *count; ++index) {
+      mark[touched[index]] = 0;
+    }
+    *count = 0;
+    return;
+  }
   const float node_degree = degree[row];
   bool eligible = node_degree > 0.0f;
   if (refinement && community_count[old] != 1) eligible = false;
@@ -388,6 +396,7 @@ __global__ void finalize_fragment_kernel(
 }
 
 struct StreamSession {
+  int device_id;
   int n;
   int chunk_rows;
   int edge_capacity;
@@ -417,9 +426,10 @@ struct StreamSession {
   std::unique_ptr<DeviceBuffer<int>> fragment_count;
   int fragment_row = -1;
 
-  StreamSession(int vertices, int rows, int edges, float total,
+  StreamSession(int device, int vertices, int rows, int edges, float total,
       float gamma, std::uint64_t run_seed, bool refinement)
-      : n(vertices), chunk_rows(rows), edge_capacity(edges),
+      : device_id(device), n(vertices), chunk_rows(rows),
+        edge_capacity(edges),
         graph_volume(total), resolution(gamma),
         tolerance(1e-7f * std::max(1.0f,
           total / (2.0f * vertices))), seed(run_seed),
@@ -490,8 +500,12 @@ void* graph_stream_cuda_create(const std::vector<float>& degree,
         [](float value) { return !std::isfinite(value); }))) {
     Rcpp::stop("Invalid CUDA streaming Leiden parent volume.");
   }
-  std::unique_ptr<StreamSession> session(new StreamSession(n, chunk_rows,
-    edge_capacity, graph_volume, resolution, seed, leiden));
+  int device = -1;
+  check_cuda(cudaGetDevice(&device),
+    "read CUDA clustering device identity");
+  std::unique_ptr<StreamSession> session(new StreamSession(
+    device, n, chunk_rows, edge_capacity,
+    graph_volume, resolution, seed, leiden));
   check_cuda(cudaMemcpy(session->degree.data(), degree.data(),
     degree.size() * sizeof(float), cudaMemcpyHostToDevice),
     "upload CUDA Louvain degree");
@@ -530,13 +544,96 @@ void graph_stream_cuda_begin_pass(void* handle, int pass) {
     sizeof(unsigned int)), "clear CUDA streaming moves");
 }
 
+int graph_stream_cuda_device_id(void* handle) {
+  return stream_session(handle).device_id;
+}
+
 void graph_stream_cuda_set_color(void* handle, int color) {
   auto& session = stream_session(handle);
-  if (session.fragment_row >= 0 || !session.leiden ||
+  if (session.fragment_row >= 0 ||
       color < 0 || color >= kColorCount) {
-    Rcpp::stop("Invalid CUDA Leiden color phase.");
+    Rcpp::stop("Invalid CUDA clustering color phase.");
   }
   session.color = color;
+}
+
+void graph_stream_cuda_set_state(void* handle,
+    const std::vector<int>& labels,
+    const std::vector<float>& volume,
+    const std::vector<int>& count) {
+  auto& session = stream_session(handle);
+  if (session.fragment_row >= 0 ||
+      labels.size() != static_cast<std::size_t>(session.n) ||
+      volume.size() != labels.size() || count.size() != labels.size()) {
+    Rcpp::stop("Invalid coordinated CUDA clustering state size.");
+  }
+  for (int u = 0; u < session.n; ++u) {
+    if (labels[u] < 0 || labels[u] >= session.n ||
+        !std::isfinite(volume[u]) || volume[u] < 0.0f ||
+        count[u] < 0) {
+      Rcpp::stop("Invalid coordinated CUDA clustering state.");
+    }
+  }
+  check_cuda(cudaMemcpy(session.labels.data(), labels.data(),
+    labels.size() * sizeof(int), cudaMemcpyHostToDevice),
+    "upload coordinated CUDA labels");
+  check_cuda(cudaMemcpy(session.volume.data(), volume.data(),
+    volume.size() * sizeof(float), cudaMemcpyHostToDevice),
+    "upload coordinated CUDA volumes");
+  check_cuda(cudaMemcpy(session.count.data(), count.data(),
+    count.size() * sizeof(int), cudaMemcpyHostToDevice),
+    "upload coordinated CUDA counts");
+}
+
+std::vector<int> graph_stream_cuda_propose_chunk(void* handle,
+    const std::vector<int>& row_ptr,
+    const std::vector<int>& col_idx,
+    const std::vector<float>& weight, int first) {
+  auto& session = stream_session(handle);
+  if (session.fragment_row >= 0 || row_ptr.size() < 2 ||
+      row_ptr.size() - 1 > static_cast<std::size_t>(session.chunk_rows) ||
+      first < 0 || first > session.n -
+        static_cast<int>(row_ptr.size() - 1) ||
+      col_idx.size() != weight.size() ||
+      col_idx.size() > static_cast<std::size_t>(session.edge_capacity) ||
+      row_ptr.front() != 0 ||
+      row_ptr.back() != static_cast<int>(col_idx.size())) {
+    Rcpp::stop("Invalid coordinated CUDA graph chunk.");
+  }
+  const int rows = static_cast<int>(row_ptr.size() - 1);
+  check_cuda(cudaMemcpy(session.row.data(), row_ptr.data(),
+    row_ptr.size() * sizeof(int), cudaMemcpyHostToDevice),
+    "upload coordinated CUDA row offsets");
+  check_cuda(cudaMemcpy(session.col.data(), col_idx.data(),
+    col_idx.size() * sizeof(int), cudaMemcpyHostToDevice),
+    "upload coordinated CUDA columns");
+  check_cuda(cudaMemcpy(session.weight.data(), weight.data(),
+    weight.size() * sizeof(float), cudaMemcpyHostToDevice),
+    "upload coordinated CUDA weights");
+  check_cuda(cudaMemcpy(session.proposal.data() + first,
+    session.labels.data() + first, rows * sizeof(int),
+    cudaMemcpyDeviceToDevice),
+    "initialize coordinated CUDA proposals");
+  constexpr int threads = 256;
+  const int blocks = (rows + threads - 1) / threads;
+  propose_moves_kernel<<<blocks, threads>>>(
+    session.row.data(), session.col.data(), session.weight.data(),
+    session.degree.data(), session.labels.data(),
+    session.parent.data(), session.volume.data(),
+    session.count.data(), session.proposal.data(), session.n,
+    first, rows, session.graph_volume, session.resolution,
+    session.tolerance, session.color, session.pass_seed,
+    session.leiden ? 1 : 0, session.leiden ? 1 : 0,
+    session.cuts.data(), session.parent_volume.data(),
+    session.proposal_weight.data());
+  check_cuda(cudaGetLastError(), "coordinated CUDA proposal");
+  check_cuda(cudaDeviceSynchronize(),
+    "synchronize coordinated CUDA proposal");
+  std::vector<int> proposals(rows);
+  check_cuda(cudaMemcpy(proposals.data(),
+    session.proposal.data() + first, rows * sizeof(int),
+    cudaMemcpyDeviceToHost), "read coordinated CUDA proposal");
+  return proposals;
 }
 
 void graph_stream_cuda_chunk(void* handle,
@@ -599,9 +696,10 @@ void graph_stream_cuda_chunk(void* handle,
     "synchronize CUDA streaming Louvain chunk");
 }
 
-void graph_stream_cuda_fragment(void* handle,
+int graph_stream_cuda_fragment_impl(void* handle,
     const std::vector<int>& col_idx,
-    const std::vector<float>& weight, int row, bool last) {
+    const std::vector<float>& weight, int row, bool last,
+    bool apply) {
   auto& session = stream_session(handle);
   if (row < 0 || row >= session.n || col_idx.empty() ||
       col_idx.size() != weight.size() ||
@@ -646,30 +744,54 @@ void graph_stream_cuda_fragment(void* handle,
       session.volume.data(), session.count.data(),
       session.proposal.data(), session.graph_volume,
       session.resolution, session.tolerance, session.color,
-      session.pass_seed, session.leiden, session.cuts.data(),
+      session.pass_seed, session.leiden, apply ? 0 : 1,
+      session.cuts.data(),
       session.parent_volume.data(), session.proposal_weight.data(),
       session.fragment_mark->data(), session.fragment_touched->data(),
       session.fragment_total->data(), session.fragment_count->data());
     check_cuda(cudaGetLastError(), "CUDA clustering fragment proposal");
-    check_cuda(cudaMemset(session.row.data(), 0, 2 * sizeof(int)),
-      "clear CUDA clustering one-row offsets");
-    const int first_color = session.leiden ? session.color : 0;
-    const int last_color = session.leiden ? session.color + 1 :
-      kColorCount;
-    for (int color = first_color; color < last_color; ++color) {
-      apply_moves_kernel<<<1, 1>>>(session.degree.data(),
-        session.labels.data(), session.proposal.data(),
-        session.volume.data(), session.count.data(),
-        session.moves.data(), session.n, row, 1, color,
-        session.pass_seed, session.leiden, session.row.data(),
-        session.col.data(), session.weight.data(),
-        session.cuts.data(), session.proposal_weight.data());
-      check_cuda(cudaGetLastError(), "CUDA clustering fragment apply");
+    if (apply) {
+      check_cuda(cudaMemset(session.row.data(), 0, 2 * sizeof(int)),
+        "clear CUDA clustering one-row offsets");
+      const int first_color = session.leiden ? session.color : 0;
+      const int last_color = session.leiden ? session.color + 1 :
+        kColorCount;
+      for (int color = first_color; color < last_color; ++color) {
+        apply_moves_kernel<<<1, 1>>>(session.degree.data(),
+          session.labels.data(), session.proposal.data(),
+          session.volume.data(), session.count.data(),
+          session.moves.data(), session.n, row, 1, color,
+          session.pass_seed, session.leiden, session.row.data(),
+          session.col.data(), session.weight.data(),
+          session.cuts.data(), session.proposal_weight.data());
+        check_cuda(cudaGetLastError(),
+          "CUDA clustering fragment apply");
+      }
     }
     session.fragment_row = -1;
   }
   check_cuda(cudaDeviceSynchronize(),
     "synchronize CUDA clustering row fragment");
+  if (!last || apply) return -1;
+  int proposal = -1;
+  check_cuda(cudaMemcpy(&proposal, session.proposal.data() + row,
+    sizeof(int), cudaMemcpyDeviceToHost),
+    "read coordinated CUDA fragment proposal");
+  return proposal;
+}
+
+void graph_stream_cuda_fragment(void* handle,
+    const std::vector<int>& col_idx,
+    const std::vector<float>& weight, int row, bool last) {
+  graph_stream_cuda_fragment_impl(handle, col_idx,
+    weight, row, last, true);
+}
+
+int graph_stream_cuda_propose_fragment(void* handle,
+    const std::vector<int>& col_idx,
+    const std::vector<float>& weight, int row, bool last) {
+  return graph_stream_cuda_fragment_impl(handle, col_idx,
+    weight, row, last, false);
 }
 
 std::uint32_t graph_stream_cuda_end_pass(void* handle) {

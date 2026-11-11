@@ -2087,6 +2087,54 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// massive_cluster_cuda_resident_csr_cpp
+List massive_cluster_cuda_resident_csr_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string output, std::string method, Rcpp::IntegerVector devices, int n_iterations, double resolution, int chunk_rows, double edge_budget, double memory_limit, int seed, bool contracted);
+RcppExport SEXP _fastEmbedR_massive_cluster_cuda_resident_csr_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP outputSEXP, SEXP methodSEXP, SEXP devicesSEXP, SEXP n_iterationsSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP, SEXP memory_limitSEXP, SEXP seedSEXP, SEXP contractedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type offsets_path(offsets_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type indices_path(indices_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type weights_path(weights_pathSEXP);
+    Rcpp::traits::input_parameter< double >::type n_vertices(n_verticesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type output(outputSEXP);
+    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type devices(devicesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_iterations(n_iterationsSEXP);
+    Rcpp::traits::input_parameter< double >::type resolution(resolutionSEXP);
+    Rcpp::traits::input_parameter< int >::type chunk_rows(chunk_rowsSEXP);
+    Rcpp::traits::input_parameter< double >::type edge_budget(edge_budgetSEXP);
+    Rcpp::traits::input_parameter< double >::type memory_limit(memory_limitSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type contracted(contractedSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_cluster_cuda_resident_csr_cpp(offsets_path, indices_path, weights_path, n_vertices, output, method, devices, n_iterations, resolution, chunk_rows, edge_budget, memory_limit, seed, contracted));
+    return rcpp_result_gen;
+END_RCPP
+}
+// massive_louvain_cuda_devices_level_cpp
+List massive_louvain_cuda_devices_level_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string output, Rcpp::IntegerVector devices, int max_passes, double resolution, int chunk_rows, double edge_budget, int seed, bool contracted, std::string initial_path, int initial_count);
+RcppExport SEXP _fastEmbedR_massive_louvain_cuda_devices_level_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP outputSEXP, SEXP devicesSEXP, SEXP max_passesSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP, SEXP seedSEXP, SEXP contractedSEXP, SEXP initial_pathSEXP, SEXP initial_countSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type offsets_path(offsets_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type indices_path(indices_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type weights_path(weights_pathSEXP);
+    Rcpp::traits::input_parameter< double >::type n_vertices(n_verticesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type output(outputSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type devices(devicesSEXP);
+    Rcpp::traits::input_parameter< int >::type max_passes(max_passesSEXP);
+    Rcpp::traits::input_parameter< double >::type resolution(resolutionSEXP);
+    Rcpp::traits::input_parameter< int >::type chunk_rows(chunk_rowsSEXP);
+    Rcpp::traits::input_parameter< double >::type edge_budget(edge_budgetSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< bool >::type contracted(contractedSEXP);
+    Rcpp::traits::input_parameter< std::string >::type initial_path(initial_pathSEXP);
+    Rcpp::traits::input_parameter< int >::type initial_count(initial_countSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_louvain_cuda_devices_level_cpp(offsets_path, indices_path, weights_path, n_vertices, output, devices, max_passes, resolution, chunk_rows, edge_budget, seed, contracted, initial_path, initial_count));
+    return rcpp_result_gen;
+END_RCPP
+}
 // massive_louvain_cuda_level_cpp
 List massive_louvain_cuda_level_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string output, int max_passes, double resolution, int chunk_rows, double edge_budget, int seed, bool contracted, std::string initial_path, int initial_count);
 RcppExport SEXP _fastEmbedR_massive_louvain_cuda_level_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP outputSEXP, SEXP max_passesSEXP, SEXP resolutionSEXP, SEXP chunk_rowsSEXP, SEXP edge_budgetSEXP, SEXP seedSEXP, SEXP contractedSEXP, SEXP initial_pathSEXP, SEXP initial_countSEXP) {
@@ -3596,6 +3644,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_graph_modularity_cpp", (DL_FUNC) &_fastEmbedR_massive_graph_modularity_cpp, 11},
     {"_fastEmbedR_massive_louvain_level_cpp", (DL_FUNC) &_fastEmbedR_massive_louvain_level_cpp, 14},
     {"_fastEmbedR_massive_louvain_metal_level_cpp", (DL_FUNC) &_fastEmbedR_massive_louvain_metal_level_cpp, 13},
+    {"_fastEmbedR_massive_cluster_cuda_resident_csr_cpp", (DL_FUNC) &_fastEmbedR_massive_cluster_cuda_resident_csr_cpp, 14},
+    {"_fastEmbedR_massive_louvain_cuda_devices_level_cpp", (DL_FUNC) &_fastEmbedR_massive_louvain_cuda_devices_level_cpp, 14},
     {"_fastEmbedR_massive_louvain_cuda_level_cpp", (DL_FUNC) &_fastEmbedR_massive_louvain_cuda_level_cpp, 13},
     {"_fastEmbedR_massive_leiden_metal_refine_cpp", (DL_FUNC) &_fastEmbedR_massive_leiden_metal_refine_cpp, 12},
     {"_fastEmbedR_massive_leiden_cuda_refine_cpp", (DL_FUNC) &_fastEmbedR_massive_leiden_cuda_refine_cpp, 12},

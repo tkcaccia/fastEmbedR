@@ -26,54 +26,46 @@ massive_cuda_stream_plan <- function(graph, output, devices,
     limit <- massive_memory_bytes(memory_limit)
     free <- massive_auto_cuda_free(devices, graph$n_vertices)
     budget <- min(2e6, floor(0.2 * free / 48))
-    if (is.na(rows) || rows < 1L ||
-        budget < graph$max_degree || budget < 1) stop(
-        "A CSR row exceeds the available bounded GPU batch.",
+    if (is.na(rows) || rows < 1L || budget < 1) stop(
+        "No bounded CUDA graph batch fits available VRAM.",
         call. = FALSE)
-    if (32 * graph$n_vertices + 512 * 1024^2 > 0.7 * limit) stop(
+    host <- 48 * graph$n_vertices + 512 * 1024^2 +
+        length(devices) * (16 * budget + 8 * rows)
+    if (host > 0.7 * limit) stop(
         "Streamed clustering host state exceeds `memory_limit`.",
         call. = FALSE)
     path <- massive_louvain_output(output,
-        32 * graph$n_vertices + 1024^2)
-    artifacts <- paste0(path, c(".part", ".stream.json",
-        ".stream.out", ".stream.err"))
+        4 * graph$n_vertices + 1024^2)
+    artifacts <- paste0(path, c(".part", ".part.part",
+        ".stream.json", ".stream.out", ".stream.err"))
     if (any(file.exists(artifacts))) stop(
         "Streamed clustering output files already exist.",
         call. = FALSE)
     list(path = path, devices = devices,
         uuids = massive_cuda_device_uuids(devices),
         chunk_rows = rows, edge_budget = budget,
-        host_limit = limit, free_vram = free)
+        host_limit = limit, host_estimate = host,
+        free_vram = free)
 }
 
 massive_cuda_stream_invoke <- function(graph, plan, controls) {
-    python <- Sys.getenv("FASTEMBEDR_CUGRAPH_PYTHON", "python3")
-    if (!nzchar(Sys.which(python))) stop(
-        "CUDA Python is unavailable; no fallback.", call. = FALSE)
-    script <- system.file("python", "massive_cuda_stream_cluster.py",
-        package = "fastEmbedR", mustWork = TRUE)
-    paths <- c(graph$offsets_path, graph$indices_path,
-        graph$weights_path)
-    args <- c(script, "--paths", paths, "--vertices",
-        format(graph$n_vertices, scientific = FALSE, trim = TRUE),
-        "--devices", length(plan$devices), "--chunk-rows",
-        plan$chunk_rows, "--edge-budget", plan$edge_budget,
-        "--passes", controls$passes, "--resolution",
-        controls$resolution, "--seed", controls$seed,
-        "--output", plan$path, "--metadata",
-        paste0(plan$path, ".stream.json"))
-    if (nzchar(controls$initial_path)) args <- c(args,
-        "--initial", controls$initial_path,
-        "--initial-count", controls$initial_count)
-    status <- system2(python, shQuote(args),
-        stdout = paste0(plan$path, ".stream.out"),
-        stderr = paste0(plan$path, ".stream.err"),
-        env = paste0("CUDA_VISIBLE_DEVICES=",
-            paste(plan$uuids, collapse = ",")))
-    if (!identical(status, 0L)) stop(
-        "Streamed CUDA clustering failed; inspect .stream.err.",
-        call. = FALSE)
-    jsonlite::fromJSON(paste0(plan$path, ".stream.json"))
+    fitted <- massive_louvain_cuda_devices_level_cpp(
+        graph$offsets_path, graph$indices_path,
+        graph$weights_path, graph$n_vertices,
+        paste0(plan$path, ".part"), plan$devices,
+        controls$passes, controls$resolution,
+        plan$chunk_rows, plan$edge_budget, controls$seed,
+        contracted = identical(graph$weight_dtype, "float64"),
+        initial_path = controls$initial_path,
+        initial_count = controls$initial_count)
+    list(backend = fitted$backend, vertices = fitted$n_vertices,
+        gpu_devices_used = fitted$gpu_devices_used,
+        gpu_identity = plan$uuids,
+        initial_partition = fitted$initial_partition,
+        communities = fitted$n_communities,
+        modularity = fitted$modularity_final,
+        modularity_initial = fitted$modularity_initial,
+        moves = fitted$moves, passes = fitted$passes)
 }
 
 massive_cuda_stream_initial <- function(initial, graph) {
@@ -94,12 +86,13 @@ massive_cuda_stream_initial <- function(initial, graph) {
 massive_cuda_stream_audit <- function(graph, plan, metadata,
         resolution, memory_limit, before, initial) {
     part <- paste0(plan$path, ".part")
-    if (!identical(metadata$backend, "cuda_streamed_multigpu_local") ||
+    if (!identical(metadata$backend,
+            "cuda_streamed_multigpu_native") ||
         metadata$vertices != graph$n_vertices ||
         !identical(as.integer(metadata$gpu_devices_used),
-            seq_along(plan$devices) - 1L) ||
-        length(unique(metadata$gpu_pci_bus_ids)) !=
-            length(plan$devices) ||
+            plan$devices) ||
+        !identical(metadata$gpu_identity, plan$uuids) ||
+        anyDuplicated(metadata$gpu_identity) ||
         !identical(metadata$initial_partition,
             nzchar(initial$path)) ||
         file.info(part)$size != 4 * graph$n_vertices) stop(
@@ -131,8 +124,7 @@ massive_cuda_stream_level <- function(graph, output, devices,
     plan <- massive_cuda_stream_plan(graph, output, devices,
         chunk_rows, memory_limit)
     before <- massive_cuda_stream_graph_identity(graph)
-    worker <- system.file("python", "massive_cuda_stream_cluster.py",
-        package = "fastEmbedR", mustWork = TRUE)
+    worker <- getLoadedDLLs()[["fastEmbedR"]][["path"]]
     hash <- unname(tools::md5sum(worker))
     metadata <- massive_cuda_stream_invoke(graph, plan, controls)
     if (!identical(before, massive_cuda_stream_graph_identity(graph)) ||
@@ -158,7 +150,7 @@ massive_cuda_stream_level <- function(graph, output, devices,
         gpu_devices = plan$devices, gpu_identity = plan$uuids,
         graph_identity = graph$file_identity,
         validated_input_identity = before, graph_audit = score,
-        stream = metadata, python_worker_md5 = hash,
+        stream = metadata, native_library_md5 = hash,
         mode = "out_of_core_graph", experimental = TRUE),
         class = "fastEmbedR_massive_louvain_level")
 }

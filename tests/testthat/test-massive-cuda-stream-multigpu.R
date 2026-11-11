@@ -53,10 +53,11 @@ test_that("stream planner budgets host, disk, and GPU chunks", {
     expect_identical(plan$devices, c(0L, 1L))
     expect_equal(plan$chunk_rows, 50L)
     expect_gt(plan$edge_budget, graph$max_degree)
-    graph$max_degree <- 1e9
-    expect_error(fastEmbedR:::massive_cuda_stream_plan(graph,
-        tempfile(), c(0L, 1L), 50L, "2GB"),
-        "exceeds")
+    graph$max_degree <- 2e6 + 1
+    graph$n_edges <- 2e6 + 1
+    spanning <- fastEmbedR:::massive_cuda_stream_plan(graph,
+        tempfile(), c(0L, 1L), 50L, "2GB")
+    expect_lt(spanning$edge_budget, graph$max_degree)
 })
 
 test_that("stream planner retains eight GPU identities and bounded work", {
@@ -75,6 +76,40 @@ test_that("stream planner retains eight GPU identities and bounded work", {
     massive_louvain_output = function(output, ...) output,
     massive_cuda_device_uuids = function(devices)
         paste0("GPU-", devices), .package = "fastEmbedR")
+})
+
+test_that("streamed multi-GPU invokes native clustering", {
+    graph <- list(offsets_path = "off", indices_path = "ids",
+        weights_path = "weights", n_vertices = 12L,
+        weight_dtype = "float64")
+    plan <- list(path = tempfile(), devices = c(1L, 3L),
+        uuids = c("GPU-1", "GPU-3"), chunk_rows = 4L,
+        edge_budget = 100L)
+    called <- NULL
+    with_mocked_bindings({
+        result <- fastEmbedR:::massive_cuda_stream_invoke(
+            graph, plan, list(passes = 2L, resolution = 1,
+                seed = 7L, initial_path = "", initial_count = 0L))
+        expect_identical(called$devices, c(1L, 3L))
+        expect_true(called$contracted)
+        expect_identical(result$backend,
+            "cuda_streamed_multigpu_native")
+        expect_identical(result$gpu_identity, plan$uuids)
+    }, massive_louvain_cuda_devices_level_cpp = function(
+            offsets_path, indices_path, weights_path,
+            n_vertices, output, devices, max_passes,
+            resolution, chunk_rows, edge_budget, seed,
+            contracted, initial_path, initial_count) {
+        called <<- list(devices = devices,
+            contracted = contracted)
+        list(backend = "cuda_streamed_multigpu_native",
+            n_vertices = n_vertices,
+            gpu_devices_used = devices,
+            initial_partition = FALSE, n_communities = 3L,
+            modularity_final = 0.5,
+            modularity_initial = 0.1, moves = 3,
+            passes = 2L)
+    }, .package = "fastEmbedR")
 })
 
 test_that("streamed Leiden checks the prior parent map", {

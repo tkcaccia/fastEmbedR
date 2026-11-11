@@ -421,7 +421,7 @@ passes the devices to the resident graph fit when it fits in memory.
 
 For a symmetric file-backed fuzzy graph, the isolated experimental
 `gpu_storage = "stream"` route keeps CSR edges and partition state on
-host storage while two to four CUDA devices process bounded batches:
+host storage while the selected CUDA devices process bounded batches:
 
 ```r
 fit <- graph_cluster(fuzzy_graph, method = "louvain", backend = "cuda",
@@ -432,7 +432,7 @@ fit <- graph_cluster(fuzzy_graph, method = "louvain", backend = "cuda",
 This performs multilevel Louvain with GPU local moves and CPU graph
 contraction and modularity audits. `method = "leiden"` uses the same
 GPU local moves plus file-backed CPU Leiden refinement and connectivity
-audits. It requires CuPy. The option is
+audits. It uses native C++ and CUDA without a Python runtime. The option is
 designed for graphs larger than combined GPU memory, but its actual
 CUDA correctness, quality, and capacity still require device
 qualification. Do not run

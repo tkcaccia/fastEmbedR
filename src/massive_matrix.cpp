@@ -1155,12 +1155,21 @@ template <typename Chunk, typename Fragment>
 void visit_clustering_uploads(CsrGraphSource& graph,
     std::uint64_t n, std::uint64_t chunk_rows,
     std::uint64_t edge_budget, Chunk upload_chunk,
-    Fragment upload_fragment) {
-  for (std::uint64_t first = 1; first <= n;) {
+    Fragment upload_fragment, std::uint64_t range_first = 1,
+    std::uint64_t range_last = 0,
+    bool interrupt = true) {
+  if (range_last == 0) range_last = n;
+  if (range_first < 1 || range_first > range_last ||
+      range_last > n) {
+    Rcpp::stop("Invalid clustering upload row range.");
+  }
+  for (std::uint64_t first = range_first;
+       first <= range_last;) {
     const auto rows = graph.bounded_rows(first, chunk_rows,
       edge_budget, true);
+    const auto bounded = std::min(rows, range_last - first + 1);
     const auto degree = graph.offset(first) - graph.offset(first - 1);
-    if (rows == 1 && degree > edge_budget) {
+    if (bounded == 1 && degree > edge_budget) {
       std::vector<int> col_idx;
       std::vector<float> weight;
       col_idx.reserve(static_cast<std::size_t>(edge_budget));
@@ -1175,24 +1184,24 @@ void visit_clustering_uploads(CsrGraphSource& graph,
           }
           col_idx.push_back(static_cast<int>(target - 1));
           weight.push_back(static_cast<float>(value));
-        });
+        }, interrupt);
       upload_fragment(col_idx, weight, first - 1, true);
     } else {
-      std::vector<int> row_ptr(rows + 1, 0);
+      std::vector<int> row_ptr(bounded + 1, 0);
       std::vector<int> col_idx;
       std::vector<float> weight;
-      graph.visit(first, rows,
+      graph.visit(first, bounded,
         [&](std::uint64_t source, std::uint32_t target,
             double value, std::uint64_t) {
           ++row_ptr[source - first + 1];
           col_idx.push_back(static_cast<int>(target - 1));
           weight.push_back(static_cast<float>(value));
-        });
+        }, interrupt);
       std::partial_sum(row_ptr.begin(), row_ptr.end(), row_ptr.begin());
       upload_chunk(row_ptr, col_idx, weight, first - 1);
     }
-    first += rows;
-    Rcpp::checkUserInterrupt();
+    first += bounded;
+    if (interrupt) Rcpp::checkUserInterrupt();
   }
 }
 
@@ -2423,6 +2432,485 @@ List massive_louvain_metal_level_cpp(std::string offsets_path,
     Rcpp::Named("objective_audit_backend") = "cpu");
 #else
   Rcpp::stop("Metal streaming Louvain requires macOS Metal.");
+#endif
+}
+
+#ifdef FASTEMBEDR_HAS_CUDA
+double coordinated_stream_modularity(CsrGraphSource& graph,
+    const std::vector<int>& labels,
+    double total,
+    double resolution, int chunk_rows,
+    std::uint64_t edge_budget) {
+  std::vector<double> volume(labels.size(), 0.0);
+  double inside = 0.0;
+  for (std::uint64_t first = 1; first <= graph.vertices();) {
+    const auto rows = graph.bounded_rows(first, chunk_rows,
+      edge_budget, true);
+    graph.visit(first, rows,
+      [&](std::uint64_t source, std::uint32_t target,
+          double weight, std::uint64_t) {
+        volume[labels[source - 1]] += weight;
+        if (labels[source - 1] == labels[target - 1]) {
+          inside += weight;
+        }
+      });
+    first += rows;
+    Rcpp::checkUserInterrupt();
+  }
+  double quality = inside / total;
+  for (double value : volume) {
+    const double share = value / total;
+    quality -= resolution * share * share;
+  }
+  return quality;
+}
+
+void coordinated_stream_totals(const std::vector<int>& labels,
+    const std::vector<float>& degree,
+    std::vector<float>& volume, std::vector<int>& count) {
+  std::fill(volume.begin(), volume.end(), 0.0f);
+  std::fill(count.begin(), count.end(), 0);
+  for (std::size_t u = 0; u < labels.size(); ++u) {
+    const int label = labels[u];
+    if (label < 0 || static_cast<std::size_t>(label) >= labels.size()) {
+      Rcpp::stop("Invalid coordinated CUDA label.");
+    }
+    volume[label] += degree[u];
+    ++count[label];
+  }
+}
+
+struct CoordinatedStreamWorker {
+  int device;
+  std::uint64_t first;
+  std::uint64_t last;
+  void* session = nullptr;
+  std::unique_ptr<CsrGraphSource> graph;
+  std::exception_ptr failure;
+  ~CoordinatedStreamWorker() {
+    if (session != nullptr) {
+      if (!fastembedr_massive_cuda_select_device(device)) {
+        graph_stream_cuda_destroy(session);
+      }
+    }
+  }
+};
+
+void coordinated_stream_propose(CoordinatedStreamWorker* worker,
+    const std::vector<int>& labels, std::vector<int>* proposed,
+    std::uint64_t chunk_rows, std::uint64_t edge_budget) {
+  try {
+    if (fastembedr_massive_cuda_select_device(worker->device)) {
+      throw std::runtime_error("Cannot select coordinated CUDA GPU.");
+    }
+    visit_clustering_uploads(*worker->graph, labels.size(),
+      chunk_rows, edge_budget,
+      [&](const std::vector<int>& row,
+          const std::vector<int>& col,
+          const std::vector<float>& weight, std::uint64_t first) {
+        const auto moves = graph_stream_cuda_propose_chunk(
+          worker->session, row, col, weight,
+          static_cast<int>(first));
+        std::copy(moves.begin(), moves.end(),
+          proposed->begin() + first);
+      },
+      [&](const std::vector<int>& col,
+          const std::vector<float>& weight,
+          std::uint64_t row, bool last) {
+        const int move = graph_stream_cuda_propose_fragment(
+          worker->session, col, weight,
+          static_cast<int>(row), last);
+        if (last) (*proposed)[row] = move;
+      }, worker->first + 1, worker->last, false);
+  } catch (...) {
+    worker->failure = std::current_exception();
+  }
+}
+
+fastembedr_graph_accel::Graph load_native_resident_csr(
+    CsrGraphSource& source, int chunk_rows,
+    std::uint64_t edge_budget, double memory_limit) {
+  namespace accel = fastembedr_graph_accel;
+  const auto n = source.vertices();
+  const auto edges = source.edges();
+  const double required = 128.0 * n + 64.0 * edges +
+    512.0 * 1024 * 1024;
+  if (n > INT_MAX || edges > SIZE_MAX / 64 ||
+      !std::isfinite(memory_limit) ||
+      required > 0.7 * memory_limit) {
+    Rcpp::stop("Native resident CSR exceeds host memory admission.");
+  }
+  accel::Graph graph;
+  graph.n = static_cast<int>(n);
+  graph.col_idx.resize(edges);
+  graph.weight.resize(edges);
+  graph.degree.assign(n, 0.0f);
+  if (edges > INT32_MAX) graph.row_ptr_wide.resize(n + 1);
+  else graph.row_ptr.resize(n + 1);
+  for (std::uint64_t row = 0; row <= n; ++row) {
+    const auto offset = source.offset(row);
+    if (edges > INT32_MAX) graph.row_ptr_wide[row] = offset;
+    else graph.row_ptr[row] = static_cast<int>(offset);
+  }
+  graph.edges.reserve(edges / 2 + n);
+  for (std::uint64_t first = 1; first <= n;) {
+    const auto rows = source.bounded_rows(first, chunk_rows,
+      edge_budget, true);
+    source.visit(first, rows,
+      [&](std::uint64_t from, std::uint32_t to,
+          double value, std::uint64_t local) {
+        const auto pos = graph.offset(first - 1) + local;
+        const float weight = static_cast<float>(value);
+        graph.col_idx[pos] = static_cast<int>(to - 1);
+        graph.weight[pos] = weight;
+        graph.degree[from - 1] += weight;
+        if (from <= to) {
+          const float half = from == to ? 0.5f : 1.0f;
+          graph.edges.push_back(accel::Edge{
+            static_cast<int>(from - 1),
+            static_cast<int>(to - 1), weight * half});
+          graph.total_edge_weight += value * half;
+        }
+      });
+    first += rows;
+    Rcpp::checkUserInterrupt();
+  }
+  graph.volume = static_cast<float>(
+    2.0 * graph.total_edge_weight);
+  if (!(graph.volume > 0.0f) ||
+      !std::isfinite(graph.volume)) {
+    Rcpp::stop("Native resident graph volume is invalid.");
+  }
+  for (std::uint64_t row = 0; row < n; ++row) {
+    for (auto pos = graph.offset(row);
+         pos < graph.offset(row + 1); ++pos) {
+      const int target = graph.col_idx[pos];
+      const auto begin = graph.col_idx.begin() +
+        graph.offset(target);
+      const auto end = graph.col_idx.begin() +
+        graph.offset(target + 1);
+      const auto reverse = std::lower_bound(begin, end,
+        static_cast<int>(row));
+      if (reverse == end || *reverse != static_cast<int>(row)) {
+        Rcpp::stop("Native resident CSR is not symmetric.");
+      }
+      const auto opposite = graph.weight[
+        graph.offset(target) + (reverse - begin)];
+      if (std::abs(opposite - graph.weight[pos]) >
+          1e-6f * std::max(1.0f, graph.weight[pos])) {
+        Rcpp::stop("Native resident CSR weights are asymmetric.");
+      }
+    }
+    if (row % 4096 == 0) Rcpp::checkUserInterrupt();
+  }
+  return graph;
+}
+#endif
+
+// [[Rcpp::export]]
+List massive_cluster_cuda_resident_csr_cpp(
+    std::string offsets_path, std::string indices_path,
+    std::string weights_path, double n_vertices,
+    std::string output, std::string method,
+    Rcpp::IntegerVector devices, int n_iterations,
+    double resolution, int chunk_rows, double edge_budget,
+    double memory_limit, int seed,
+    bool contracted = false) {
+#if defined(FASTEMBEDR_HAS_CUDA) && defined(__unix__)
+  const auto budget = whole_number(edge_budget, "edge_budget");
+  if (devices.size() < 2 || chunk_rows < 1 ||
+      budget < 1 || budget > INT_MAX || seed < 0 ||
+      (method != "louvain" && method != "leiden") ||
+      std::filesystem::exists(output) ||
+      std::filesystem::exists(output + ".part")) {
+    Rcpp::stop("Invalid resident CUDA clustering controls.");
+  }
+  int available = 0;
+  if (fastembedr_massive_cuda_device_count(&available)) {
+    Rcpp::stop("Cannot inspect resident CUDA devices.");
+  }
+  std::vector<int> selected(devices.begin(), devices.end());
+  std::vector<bool> seen(available, false);
+  for (int device : selected) {
+    if (device < 0 || device >= available || seen[device]) {
+      Rcpp::stop("Resident CUDA GPUs must be distinct and visible.");
+    }
+    seen[device] = true;
+  }
+  CsrGraphSource source(offsets_path, indices_path,
+    weights_path, n_vertices, "stream", contracted);
+  const std::vector<std::string> paths = {
+    offsets_path, indices_path, weights_path};
+  std::vector<std::string> stamps;
+  std::vector<std::uint64_t> sizes;
+  for (const auto& path : paths) {
+    stamps.push_back(file_stamp(path));
+    sizes.push_back(std::filesystem::file_size(path));
+  }
+  const auto graph = load_native_resident_csr(source,
+    chunk_rows, budget, memory_limit);
+  if (selected.size() > static_cast<std::size_t>(graph.n)) {
+    Rcpp::stop("Resident CUDA needs a row on each GPU.");
+  }
+  const auto move = [&](const fastembedr_graph_accel::Graph& level,
+      const std::vector<int>& initial,
+      const std::vector<int>* parent, int passes,
+      float gamma, std::uint64_t run_seed,
+      bool refinement) {
+    return graph_local_move_cuda_devices_impl(level,
+      initial, parent, passes, gamma, run_seed,
+      refinement, selected);
+  };
+  auto result = fastembedr_graph_accel::cluster_graph(
+    graph, method, resolution, n_iterations, 1,
+    seed, "cuda", move);
+  const auto membership = Rcpp::as<Rcpp::IntegerVector>(
+    result["membership"]);
+  if (membership.size() != graph.n) {
+    Rcpp::stop("Native resident labels are incomplete.");
+  }
+  const std::string part = output + ".part";
+  {
+    MappedLouvainVector<std::uint32_t> labels(part, graph.n);
+    for (int u = 0; u < graph.n; ++u) {
+      if (membership[u] < 1 || membership[u] > graph.n) {
+        Rcpp::stop("Native resident label is invalid.");
+      }
+      labels[u] = static_cast<std::uint32_t>(membership[u]);
+    }
+    labels.sync();
+  }
+  for (std::size_t i = 0; i < paths.size(); ++i) {
+    std::error_code error;
+    const auto size = std::filesystem::file_size(paths[i], error);
+    if (error || size != sizes[i] ||
+        file_stamp(paths[i]) != stamps[i]) {
+      Rcpp::stop("Native resident graph changed during fitting.");
+    }
+  }
+  std::error_code error;
+  std::filesystem::rename(part, output, error);
+  if (error) Rcpp::stop("Cannot finalize native CUDA labels.");
+  result["membership"] = R_NilValue;
+  result["membership_path"] = output;
+  result["gpu_devices_used"] = devices;
+  result["backend"] = "cuda_resident_multigpu_native";
+  return result;
+#else
+  Rcpp::stop("Native resident multi-GPU clustering needs Linux CUDA.");
+#endif
+}
+
+// [[Rcpp::export]]
+List massive_louvain_cuda_devices_level_cpp(
+    std::string offsets_path, std::string indices_path,
+    std::string weights_path, double n_vertices,
+    std::string output, Rcpp::IntegerVector devices,
+    int max_passes, double resolution, int chunk_rows,
+    double edge_budget, int seed, bool contracted = false,
+    std::string initial_path = "", int initial_count = 0) {
+#if defined(FASTEMBEDR_HAS_CUDA) && defined(__unix__)
+  const auto budget = whole_number(edge_budget, "edge_budget");
+  if (devices.size() < 2 || max_passes < 1 || chunk_rows < 1 ||
+      budget < 1 || budget > INT_MAX || seed < 0 ||
+      !std::isfinite(resolution) || resolution <= 0.0) {
+    Rcpp::stop("Invalid coordinated CUDA clustering controls.");
+  }
+  CsrGraphSource graph(offsets_path, indices_path, weights_path,
+    n_vertices, "stream", contracted);
+  const auto n = graph.vertices();
+  if (n > INT_MAX || devices.size() > n ||
+      std::filesystem::exists(output) ||
+      std::filesystem::exists(output + ".part")) {
+    Rcpp::stop("Invalid coordinated CUDA graph or output.");
+  }
+  int available = 0;
+  if (fastembedr_massive_cuda_device_count(&available)) {
+    Rcpp::stop("Cannot inspect CUDA devices.");
+  }
+  std::vector<bool> seen(available, false);
+  for (int device : devices) {
+    if (device < 0 || device >= available || seen[device]) {
+      Rcpp::stop("CUDA devices must be distinct and visible.");
+    }
+    seen[device] = true;
+  }
+  std::vector<std::string> paths = {
+    offsets_path, indices_path, weights_path};
+  if (!initial_path.empty()) paths.push_back(initial_path);
+  std::vector<std::string> stamps;
+  std::vector<std::uint64_t> sizes;
+  for (const auto& path : paths) {
+    stamps.push_back(file_stamp(path));
+    sizes.push_back(std::filesystem::file_size(path));
+  }
+  std::vector<int> labels(n);
+  if (initial_path.empty()) {
+    std::iota(labels.begin(), labels.end(), 0);
+  } else {
+    if (initial_count < 1 || initial_count > static_cast<int>(n)) {
+      Rcpp::stop("Invalid initial community count.");
+    }
+    GraphFile saved(initial_path, checked_product(n, 4), "mmap");
+    for (std::uint64_t u = 0; u < n; ++u) {
+      const auto value = read_u32(saved.read(u * 4, 4));
+      if (value < 1 || value > static_cast<unsigned>(initial_count)) {
+        Rcpp::stop("Initial CUDA label is out of range.");
+      }
+      labels[u] = static_cast<int>(value - 1);
+    }
+  }
+  std::vector<float> degree(n, 0.0f);
+  double total = 0.0;
+  for (std::uint64_t first = 1; first <= n;) {
+    const auto rows = graph.bounded_rows(first, chunk_rows,
+      budget, true);
+    graph.visit(first, rows,
+      [&](std::uint64_t source, std::uint32_t,
+          double weight, std::uint64_t) {
+        degree[source - 1] += static_cast<float>(weight);
+        total += weight;
+      });
+    first += rows;
+    Rcpp::checkUserInterrupt();
+  }
+  if (!(total > 0.0) || total > FLT_MAX) {
+    Rcpp::stop("Coordinated CUDA graph volume is invalid.");
+  }
+  const double initial_quality = coordinated_stream_modularity(
+    graph, labels, total, resolution, chunk_rows, budget);
+  std::vector<std::unique_ptr<CoordinatedStreamWorker>> workers;
+  workers.reserve(devices.size());
+  for (int i = 0; i < devices.size(); ++i) {
+    auto worker = std::make_unique<CoordinatedStreamWorker>();
+    worker->device = devices[i];
+    worker->first = n * static_cast<std::uint64_t>(i) /
+      devices.size();
+    worker->last = n * static_cast<std::uint64_t>(i + 1) /
+      devices.size();
+    worker->graph = std::make_unique<CsrGraphSource>(
+      offsets_path, indices_path, weights_path,
+      n_vertices, "stream", contracted);
+    if (fastembedr_massive_cuda_select_device(worker->device)) {
+      Rcpp::stop("Cannot select coordinated CUDA GPU.");
+    }
+    worker->session = graph_stream_cuda_create(degree, labels,
+      static_cast<float>(total), static_cast<float>(resolution),
+      static_cast<std::uint64_t>(seed), chunk_rows,
+      static_cast<int>(budget));
+    if (graph_stream_cuda_device_id(worker->session) !=
+        worker->device) {
+      Rcpp::stop("Coordinated CUDA worker device mismatch.");
+    }
+    workers.emplace_back(std::move(worker));
+  }
+  std::vector<float> volume(n);
+  std::vector<int> count(n);
+  std::vector<int> proposed(n);
+  std::uint64_t moves = 0;
+  int passes = 0;
+  for (int pass = 0; pass < max_passes; ++pass) {
+    const auto previous = labels;
+    const double prior = coordinated_stream_modularity(
+      graph, labels, total, resolution,
+      chunk_rows, budget);
+    std::uint64_t pass_moves = 0;
+    for (int color = 0; color < 8; ++color) {
+      coordinated_stream_totals(labels, degree, volume, count);
+      std::copy(labels.begin(), labels.end(), proposed.begin());
+      for (auto& worker : workers) {
+        if (fastembedr_massive_cuda_select_device(worker->device)) {
+          Rcpp::stop("Cannot select coordinated CUDA GPU.");
+        }
+        graph_stream_cuda_begin_pass(worker->session, pass);
+        graph_stream_cuda_set_color(worker->session, color);
+        graph_stream_cuda_set_state(worker->session,
+          labels, volume, count);
+        worker->failure = nullptr;
+      }
+      std::vector<std::future<void>> tasks;
+      tasks.reserve(workers.size());
+      for (auto& worker : workers) {
+        tasks.emplace_back(std::async(std::launch::async,
+          coordinated_stream_propose,
+          worker.get(), std::cref(labels), &proposed,
+          static_cast<std::uint64_t>(chunk_rows), budget));
+      }
+      for (auto& task : tasks) task.get();
+      for (const auto& worker : workers) {
+        if (worker->failure) std::rethrow_exception(worker->failure);
+      }
+      for (std::size_t u = 0; u < n; ++u) {
+        if (proposed[u] < 0 ||
+            proposed[u] >= static_cast<int>(n)) {
+          Rcpp::stop("Invalid coordinated CUDA proposal.");
+        }
+        pass_moves += proposed[u] != labels[u];
+      }
+      labels.swap(proposed);
+      Rcpp::checkUserInterrupt();
+    }
+    ++passes;
+    const double next = coordinated_stream_modularity(
+      graph, labels, total, resolution,
+      chunk_rows, budget);
+    if (!std::isfinite(next) || next + 1e-9 < prior) {
+      labels = previous;
+      break;
+    }
+    moves += pass_moves;
+    if (pass_moves == 0) break;
+  }
+  workers.clear();
+  const std::string part = output + ".part";
+  std::vector<std::uint32_t> compact(n, 0);
+  std::uint32_t communities = 0;
+  for (int label : labels) {
+    if (compact[label] == 0) compact[label] = ++communities;
+  }
+  {
+    MappedLouvainVector<std::uint32_t> result(part, n);
+    for (std::uint64_t u = 0; u < n; ++u) {
+      result[u] = compact[labels[u]];
+    }
+    result.sync();
+  }
+  auto audit = massive_graph_modularity_cpp(offsets_path,
+    indices_path, weights_path, part, n_vertices,
+    static_cast<int>(communities), resolution,
+    chunk_rows, edge_budget, false, contracted);
+  const double final = Rcpp::as<double>(audit["modularity"]);
+  if (!std::isfinite(final) ||
+      final < initial_quality - 1e-7) {
+    Rcpp::stop("Coordinated CUDA clustering reduced modularity.");
+  }
+  for (std::size_t i = 0; i < paths.size(); ++i) {
+    std::error_code error;
+    const auto size = std::filesystem::file_size(paths[i], error);
+    if (error || size != sizes[i] ||
+        file_stamp(paths[i]) != stamps[i]) {
+      Rcpp::stop("Coordinated CUDA graph changed during fitting.");
+    }
+  }
+  std::error_code error;
+  std::filesystem::rename(part, output, error);
+  if (error) Rcpp::stop("Cannot finalize CUDA clustering labels.");
+  return List::create(
+    Rcpp::Named("membership_path") = output,
+    Rcpp::Named("n_vertices") = static_cast<double>(n),
+    Rcpp::Named("n_communities") =
+      static_cast<int>(communities),
+    Rcpp::Named("modularity_initial") = initial_quality,
+    Rcpp::Named("modularity_final") = final,
+    Rcpp::Named("total_edge_weight") = total / 2.0,
+    Rcpp::Named("moves") = static_cast<double>(moves),
+    Rcpp::Named("passes") = passes,
+    Rcpp::Named("gpu_devices_used") = devices,
+    Rcpp::Named("backend") = "cuda_streamed_multigpu_native",
+    Rcpp::Named("initial_partition") =
+      !initial_path.empty());
+#else
+  Rcpp::stop("Native multi-GPU streamed clustering needs Linux CUDA.");
 #endif
 }
 

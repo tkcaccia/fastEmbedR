@@ -445,9 +445,9 @@ print.fastEmbedR_massive_leiden <- function(x, ...) {
     cat("EXPERIMENTAL fastEmbedR file-backed Leiden\n")
     cat("  vertices: ", format(x$n_vertices, scientific = FALSE),
         "; communities: ", x$n_communities, "\n", sep = "")
-    if (!is.null(x$cugraph)) {
+    if (!is.null(x$gpu_devices)) {
         cat("  modularity: ", signif(x$modularity_final, 6),
-            "; backend: cuGraph on ", length(x$gpu_devices),
+            "; backend: native CUDA on ", length(x$gpu_devices),
             " GPUs\n", sep = "")
     } else {
         cat("  modularity: ", signif(x$modularity_final, 6),

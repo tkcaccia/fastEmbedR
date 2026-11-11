@@ -229,7 +229,7 @@ massive_cluster_full_cuda <- function(x, method, output, devices,
         checkpoint, resume, initial, gpu_storage = "resident") {
     if (method == "walktrap" || checkpoint || resume ||
         !is.null(initial)) stop(
-        "Multi-GPU cuGraph supports Leiden/Louvain without ",
+        "Multi-GPU CUDA supports Leiden/Louvain without ",
         "checkpoint or initial labels; no fallback.", call. = FALSE)
     if (gpu_storage == "stream") {
         stream <- if (method == "louvain")
@@ -239,7 +239,7 @@ massive_cluster_full_cuda <- function(x, method, output, devices,
             chunk_rows, memory_limit, resolution, n_iterations,
             seed))
     }
-    result <- massive_cugraph_cluster(x, output, method, devices,
+    result <- massive_cuda_resident_cluster(x, output, method, devices,
         chunk_rows, memory_limit, resolution, n_iterations, seed)
     result$mode <- "out_of_core_graph"
     result
@@ -353,20 +353,19 @@ massive_cluster_auto_result <- function(result, massive, plan) {
 #' run on the GPU while contraction and objective audits run on the CPU.
 #' Full-graph Leiden runs one
 #' hierarchy with `n_iterations` local-move passes per level on CPU.
-#' In cuGraph, `n_iterations` instead caps levels; cuGraph Louvain has no
-#' seed control and only accepts the default `seed = 1` request. Full-graph
+#' The native multi-GPU routes use `n_iterations` as a local-move pass
+#' limit per level and accept `seed`. Full-graph
 #' Walktrap runs exact walks within bounded blocks and contracts communities;
 #' it is an explicit approximation when more than one block is needed.
-#' Multi-GPU CUDA full-graph clustering uses optional Python RAPIDS cuGraph,
-#' Dask-CUDA, gpuinfo >= 0.2.0, and jsonlite. It needs the complete graph
-#' to fit across the selected GPUs, fails explicitly if memory is
-#' insufficient, and has no checkpoint or initial-label support. It is
-#' not a billion-row out-of-core clustering algorithm. An experimental
+#' Native multi-GPU CUDA resident clustering keeps graph shards on the
+#' selected GPUs and checks host RAM and per-device VRAM before fitting.
+#' It fails explicitly if memory is insufficient and has no checkpoint
+#' or initial-label support. An experimental
 #' `gpu_storage = "stream"` route runs bounded multi-GPU Louvain
 #' local-moving levels with graph and labels on host storage, and CPU
 #' graph contraction between levels. Leiden also uses bounded multi-GPU
 #' local moves, with CPU Leiden refinement and CPU graph contraction.
-#' It requires CuPy.
+#' Both routes use package-owned C++ and CUDA kernels.
 #' `massive = "auto"` uses
 #' ordinary in-memory graph clustering when resource estimates permit it.
 #' Exact Walktrap is CPU-only and limited to 4,000 landmark vertices;
@@ -384,12 +383,12 @@ massive_cluster_auto_result <- function(result, massive, plan) {
 #'   label-file path in full-graph mode.
 #' @param backend `"cpu"`, `"cuda"`, or `"metal"` for landmarks;
 #'   full-graph CUDA Louvain/Leiden with `devices = NULL` stream graph chunks.
-#'   Multiple CUDA devices use cuGraph for resident clustering.
+#'   Multiple CUDA devices use native coordinated clustering.
 #' @param devices Optional distinct CUDA devices for landmark clustering
 #'   or in-memory auto mode. Two or more devices coordinate one graph fit;
 #'   query KNN shards use the selected devices. Full-graph mode accepts
 #'   at least two initial CUDA-visible devices.
-#' @param gpu_storage `"resident"` for cuGraph or `"stream"` for
+#' @param gpu_storage `"resident"` for GPU-held CSR shards or `"stream"` for
 #'   bounded multi-GPU Louvain or Leiden local moves in full-graph CUDA mode.
 #' @param n.cores CPU workers for graph building, landmark assignment,
 #'   and bounded file-backed Leiden/Louvain candidate preparation.
@@ -406,7 +405,7 @@ massive_cluster_auto_result <- function(result, massive, plan) {
 #' @param resolution,n_iterations,n_runs,steps,seed Graph clustering controls.
 #' @param checkpoint,resume Save or reuse completed landmark workflow stages,
 #'   label batches, or completed CPU/CUDA/Metal Louvain and CPU Leiden stages.
-#'   cuGraph and Walktrap do not support checkpoints.
+#'   Multi-GPU CUDA and Walktrap do not support checkpoints.
 #' @param checkpoint_every Landmark label batches between checkpoints.
 #' @param initial Optional saved landmark-clustering result used to
 #'   initialize full-graph Louvain or Leiden. Other modes reject it.

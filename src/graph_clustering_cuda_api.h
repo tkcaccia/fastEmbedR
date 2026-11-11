@@ -33,7 +33,19 @@ void* graph_stream_cuda_create(const std::vector<float>& degree,
   const std::vector<float>* cuts = nullptr,
   const std::vector<float>* parent_volume = nullptr);
 void graph_stream_cuda_begin_pass(void* handle, int pass);
+int graph_stream_cuda_device_id(void* handle);
 void graph_stream_cuda_set_color(void* handle, int color);
+void graph_stream_cuda_set_state(void* handle,
+  const std::vector<int>& labels,
+  const std::vector<float>& volume,
+  const std::vector<int>& count);
+std::vector<int> graph_stream_cuda_propose_chunk(void* handle,
+  const std::vector<int>& row_ptr,
+  const std::vector<int>& col_idx,
+  const std::vector<float>& weight, int first);
+int graph_stream_cuda_propose_fragment(void* handle,
+  const std::vector<int>& col_idx,
+  const std::vector<float>& weight, int row, bool last);
 void graph_stream_cuda_chunk(void* handle,
   const std::vector<int>& row_ptr,
   const std::vector<int>& col_idx,

@@ -459,19 +459,8 @@ inline std::vector<int> leiden_partition(
   return compact_membership(membership);
 }
 
-inline Rcpp::List cluster(
-    const Rcpp::IntegerVector& from,
-    const Rcpp::IntegerVector& to,
-    const Rcpp::NumericVector& weight,
-    int n_vertices,
-    const std::string& method,
-    double resolution,
-    int n_iterations,
-    int n_runs,
-    double seed,
-    const std::string& backend,
-    const MoveFunction& move,
-    bool force_wide = false) {
+inline void validate_cluster_controls(const std::string& method,
+    double resolution, int n_iterations, int n_runs) {
   if (method != "louvain" && method != "leiden") {
     Rcpp::stop("GPU graph clustering supports `louvain` and `leiden`.");
   }
@@ -481,9 +470,20 @@ inline Rcpp::List cluster(
   if (n_iterations < 1 || n_runs < 1) {
     Rcpp::stop("`n_iterations` and `n_runs` must be positive.");
   }
-  const Graph graph = graph_from_r(from, to, weight, n_vertices,
-    force_wide);
-  std::vector<int> best(static_cast<std::size_t>(n_vertices));
+}
+
+inline Rcpp::List cluster_graph(
+    const Graph& graph,
+    const std::string& method,
+    double resolution,
+    int n_iterations,
+    int n_runs,
+    double seed,
+    const std::string& backend,
+    const MoveFunction& move) {
+  validate_cluster_controls(method, resolution,
+    n_iterations, n_runs);
+  std::vector<int> best(static_cast<std::size_t>(graph.n));
   std::iota(best.begin(), best.end(), 0);
   double best_modularity = modularity(graph, best, resolution);
   const std::uint64_t base_seed =
@@ -528,6 +528,26 @@ inline Rcpp::List cluster(
       "uint64" : "int32",
     Rcpp::Named("coarsening_backend") = "native_cpp"
   );
+}
+
+inline Rcpp::List cluster(
+    const Rcpp::IntegerVector& from,
+    const Rcpp::IntegerVector& to,
+    const Rcpp::NumericVector& weight,
+    int n_vertices,
+    const std::string& method,
+    double resolution,
+    int n_iterations,
+    int n_runs,
+    double seed,
+    const std::string& backend,
+    const MoveFunction& move,
+    bool force_wide = false) {
+  validate_cluster_controls(method, resolution,
+    n_iterations, n_runs);
+  return cluster_graph(graph_from_r(from, to, weight,
+    n_vertices, force_wide), method, resolution,
+    n_iterations, n_runs, seed, backend, move);
 }
 
 }  // namespace fastembedr_graph_accel
