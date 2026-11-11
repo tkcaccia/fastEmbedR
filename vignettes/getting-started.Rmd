@@ -89,11 +89,13 @@ fit_cuda <- fastEmbedR::umap(x, backend = "cuda", seed = 4)
 
 `n.cores` is a positive integer controlling CPU parallel work, including the
 native nearest-neighbor search and the CPU graph, affinity, and optimization
-stages that support parallel execution. For UMAP, the optimizer currently uses
-at most four workers and records the requested and effective values. When
-`n.cores` is omitted, `options(n.cores = ...)` is used when set. Otherwise KNN
-and PCA use one worker, UMAP selects a size-aware default from one to four
-workers, and t-SNE uses four workers. Metal and CUDA execute on their respective
+stages that support parallel execution. For resident UMAP, an explicit request
+can select up to 32 optimizer workers; the result records both requested and
+effective values. When `n.cores` is omitted, `options(n.cores = ...)` is used
+when set. Otherwise KNN and PCA use one worker, UMAP selects a size-aware
+default from one to four workers, and t-SNE uses four workers. Effective
+parallelism varies by stage and input size, so requesting more workers does
+not guarantee a faster fit. Metal and CUDA execute on their respective
 accelerators and ignore `n.cores`; the argument does not control GPU
 concurrency.
 
