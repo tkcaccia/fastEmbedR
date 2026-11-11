@@ -457,7 +457,7 @@
     {
       "id": "cugraph",
       "name": "RAPIDS cuGraph",
-      "classification": "architecture_reference",
+      "classification": "design_reference",
       "repository": "https://github.com/rapidsai/cugraph",
       "revision": "528ddde979df2243bf51c116d89a0ecdf85a39ee",
       "version": "not-used-at-runtime",

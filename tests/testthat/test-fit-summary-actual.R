@@ -8,7 +8,8 @@ test_that("four resident entry points return a common summary schema", {
         umap = umap(x, n_neighbors = 10L, backend = "cpu"),
         cluster = graph_cluster(x, method = "louvain",
             k = 10L, backend = "cpu"))
-    required <- c("backend", "backend_engine", "devices",
+    required <- c("backend", "backend_engine",
+        "graph_offset_dtype", "devices",
         "device_identity", "scope", "stage_backend",
         "stage_seconds", "memory_use", "output_rows")
     for (fit in fitted) {

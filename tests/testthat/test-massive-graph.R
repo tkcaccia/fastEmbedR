@@ -3763,7 +3763,8 @@ test_that("coordinated UMAP budgets padded device layouts", {
     result <- fastEmbedR:::massive_umap_cuda_result(
         list(nrow = 13L, ncol = 3L, resources = list()),
         plan, built, "memory")
-    expect_equal(result$resources$device_buffer_bytes, 584)
+    expect_equal(result$resources$device_buffer_bytes,
+        5L * 48L + 3L * 168L)
     expect_equal(result$resources$delta_scale, 65536)
     expect_equal(result$resources$synchronization_seconds, 3)
     expect_equal(result$resources$finalization_block_seconds, 5)
@@ -3815,7 +3816,7 @@ test_that("coordinated UMAP budgets padded device layouts", {
         list(n_vertices = 13L, n_edges = 8L), list(ncol = 3L),
         built, list(every = 0L, epoch = 0L, sidecar = NULL),
         FALSE, "memory")$resources$layout_ram_bytes,
-        3L * 3L * 4L + 5L * 16L * 2L)
+        3L * 3L * 4L + 5L * 48L * 2L)
     graph <- list(n_vertices = 13L, n_edges = 8L,
         max_degree = 2L)
     free <- (64 * 1024^2 + 336 + 16) / 0.65
@@ -3834,7 +3835,7 @@ test_that("coordinated UMAP budgets padded device layouts", {
             expect_equal(capacity(graph, 156, 3L, limit,
                 3L, "memory", 0L), 20L)
             expect_equal(capacity(graph, 156, 3L, limit,
-                3L, "memory", 0:1), 10L)
+                3L, "memory", 0:1), 3L)
             graph$max_degree <- 100L
             expect_equal(capacity(graph, 156, 3L, limit,
                 3L, "memory", 0L), 20L)
@@ -3856,7 +3857,7 @@ test_that("coordinated t-SNE budgets one edge buffer per device", {
             four <- plan(graph, init, output, "96MB", "cuda", 0:3)
             expect_lt(four$edge_capacity, one$edge_capacity)
             expect_equal(four$peak_ram,
-                64 * 1024^2 + four$edge_capacity * 12 * 4)
+                64 * 1024^2 + four$edge_capacity * 36 * 4)
             expect_lte(four$peak_ram,
                 0.8 * fastEmbedR:::massive_memory_bytes("96MB"))
             writeBin(rep(0, graph$n_vertices * 2L), output,

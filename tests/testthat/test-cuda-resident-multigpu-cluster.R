@@ -17,6 +17,7 @@ test_that("coordinated CUDA graph fit uses selected GPUs", {
         as.integer(devices),
     massive_cuda_device_uuids = function(devices)
         c("gpu0", "gpu1"),
+    massive_auto_cuda_free = function(...) 8 * 1024^3,
     graph_clustering_cuda_available_cpp = function() TRUE,
     fastembedr_graph_cluster_cuda_devices_cpp = function(...) {
         calls <<- calls + 1L
@@ -110,6 +111,7 @@ test_that("resident graph clustering forwards eight selected GPUs", {
     },
     massive_cuda_device_uuids = function(devices)
         paste0("gpu", devices),
+    massive_auto_cuda_free = function(...) 8 * 1024^3,
     graph_clustering_cuda_available_cpp = function() TRUE,
     fastembedr_graph_cluster_cuda_devices_cpp = function(..., devices) {
         calls <<- calls + 1L
@@ -139,6 +141,7 @@ test_that("coordinated CUDA clustering accepts consensus controls", {
         as.integer(devices),
     massive_cuda_device_uuids = function(devices)
         c("gpu0", "gpu1"),
+    massive_auto_cuda_free = function(...) 8 * 1024^3,
     graph_clustering_cuda_available_cpp = function() TRUE,
     fastembedr_graph_cluster_cuda_devices_cpp = function(...) {
         calls <<- calls + 1L

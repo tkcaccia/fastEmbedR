@@ -56,10 +56,13 @@ test_that("resident CSR stage model keeps wide offsets and float32 edges", {
         50000000 * 8 * 15)
     expect_equal(plan$stages[["optimizer_spectral"]],
         one_worker$stages[["optimizer_spectral"]])
-    admitted <- fastEmbedR:::umap_check_resident_csr_capacity(
+    expect_error(fastEmbedR:::umap_check_resident_csr_capacity(
         50000000, 30, "270GB", 269e9, 16L,
+        allow_wide = TRUE), "RAM budget")
+    admitted <- fastEmbedR:::umap_check_resident_csr_capacity(
+        50000000, 30, "300GB", 300e9, 16L,
         allow_wide = TRUE)
-    expect_lt(admitted$peak_ram_estimate_bytes, 0.7 * 269e9)
+    expect_lt(admitted$peak_ram_estimate_bytes, 0.7 * 300e9)
     small <- fastEmbedR:::umap_resident_csr_stage_bytes(1000, 30)
     expect_identical(small$offset_dtype, "int32")
     expect_equal(small$offset_bytes, (1000 + 1) * 4)
