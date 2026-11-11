@@ -6871,6 +6871,13 @@ extern "C" int fastembedr_massive_umap_cuda_download(
 }
 
 #ifdef FASTEMBEDR_HAS_NCCL
+struct MassiveUmapStageSlot {
+  void* host = nullptr;
+  void* device = nullptr;
+  cudaEvent_t done = nullptr;
+  bool submitted = false;
+};
+
 struct MassiveUmapMultiCudaContext {
   int vertices = 0;
   int dimensions = 2;
@@ -6882,6 +6889,9 @@ struct MassiveUmapMultiCudaContext {
   std::vector<MassiveUmapCudaContext*> workers;
   std::vector<unsigned long long*> deltas;
   std::vector<ncclComm_t> comms;
+  std::vector<cudaStream_t> upload_streams;
+  std::vector<MassiveUmapStageSlot> staged;
+  std::vector<std::uint64_t> batch_sequence;
 };
 
 int massive_umap_nccl_check(ncclResult_t status, const char* where) {
@@ -6896,6 +6906,16 @@ extern "C" void fastembedr_massive_umap_multigpu_destroy(void* raw) {
   if (ctx == nullptr) return;
   for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
     cudaSetDevice(ctx->devices[rank]);
+    if (ctx->upload_streams[rank] != nullptr)
+      cudaStreamSynchronize(ctx->upload_streams[rank]);
+    for (int slot = 0; slot < 2; ++slot) {
+      auto& batch = ctx->staged[2 * rank + slot];
+      if (batch.done != nullptr) cudaEventDestroy(batch.done);
+      if (batch.device != nullptr) cudaFree(batch.device);
+      if (batch.host != nullptr) cudaFreeHost(batch.host);
+    }
+    if (ctx->upload_streams[rank] != nullptr)
+      cudaStreamDestroy(ctx->upload_streams[rank]);
     if (ctx->comms[rank] != nullptr)
       ncclCommDestroy(ctx->comms[rank]);
     if (ctx->deltas[rank] != nullptr)
@@ -6955,6 +6975,9 @@ extern "C" void* fastembedr_massive_umap_multigpu_create(
   ctx->workers.resize(device_count, nullptr);
   ctx->deltas.resize(device_count, nullptr);
   ctx->comms.resize(device_count, nullptr);
+  ctx->upload_streams.resize(device_count, nullptr);
+  ctx->staged.resize(2 * device_count);
+  ctx->batch_sequence.resize(device_count, 0);
   const auto layout_bytes = static_cast<std::size_t>(padded) *
     dimensions * sizeof(float);
   const auto edge_bytes = static_cast<std::size_t>(edge_capacity) * 16u;
@@ -6962,7 +6985,7 @@ extern "C" void* fastembedr_massive_umap_multigpu_create(
     if (check_cuda(cudaSetDevice(devices[rank]),
           "cudaSetDevice(multi-GPU UMAP)") ||
         check_embedding_memory_available(3u * layout_bytes +
-          edge_bytes, "multi-GPU UMAP allocation")) {
+          3u * edge_bytes, "multi-GPU UMAP allocation")) {
       fastembedr_massive_umap_multigpu_destroy(ctx);
       return nullptr;
     }
@@ -6982,6 +7005,25 @@ extern "C" void* fastembedr_massive_umap_multigpu_create(
       return nullptr;
     }
     ctx->workers[rank]->params.n = vertices;
+    if (check_cuda(cudaStreamCreateWithFlags(
+          &ctx->upload_streams[rank], cudaStreamNonBlocking),
+          "cudaStreamCreate(multi-GPU UMAP uploads)")) {
+      fastembedr_massive_umap_multigpu_destroy(ctx);
+      return nullptr;
+    }
+    for (int slot = 0; slot < 2; ++slot) {
+      auto& batch = ctx->staged[2 * rank + slot];
+      if (check_cuda(cudaHostAlloc(&batch.host, edge_bytes,
+            cudaHostAllocDefault), "cudaHostAlloc(UMAP batch)") ||
+          check_cuda(cudaMalloc(&batch.device, edge_bytes),
+            "cudaMalloc(UMAP batch)") ||
+          check_cuda(cudaEventCreateWithFlags(&batch.done,
+            cudaEventDisableTiming),
+            "cudaEventCreate(UMAP batch)")) {
+        fastembedr_massive_umap_multigpu_destroy(ctx);
+        return nullptr;
+      }
+    }
   }
   if (massive_umap_nccl_check(ncclCommInitAll(ctx->comms.data(),
         device_count, devices), "ncclCommInitAll(multi-GPU UMAP)")) {
@@ -7069,34 +7111,47 @@ extern "C" int fastembedr_massive_umap_multigpu_step(
     sizeof(int);
   const auto weights_bytes = static_cast<std::size_t>(edges) *
     sizeof(float);
-  if (check_cuda(cudaMemcpy(worker->heads, heads, ids_bytes,
-        cudaMemcpyHostToDevice), "cudaMemcpy(multi-GPU UMAP heads)") ||
-      check_cuda(cudaMemcpy(worker->tails, tails, ids_bytes,
-        cudaMemcpyHostToDevice), "cudaMemcpy(multi-GPU UMAP tails)") ||
-      check_cuda(cudaMemcpy(worker->weights, weights, weights_bytes,
-        cudaMemcpyHostToDevice), "cudaMemcpy(multi-GPU UMAP weights)") ||
-      check_cuda(cudaMemcpy(worker->periods, periods, weights_bytes,
-        cudaMemcpyHostToDevice), "cudaMemcpy(multi-GPU UMAP periods)"))
-    return 1;
+  auto& batch = ctx->staged[2 * rank +
+    (ctx->batch_sequence[rank]++ % 2)];
+  if (batch.submitted && check_cuda(cudaEventSynchronize(batch.done),
+        "cudaEventSynchronize(UMAP batch reuse)")) return 1;
+  auto* host = static_cast<char*>(batch.host);
+  std::memcpy(host, heads, ids_bytes);
+  std::memcpy(host + ids_bytes, tails, ids_bytes);
+  std::memcpy(host + 2 * ids_bytes, weights, weights_bytes);
+  std::memcpy(host + 2 * ids_bytes + weights_bytes,
+    periods, weights_bytes);
+  auto* device = static_cast<char*>(batch.device);
+  auto* d_heads = reinterpret_cast<int*>(device);
+  auto* d_tails = reinterpret_cast<int*>(device + ids_bytes);
+  auto* d_weights = reinterpret_cast<float*>(device + 2 * ids_bytes);
+  auto* d_periods = reinterpret_cast<float*>(
+    device + 2 * ids_bytes + weights_bytes);
+  auto stream = ctx->upload_streams[rank];
+  if (check_cuda(cudaMemcpyAsync(batch.device, batch.host,
+        2 * ids_bytes + 2 * weights_bytes,
+        cudaMemcpyHostToDevice, stream),
+        "cudaMemcpyAsync(multi-GPU UMAP batch)")) return 1;
   if (ctx->dimensions == 3) {
     embed_epoch_coo_delta_kernel<3><<<
-      (edges + 255) / 256, 256>>>(worker->layout,
-      ctx->deltas[rank], worker->heads, worker->tails,
-      worker->weights, worker->periods, worker->params,
+      (edges + 255) / 256, 256, 0, stream>>>(worker->layout,
+      ctx->deltas[rank], d_heads, d_tails,
+      d_weights, d_periods, worker->params,
       static_cast<unsigned int>(epoch), edges, ctx->delta_scale);
   } else {
     embed_epoch_coo_delta_kernel<2><<<
-      (edges + 255) / 256, 256>>>(worker->layout,
-      ctx->deltas[rank], worker->heads, worker->tails,
-      worker->weights, worker->periods, worker->params,
+      (edges + 255) / 256, 256, 0, stream>>>(worker->layout,
+      ctx->deltas[rank], d_heads, d_tails,
+      d_weights, d_periods, worker->params,
       static_cast<unsigned int>(epoch), edges, ctx->delta_scale);
   }
-  return check_cuda(cudaGetLastError(),
-      "multi-GPU UMAP delta launch") ||
-    check_cuda(cudaDeviceSynchronize(),
-      "multi-GPU UMAP edge synchronization") ||
-    check_cuda(cudaSetDevice(ctx->previous_device),
-      "cudaSetDevice(multi-GPU UMAP restore)");
+  if (check_cuda(cudaGetLastError(),
+        "multi-GPU UMAP delta launch") ||
+      check_cuda(cudaEventRecord(batch.done, stream),
+        "cudaEventRecord(UMAP batch)")) return 1;
+  batch.submitted = true;
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(multi-GPU UMAP restore)");
 }
 
 extern "C" int fastembedr_massive_umap_multigpu_finish_epoch(
@@ -7109,6 +7164,12 @@ extern "C" int fastembedr_massive_umap_multigpu_finish_epoch(
   const auto count = static_cast<std::size_t>(ctx->block_rows) *
     ctx->dimensions;
   const auto reduce_started = std::chrono::steady_clock::now();
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(UMAP batch barrier)") ||
+        check_cuda(cudaDeviceSynchronize(),
+          "cudaDeviceSynchronize(UMAP batch barrier)")) return 1;
+  }
   if (massive_umap_nccl_check(ncclGroupStart(),
         "ncclGroupStart(UMAP reduce)")) return 1;
   int failed = 0;

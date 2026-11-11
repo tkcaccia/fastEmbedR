@@ -171,7 +171,8 @@ massive_umap_layout_ram <- function(plan, init, layout_storage) {
         return(plan$layout_bytes + plan$edge_capacity * 16)
     if (plan$backend == "cuda") return(
         min(plan$chunk_rows, 8192L) * init$ncol * 4 +
-        plan$edge_capacity * 16 * max(1L, length(plan$devices)))
+        plan$edge_capacity * (if (length(plan$devices) > 1L)
+            48 * length(plan$devices) else 16))
     if (plan$backend == "metal") return(
         (if (layout_storage == "memory") 3 * plan$layout_bytes
         else 2 * plan$layout_bytes + min(plan$chunk_rows, 8192L) *
@@ -248,12 +249,8 @@ massive_umap_cuda_result <- function(result, plan, built,
     result$native_backend_used <- built$backend_used
     device_layout <- massive_umap_cuda_layout_bytes(result$nrow,
         result$ncol, plan$devices)
-    result$resources$device_buffer_bytes <-
-        plan$edge_capacity * 16 +
-        if (!is.null(plan$devices)) 3 * device_layout else
-        if (layout_storage == "memory") plan$layout_bytes else 0
-    result$resources$managed_layout_bytes <-
-        if (layout_storage == "managed") plan$layout_bytes else 0
+    result$resources <- massive_umap_cuda_resource_memory(
+        result$resources, plan, layout_storage, device_layout)
     result$resources$edge_batch_capacity <- plan$edge_capacity
     result$stage_seconds <- list(
         graph_visit = built$graph_visit_seconds,
@@ -266,6 +263,9 @@ massive_umap_cuda_result <- function(result, plan, built,
     result$resources$graph_feeder <- if (is.null(plan$devices)) {
         "serial"
     } else "concurrent_owner"
+    result$resources$device_step_timing_scope <-
+        if (is.null(plan$devices)) "kernel_wait" else
+        "host_pack_copy_enqueue_and_slot_wait"
     if (is.null(plan$devices)) return(result)
     if (length(plan$devices) > 1L &&
         (length(built$owner_wall_seconds) != 1L ||
@@ -288,6 +288,20 @@ massive_umap_cuda_result <- function(result, plan, built,
             length(plan$devices) * device_layout
         } else 0
     result
+}
+
+massive_umap_cuda_resource_memory <- function(resources, plan,
+        layout_storage, device_layout) {
+    multi <- length(plan$devices) > 1L
+    resources$device_buffer_bytes <- plan$edge_capacity *
+        (if (multi) 48 else 16) +
+        if (!is.null(plan$devices)) 3 * device_layout else
+        if (layout_storage == "memory") plan$layout_bytes else 0
+    resources$pinned_batch_bytes <-
+        if (multi) 32 * plan$edge_capacity else 0
+    resources$managed_layout_bytes <-
+        if (layout_storage == "managed") plan$layout_bytes else 0
+    resources
 }
 
 massive_umap_checkpoint_cleanup <- function(output, sidecar) {
@@ -553,10 +567,11 @@ massive_umap_cuda_capacity <- function(graph, layout_bytes,
         layout_bytes
     } else 0
     host_batches <- max(1L, length(devices))
-    capacity <- floor(min(graph$n_edges, 1e6, available / 16,
+    per_edge <- if (length(devices) > 1L) 48 else 16
+    capacity <- floor(min(graph$n_edges, 1e6, available / per_edge,
         (limit - 128 * 1024^2 - host_layout -
             min(chunk_rows, 8192L) * dimensions * 4) /
-            (16 * host_batches)))
+            (per_edge * host_batches)))
     if (!is.finite(capacity) || capacity < 1) {
         stop("CUDA layout or edge batch exceeds the RAM/VRAM ",
             "budget; no CPU fallback was used.", call. = FALSE)

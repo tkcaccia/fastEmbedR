@@ -51,6 +51,24 @@ A change is retained only when it satisfies all applicable gates:
 No change below obtains speed by reducing k, perplexity, epochs, grid size, or
 the number of optimization iterations.
 
+## Native coordinated CUDA UMAP batch staging
+
+The multi-GPU UMAP optimizer uses two pinned host and device edge batches per
+GPU. It prepares the next graph batch while the previous batch uploads and
+runs on that GPU. A device barrier completes every batch before NCCL combines
+updates at the epoch boundary. This is fastEmbedR's C++/CUDA optimizer; it
+does not call another package's embedding implementation. The extra batch
+memory is included in RAM and VRAM admission and in result resources.
+
+In a development check on two A10Gs, a 10-million-row, 14-neighbor synthetic
+graph and ten unchanged UMAP epochs took 14.821 seconds median with staging
+and 16.166 seconds median without it (three runs of each). All six full
+output hashes matched. Small public `umap()` checks also matched exactly for
+2D fuzzy and 3D binary graphs. These optimizer-only checks do not measure
+KNN construction, real-data embedding quality, eight-GPU scaling, or a
+100-million-row fit. The result is an incremental improvement; graph
+preparation and repeated layout replication remain scaling work.
+
 ## Component Ownership And Data Flow
 
 The public one-call functions combine nearest-neighbor search and embedding;
