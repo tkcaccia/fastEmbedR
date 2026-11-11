@@ -837,12 +837,18 @@ fast_knn_umap_prepared_core <- function(
 }
 
 umap_resident_csr_stage_bytes <- function(rows, width,
-        n_threads = 1L) {
+        n_threads = 1L, distance_bytes = 4L) {
+    if (length(distance_bytes) != 1L ||
+        is.na(distance_bytes) ||
+        !distance_bytes %in% c(4L, 8L)) {
+        stop("KNN distance width must be four or eight bytes.",
+            call. = FALSE)
+    }
     directed <- as.double(rows) * width
     symmetric <- 2 * directed
     offset_width <- if (symmetric > .Machine$integer.max) 8 else 4
     offsets <- (as.double(rows) + 1) * offset_width
-    input <- 8 * directed
+    input <- (4 + distance_bytes) * directed
     copy <- 4 * directed
     counts <- 4 * as.double(rows)
     workers <- offset_width * as.double(rows) * n_threads
@@ -874,7 +880,7 @@ umap_resident_csr_stage_bytes <- function(rows, width,
 umap_check_resident_csr_capacity <- function(rows, width,
         memory_limit = getOption("memory_limit", "8GB"),
         available = massive_available_ram_bytes(), n_threads = 1L,
-        allow_wide = FALSE) {
+        allow_wide = FALSE, distance_bytes = 4L) {
     if (!is.finite(rows) || !is.finite(width) || rows < 2 ||
         width < 1 || (!allow_wide && 2 * as.double(rows) * width >
             .Machine$integer.max)) stop(
@@ -882,7 +888,8 @@ umap_check_resident_csr_capacity <- function(rows, width,
         "use a file-backed full graph with bounded reads.",
         call. = FALSE)
     budget <- massive_memory_bytes(memory_limit)
-    stages <- umap_resident_csr_stage_bytes(rows, width, n_threads)
+    stages <- umap_resident_csr_stage_bytes(
+        rows, width, n_threads, distance_bytes)
     estimate <- max(stages$stages,
         256 * 1024^2 + 96 * rows +
             128 * as.double(rows) * width)
@@ -929,7 +936,8 @@ umap_build_csr_graph <- function(indices,
     width <- if (identical(graph_mode, "binary")) n_cols else
         min(n_cols, edge_budget)
     umap_check_resident_csr_capacity(rows, width,
-        n_threads = n_threads, allow_wide = allow_wide)
+        n_threads = n_threads, allow_wide = allow_wide,
+        distance_bytes = if (is_float32_matrix(distances)) 4L else 8L)
     umap_admit_wide_graph(rows, width, distances, graph_mode,
         allow_wide, force_wide)
     if (identical(graph_mode, "binary")) {

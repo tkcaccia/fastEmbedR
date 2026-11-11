@@ -72,6 +72,18 @@ test_that("resident CSR stage model keeps wide offsets and float32 edges", {
         256 * 1024^3)
 })
 
+test_that("resident CSR admission counts double KNN distances", {
+    model <- fastEmbedR:::umap_resident_csr_stage_bytes
+    single <- model(1000000, 30, distance_bytes = 4L)
+    double <- model(1000000, 30, distance_bytes = 8L)
+    expect_equal(double$stages[["knn_input"]] -
+        single$stages[["knn_input"]], 120000000)
+    expect_equal(double$stages[["optimizer_spectral"]] -
+        single$stages[["optimizer_spectral"]], 120000000)
+    expect_error(model(1000, 30, distance_bytes = 2L),
+        "distance width")
+})
+
 test_that("file-backed CSR ownership counts exceed signed 32 bits", {
     path <- tempfile(fileext = ".offsets.u64")
     on.exit(unlink(path))
