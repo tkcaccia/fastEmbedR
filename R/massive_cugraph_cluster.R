@@ -77,7 +77,16 @@ massive_cugraph_invoke <- function(graph, plan, method,
             paste0(plan$path, ".part"))) stop(
         "cuGraph did not write complete labels and metadata.",
         call. = FALSE)
-    jsonlite::fromJSON(metadata, simplifyVector = FALSE)
+    result <- jsonlite::fromJSON(metadata, simplifyVector = FALSE)
+    started <- proc.time()[[3L]]
+    result$communities <- massive_compact_u32_labels_cpp(
+        paste0(plan$path, ".part"), graph$n_vertices)
+    result$native_label_compaction_seconds <-
+        proc.time()[[3L]] - started
+    result$label_compaction_backend <- "native_cpp"
+    result$label_export_seconds <- result$label_export_seconds +
+        result$native_label_compaction_seconds
+    result
 }
 
 massive_cugraph_worker_map <- function(workers, devices) {

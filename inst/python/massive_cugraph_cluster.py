@@ -318,34 +318,7 @@ def write_labels(parts, output, vertices, ram_limit, offsets_path):
         if np.any(degrees[missing] != 0):
             raise ValueError("cuGraph omitted non-isolated source rows")
         labels[first + missing] = vertices + first + missing + 1
-    communities = compact_labels(labels, vertices)
     labels.flush()
-    return communities
-
-
-def compact_labels(labels, vertices):
-    popcount = np.array([value.bit_count() for value in range(256)],
-                        dtype=np.uint8)
-    present = np.zeros((2 * vertices + 8) // 8, dtype=np.uint8)
-    for first in range(0, vertices, 1_000_000):
-        values = np.unique(labels[first:first + 1_000_000])
-        bits = (1 << (values & 7)).astype(np.uint8)
-        np.bitwise_or.at(present, values >> 3, bits)
-    prefix = np.empty(len(present) + 1, dtype=np.uint32)
-    prefix[0] = 0
-    for first in range(0, len(present), 1_000_000):
-        last = min(first + 1_000_000, len(present))
-        np.cumsum(popcount[present[first:last]], dtype=np.uint32,
-                  out=prefix[first + 1:last + 1])
-        prefix[first + 1:last + 1] += prefix[first]
-    for first in range(0, vertices, 1_000_000):
-        last = min(first + 1_000_000, vertices)
-        values = labels[first:last]
-        slots = values >> 3
-        below = ((1 << (values & 7)) - 1).astype(np.uint8)
-        labels[first:last] = prefix[slots] + \
-            popcount[present[slots] & below] + 1
-    return int(prefix[-1])
 
 
 def run(args):
@@ -403,9 +376,8 @@ def run(args):
             options.update(max_level=args.iterations)
         parts, reported = getattr(dcg, args.method)(graph, **options)
         fitted = time.monotonic()
-        communities = write_labels(parts, args.output,
-                                   args.vertices, args.ram_limit,
-                                   paths[0])
+        write_labels(parts, args.output, args.vertices,
+                     args.ram_limit, paths[0])
         exported = time.monotonic()
         memory = sampler.finish()
     finally:
@@ -421,7 +393,7 @@ def run(args):
                 "cugraph_version": cugraph.__version__,
                 "devices": identities, "rows": args.vertices,
                 "distributed_graph": True, "worker_count": workers,
-                "communities": communities,
+                "communities": None,
                 "iterations_requested": args.iterations,
                 "resolution": args.resolution,
                 "seed_requested": args.seed,

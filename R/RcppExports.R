@@ -453,6 +453,10 @@ pca_cuda_resident_project_cpp <- function(input, devices, center, scale, loading
     .Call(`_fastEmbedR_pca_cuda_resident_project_cpp`, input, devices, center, scale, loadings)
 }
 
+massive_compact_u32_labels_cpp <- function(path, rows) {
+    .Call(`_fastEmbedR_massive_compact_u32_labels_cpp`, path, rows)
+}
+
 massive_file_info_cpp <- function(path, format, rows, columns) {
     .Call(`_fastEmbedR_massive_file_info_cpp`, path, format, rows, columns)
 }

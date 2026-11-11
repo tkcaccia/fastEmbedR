@@ -103,8 +103,8 @@ class CuGraphWorkerTests(unittest.TestCase):
                                         "partition": [0, 0]}),
                           pd.DataFrame({"vertex": [1, 3],
                                         "partition": [1, 1]})])
-            self.assertEqual(worker.write_labels(good, output, 4,
-                                                 4096, offsets), 2)
+            self.assertIsNone(worker.write_labels(good, output, 4,
+                                                 4096, offsets))
             self.assertEqual(np.fromfile(output, dtype="<u4").tolist(),
                              [1, 2, 1, 2])
             missing = Parts([pd.DataFrame({"vertex": [0, 1, 2],
@@ -125,36 +125,10 @@ class CuGraphWorkerTests(unittest.TestCase):
             np.array([0, 1, 2, 2, 3, 4], dtype="<u8").tofile(offsets)
             parts = Parts([pd.DataFrame({"vertex": [0, 1, 3, 4],
                                          "partition": [0, 0, 1, 1]})])
-            self.assertEqual(worker.write_labels(parts, output, 5,
-                                                 4096, offsets), 3)
+            self.assertIsNone(worker.write_labels(parts, output, 5,
+                                                 4096, offsets))
             self.assertEqual(np.fromfile(output, dtype="<u4").tolist(),
-                             [1, 1, 3, 2, 2])
-
-    def test_label_compaction_matches_sorted_unique_ids(self):
-        original = np.array([1, 5, 5, 12, 3, 12, 8], dtype="<u4")
-        expected = np.searchsorted(np.unique(original), original) + 1
-        observed = original.copy()
-        self.assertEqual(worker.compact_labels(observed, len(observed)), 5)
-        np.testing.assert_array_equal(observed, expected)
-
-    def test_label_compaction_limits_unique_to_one_chunk(self):
-        rows = 1_000_003
-        original_unique = np.unique
-
-        def bounded_unique(values):
-            self.assertLessEqual(len(values), 1_000_000)
-            return original_unique(values)
-
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "labels.u32"
-            labels = np.memmap(path, dtype="<u4", mode="w+",
-                               shape=(rows,))
-            labels[:] = np.arange(rows, dtype=np.uint32) % 97 + 1
-            with patch.object(worker.np, "unique",
-                              side_effect=bounded_unique):
-                self.assertEqual(worker.compact_labels(labels, rows), 97)
-            self.assertEqual(labels[0], 1)
-            self.assertEqual(labels[-1], rows % 97)
+                             [1, 1, 8, 2, 2])
 
     def test_gpu_identity_rejects_uuid_mismatch(self):
         runtime = types.SimpleNamespace(

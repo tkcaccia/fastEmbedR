@@ -278,6 +278,85 @@ int massive_cuda_device_count_cpp();
 int massive_cuda_select_cpp(int device);
 List massive_cuda_memory_cpp();
 
+// [[Rcpp::export]]
+int massive_compact_u32_labels_cpp(std::string path, double rows) {
+  if (!std::isfinite(rows) || rows < 1 ||
+      rows > static_cast<double>(INT_MAX) || rows != std::floor(rows)) {
+    Rcpp::stop("Invalid community-label row count.");
+  }
+  const auto n = static_cast<std::uint64_t>(rows);
+  std::error_code error;
+  if (std::filesystem::file_size(path, error) != n * 4 || error) {
+    Rcpp::stop("Community-label file size does not match row count.");
+  }
+  std::fstream file(path, std::ios::in | std::ios::out |
+    std::ios::binary);
+  if (!file) Rcpp::stop("Cannot open community-label file.");
+  const auto maximum = 2 * n;
+  std::vector<std::uint8_t> present(maximum / 8 + 1, 0);
+  std::vector<std::uint32_t> buffer(
+    static_cast<std::size_t>(std::min<std::uint64_t>(n, 1000000)));
+  for (std::uint64_t first = 0; first < n; first += buffer.size()) {
+    const auto count = static_cast<std::size_t>(
+      std::min<std::uint64_t>(buffer.size(), n - first));
+    file.read(reinterpret_cast<char*>(buffer.data()), count * 4);
+    if (!file) Rcpp::stop("Cannot read community-label file.");
+    for (std::size_t i = 0; i < count; ++i) {
+      const auto label = buffer[i];
+      if (label < 1 || label > maximum) {
+        Rcpp::stop("Community label is outside the validated range.");
+      }
+      present[label >> 3] |= static_cast<std::uint8_t>(
+        1U << (label & 7U));
+    }
+    Rcpp::checkUserInterrupt();
+  }
+  std::vector<std::uint32_t> prefix(present.size() + 1, 0);
+  for (std::size_t i = 0; i < present.size(); ++i) {
+    std::uint8_t bits = present[i];
+    while (bits) {
+      prefix[i + 1] += bits & 1U;
+      bits >>= 1U;
+    }
+    prefix[i + 1] += prefix[i];
+  }
+  const auto communities = prefix.back();
+  if (communities < 1 || communities > n) {
+    Rcpp::stop("Community-label count is invalid.");
+  }
+  file.clear();
+  file.seekg(0);
+  for (std::uint64_t first = 0; first < n; first += buffer.size()) {
+    const auto count = static_cast<std::size_t>(
+      std::min<std::uint64_t>(buffer.size(), n - first));
+    file.read(reinterpret_cast<char*>(buffer.data()), count * 4);
+    if (!file) Rcpp::stop("Cannot reread community-label file.");
+    for (std::size_t i = 0; i < count; ++i) {
+      const auto label = buffer[i];
+      const auto slot = label >> 3;
+      const auto below = static_cast<std::uint8_t>(
+        (1U << (label & 7U)) - 1U);
+      std::uint8_t bits = present[slot] & below;
+      std::uint32_t rank = prefix[slot] + 1;
+      while (bits) {
+        rank += bits & 1U;
+        bits >>= 1U;
+      }
+      buffer[i] = rank;
+    }
+    file.clear();
+    file.seekp(static_cast<std::streamoff>(first * 4));
+    file.write(reinterpret_cast<const char*>(buffer.data()), count * 4);
+    if (!file) Rcpp::stop("Cannot write compact community labels.");
+    file.clear();
+    file.seekg(static_cast<std::streamoff>((first + count) * 4));
+    Rcpp::checkUserInterrupt();
+  }
+  file.flush();
+  if (!file) Rcpp::stop("Cannot flush compact community labels.");
+  return static_cast<int>(communities);
+}
+
 namespace {
 
 std::uint64_t whole_number(double value, const char* name) {

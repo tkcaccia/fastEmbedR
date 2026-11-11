@@ -1982,6 +1982,18 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// massive_compact_u32_labels_cpp
+int massive_compact_u32_labels_cpp(std::string path, double rows);
+RcppExport SEXP _fastEmbedR_massive_compact_u32_labels_cpp(SEXP pathSEXP, SEXP rowsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type path(pathSEXP);
+    Rcpp::traits::input_parameter< double >::type rows(rowsSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_compact_u32_labels_cpp(path, rows));
+    return rcpp_result_gen;
+END_RCPP
+}
 // massive_file_info_cpp
 List massive_file_info_cpp(std::string path, std::string format, double rows, double columns);
 RcppExport SEXP _fastEmbedR_massive_file_info_cpp(SEXP pathSEXP, SEXP formatSEXP, SEXP rowsSEXP, SEXP columnsSEXP) {
@@ -3578,6 +3590,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_reorder_posting_graph_cpp", (DL_FUNC) &_fastEmbedR_massive_reorder_posting_graph_cpp, 10},
     {"_fastEmbedR_pca_cuda_resident_covariance_cpp", (DL_FUNC) &_fastEmbedR_pca_cuda_resident_covariance_cpp, 3},
     {"_fastEmbedR_pca_cuda_resident_project_cpp", (DL_FUNC) &_fastEmbedR_pca_cuda_resident_project_cpp, 5},
+    {"_fastEmbedR_massive_compact_u32_labels_cpp", (DL_FUNC) &_fastEmbedR_massive_compact_u32_labels_cpp, 2},
     {"_fastEmbedR_massive_file_info_cpp", (DL_FUNC) &_fastEmbedR_massive_file_info_cpp, 4},
     {"_fastEmbedR_massive_disk_available_cpp", (DL_FUNC) &_fastEmbedR_massive_disk_available_cpp, 1},
     {"_fastEmbedR_massive_graph_modularity_cpp", (DL_FUNC) &_fastEmbedR_massive_graph_modularity_cpp, 11},
