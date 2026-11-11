@@ -1699,11 +1699,18 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
   const int total = early_iter + normal_iter;
   const int block_rows = (n - 1) / devices.size() + 1;
   NumericVector attraction_edges(devices.size());
+  std::vector<unsigned long long> rank_edges(devices.size());
   for (int rank = 0; rank < devices.size(); ++rank) {
     const int first = rank * block_rows;
     const int last = std::min(n, first + block_rows);
-    attraction_edges[rank] = graph.row_ptr[last] - graph.row_ptr[first];
+    rank_edges[rank] = graph.row_ptr[last] - graph.row_ptr[first];
+    attraction_edges[rank] = rank_edges[rank];
   }
+  const int cache_state = total > 1 ?
+    fastembedr_massive_tsne_multigpu_cache_begin(
+      context.get(), rank_edges.data()) : 0;
+  if (cache_state < 0) resident_tsne_cuda_check(1);
+  const bool cached = cache_state == 1;
   for (int iter = 0; iter < total; ++iter) {
     const bool early = iter < early_iter;
     const float phase_exag = static_cast<float>(
@@ -1714,17 +1721,25 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
       early ? initial_momentum : final_momentum);
     resident_tsne_cuda_check(
       fastembedr_massive_tsne_multigpu_begin(context.get()));
-    std::vector<std::future<void>> pending;
-    for (int rank = 0; rank < devices.size(); ++rank) {
-      const int first = rank * block_rows;
-      const int last = std::min(n, first + block_rows);
-      pending.emplace_back(std::async(std::launch::async,
-        [&, rank, first, last, phase_exag]() {
-          resident_tsne_attract(context.get(), graph, rank,
-            first, last, capacity, phase_exag);
-        }));
+    if (cached && iter > 0) {
+      for (int rank = 0; rank < devices.size(); ++rank) {
+        resident_tsne_cuda_check(
+          fastembedr_massive_tsne_multigpu_cache_replay(
+            context.get(), rank, phase_exag));
+      }
+    } else {
+      std::vector<std::future<void>> pending;
+      for (int rank = 0; rank < devices.size(); ++rank) {
+        const int first = rank * block_rows;
+        const int last = std::min(n, first + block_rows);
+        pending.emplace_back(std::async(std::launch::async,
+          [&, rank, first, last, phase_exag]() {
+            resident_tsne_attract(context.get(), graph, rank,
+              first, last, capacity, phase_exag);
+          }));
+      }
+      for (auto& task : pending) task.get();
     }
-    for (auto& task : pending) task.get();
     resident_tsne_cuda_check(
       fastembedr_massive_tsne_multigpu_finish(context.get(),
         phase_lr, momentum, static_cast<float>(min_gain),
@@ -1772,6 +1787,10 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
     Rcpp::Named("optimization_elapsed_sec") =
       seconds(affinity_end, optimization_end),
     Rcpp::Named("native_total_elapsed_sec") = seconds(started, finished),
+    Rcpp::Named("graph_cache_mode") = cached ?
+      "resident_device_shards" : "staged_batches",
+    Rcpp::Named("graph_cache_bytes") = cached ?
+      static_cast<double>(graph.col.size()) * 12.0 : 0.0,
     Rcpp::Named("gpu_devices") = devices,
     Rcpp::Named("per_device_attraction_edges") = attraction_edges);
 #else

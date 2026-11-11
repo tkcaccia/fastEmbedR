@@ -25,6 +25,10 @@ extern "C" int fastembedr_massive_umap_multigpu_upload(
     void* context, int first, int rows, const float* layout);
 extern "C" int fastembedr_massive_umap_multigpu_start_epoch(
     void* context);
+extern "C" int fastembedr_massive_umap_multigpu_cache_begin(
+    void* context, const unsigned long long* rank_edges);
+extern "C" int fastembedr_massive_umap_multigpu_cache_replay(
+    void* context, int rank, int epoch);
 extern "C" int fastembedr_massive_umap_multigpu_step(
     void* context, int rank, const int* heads, const int* tails,
     const float* weights, const float* periods, int edges, int epoch);

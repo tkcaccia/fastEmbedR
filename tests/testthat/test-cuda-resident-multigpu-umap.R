@@ -13,12 +13,17 @@ test_that("resident UMAP uses coordinated CUDA for both public APIs", {
             "cuda_resident_umap_coordinated_nccl")
         expect_identical(cfg$gpu_devices, c(0L, 1L))
         expect_identical(cfg$gpu_identity, c("GPU-A", "GPU-B"))
+        expect_identical(cfg$graph_cache$graph_cache_mode,
+            "resident_device_shards")
+        expect_identical(cfg$graph_cache$graph_cache_bytes, 128)
         expect_lt(max(abs(as.vector(as.numeric(fit)) -
             as.vector(initial))), 1e-6)
         one <- umap(list(indices = indices, distances = distances),
             backend = "cuda", devices = c(0L, 1L))
         expect_identical(calls, 2L)
         expect_identical(one$parameters$gpu_devices, c(0L, 1L))
+        expect_identical(one$parameters$graph_cache$graph_cache_mode,
+            "resident_device_shards")
     },
     massive_nccl_available_cpp = function() TRUE,
     massive_validate_devices = function(devices, ...) devices,
@@ -33,6 +38,8 @@ test_that("resident UMAP uses coordinated CUDA for both public APIs", {
             gpu_devices = args[[11L]],
             per_device_edge_visits = c(10, 10),
             delta_scale = 256,
+            graph_cache_mode = "resident_device_shards",
+            graph_cache_bytes = 128,
             synchronization_seconds = 0.01)
     }, .package = "fastEmbedR")
 })
@@ -52,6 +59,8 @@ test_that("resident UMAP materializes native GPU KNN in host RAM", {
         expect_true(cfg$knn_materialized_for_gpu)
         expect_identical(cfg$optimizer,
             "cuda_resident_umap_coordinated_nccl")
+        expect_identical(cfg$graph_cache$graph_cache_mode,
+            "staged_batches")
     },
     fastembedr_is_gpu_knn = function(x)
         inherits(x, "fake_gpu_knn"),
@@ -73,6 +82,8 @@ test_that("resident UMAP materializes native GPU KNN in host RAM", {
             gpu_devices = args[[11L]],
             per_device_edge_visits = c(10, 10),
             delta_scale = 256,
+            graph_cache_mode = "staged_batches",
+            graph_cache_bytes = 0,
             synchronization_seconds = 0.01)
     }, .package = "fastEmbedR")
 })

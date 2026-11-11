@@ -16,6 +16,8 @@ test_that("resident t-SNE selects the coordinated CUDA optimizer", {
         expect_identical(cfg$gpu_devices, c(0L, 1L))
         expect_identical(cfg$gpu_identity, c("GPU-A", "GPU-B"))
         expect_true(all(cfg$per_device_attraction_edges > 0L))
+        expect_identical(cfg$graph_cache$graph_cache_mode,
+            "resident_device_shards")
         expect_equal(as.vector(fit), as.vector(initial))
         one_call <- tsne(list(indices = indices,
             distances = distances), perplexity = 2,
@@ -25,6 +27,8 @@ test_that("resident t-SNE selects the coordinated CUDA optimizer", {
         expect_identical(calls, 2L)
         expect_identical(one_call$parameters$gpu_devices,
             c(0L, 1L))
+        expect_identical(one_call$parameters$graph_cache$graph_cache_bytes,
+            192)
     },
     embedding_cuda_available_cpp = function() TRUE,
     cuda_opentsne_native_available = function() TRUE,
@@ -38,7 +42,9 @@ test_that("resident t-SNE selects the coordinated CUDA optimizer", {
             optimizer = "cuda_resident_coordinated_nccl",
             repulsion = "fft_grid", precision = "float32",
             n_threads = 1L, gpu_devices = args[[17L]],
-            per_device_attraction_edges = c(8L, 8L))
+            per_device_attraction_edges = c(8L, 8L),
+            graph_cache_mode = "resident_device_shards",
+            graph_cache_bytes = 192)
     }, .package = "fastEmbedR")
 })
 

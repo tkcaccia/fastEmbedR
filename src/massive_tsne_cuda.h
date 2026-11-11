@@ -33,6 +33,10 @@ extern "C" int fastembedr_massive_tsne_multigpu_begin(
     void* context);
 extern "C" int fastembedr_massive_tsne_multigpu_repulsion_ms(
     void* context, float* elapsed_ms);
+extern "C" int fastembedr_massive_tsne_multigpu_cache_begin(
+    void* context, const unsigned long long* rank_edges);
+extern "C" int fastembedr_massive_tsne_multigpu_cache_replay(
+    void* context, int rank, float exaggeration);
 extern "C" int fastembedr_massive_tsne_multigpu_attract(
     void* context, int rank, const int* heads, const int* tails,
     const float* weights, int edges, float exaggeration);

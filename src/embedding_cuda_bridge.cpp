@@ -603,22 +603,45 @@ List umap_cuda_optimize_csr_multigpu_cpp(
   }
   const int block_rows = (n - 1) / devices.size() + 1;
   const float min_weight = max_weight / n_epochs;
+  std::vector<unsigned long long> rank_edges(devices.size());
+  for (int rank = 0; rank < devices.size(); ++rank) {
+    const int first = rank * block_rows;
+    const int last = std::min(n, first + block_rows);
+    rank_edges[rank] = graph.offset(last) - graph.offset(first);
+  }
+  const int cache_state = n_epochs > 1 ?
+    fastembedr_massive_umap_multigpu_cache_begin(
+      context.get(), rank_edges.data()) : 0;
+  if (cache_state < 0) resident_umap_check(1);
+  const bool cached = cache_state == 1;
+  std::vector<std::uint64_t> cached_visits(devices.size(), 0);
   NumericVector visits(devices.size());
   for (int epoch = 0; epoch < n_epochs; ++epoch) {
     resident_umap_check(
       fastembedr_massive_umap_multigpu_start_epoch(
         context.get()));
-    std::vector<std::future<std::uint64_t>> pending;
-    for (int rank = 0; rank < devices.size(); ++rank) {
-      pending.emplace_back(std::async(std::launch::async,
-        [&, rank, epoch]() {
-          return resident_umap_rank_epoch(context.get(),
-            graph, rank, block_rows,
-            capacity, epoch, min_weight, max_weight);
-        }));
-    }
-    for (int rank = 0; rank < devices.size(); ++rank) {
-      visits[rank] += pending[rank].get();
+    if (cached && epoch > 0) {
+      for (int rank = 0; rank < devices.size(); ++rank) {
+        resident_umap_check(
+          fastembedr_massive_umap_multigpu_cache_replay(
+            context.get(), rank, epoch));
+        visits[rank] += cached_visits[rank];
+      }
+    } else {
+      std::vector<std::future<std::uint64_t>> pending;
+      for (int rank = 0; rank < devices.size(); ++rank) {
+        pending.emplace_back(std::async(std::launch::async,
+          [&, rank, epoch]() {
+            return resident_umap_rank_epoch(context.get(),
+              graph, rank, block_rows,
+              capacity, epoch, min_weight, max_weight);
+          }));
+      }
+      for (int rank = 0; rank < devices.size(); ++rank) {
+        const auto count = pending[rank].get();
+        visits[rank] += count;
+        if (cached) cached_visits[rank] = count;
+      }
     }
     resident_umap_check(
       fastembedr_massive_umap_multigpu_finish_epoch(
@@ -664,6 +687,10 @@ List umap_cuda_optimize_csr_multigpu_cpp(
     Rcpp::Named("gpu_devices") = devices,
     Rcpp::Named("per_device_edge_visits") = visits,
     Rcpp::Named("delta_scale") = delta_scale,
+    Rcpp::Named("graph_cache_mode") = cached ?
+      "resident_device_shards" : "staged_batches",
+    Rcpp::Named("graph_cache_bytes") = cached ?
+      static_cast<double>(nnz) * 16.0 : 0.0,
     Rcpp::Named("synchronization_seconds") =
       fastembedr_massive_umap_multigpu_collective_seconds(
         context.get()));

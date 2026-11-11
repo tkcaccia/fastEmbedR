@@ -211,8 +211,7 @@ run_resident_umap_multigpu <- function(indices, distances,
     init <- prepare_reusable_umap_init(prepared, cfg,
         n_components, seed)
     graph <- prepared$graph
-    cfg$graph_offset_dtype <- graph$offset_dtype
-    cfg$csr_offset_dtype <- graph$offset_dtype
+    cfg$graph_offset_dtype <- cfg$csr_offset_dtype <- graph$offset_dtype
     cfg$graph_nnz <- as.double(graph$nnz)
     initial <- if (is_float32_matrix(init$value)) {
         float::dbl(init$value)
@@ -231,6 +230,7 @@ run_resident_umap_multigpu <- function(indices, distances,
     cfg$gpu_identity <- identity
     cfg$per_device_edge_visits <- out$per_device_edge_visits
     cfg$delta_scale <- out$delta_scale
+    cfg$graph_cache <- out[c("graph_cache_mode", "graph_cache_bytes")]
     cfg$synchronization_seconds <- out$synchronization_seconds
     cfg$knn_materialized_for_gpu <- from_gpu
     cfg$input_storage <- "resident_knn"

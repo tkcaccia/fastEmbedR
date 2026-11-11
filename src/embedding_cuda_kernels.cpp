@@ -6878,6 +6878,11 @@ struct MassiveUmapStageSlot {
   bool submitted = false;
 };
 
+struct MassiveUmapCachedBatch {
+  std::size_t offset = 0;
+  int edges = 0;
+};
+
 struct MassiveUmapMultiCudaContext {
   int vertices = 0;
   int dimensions = 2;
@@ -6892,6 +6897,11 @@ struct MassiveUmapMultiCudaContext {
   std::vector<cudaStream_t> upload_streams;
   std::vector<MassiveUmapStageSlot> staged;
   std::vector<std::uint64_t> batch_sequence;
+  bool cache_enabled = false;
+  std::vector<void*> cached_edges;
+  std::vector<std::size_t> cached_capacity;
+  std::vector<std::size_t> cached_used;
+  std::vector<std::vector<MassiveUmapCachedBatch>> cached_batches;
 };
 
 int massive_umap_nccl_check(ncclResult_t status, const char* where) {
@@ -6914,6 +6924,9 @@ extern "C" void fastembedr_massive_umap_multigpu_destroy(void* raw) {
       if (batch.device != nullptr) cudaFree(batch.device);
       if (batch.host != nullptr) cudaFreeHost(batch.host);
     }
+    if (rank < ctx->cached_edges.size() &&
+        ctx->cached_edges[rank] != nullptr)
+      cudaFree(ctx->cached_edges[rank]);
     if (ctx->upload_streams[rank] != nullptr)
       cudaStreamDestroy(ctx->upload_streams[rank]);
     if (ctx->comms[rank] != nullptr)
@@ -6978,6 +6991,10 @@ extern "C" void* fastembedr_massive_umap_multigpu_create(
   ctx->upload_streams.resize(device_count, nullptr);
   ctx->staged.resize(2 * device_count);
   ctx->batch_sequence.resize(device_count, 0);
+  ctx->cached_edges.resize(device_count, nullptr);
+  ctx->cached_capacity.resize(device_count, 0);
+  ctx->cached_used.resize(device_count, 0);
+  ctx->cached_batches.resize(device_count);
   const auto layout_bytes = static_cast<std::size_t>(padded) *
     dimensions * sizeof(float);
   const auto edge_bytes = static_cast<std::size_t>(edge_capacity) * 16u;
@@ -7078,6 +7095,91 @@ extern "C" int fastembedr_massive_umap_multigpu_start_epoch(
     "cudaSetDevice(multi-GPU UMAP restore)");
 }
 
+extern "C" int fastembedr_massive_umap_multigpu_cache_begin(
+    void* raw, const unsigned long long* rank_edges) {
+  auto* ctx = static_cast<MassiveUmapMultiCudaContext*>(raw);
+  if (ctx == nullptr || rank_edges == nullptr || ctx->cache_enabled) {
+    set_embedding_error("invalid resident UMAP graph cache request");
+    return -1;
+  }
+  constexpr std::size_t reserve = 512u * 1024u * 1024u;
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    if (rank_edges[rank] > SIZE_MAX / 16u) {
+      set_embedding_error("resident UMAP graph cache size overflow");
+      return -1;
+    }
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(UMAP graph cache admission)")) return -1;
+    const auto bytes = static_cast<std::size_t>(rank_edges[rank]) * 16u;
+    std::size_t free = 0, total = 0;
+    if (check_cuda(cudaMemGetInfo(&free, &total),
+          "cudaMemGetInfo(UMAP graph cache admission)")) return -1;
+    if (free <= reserve || bytes > (free - reserve) / 2u) {
+      return check_cuda(cudaSetDevice(ctx->previous_device),
+        "cudaSetDevice(UMAP graph cache restore)") ? -1 : 0;
+    }
+    ctx->cached_capacity[rank] = bytes;
+  }
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    if (ctx->cached_capacity[rank] == 0) continue;
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(UMAP graph cache allocation)") ||
+        check_cuda(cudaMalloc(&ctx->cached_edges[rank],
+          ctx->cached_capacity[rank]),
+          "cudaMalloc(UMAP resident graph cache)")) return -1;
+  }
+  ctx->cache_enabled = true;
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(UMAP graph cache restore)") ? -1 : 1;
+}
+
+int massive_umap_multigpu_launch(MassiveUmapMultiCudaContext* ctx,
+    int rank, const char* device, int edges, int epoch,
+    cudaStream_t stream) {
+  const auto bytes = static_cast<std::size_t>(edges) * 4u;
+  auto* heads = reinterpret_cast<const int*>(device);
+  auto* tails = reinterpret_cast<const int*>(device + bytes);
+  auto* weights = reinterpret_cast<const float*>(device + 2u * bytes);
+  auto* periods = reinterpret_cast<const float*>(device + 3u * bytes);
+  auto* worker = ctx->workers[rank];
+  if (ctx->dimensions == 3) {
+    embed_epoch_coo_delta_kernel<3><<<
+      (edges + 255) / 256, 256, 0, stream>>>(worker->layout,
+      ctx->deltas[rank], heads, tails, weights, periods,
+      worker->params, static_cast<unsigned int>(epoch),
+      edges, ctx->delta_scale);
+  } else {
+    embed_epoch_coo_delta_kernel<2><<<
+      (edges + 255) / 256, 256, 0, stream>>>(worker->layout,
+      ctx->deltas[rank], heads, tails, weights, periods,
+      worker->params, static_cast<unsigned int>(epoch),
+      edges, ctx->delta_scale);
+  }
+  return check_cuda(cudaGetLastError(),
+    "multi-GPU UMAP delta launch");
+}
+
+extern "C" int fastembedr_massive_umap_multigpu_cache_replay(
+    void* raw, int rank, int epoch) {
+  auto* ctx = static_cast<MassiveUmapMultiCudaContext*>(raw);
+  if (ctx == nullptr || !ctx->cache_enabled || rank < 0 ||
+      rank >= static_cast<int>(ctx->devices.size()) || epoch < 1 ||
+      epoch >= ctx->workers[rank]->params.n_epochs) {
+    set_embedding_error("invalid resident UMAP graph cache replay");
+    return 1;
+  }
+  if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+        "cudaSetDevice(UMAP graph cache replay)")) return 1;
+  const auto* base = static_cast<const char*>(ctx->cached_edges[rank]);
+  for (const auto& batch : ctx->cached_batches[rank]) {
+    if (massive_umap_multigpu_launch(ctx, rank,
+          base + batch.offset, batch.edges, epoch,
+          ctx->upload_streams[rank])) return 1;
+  }
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(UMAP graph cache restore)");
+}
+
 extern "C" int fastembedr_massive_umap_multigpu_step(
     void* raw, int rank, const int* heads, const int* tails,
     const float* weights, const float* periods, int edges,
@@ -7094,6 +7196,10 @@ extern "C" int fastembedr_massive_umap_multigpu_step(
   if (edges > worker->capacity || epoch < 0 ||
       epoch >= worker->params.n_epochs) {
     set_embedding_error("multi-GPU UMAP edge batch exceeds capacity");
+    return 1;
+  }
+  if (ctx->cache_enabled && epoch != 0) {
+    set_embedding_error("resident UMAP graph cache must replay epochs");
     return 1;
   }
   const int first = rank * ctx->block_rows;
@@ -7121,34 +7227,30 @@ extern "C" int fastembedr_massive_umap_multigpu_step(
   std::memcpy(host + 2 * ids_bytes, weights, weights_bytes);
   std::memcpy(host + 2 * ids_bytes + weights_bytes,
     periods, weights_bytes);
-  auto* device = static_cast<char*>(batch.device);
-  auto* d_heads = reinterpret_cast<int*>(device);
-  auto* d_tails = reinterpret_cast<int*>(device + ids_bytes);
-  auto* d_weights = reinterpret_cast<float*>(device + 2 * ids_bytes);
-  auto* d_periods = reinterpret_cast<float*>(
-    device + 2 * ids_bytes + weights_bytes);
+  const auto payload_bytes = 2 * ids_bytes + 2 * weights_bytes;
+  const auto offset = ctx->cached_used[rank];
+  if (ctx->cache_enabled &&
+      (offset > ctx->cached_capacity[rank] ||
+       payload_bytes > ctx->cached_capacity[rank] - offset)) {
+    set_embedding_error("resident UMAP graph cache capacity exceeded");
+    return 1;
+  }
+  auto* device = ctx->cache_enabled ?
+    static_cast<char*>(ctx->cached_edges[rank]) + offset :
+    static_cast<char*>(batch.device);
   auto stream = ctx->upload_streams[rank];
-  if (check_cuda(cudaMemcpyAsync(batch.device, batch.host,
-        2 * ids_bytes + 2 * weights_bytes,
+  if (check_cuda(cudaMemcpyAsync(device, batch.host,
+        payload_bytes,
         cudaMemcpyHostToDevice, stream),
         "cudaMemcpyAsync(multi-GPU UMAP batch)")) return 1;
-  if (ctx->dimensions == 3) {
-    embed_epoch_coo_delta_kernel<3><<<
-      (edges + 255) / 256, 256, 0, stream>>>(worker->layout,
-      ctx->deltas[rank], d_heads, d_tails,
-      d_weights, d_periods, worker->params,
-      static_cast<unsigned int>(epoch), edges, ctx->delta_scale);
-  } else {
-    embed_epoch_coo_delta_kernel<2><<<
-      (edges + 255) / 256, 256, 0, stream>>>(worker->layout,
-      ctx->deltas[rank], d_heads, d_tails,
-      d_weights, d_periods, worker->params,
-      static_cast<unsigned int>(epoch), edges, ctx->delta_scale);
-  }
-  if (check_cuda(cudaGetLastError(),
-        "multi-GPU UMAP delta launch") ||
+  if (massive_umap_multigpu_launch(ctx, rank, device,
+        edges, epoch, stream) ||
       check_cuda(cudaEventRecord(batch.done, stream),
         "cudaEventRecord(UMAP batch)")) return 1;
+  if (ctx->cache_enabled) {
+    ctx->cached_batches[rank].push_back({offset, edges});
+    ctx->cached_used[rank] += payload_bytes;
+  }
   batch.submitted = true;
   return check_cuda(cudaSetDevice(ctx->previous_device),
     "cudaSetDevice(multi-GPU UMAP restore)");
@@ -7853,6 +7955,11 @@ struct MassiveTsneStageSlot {
   bool submitted = false;
 };
 
+struct MassiveTsneCachedBatch {
+  std::size_t offset = 0;
+  int edges = 0;
+};
+
 struct MassiveTsneMultiCudaContext {
   int n = 0;
   int dimensions = 2;
@@ -7863,6 +7970,11 @@ struct MassiveTsneMultiCudaContext {
   std::vector<ncclComm_t> comms;
   std::vector<MassiveTsneStageSlot> staged;
   std::vector<std::uint64_t> batch_sequence;
+  bool cache_enabled = false;
+  std::vector<void*> cached_edges;
+  std::vector<std::size_t> cached_capacity;
+  std::vector<std::size_t> cached_used;
+  std::vector<std::vector<MassiveTsneCachedBatch>> cached_batches;
 };
 
 extern "C" void fastembedr_massive_tsne_multigpu_destroy(void* raw) {
@@ -7878,6 +7990,9 @@ extern "C" void fastembedr_massive_tsne_multigpu_destroy(void* raw) {
       if (batch.device != nullptr) cudaFree(batch.device);
       if (batch.host != nullptr) cudaFreeHost(batch.host);
     }
+    if (rank < ctx->cached_edges.size() &&
+        ctx->cached_edges[rank] != nullptr)
+      cudaFree(ctx->cached_edges[rank]);
     if (ctx->comms[rank] != nullptr)
       ncclCommDestroy(ctx->comms[rank]);
     fastembedr_massive_tsne_cuda_destroy(ctx->workers[rank]);
@@ -7933,6 +8048,10 @@ extern "C" void* fastembedr_massive_tsne_multigpu_create(
   ctx->comms.resize(device_count, nullptr);
   ctx->staged.resize(2 * device_count);
   ctx->batch_sequence.resize(device_count, 0);
+  ctx->cached_edges.resize(device_count, nullptr);
+  ctx->cached_capacity.resize(device_count, 0);
+  ctx->cached_used.resize(device_count, 0);
+  ctx->cached_batches.resize(device_count);
   for (int rank = 0; rank < device_count; ++rank) {
     if (check_cuda(cudaSetDevice(devices[rank]),
           "cudaSetDevice(t-SNE create)")) {
@@ -8040,6 +8159,85 @@ extern "C" int fastembedr_massive_tsne_multigpu_repulsion_ms(
   return status || restored;
 }
 
+extern "C" int fastembedr_massive_tsne_multigpu_cache_begin(
+    void* raw, const unsigned long long* rank_edges) {
+  auto* ctx = static_cast<MassiveTsneMultiCudaContext*>(raw);
+  if (ctx == nullptr || rank_edges == nullptr || ctx->cache_enabled) {
+    set_embedding_error("invalid resident t-SNE graph cache request");
+    return -1;
+  }
+  constexpr std::size_t reserve = 512u * 1024u * 1024u;
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    if (rank_edges[rank] > SIZE_MAX / 12u) {
+      set_embedding_error("resident t-SNE graph cache size overflow");
+      return -1;
+    }
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(t-SNE graph cache admission)")) return -1;
+    const auto bytes = static_cast<std::size_t>(rank_edges[rank]) * 12u;
+    std::size_t free = 0, total = 0;
+    if (check_cuda(cudaMemGetInfo(&free, &total),
+          "cudaMemGetInfo(t-SNE graph cache admission)")) return -1;
+    if (free <= reserve || bytes > (free - reserve) / 2u) {
+      return check_cuda(cudaSetDevice(ctx->previous_device),
+        "cudaSetDevice(t-SNE graph cache restore)") ? -1 : 0;
+    }
+    ctx->cached_capacity[rank] = bytes;
+  }
+  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+    if (ctx->cached_capacity[rank] == 0) continue;
+    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+          "cudaSetDevice(t-SNE graph cache allocation)") ||
+        check_cuda(cudaMalloc(&ctx->cached_edges[rank],
+          ctx->cached_capacity[rank]),
+          "cudaMalloc(t-SNE resident graph cache)")) return -1;
+  }
+  ctx->cache_enabled = true;
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(t-SNE graph cache restore)") ? -1 : 1;
+}
+
+int massive_tsne_multigpu_launch(MassiveTsneMultiCudaContext* ctx,
+    int rank, const char* device, int edges, float exaggeration) {
+  const auto bytes = static_cast<std::size_t>(edges) * 4u;
+  auto* heads = reinterpret_cast<const int*>(device);
+  auto* tails = reinterpret_cast<const int*>(device + bytes);
+  auto* weights = reinterpret_cast<const float*>(device + 2u * bytes);
+  auto* worker = ctx->workers[rank];
+  const int blocks = (edges - 1) / 256 + 1;
+  if (ctx->dimensions == 3) {
+    massive_tsne_attractive_3d_kernel<<<blocks, 256, 0,
+      worker->stream>>>(heads, tails, weights,
+      worker->current, worker->gradient, edges, exaggeration);
+  } else {
+    massive_tsne_attractive_kernel<<<blocks, 256, 0,
+      worker->stream>>>(heads, tails, weights,
+      worker->current, worker->gradient, edges, exaggeration);
+  }
+  return check_cuda(cudaGetLastError(),
+    "multi-GPU t-SNE attraction launch");
+}
+
+extern "C" int fastembedr_massive_tsne_multigpu_cache_replay(
+    void* raw, int rank, float exaggeration) {
+  auto* ctx = static_cast<MassiveTsneMultiCudaContext*>(raw);
+  if (ctx == nullptr || !ctx->cache_enabled || rank < 0 ||
+      rank >= static_cast<int>(ctx->devices.size()) ||
+      !std::isfinite(exaggeration) || exaggeration <= 0.0f) {
+    set_embedding_error("invalid resident t-SNE graph cache replay");
+    return 1;
+  }
+  if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+        "cudaSetDevice(t-SNE graph cache replay)")) return 1;
+  const auto* base = static_cast<const char*>(ctx->cached_edges[rank]);
+  for (const auto& batch : ctx->cached_batches[rank]) {
+    if (massive_tsne_multigpu_launch(ctx, rank,
+          base + batch.offset, batch.edges, exaggeration)) return 1;
+  }
+  return check_cuda(cudaSetDevice(ctx->previous_device),
+    "cudaSetDevice(t-SNE graph cache restore)");
+}
+
 extern "C" int fastembedr_massive_tsne_multigpu_attract(
     void* raw, int rank, const int* heads, const int* tails,
     const float* weights, int edges, float exaggeration) {
@@ -8077,27 +8275,28 @@ extern "C" int fastembedr_massive_tsne_multigpu_attract(
   std::memcpy(host, heads, bytes);
   std::memcpy(host + bytes, tails, bytes);
   std::memcpy(host + 2 * bytes, weights, bytes);
-  auto* device = static_cast<char*>(batch.device);
-  auto* d_heads = reinterpret_cast<int*>(device);
-  auto* d_tails = reinterpret_cast<int*>(device + bytes);
-  auto* d_weights = reinterpret_cast<float*>(device + 2 * bytes);
-  if (check_cuda(cudaMemcpyAsync(batch.device, batch.host,
-        3 * bytes, cudaMemcpyHostToDevice, worker->stream),
-        "cudaMemcpyAsync(t-SNE staged batch)")) return 1;
-  const int blocks = (edges - 1) / 256 + 1;
-  if (ctx->dimensions == 3) {
-    massive_tsne_attractive_3d_kernel<<<blocks, 256, 0,
-      worker->stream>>>(d_heads, d_tails, d_weights,
-      worker->current, worker->gradient, edges, exaggeration);
-  } else {
-    massive_tsne_attractive_kernel<<<blocks, 256, 0,
-      worker->stream>>>(d_heads, d_tails, d_weights,
-      worker->current, worker->gradient, edges, exaggeration);
+  const auto payload_bytes = 3u * bytes;
+  const auto offset = ctx->cached_used[rank];
+  if (ctx->cache_enabled &&
+      (offset > ctx->cached_capacity[rank] ||
+       payload_bytes > ctx->cached_capacity[rank] - offset)) {
+    set_embedding_error("resident t-SNE graph cache capacity exceeded");
+    return 1;
   }
-  if (check_cuda(cudaGetLastError(),
-        "multi-GPU t-SNE attraction launch") ||
+  auto* device = ctx->cache_enabled ?
+    static_cast<char*>(ctx->cached_edges[rank]) + offset :
+    static_cast<char*>(batch.device);
+  if (check_cuda(cudaMemcpyAsync(device, batch.host,
+        payload_bytes, cudaMemcpyHostToDevice, worker->stream),
+        "cudaMemcpyAsync(t-SNE staged batch)")) return 1;
+  if (massive_tsne_multigpu_launch(ctx, rank, device,
+        edges, exaggeration) ||
       check_cuda(cudaEventRecord(batch.done, worker->stream),
         "cudaEventRecord(t-SNE batch)")) return 1;
+  if (ctx->cache_enabled) {
+    ctx->cached_batches[rank].push_back({offset, edges});
+    ctx->cached_used[rank] += payload_bytes;
+  }
   batch.submitted = true;
   return check_cuda(cudaSetDevice(ctx->previous_device),
     "cudaSetDevice(t-SNE restore)");
