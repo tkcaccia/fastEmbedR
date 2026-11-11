@@ -10,6 +10,15 @@ massive_cuda_stream_graph_identity <- function(graph) {
     current
 }
 
+massive_cuda_stream_finalize <- function(part, output) {
+    if (!suppressWarnings(file.link(part, output))) stop(
+        "Cannot finalize CUDA labels without replacing an existing output.",
+        call. = FALSE)
+    if (!file.remove(part)) warning(
+        "Completed CUDA label part was retained.", call. = FALSE)
+    invisible(output)
+}
+
 massive_cuda_stream_plan <- function(graph, output, devices,
         chunk_rows, memory_limit) {
     if (!inherits(graph, "fastEmbedR_massive_graph") ||
@@ -109,8 +118,7 @@ massive_cuda_stream_audit <- function(graph, plan, metadata,
             call. = FALSE)
     if (!identical(before, massive_cuda_stream_graph_identity(graph)))
         stop("Massive graph changed during clustering.", call. = FALSE)
-    if (!file.rename(part, plan$path)) stop(
-        "Cannot finalize streamed CUDA labels.", call. = FALSE)
+    massive_cuda_stream_finalize(part, plan$path)
     score
 }
 
@@ -214,9 +222,7 @@ massive_cuda_stream_cluster <- function(graph, output, devices,
         !identical(before, massive_cuda_stream_graph_identity(graph))) stop(
         "Streamed multilevel Louvain failed its final audit.",
         call. = FALSE)
-    if (!file.rename(hierarchy$part, path)) stop(
-        "Cannot finalize streamed multilevel Louvain labels.",
-        call. = FALSE)
+    massive_cuda_stream_finalize(hierarchy$part, path)
     first$membership_path <- path
     first$membership_identity <- massive_checkpoint_file_identity(path)
     first$n_communities <- hierarchy$level$n_communities
@@ -312,9 +318,7 @@ massive_cuda_stream_leiden <- function(graph, output, devices,
         !identical(before, massive_cuda_stream_graph_identity(graph))) stop(
         "Streamed Leiden failed modularity or connectivity audit.",
         call. = FALSE)
-    if (!file.rename(fitted$part, path)) stop(
-        "Cannot finalize streamed Leiden labels.",
-        call. = FALSE)
+    massive_cuda_stream_finalize(fitted$part, path)
     structure(list(membership_path = path,
         membership_identity = massive_checkpoint_file_identity(path),
         n_vertices = graph$n_vertices,

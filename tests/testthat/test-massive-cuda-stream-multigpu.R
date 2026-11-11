@@ -1,3 +1,21 @@
+test_that("native CUDA finalization never replaces an existing result", {
+    skip_on_os("windows")
+    part <- tempfile()
+    output <- tempfile()
+    writeBin(as.raw(1:3), part)
+    writeBin(as.raw(4:6), output)
+    expect_error(fastEmbedR:::massive_cuda_stream_finalize(
+        part, output), "without replacing")
+    expect_identical(readBin(output, "raw", n = 3L),
+        as.raw(4:6))
+    unlink(output)
+    expect_invisible(fastEmbedR:::massive_cuda_stream_finalize(
+        part, output))
+    expect_false(file.exists(part))
+    expect_identical(readBin(output, "raw", n = 3L),
+        as.raw(1:3))
+})
+
 test_that("streamed multi-GPU route is explicit and method-limited", {
     graph <- list(n_vertices = 12L, n_edges = 60L,
         max_degree = 6L, storage = "csr",

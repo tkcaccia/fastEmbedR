@@ -2436,6 +2436,18 @@ List massive_louvain_metal_level_cpp(std::string offsets_path,
 }
 
 #ifdef FASTEMBEDR_HAS_CUDA
+void finalize_cuda_labels_no_replace(const std::string& part,
+    const std::string& output) {
+  std::error_code error;
+  std::filesystem::create_hard_link(part, output, error);
+  if (error) {
+    Rcpp::stop("Cannot finalize CUDA labels without replacing an "
+               "existing output: " + error.message());
+  }
+  std::filesystem::remove(part, error);
+  if (error) Rcpp::warning("Completed CUDA label part was retained.");
+}
+
 double coordinated_stream_modularity(CsrGraphSource& graph,
     const std::vector<int>& labels,
     double total,
@@ -2688,9 +2700,7 @@ List massive_cluster_cuda_resident_csr_cpp(
       Rcpp::stop("Native resident graph changed during fitting.");
     }
   }
-  std::error_code error;
-  std::filesystem::rename(part, output, error);
-  if (error) Rcpp::stop("Cannot finalize native CUDA labels.");
+  finalize_cuda_labels_no_replace(part, output);
   result["membership"] = R_NilValue;
   result["membership_path"] = output;
   result["gpu_devices_used"] = devices;
@@ -2892,9 +2902,7 @@ List massive_louvain_cuda_devices_level_cpp(
       Rcpp::stop("Coordinated CUDA graph changed during fitting.");
     }
   }
-  std::error_code error;
-  std::filesystem::rename(part, output, error);
-  if (error) Rcpp::stop("Cannot finalize CUDA clustering labels.");
+  finalize_cuda_labels_no_replace(part, output);
   return List::create(
     Rcpp::Named("membership_path") = output,
     Rcpp::Named("n_vertices") = static_cast<double>(n),
