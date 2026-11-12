@@ -3,10 +3,7 @@ massive_cluster_reference_budget <- function(rows, cols, k,
     limit <- massive_memory_bytes(memory_limit)
     per_landmark <- 64 * cols + 512 * k + 2048 + 8 * workers
     available <- max(0, 0.7 * limit - 168 * 1024^2)
-    ram_cap <- if (method == "walktrap") {
-        floor((sqrt(per_landmark^2 + 64 * available) -
-            per_landmark) / 32)
-    } else floor(available / per_landmark)
+    ram_cap <- floor(available / per_landmark)
     vram_cap <- Inf
     if (backend == "cuda") {
         free <- massive_auto_cuda_free(devices, rows)
@@ -15,7 +12,6 @@ massive_cluster_reference_budget <- function(rows, cols, k,
     }
     cap <- min(ram_cap, vram_cap, floor(rows / 2),
         .Machine$integer.max)
-    if (method == "walktrap") cap <- min(cap, 4000L)
     list(cap = cap, limit = limit,
         per_landmark = per_landmark,
         free_vram_bytes = if (backend == "cuda") free else NA_real_)
@@ -31,7 +27,6 @@ massive_cluster_auto_bytes <- function(rows, cols, k, workers,
         bytes <- bytes + (fit_workers - 1L) *
             rows * (128 * k + 256)
     }
-    if (method == "walktrap") bytes <- bytes + 16 * rows^2
     bytes
 }
 
@@ -59,7 +54,6 @@ massive_cluster_auto_plan <- function(x, landmarks, k, backend,
         0.5 * budget$free_vram_bytes
     if (mode == "auto" && is.null(landmarks) &&
         rows <= .Machine$integer.max &&
-        (method != "walktrap" || rows <= 4000L) &&
         normal <= 0.5 * budget$limit && gpu_ok) {
         if (!is.null(output)) stop(
             "Auto clustering fits in memory; remove `output`.",
@@ -74,8 +68,8 @@ massive_cluster_auto_plan <- function(x, landmarks, k, backend,
         integer_scalar(landmarks)
     if (is.na(count) || !is.finite(count) || count <= k ||
         count >= rows || count > budget$cap) stop(
-        "Landmark count exceeds the RAM/VRAM or Walktrap ",
-        "4,000-vertex budget, or cannot support `k`.",
+        "Landmark count exceeds the RAM/VRAM budget ",
+        "or cannot support `k`.",
         call. = FALSE)
     if (is.null(output)) stop("Landmark output required.", call. = FALSE)
     if (mode == "auto") message("EXPERIMENTAL auto: landmark clustering")
@@ -227,7 +221,7 @@ massive_cluster_in_memory <- function(x, k, method, backend,
 massive_cluster_full_cuda <- function(x, method, output, devices,
         chunk_rows, memory_limit, resolution, n_iterations, seed,
         checkpoint, resume, initial, gpu_storage = "resident") {
-    if (method == "walktrap" || checkpoint || resume ||
+    if (checkpoint || resume ||
         !is.null(initial)) stop(
         "Multi-GPU CUDA supports Leiden/Louvain without ",
         "checkpoint or initial labels; no fallback.", call. = FALSE)
@@ -250,8 +244,6 @@ massive_cluster_full_workers <- function(n.cores, method, backend) {
     if (backend != "cpu" && workers != 1L) stop(
         "Full-graph GPU clustering uses one CPU coordinator.",
         call. = FALSE)
-    if (method == "walktrap" && workers != 1L) stop(
-        "File-backed Walktrap uses one CPU worker.", call. = FALSE)
     workers
 }
 
@@ -274,8 +266,6 @@ massive_cluster_full_graph <- function(x, method, backend, output,
                 fit = unname(proc.time()[[3L]] - started))
         return(result)
     }
-    if (backend == "cuda" && method == "walktrap") stop(
-        "CUDA Walktrap is unavailable; no fallback.", call. = FALSE)
     if (!(backend %in% c("cpu", "metal", "cuda")) ||
         !is.null(devices)) stop(
         "Full-graph clustering needs CPU, Metal, or CUDA devices.",
@@ -293,17 +283,6 @@ massive_cluster_full_graph <- function(x, method, backend, output,
 massive_cluster_full_fit <- function(x, method, backend, output,
         workers, chunk_rows, memory_limit, resolution,
         n_iterations, steps, seed, checkpoint, resume, initial) {
-    if (identical(method, "walktrap")) {
-        if (!is.null(initial) || checkpoint || resume ||
-            !isTRUE(all.equal(resolution, 1)) ||
-            n_iterations != 10L) stop(
-            "Partitioned Walktrap has no initialization or checkpoint; ",
-            "resolution and iteration controls do not apply.",
-            call. = FALSE)
-        return(massive_walktrap(x, output, steps = steps,
-            chunk_rows = chunk_rows %||% 4000L,
-            memory_limit = memory_limit, backend = backend))
-    }
     if (identical(method, "leiden")) return(massive_leiden(x, output,
         max_passes = n_iterations, resolution = resolution,
         seed = seed, chunk_rows = chunk_rows,
@@ -341,12 +320,12 @@ massive_cluster_auto_result <- function(result, massive, plan) {
 
 #' EXPERIMENTAL massive-data community clustering
 #'
-#' Selects bounded resident landmarks from a file-backed matrix, builds their
-#' graph with `knn_graph()`, and runs the existing native Walktrap, Louvain,
-#' or Leiden implementation. Metal supports landmark Leiden/Louvain with
-#' exact KNN and file-backed full-graph Louvain. Query-to-landmark
-#' neighbors and weighted-vote labels remain file-backed. This is a landmark
-#' approximation, not clustering of the complete graph. With a symmetric
+#' Selects bounded resident landmarks from a file-backed matrix, builds
+#' their graph with `knn_graph()`, and runs native Louvain or Leiden. Metal
+#' supports landmark fits with exact KNN and full-graph Louvain.
+#' Query-to-landmark neighbors and weighted-vote labels remain file-backed.
+#' This is a landmark approximation, not clustering of the complete graph.
+#' With a symmetric
 #' file-backed fuzzy graph and `massive = "out_of_core_graph"`, the function
 #' runs CPU, CUDA, or Metal multilevel Louvain or Leiden.
 #' CUDA and Metal local moves
@@ -355,8 +334,6 @@ massive_cluster_auto_result <- function(result, massive, plan) {
 #' hierarchy with `n_iterations` local-move passes per level on CPU.
 #' The native multi-GPU routes use `n_iterations` as a local-move pass
 #' limit per level and accept `seed`. Full-graph
-#' Walktrap runs exact walks within bounded blocks and contracts communities;
-#' it is an explicit approximation when more than one block is needed.
 #' Native multi-GPU CUDA resident clustering keeps graph shards on the
 #' selected GPUs and checks host RAM and per-device VRAM before fitting.
 #' It fails explicitly if memory is insufficient and has no checkpoint
@@ -368,12 +345,10 @@ massive_cluster_auto_result <- function(result, massive, plan) {
 #' Both routes use package-owned C++ and CUDA kernels.
 #' `massive = "auto"` uses
 #' ordinary in-memory graph clustering when resource estimates permit it.
-#' Exact Walktrap is CPU-only and limited to 4,000 landmark vertices;
-#' automatic planning includes its quadratic transition-matrix memory.
 #'
 #' @param x A `massive_matrix()` descriptor, a symmetric file-backed fuzzy
 #'   graph in full-graph mode, or a resident matrix in auto mode.
-#' @param method `"leiden"`, `"louvain"`, or `"walktrap"` (random walks).
+#' @param method `"leiden"` or `"louvain"`.
 #' @param massive `"landmark"`, `"auto"`, or `"out_of_core_graph"`.
 #' @param landmarks Landmark count; auto mode chooses a bounded count if NULL.
 #' @param nn Previous massive landmark UMAP or t-SNE result whose verified
@@ -402,18 +377,19 @@ massive_cluster_auto_result <- function(result, massive, plan) {
 #' @param chunk_rows Maximum source rows per streamed batch. Full-graph
 #'   Louvain defaults to 8,192 rows on CPU/CUDA and 65,536 on Metal.
 #' @param memory_limit Conservative RAM budget; CUDA also checks free VRAM.
-#' @param resolution,n_iterations,n_runs,steps,seed Graph clustering controls.
+#' @param resolution,n_iterations,n_runs,seed Graph clustering controls.
+#' @param steps Reserved legacy control; only the default is accepted.
 #' @param checkpoint,resume Save or reuse completed landmark workflow stages,
 #'   label batches, or completed CPU/CUDA/Metal Louvain and CPU Leiden stages.
-#'   Multi-GPU CUDA and Walktrap do not support checkpoints.
+#'   Multi-GPU CUDA does not support checkpoints.
 #' @param checkpoint_every Landmark label batches between checkpoints.
 #' @param initial Optional saved landmark-clustering result used to
 #'   initialize full-graph Louvain or Leiden. Other modes reject it.
 #' @return An experimental file-backed clustering result, a file-backed
-#'   Walktrap, Louvain, or Leiden result in full-graph mode, or an in-memory
+#'   Louvain or Leiden result in full-graph mode, or an in-memory
 #'   `graph_cluster()` result when auto mode selects the resident route.
 #' @keywords internal
-massive_cluster <- function(x, method = c("leiden", "louvain", "walktrap"),
+massive_cluster <- function(x, method = c("leiden", "louvain"),
         massive = c("landmark", "auto", "out_of_core_graph"), landmarks = NULL,
         k = 30L, output = NULL, backend = "cpu", n.cores = 1L,
         devices = NULL, landmark_method = c("reservoir", "random"),
@@ -425,6 +401,8 @@ massive_cluster <- function(x, method = c("leiden", "louvain", "walktrap"),
         parallel.mode = c("restarts", "fit"),
         gpu_storage = c("resident", "stream")) {
     method <- match.arg(method)
+    if (!identical(steps, 4L)) stop(
+        "`steps` is no longer supported.", call. = FALSE)
     massive <- match.arg(massive)
     parallel.mode <- match.arg(parallel.mode)
     gpu_storage <- match.arg(gpu_storage)
@@ -434,7 +412,7 @@ massive_cluster <- function(x, method = c("leiden", "louvain", "walktrap"),
         "`gpu_storage = \"stream\"` needs multi-GPU full-graph CUDA.",
         call. = FALSE)
     if (parallel.mode == "fit" &&
-        (backend != "cpu" || method == "walktrap")) stop(
+        backend != "cpu") stop(
         "`parallel.mode = \"fit\"` requires CPU Louvain or Leiden ",
         "clustering.", call. = FALSE)
     if (massive == "out_of_core_graph") {
@@ -444,7 +422,7 @@ massive_cluster <- function(x, method = c("leiden", "louvain", "walktrap"),
             "`parallel.mode = \"fit\"`.", call. = FALSE)
         unused <- c(!missing(landmarks), !missing(k), !is.null(nn),
             !missing(landmark_method), !missing(knn_method), !missing(n_runs),
-            !missing(steps) && method != "walktrap")
+            !missing(steps))
         return(massive_cluster_full_request(x, method, backend, output,
             n.cores, chunk_rows, memory_limit, resolution, n_iterations,
             steps, seed, checkpoint, resume, checkpoint_every, unused,

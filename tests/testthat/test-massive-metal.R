@@ -4,8 +4,6 @@ test_that("Metal landmark clustering never falls back silently", {
         expect_error(fastEmbedR:::massive_cluster_backend(
             "leiden", "metal"), "no CPU fallback"),
         .package = "fastEmbedR")
-    expect_error(fastEmbedR:::massive_cluster_backend(
-        "walktrap", "metal"), "CPU-only")
 })
 
 test_that("file-backed Metal exact KNN matches streamed CPU search", {
@@ -235,9 +233,6 @@ test_that("Metal landmark communities retain every source row", {
         expect_identical(labels$membership[result$selection$indices],
             result$reference_membership)
     }
-    expect_error(massive_cluster(source, method = "walktrap",
-        landmarks = 12L, k = 4L, backend = "metal",
-        output = file.path(directory, "walktrap")), "CPU-only")
     expect_error(massive_cluster(source, method = "leiden",
         massive = "out_of_core_graph", backend = "metal",
         output = file.path(directory, "full.clusters.u32")),

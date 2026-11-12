@@ -16,9 +16,6 @@ test_that("automatic clustering uses CPU fit workers in one run", {
 test_that("CPU fit mode rejects incompatible massive routes", {
     x <- matrix(seq_len(80), ncol = 4L)
     expect_error(massive_cluster(x, massive = "auto",
-        method = "walktrap", parallel.mode = "fit"),
-        "requires CPU Louvain or Leiden")
-    expect_error(massive_cluster(x, massive = "auto",
         backend = "cuda", parallel.mode = "fit"),
         "requires CPU Louvain or Leiden")
 })

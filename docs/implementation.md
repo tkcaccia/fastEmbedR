@@ -39,7 +39,7 @@ The public package surface is deliberately small:
   support is an explicit error rather than a CPU fallback.
 - `knn_graph()` builds one compact undirected graph from data, an embedding,
   or supplied neighbors; `graph_cluster()` applies native Louvain, Leiden,
-  or Walktrap community detection.
+  community detection.
 - `backend` is limited to `"cpu"`, `"metal"`, and `"cuda"`.
 - GPU requests fail clearly if native GPU code is unavailable. CPU fallback is
   never reported as Metal or CUDA work.
@@ -190,12 +190,10 @@ filtering and a final weight threshold are optional. Directed duplicates are
 collapsed once, so clustering does not repeat neighbor search or retain a
 dense adjacency matrix.
 
-`graph_cluster()` provides three package-native algorithms:
+`graph_cluster()` provides two package-native algorithms:
 
 - multilevel Louvain local moving and graph aggregation [14];
-- Leiden local moving, within-community refinement, and aggregation [15];
-- the Pons-Latapy Walktrap random-walk distance and adjacent-community
-  agglomeration [16].
+- Leiden local moving, within-community refinement, and aggregation [15].
 
 The Leiden phase organization is informed by the MIT-licensed NetworKit
 implementation [17]. The accelerator design is also informed by the parallel
@@ -215,12 +213,7 @@ levels. Leiden communities are checked and disconnected components are split
 before aggregation. This shared host orchestration keeps CPU, CUDA, and Metal
 semantics aligned without imposing a cuGraph dependency.
 
-Walktrap is the published random-walk method, not a sampled proximity
-approximation. Its exact transition storage is quadratic, so the
-implementation stops before an unsafe allocation and directs large graphs to
-Louvain or Leiden. Walktrap remains CPU-only. A request for CUDA or Metal
-Walktrap fails explicitly; it is never reported as GPU work after running on
-CPU. `igraph` is used only as a guarded test and benchmark oracle. Fixed seeds
+`igraph` is used only as a guarded test and benchmark oracle. Fixed seeds
 control scheduling, but floating-point atomic update order means GPU results
 are not guaranteed to be bitwise identical across devices.
 

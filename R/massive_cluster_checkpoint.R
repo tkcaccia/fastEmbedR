@@ -56,15 +56,13 @@ massive_cluster_checkpoint_controls <- function(checkpoint, resume,
 
 massive_cluster_workflow_report <- function(x, plan, paths, backend,
         method) {
-    walktrap_bytes <- 16 * plan$count^2 * (method == "walktrap")
     estimate <- 168 * 1024^2 +
-        plan$count * plan$budget$per_landmark + walktrap_bytes
+        plan$count * plan$budget$per_landmark
     message("EXPERIMENTAL landmark clustering: ", x$nrow,
         " rows; ", plan$count, " landmarks; backend=", backend,
         "; estimated RAM=", round(estimate / 1024^3, 2),
         " GiB; disk=", round(paths$disk_bytes / 1024^3, 2), " GiB")
-    list(walktrap_bytes = walktrap_bytes,
-        reference_ram_estimate_bytes = estimate)
+    list(reference_ram_estimate_bytes = estimate)
 }
 
 massive_cluster_reference_graph <- function(x, selection, plan, k,

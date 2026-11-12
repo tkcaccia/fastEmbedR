@@ -801,7 +801,3 @@ transform_tsne_cpp <- function(reference_layout, indices, distances, y_init, ini
     .Call(`_fastEmbedR_transform_tsne_cpp`, reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, n_threads, seed, verbose)
 }
 
-fastembedr_walktrap_cpp <- function(from, to, weight, n_vertices, steps = 4L) {
-    .Call(`_fastEmbedR_fastembedr_walktrap_cpp`, from, to, weight, n_vertices, steps)
-}
-

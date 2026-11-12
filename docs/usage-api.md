@@ -376,10 +376,8 @@ The accelerator routes still require device qualification.
 
 `knn_graph()` uses the selected backend only when it must compute neighbors.
 `graph_cluster()` runs native CPU, CUDA, or Metal Louvain/Leiden without
-calling igraph, cuGraph, Python, or another clustering routine. Walktrap is
-CPU-only. An unavailable or unsupported GPU backend fails explicitly.
-Walktrap is intended for small and moderate graphs because its transition
-matrix is quadratic; use Leiden or Louvain for large graphs.
+calling igraph, cuGraph, Python, or another clustering routine. An
+unavailable or unsupported GPU backend fails explicitly.
 
 CPU Louvain and Leiden can run independent seeded restarts concurrently:
 
@@ -391,7 +389,7 @@ communities <- graph_cluster(graph, method = "leiden", backend = "cpu",
 The best modularity is selected in the same run order as `n.cores = 1`.
 The result records `effective_cpu_workers` and `parameters$n.cores`.
 In restart mode, `n.cores` must not exceed `n_runs`. This accelerates
-repeated restarts. Vector consensus, Walktrap, CUDA, and Metal reject
+repeated restarts. Vector consensus, CUDA, and Metal reject
 `n.cores > 1`.
 
 For one shared CPU partition, request

@@ -32,10 +32,6 @@ test_that("full-graph CUDA dispatches to the native resident route", {
         expect_identical(result$mode, "out_of_core_graph")
         expect_identical(result$backend, "cuda")
         expect_identical(result$devices, c(0L, 1L))
-        expect_error(massive_cluster(graph, method = "walktrap",
-            massive = "out_of_core_graph", backend = "cuda",
-            output = tempfile(), devices = c(0L, 1L)),
-            "Walktrap|supports Leiden/Louvain")
     }, massive_cuda_resident_cluster = function(graph,
             output, method, devices, ...) list(
         backend = "cuda", devices = devices),

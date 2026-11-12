@@ -45,7 +45,7 @@ when they influenced design, benchmarking, or backend engineering.
   design. The public package implementation is native C++/Metal/CUDA code.
 - AppleSiliconFFT informed the native Metal FFT-grid engineering. The package
   keeps its own backend surface and does not expose experimental FFT variants.
-- Louvain, Leiden, and Walktrap are native package implementations [14-16].
+- Louvain and Leiden are native package implementations [14-15].
   The Leiden phase organization was informed by MIT-licensed NetworKit [17];
   public cuGraph documentation [18] informed the parallel CSR design.
   fastEmbedR does not copy or link NetworKit, igraph, or cuGraph at run time.

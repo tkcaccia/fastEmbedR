@@ -303,9 +303,7 @@ table(communities$membership)
 Louvain and Leiden have native CPU, CUDA, and Metal backends and use sparse
 graph storage. Select an accelerator explicitly with
 `graph_cluster(..., backend = "cuda")` or `"metal"`; an unavailable backend
-fails rather than falling back to CPU. `walktrap` is the true Pons-Latapy
-random-walk agglomeration method and remains CPU-only because its exact
-transition matrix is intentionally limited to moderate graphs. Neither
+fails rather than falling back to CPU. Neither
 `igraph`, cuGraph, nor an external clustering routine is called at run time.
 
 # PCA and reproducible t-SNE initialization
@@ -810,9 +808,8 @@ procedure and keeps the fitted reference coordinates unchanged.
 
 `knn_graph()` builds weighted sparse graphs using shared-neighbor, inverse-
 distance, or binary edges. `graph_cluster()` provides native Louvain, Leiden,
-and exact CPU Walktrap implementations. Louvain and Leiden have CPU, Metal, and
-CUDA routes; Walktrap remains CPU-only because its exact transition
-representation is quadratic in the number of vertices. The implementations are
+implementations. Louvain and Leiden have CPU, Metal, and
+CUDA routes. The implementations are
 tested against `igraph` on matched weighted graphs, but `igraph` is not a
 runtime dependency.
 

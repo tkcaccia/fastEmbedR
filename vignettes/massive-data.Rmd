@@ -129,7 +129,7 @@ actual backend, stage times, and bounded output access.
 clustering result.
 For a resident matrix, the same calls use the ordinary resident route
 when `landmarks` is absent. `graph_cluster()` accepts Leiden, Louvain,
-and Walktrap. A landmark result assigns the remaining observations by
+and Leiden. A landmark result assigns the remaining observations by
 weighted voting; it is not full-data graph clustering.
 
 # Full-graph analysis

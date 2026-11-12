@@ -8,7 +8,7 @@ massive_cluster_landmarks(
   reference_graph,
   knn,
   output,
-  method = c("leiden", "louvain", "walktrap"),
+  method = c("leiden", "louvain"),
   selection = NULL,
   backend = "cpu",
   n.cores = 1L,
@@ -34,7 +34,7 @@ massive_cluster_landmarks(
 
 \item{output}{New prefix for label and confidence output files.}
 
-\item{method}{\code{"leiden"}, \code{"louvain"}, or \code{"walktrap"}.}
+\item{method}{\code{"leiden"} or \code{"louvain"}.}
 
 \item{selection}{Optional result of \code{massive_select_landmarks()} from the
 query source; selected rows retain their fitted community labels.}
@@ -56,7 +56,7 @@ independent Leiden/Louvain fitting restarts.}
 
 \item{n_runs}{Independent seeded graph-clustering runs.}
 
-\item{steps}{Walktrap random-walk length.}
+\item{steps}{Reserved legacy control; only the default is accepted.}
 
 \item{seed}{Random seed for Leiden or Louvain.}
 
@@ -78,7 +78,7 @@ A lightweight \code{fastEmbedR_massive_clusters} descriptor with
 one-based \code{uint32} labels, float32 confidence, and landmark metadata.
 }
 \description{
-Runs the existing native Leiden, Louvain, or Walktrap implementation on
+Runs the existing native Leiden or Louvain implementation on
 a resident landmark graph. Saved CPU-, CUDA-, or Metal-built KNN rows
 are streamed through inverse-distance weighted community voting. A supplied
 landmark selection preserves reference labels at their source rows.

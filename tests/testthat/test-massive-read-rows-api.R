@@ -14,8 +14,7 @@ test_that("one reader covers matrix and full-graph cluster results", {
         membership_identity = fastEmbedR:::
             massive_checkpoint_file_identity(labels_path))
     for (kind in c("fastEmbedR_massive_louvain_level",
-            "fastEmbedR_massive_leiden",
-            "fastEmbedR_massive_walktrap")) {
+            "fastEmbedR_massive_leiden")) {
         result <- structure(state, class = kind)
         expect_identical(massive_read_rows(result, 2L, 2L),
             c(2L, 1L))

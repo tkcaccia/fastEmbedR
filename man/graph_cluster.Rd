@@ -6,7 +6,7 @@
 \usage{
 graph_cluster(
   graph,
-  method = c("leiden", "louvain", "walktrap"),
+  method = c("leiden", "louvain"),
   backend = NULL,
   resolution = 1,
   n_iterations = 10L,
@@ -33,8 +33,7 @@ matrix or prepared file-backed graph. An edge-list list with \code{from},
 \code{to}, \code{weight}, and \code{n_vertices} is also accepted. Data matrices build
 a KNN graph first; prepared graphs reuse their existing edges.}
 
-\item{method}{\code{"leiden"}, \code{"louvain"}, or \code{"walktrap"}. Walktrap is the
-package's true random-walk community method.}
+\item{method}{\code{"leiden"} or \code{"louvain"}.}
 
 \item{backend}{Execution backend. \code{"cuda"} and \code{"metal"} are available for
 Louvain and Leiden only and fail explicitly if the requested accelerator
@@ -42,8 +41,7 @@ was not compiled or is unavailable. They never fall back to CPU.}
 
 \item{resolution}{Positive finite modularity resolution(s). A vector
 automatically enables consensus across all resolution-seed combinations.
-The first value controls final clustering on the reweighted graph.
-Walktrap requires the single value 1.}
+The first value controls final clustering on the reweighted graph.}
 
 \item{n_iterations}{Maximum local-moving passes for Louvain and Leiden.}
 
@@ -51,7 +49,7 @@ Walktrap requires the single value 1.}
 result is returned for scalar controls. Must be 1 with vector controls;
 use \code{seed} to specify consensus repeats.}
 
-\item{steps}{Random-walk length for Walktrap.}
+\item{steps}{Reserved legacy control; only the default is accepted.}
 
 \item{seed}{Finite integer seed(s). A vector automatically enables
 consensus; each seed is tested once per supplied resolution. The first
@@ -146,8 +144,8 @@ Matrix input with explicit \code{landmarks} returns a
 \code{graph_cluster()} clusters a matrix, compact graph, or file-backed input
 with a native
 multilevel Louvain implementation, a Leiden local-move/refine/aggregate
-implementation, or the Pons-Latapy Walktrap algorithm. Louvain and Leiden
-have CPU, CUDA, and Metal implementations. Walktrap is CPU-only. No Python,
+implementation. Louvain and Leiden have CPU, CUDA, and Metal
+implementations. No Python,
 \code{igraph}, cuGraph, or external clustering function is called at run time.
 }
 \details{
