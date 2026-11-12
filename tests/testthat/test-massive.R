@@ -3599,7 +3599,7 @@ test_that("all native graph methods vote into file-backed labels", {
     source_path <- make_massive_fixture(query)
     reference_path <- make_massive_fixture(reference)
     prefix <- tempfile()
-    outputs <- vapply(c("leiden", "louvain", "walktrap"),
+    outputs <- vapply(c("leiden", "louvain"),
         function(x) tempfile(), character(1L))
     files <- c(source_path, reference_path,
         paste0(prefix, c(".indices.u32", ".distances.f32")),
@@ -3659,9 +3659,6 @@ test_that("all native graph methods vote into file-backed labels", {
     expect_gt(resources$reference_graph_estimate_bytes, 0)
     expect_equal(resources$vote_worker_bytes,
         max(8 * min(knn$n_reference, 65536), 64 * knn$ncol) * 2)
-    expect_error(massive_cluster_landmarks(graph, knn,
-        tempfile(), method = "walktrap", backend = "cuda"),
-        "Walktrap is CPU-only")
     if (isTRUE(fastEmbedR:::graph_clustering_cuda_available_cpp())) {
         for (method in c("leiden", "louvain")) {
             gpu_output <- tempfile()
@@ -3702,13 +3699,11 @@ test_that("massive clustering composes selection, graph, and voting", {
     on.exit(unlink(c(source_path, directory), recursive = TRUE))
     source <- massive_matrix(source_path, nrow = nrow(x),
         ncol = ncol(x))
-    for (method in c("leiden", "louvain", "walktrap")) {
+    for (method in c("leiden", "louvain")) {
         prefix <- file.path(directory, method)
         result <- massive_cluster(source, method = method,
             landmarks = 24L, k = 4L, output = prefix,
-            landmark_method = if (method == "walktrap") {
-                "random"
-            } else "reservoir",
+            landmark_method = "reservoir",
             n.cores = 2L, chunk_rows = 7L,
             memory_limit = "512MB", seed = 3L)
         selected <- result$selection$indices
@@ -3731,7 +3726,7 @@ test_that("massive clustering composes selection, graph, and voting", {
             nrow(x) * 4)
         expect_identical(result$graph_backend, "cpu")
         expect_identical(result$selection$method,
-            if (method == "walktrap") "random" else "reservoir")
+            "reservoir")
         expect_identical(result$reference_graph_parameters$weight,
             "snn")
     }
@@ -3811,9 +3806,6 @@ test_that("massive clustering rejects unsafe requests before writing", {
     expect_error(massive_cluster(source, landmarks = 15L,
         k = 4L, output = prefix, memory_limit = "64MB"),
         "budget")
-    expect_error(massive_cluster(source, method = "walktrap",
-        landmarks = 15L, k = 4L, output = prefix,
-        backend = "cuda"), "Walktrap is CPU-only")
     expect_error(massive_cluster(source, landmarks = 15L,
         k = 4L, output = prefix, resolution = -1),
         "resolution")
@@ -3837,48 +3829,6 @@ test_that("massive clustering rejects unsafe requests before writing", {
     expect_length(list.files(directory), 0L)
 })
 
-test_that("Walktrap landmark planning respects native RAM limits", {
-    source <- fastEmbedR:::massive_synthetic_matrix(1e9, 96L)
-    plan <- with_mocked_bindings(
-        massive_available_ram_bytes = function() 16 * 1024^3,
-        fastEmbedR:::massive_cluster_auto_plan(source,
-            NULL, 30L, "cpu", 1L, "8GB", "auto", tempfile(),
-            NULL, "walktrap"),
-        .package = "fastEmbedR")
-    expect_identical(plan$mode, "landmark")
-    expect_identical(plan$count, 4000L)
-    expect_lte(16 * plan$count^2 +
-        plan$count * plan$budget$per_landmark,
-        0.7 * plan$budget$limit - 168 * 1024^2)
-    small <- fastEmbedR:::massive_cluster_auto_plan(source,
-        NULL, 30L, "cpu", 1L, "256MB", "landmark",
-        tempfile(), NULL, "walktrap")
-    expect_lt(small$count, plan$count)
-    expect_error(fastEmbedR:::massive_cluster_auto_plan(source,
-        4001L, 30L, "cpu", 1L, "8GB", "landmark",
-        tempfile(), NULL, "walktrap"), "Walktrap")
-    expect_error(massive_cluster(source, method = "walktrap",
-        landmarks = 4001L, k = 30L, output = tempfile(),
-        memory_limit = "8GB"), "Walktrap")
-    other <- fastEmbedR:::massive_cluster_reference_budget(
-        1e9, 96L, 30L, "cpu", 1L, "8GB", NULL, "leiden")
-    expect_gt(other$cap, plan$count)
-})
-
-test_that("Walktrap resource check precedes output creation", {
-    knn <- list(nrow = 1e9, ncol = 30L, n_reference = 4000L)
-    graph <- list(n_vertices = 4000L, weight = numeric())
-    estimate <- fastEmbedR:::massive_cluster_resources(knn,
-        graph, 1L, NULL, "512MB", "cpu", "walktrap")
-    expect_gte(estimate$peak_ram_bytes, 16 * 4000^2)
-    expect_error(fastEmbedR:::massive_cluster_resources(knn,
-        graph, 1L, NULL, "256MB", "cpu", "walktrap"),
-        "memory_limit")
-    graph$n_vertices <- 4001L
-    expect_error(fastEmbedR:::massive_cluster_resources(knn,
-        graph, 1L, NULL, "8GB", "cpu", "walktrap"),
-        "4,000 landmarks")
-})
 
 test_that("CUDA landmark clustering honors selected device", {
     skip_if_not(isTRUE(fastEmbedR:::embedding_cuda_available_cpp()))

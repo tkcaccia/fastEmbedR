@@ -11,7 +11,6 @@
 \alias{summary.fastEmbedR_massive_clusters}
 \alias{summary.fastEmbedR_massive_leiden}
 \alias{summary.fastEmbedR_massive_louvain_level}
-\alias{summary.fastEmbedR_massive_walktrap}
 \title{Summarize a fastEmbedR fit without loading file-backed output}
 \usage{
 \method{summary}{fastEmbedR_pca}(object, ...)
@@ -31,8 +30,6 @@
 \method{summary}{fastEmbedR_massive_leiden}(object, ...)
 
 \method{summary}{fastEmbedR_massive_louvain_level}(object, ...)
-
-\method{summary}{fastEmbedR_massive_walktrap}(object, ...)
 }
 \arguments{
 \item{object}{A result from \code{pca()}, \code{tsne()}, \code{umap()}, or
@@ -42,8 +39,8 @@
 }
 \value{
 A list with canonical \code{backend}, detailed \code{backend_engine},
-\code{graph_offset_dtype}, \code{devices}, \code{device_identity},
-\code{scope}, \code{stage_backend},
+\code{graph_offset_dtype}, \code{devices}, \code{device_identity}, \code{scope},
+\code{stage_backend},
 \code{stage_seconds}, \code{memory_use}, and \code{output_rows}. Missing total memory
 estimates remain \code{NA}; available component estimates are reported
 separately and are not an observed peak.

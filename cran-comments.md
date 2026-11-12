@@ -18,6 +18,6 @@ requests fail clearly at run time.
 
 ## Downstream and optional packages
 
-Graph construction and Louvain, Leiden, and Walktrap community detection are
+Graph construction and Louvain and Leiden community detection are
 implemented natively. `igraph` is suggested only for guarded validation tests
 and optional comparisons.

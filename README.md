@@ -173,12 +173,12 @@ and quality metrics without changing the stored layout.
 Clustering is a secondary downstream facility rather than the package's
 principal contribution. An embedding or KNN result can be passed to
 `knn_graph()`, followed by `graph_cluster()`. Louvain and Leiden have
-package-native CPU, CUDA, and Metal backends; Walktrap is CPU-only.
+package-native CPU, CUDA, and Metal backends.
 
 | Function | Purpose |
 | --- | --- |
 | `knn_graph()` | Compact graph from data, an embedding, or supplied neighbors. |
-| `graph_cluster()` | Native Louvain, Leiden, or Pons-Latapy Walktrap communities. |
+| `graph_cluster()` | Native Louvain or Leiden communities. |
 
 CPU, CUDA, and Metal Louvain and Leiden support graph consensus and projection
 weighting. Both use the supplied graph; projection weighting additionally

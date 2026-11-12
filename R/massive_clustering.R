@@ -18,7 +18,7 @@ massive_cluster_cuda_resources <- function(reference_graph,
 
 massive_cluster_fit_workers <- function(method, backend, workers, n_runs,
         parallel.mode = "restarts") {
-    if (backend != "cpu" || method == "walktrap") return(1L)
+    if (backend != "cpu") return(1L)
     if (identical(parallel.mode, "fit")) return(workers)
     min(workers, graph_positive_integer(n_runs, "n_runs"))
 }
@@ -38,11 +38,6 @@ massive_cluster_resources <- function(graph, reference_graph, workers,
         n_runs = 1L, devices = NULL,
         parallel.mode = "restarts") {
     limit <- massive_memory_bytes(memory_limit)
-    if (method == "walktrap" &&
-        reference_graph$n_vertices > 4000L) {
-        stop("Exact Walktrap supports at most 4,000 landmarks.",
-            call. = FALSE)
-    }
     # Include R edges and native sorting, adjacency, and contraction buffers.
     fit_workers <- massive_cluster_fit_workers(method, backend,
         workers, n_runs, parallel.mode)
@@ -51,8 +46,6 @@ massive_cluster_resources <- function(graph, reference_graph, workers,
     vote_worker_bytes <- max(8 * min(graph$n_reference, 65536),
         64 * graph$ncol) * workers
     fixed <- 64 * 1024^2 + graph_bytes + vote_worker_bytes
-    if (method == "walktrap")
-        fixed <- fixed + 16 * reference_graph$n_vertices^2
     per_row <- 20 * graph$ncol + 24
     maximum <- floor((0.7 * limit - fixed) / per_row)
     maximum <- min(maximum, floor(128e6 / (20 * graph$ncol)))
@@ -337,10 +330,6 @@ massive_cluster_backend <- function(method, backend) {
         stop("EXPERIMENTAL clustering requires CPU, CUDA, or Metal.",
             call. = FALSE)
     }
-    if (backend != "cpu" && method == "walktrap") {
-        stop("Walktrap is CPU-only; no GPU fallback was used.",
-            call. = FALSE)
-    }
     if (backend == "cuda" &&
         (!isTRUE(graph_clustering_cuda_available_cpp()) ||
             !isTRUE(embedding_cuda_available_cpp()))) {
@@ -370,11 +359,11 @@ massive_cluster_landmark_validate <- function(reference_graph, knn,
     if (reference_graph$n_vertices != knn$n_reference) stop(
         "Landmark graph and KNN reference sizes differ.",
         call. = FALSE)
-    method <- match.arg(method, c("leiden", "louvain", "walktrap"))
+    method <- match.arg(method, c("leiden", "louvain"))
     backend <- massive_cluster_backend(method, backend)
     parallel.mode <- match.arg(parallel.mode, c("restarts", "fit"))
     if (parallel.mode == "fit" &&
-        (backend != "cpu" || method == "walktrap")) stop(
+        backend != "cpu") stop(
         "`parallel.mode = \"fit\"` requires CPU Louvain or Leiden.",
         call. = FALSE)
     list(graph = reference_graph, method = method, backend = backend,
@@ -408,7 +397,7 @@ massive_cluster_landmark_workers <- function(n.cores, parallel.mode) {
 
 #' EXPERIMENTAL file-backed landmark graph clustering
 #'
-#' Runs the existing native Leiden, Louvain, or Walktrap implementation on
+#' Runs the existing native Leiden or Louvain implementation on
 #' a resident landmark graph. Saved CPU-, CUDA-, or Metal-built KNN rows
 #' are streamed through inverse-distance weighted community voting. A supplied
 #' landmark selection preserves reference labels at their source rows.
@@ -417,7 +406,7 @@ massive_cluster_landmark_workers <- function(n.cores, parallel.mode) {
 #' @param knn Saved CPU-, CUDA-, or Metal-built query-to-landmark graph from
 #'   `massive_landmark_knn()`.
 #' @param output New prefix for label and confidence output files.
-#' @param method `"leiden"`, `"louvain"`, or `"walktrap"`.
+#' @param method `"leiden"` or `"louvain"`.
 #' @param selection Optional result of `massive_select_landmarks()` from the
 #'   query source; selected rows retain their fitted community labels.
 #' @param backend `"cpu"` for all methods, or `"cuda"` or `"metal"` for
@@ -435,7 +424,7 @@ massive_cluster_landmark_workers <- function(n.cores, parallel.mode) {
 #' @param resolution Modularity resolution for Leiden or Louvain.
 #' @param n_iterations Maximum local-moving passes.
 #' @param n_runs Independent seeded graph-clustering runs.
-#' @param steps Walktrap random-walk length.
+#' @param steps Reserved legacy control; only the default is accepted.
 #' @param seed Random seed for Leiden or Louvain.
 #' @param checkpoint Save landmark communities and completed output rows.
 #' @param checkpoint_every Save progress after this many query batches.
@@ -445,7 +434,7 @@ massive_cluster_landmark_workers <- function(n.cores, parallel.mode) {
 #' @keywords internal
 massive_cluster_landmarks <- function(
     reference_graph, knn, output,
-    method = c("leiden", "louvain", "walktrap"),
+    method = c("leiden", "louvain"),
     selection = NULL, backend = "cpu", n.cores = 1L,
     chunk_rows = NULL, memory_limit = "8GB",
     resolution = 1, n_iterations = 10L, n_runs = 1L,

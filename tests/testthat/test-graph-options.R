@@ -142,8 +142,6 @@ test_that("graph options reject unsupported routes and invalid controls", {
         expect_error(graph_cluster(graph, backend = "cuda",
             projection = list(layout = layout)), "CUDA.*unavailable")
     }
-    expect_error(graph_cluster(graph, method = "walktrap", backend = "cpu",
-        seed = c(1L, 2L)), "require Louvain or Leiden")
     expect_error(graph_cluster(graph, resolution = numeric()),
         "positive finite")
     expect_error(graph_cluster(graph, resolution = c(1, NA_real_)),
@@ -242,8 +240,6 @@ test_that("CPU graph restarts use requested workers and preserve selection", {
         "n_runs >= n.cores")
     expect_error(graph_cluster(graph, n.cores = 0L), "n.cores")
     expect_error(graph_cluster(graph, n.cores = 1.5), "n.cores")
-    expect_error(graph_cluster(graph, method = "walktrap", n_runs = 3L,
-        n.cores = 2L), "CPU restart workers")
     expect_error(graph_cluster(graph, backend = "cuda", n_runs = 3L,
         n.cores = 2L), "CPU restart workers")
     expect_error(graph_cluster(graph, resolution = c(0.5, 1),
@@ -266,8 +262,6 @@ test_that("CPU graph threads coordinate one partition in fit mode", {
         }
     }
     expect_error(graph_cluster(graph, backend = "cuda",
-        parallel.mode = "fit"), "requires CPU")
-    expect_error(graph_cluster(graph, method = "walktrap",
         parallel.mode = "fit"), "requires CPU")
     expect_error(graph_cluster(graph, n.cores = 33L,
         parallel.mode = "fit"), "at most 32")

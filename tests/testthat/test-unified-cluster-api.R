@@ -25,8 +25,6 @@ test_that("graph_cluster accepts resident and file-backed matrices", {
         k = 4L, vote_k = 4L)
     expect_identical(default$method, "leiden")
     expect_length(default$membership, nrow(x))
-    expect_error(graph_cluster(x, landmarks = 24L,
-        method = "walktrap"), "supports Leiden or Louvain")
     expect_error(graph_cluster(x, method = "louvain",
         landmarks = 24L, massive = "landmark"),
         "Resident landmark clustering")

@@ -197,7 +197,7 @@ knn_graph <- function(x,
 graph_cluster_settings <- function(method, backend, resolution,
                                     n_iterations, n_runs, steps, seed,
                                     vectors = FALSE, n.cores = 1L) {
-    method <- match.arg(method, c("leiden", "louvain", "walktrap"))
+    method <- match.arg(method, c("leiden", "louvain"))
     backend <- resolve_embedding_backend(backend)
     resolution <- as.numeric(resolution)
     if (!length(resolution) || any(!is.finite(resolution)) ||
@@ -227,24 +227,8 @@ graph_cluster_settings <- function(method, backend, resolution,
         seed = as.integer(seed),
         consensus = length(resolution) > 1L || length(seed) > 1L
     )
-    validate_walktrap_settings(settings)
-}
-
-validate_walktrap_settings <- function(settings) {
-    if (settings$method != "walktrap") {
-        return(settings)
-    }
-    if (!isTRUE(all.equal(settings$resolution, 1))) {
-        stop("Walktrap uses its reference resolution of 1.",
-            call. = FALSE
-        )
-    }
-    if (settings$backend != "cpu") {
-        stop(
-            "Walktrap is supported only with `backend = \"cpu\"`.",
-            call. = FALSE
-        )
-    }
+    if (settings$steps != 4L) stop(
+        "`steps` is no longer supported.", call. = FALSE)
     settings
 }
 
@@ -285,30 +269,16 @@ run_graph_cluster_backend <- function(graph, settings) {
     if (!is.null(settings$devices)) return(
         run_graph_cluster_multigpu(graph, settings, options))
     if (settings$n.cores > 1L && (settings$backend != "cpu" ||
-        settings$method == "walktrap" || settings$consensus ||
+        settings$consensus ||
         (!settings$parallel.fit &&
         settings$n_runs < settings$n.cores))) stop(
         "CPU restart workers or fit workers require scalar ",
         "Louvain/Leiden controls and ",
         "`backend = \"cpu\"`; restart mode also needs ",
         "`n_runs >= n.cores`.", call. = FALSE)
-    if ((settings$consensus || options) &&
-        settings$method == "walktrap") {
-        stop("Graph options require Louvain or Leiden.",
-            call. = FALSE)
-    }
     if (settings$consensus && settings$n_runs != 1L) {
         stop("With vector controls use n_runs = 1; seed defines repeats.",
             call. = FALSE)
-    }
-    if (settings$method == "walktrap") {
-        return(fastembedr_walktrap_cpp(
-            graph$from,
-            graph$to,
-            graph$weight,
-            n_vertices = graph$n_vertices,
-            steps = settings$steps
-        ))
     }
     if ((settings$consensus || options) &&
         settings$backend %in% c("cuda", "metal")) {
@@ -429,19 +399,13 @@ graph_cluster_require_gpu <- function(backend) {
 }
 
 graph_cluster_parameters <- function(graph, settings, started) {
-    walktrap <- settings$method == "walktrap"
     list(
-        resolution = if (walktrap) 1 else settings$resolution,
-        n_iterations = if (walktrap) {
-            NA_integer_
-        } else {
-            settings$n_iterations
-        },
-        n_runs = if (walktrap) 1L else settings$n_runs,
+        resolution = settings$resolution,
+        n_iterations = settings$n_iterations,
+        n_runs = settings$n_runs,
         n.cores = settings$n.cores,
         parallel.mode = settings$parallel.mode,
-        steps = if (walktrap) settings$steps else NA_integer_,
-        seed = if (walktrap) NA_integer_ else settings$seed,
+        seed = settings$seed,
         n_vertices = graph$n_vertices,
         n_edges = graph$n_edges,
         elapsed_sec = unname(proc.time()[[3L]] - started)
@@ -490,23 +454,21 @@ graph_cluster_input_controls <- function(graph, landmarks, k,
 #' `graph_cluster()` clusters a matrix, compact graph, or file-backed input
 #' with a native
 #' multilevel Louvain implementation, a Leiden local-move/refine/aggregate
-#' implementation, or the Pons-Latapy Walktrap algorithm. Louvain and Leiden
-#' have CPU, CUDA, and Metal implementations. Walktrap is CPU-only. No Python,
+#' implementation. Louvain and Leiden have CPU, CUDA, and Metal
+#' implementations. No Python,
 #' `igraph`, cuGraph, or external clustering function is called at run time.
 #'
 #' @param graph A resident data matrix, `fastEmbedR_graph`, file-backed
 #'   matrix or prepared file-backed graph. An edge-list list with `from`,
 #'   `to`, `weight`, and `n_vertices` is also accepted. Data matrices build
 #'   a KNN graph first; prepared graphs reuse their existing edges.
-#' @param method `"leiden"`, `"louvain"`, or `"walktrap"`. Walktrap is the
-#'   package's true random-walk community method.
+#' @param method `"leiden"` or `"louvain"`.
 #' @param backend Execution backend. `"cuda"` and `"metal"` are available for
 #'   Louvain and Leiden only and fail explicitly if the requested accelerator
 #'   was not compiled or is unavailable. They never fall back to CPU.
 #' @param resolution Positive finite modularity resolution(s). A vector
 #'   automatically enables consensus across all resolution-seed combinations.
 #'   The first value controls final clustering on the reweighted graph.
-#'   Walktrap requires the single value 1.
 #' @param n_iterations Maximum local-moving passes for Louvain and Leiden.
 #' @param n_runs Independent seeded Louvain/Leiden runs; the highest-modularity
 #'   result is returned for scalar controls. Must be 1 with vector controls;
@@ -541,7 +503,7 @@ graph_cluster_input_controls <- function(graph, landmarks, k,
 #'   `memory_limit` check; the limit does not bound the subsequent fit.
 #'   A file-backed matrix needs `landmarks`; a full file-backed fit needs
 #'   a prepared graph. These controls are rejected for a resident graph.
-#' @param steps Random-walk length for Walktrap.
+#' @param steps Reserved legacy control; only the default is accepted.
 #' @param seed Finite integer seed(s). A vector automatically enables
 #'   consensus; each seed is tested once per supplied resolution. The first
 #'   seed controls the final clustering. Scalars preserve ordinary clustering.
@@ -660,7 +622,7 @@ graph_cluster_input_controls <- function(graph, landmarks, k,
 #' table(clusters$membership)
 #' @export
 graph_cluster <- function(graph,
-                            method = c("leiden", "louvain", "walktrap"),
+                            method = c("leiden", "louvain"),
                             backend = NULL, resolution = 1,
                             n_iterations = 10L,
                             n_runs = 1L,
@@ -729,17 +691,14 @@ graph_cluster_resident_landmarks <- function(graph, method, backend,
         resolution, n_iterations, n_runs, steps, seed,
         layout_merge, projection, small_groups, n.cores,
         devices, parallel.mode, massive, dots) {
-    method <- match.arg(method, c("leiden", "louvain", "walktrap"))
-    if (method == "walktrap") stop(
-        "Resident landmark clustering supports Leiden or Louvain.",
-        call. = FALSE)
+    method <- match.arg(method, c("leiden", "louvain"))
     if (!is.null(massive) || !is.null(layout_merge) ||
         !is.null(projection) || !is.null(small_groups)) stop(
         "Resident landmark clustering cannot use file-backed or ",
         "graph postprocessing controls.", call. = FALSE)
     if (!identical(steps, 4L) || length(seed) != 1L) stop(
         "Resident landmark clustering needs scalar seed and ",
-        "default Walktrap steps.", call. = FALSE)
+        "default steps control.", call. = FALSE)
     if (any(!nzchar(names(dots)))) stop(
         "Resident landmark controls must be named.",
         call. = FALSE)
@@ -765,8 +724,7 @@ graph_cluster_resident <- function(graph, method, backend,
     settings$parallel.mode <- match.arg(parallel.mode,
         c("restarts", "fit"))
     settings$parallel.fit <- settings$parallel.mode == "fit"
-    if (settings$parallel.fit && (settings$backend != "cpu" ||
-        settings$method == "walktrap")) stop(
+    if (settings$parallel.fit && settings$backend != "cpu") stop(
         "`parallel.mode = \"fit\"` requires CPU Louvain or Leiden.",
         call. = FALSE)
     if (settings$parallel.fit && settings$n.cores > 32L) stop(
@@ -876,7 +834,7 @@ graph_cluster_data_input <- function(graph, method, backend,
         inherits(graph, "fastEmbedR_massive_graph")) {
         "out_of_core_graph"
     } else "auto"
-    method <- match.arg(method, c("leiden", "louvain", "walktrap"))
+    method <- match.arg(method, c("leiden", "louvain"))
     default_mode <- length(parallel.mode) > 1L
     parallel.mode <- match.arg(parallel.mode,
         c("restarts", "fit"))
@@ -889,7 +847,7 @@ graph_cluster_data_input <- function(graph, method, backend,
     if (massive != "out_of_core_graph") {
         args$n_runs <- n_runs
         args$steps <- steps
-    } else if (method == "walktrap") args$steps <- steps
+    }
     do.call(massive_cluster, c(args, dots))
 }
 

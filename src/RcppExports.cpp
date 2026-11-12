@@ -3508,21 +3508,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// fastembedr_walktrap_cpp
-Rcpp::List fastembedr_walktrap_cpp(Rcpp::IntegerVector from, Rcpp::IntegerVector to, Rcpp::NumericVector weight, int n_vertices, int steps);
-RcppExport SEXP _fastEmbedR_fastembedr_walktrap_cpp(SEXP fromSEXP, SEXP toSEXP, SEXP weightSEXP, SEXP n_verticesSEXP, SEXP stepsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type from(fromSEXP);
-    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type to(toSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type weight(weightSEXP);
-    Rcpp::traits::input_parameter< int >::type n_vertices(n_verticesSEXP);
-    Rcpp::traits::input_parameter< int >::type steps(stepsSEXP);
-    rcpp_result_gen = Rcpp::wrap(fastembedr_walktrap_cpp(from, to, weight, n_vertices, steps));
-    return rcpp_result_gen;
-END_RCPP
-}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_fastembedr_build_config_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_build_config_cpp, 0},
@@ -3725,7 +3710,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_knn_tsne_opentsne_float_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_float_cpp, 24},
     {"_fastEmbedR_massive_tsne_optimize_cpp", (DL_FUNC) &_fastEmbedR_massive_tsne_optimize_cpp, 23},
     {"_fastEmbedR_transform_tsne_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_cpp, 21},
-    {"_fastEmbedR_fastembedr_walktrap_cpp", (DL_FUNC) &_fastEmbedR_fastembedr_walktrap_cpp, 5},
     {NULL, NULL, 0}
 };
 

@@ -28,8 +28,6 @@ backend exists.
    them into in-memory `from`, `to`, and `weight` graph vectors.
 8. `src/tsne_neighbors.cpp` stores sparse affinity arrays and full layout,
    gradient, update, and gain vectors in memory. FFT workspaces are additional.
-9. The public random-walk method is `method = "walktrap"`. Its native
-   implementation in `src/walktrap.cpp` receives complete edge vectors.
 10. Native Louvain in `src/graph_clustering.cpp` builds resident adjacency
     and contracted graphs from complete edge vectors.
 11. Native Leiden shares that input boundary and adds resident refinement
@@ -47,8 +45,7 @@ backend exists.
     writes a landmark file; a persistent CPU HNSW index or exact reference
     search produces disk-backed query-to-landmark KNN files. CPU landmark
     projection now reads that graph in bounded batches and writes UMAP or
-    t-SNE coordinates to another float32 file. The existing Walktrap,
-    Louvain, and Leiden methods cluster a resident landmark graph, and
+    t-SNE coordinates to another float32 file. The existing Louvain and Leiden methods cluster a resident landmark graph, and
     streamed weighted votes write full-data label/confidence files. The
     experimental CUDA exact and IVF-Flat KNN routes retain one cuVS reference
     index across bounded query batches. Explicit sharded-exact
@@ -655,7 +652,7 @@ batch before touching partial output. A replayed incomplete batch is
 merged idempotently; the pilot does not prove full HNSW index identity.
 The graph can feed experimental CPU and CUDA full-data UMAP after fuzzy
 symmetrization. That fuzzy graph can also feed CPU full-graph Louvain,
-Leiden, or approximate partitioned Walktrap; CUDA clustering remains
+and Leiden; CUDA clustering remains
 unavailable.
 `massive_read_graph_partition()` loads one bounded edge list at a time.
 `massive_umap_memberships()` now scans a fixed-k distance graph twice and
@@ -741,7 +738,6 @@ streamed exact neighbors and report observed mean and minimum row recall.
 Sampled queries share bounded reference passes, reported as
 `audit_reference_passes`. The audit is not a scale-validated full-data ANN
 solution;
-partitioned full-graph Walktrap is experimental and approximate.
 Louvain and Leiden keep large
 contracted levels file-backed and retains intermediate files.
 `massive_graph_modularity()` now scans a symmetric fuzzy CSR graph and a
@@ -809,7 +805,7 @@ or memory advantages. The complete run and input identities are in
 Optional checkpoints save completed graph levels and the final mapping;
 resume verifies graph, mapping, controls, native library, and mapped-label
 identities. An interrupted local move or contraction retains partial files
-and still requires separate recovery. Full-graph Walktrap remains absent.
+and still requires separate recovery.
 Louvain's mapped label, count, and volume files require 16 bytes per vertex;
 mapped pages may contribute to RSS beyond the scan-buffer budget.
 The experimental full-graph UMAP optimizer currently works only with
@@ -921,10 +917,10 @@ one-million-row synthetic diagnostic measured median t-SNE call times
 of 1.436 seconds with a fresh KNN and 0.236 seconds with the checked
 saved KNN over three same-seed pairs. This is not a general speedup
 estimate or a real-data quality result. A separate
-driver reused UMAP's saved KNN to run landmark Leiden, Louvain, and
-Walktrap with 120-million-row file-backed label and confidence outputs.
-The incremental post-KNN stages took 18.1, 7.7, and 15.1 seconds;
-Walktrap ran on CPU and all three assignments ran on CPU. Bounded scans
+driver reused UMAP's saved KNN to run landmark Leiden and Louvain
+with 120-million-row file-backed label and confidence outputs.
+The incremental post-KNN stages took 18.1 and 7.7 seconds;
+both assignments ran on CPU. Bounded scans
 verified every saved t-SNE coordinate, neighbor, label, and confidence.
 These timings exclude a repeated graph search for clustering and do not
 validate scientific quality with only 32 landmarks.
@@ -949,44 +945,22 @@ controls plus KNN file paths, sizes, and modification times; it does not
 hash every byte of the potentially enormous KNN files.
 
 Landmark clustering uses the package's native `graph_cluster()` on the
-resident reference graph. Louvain and Leiden can run on CUDA; Walktrap
-remains CPU-only. Non-landmark rows receive inverse-distance
+resident reference graph. Louvain and Leiden can run on CUDA. Non-landmark rows receive inverse-distance
 weighted community votes from their saved query-to-reference KNN rows.
 The saved KNN graph may be built on CUDA and reused without repeating
 the neighbor search. Query community voting remains on CPU and is
 reported separately from graph construction and landmark clustering.
 The memory preflight includes a conservative allowance for resident
-graph edges and native clustering buffers, plus VRAM for CUDA. Exact
-Walktrap has a native ceiling of 4,000 reference vertices and allocates
-two dense double-precision transition matrices, requiring at least
-`16 * landmarks^2` bytes. Automatic selection and explicit requests
-are checked against both limits before landmark extraction begins.
+graph edges and native clustering buffers, plus VRAM for CUDA. Automatic selection and explicit requests are checked against memory
+limits before landmark extraction begins.
 The file-backed result contains one-based `uint32` membership and float32
 vote confidence. It does not update non-landmark edges. A distinct
 file-backed full-graph CPU Louvain or Leiden route is available.
-Partitioned Walktrap runs exact native walks within bounded induced
-blocks, then contracts communities. Cross-block walks are absent at
-the first level, so this is an explicit approximation. A connected
-360-point synthetic comparison gave ARI 0.887-0.943 versus whole-graph
-Walktrap for block widths 60-180; this does not establish large-graph
-quality or runtime. A second 600-point diagnostic reordered the same
-three-group data. At block width 100, agreement with planted groups
-dropped from ARI 0.990 in grouped row order to 0.833 after shuffling;
-partitioned modularity fell from 0.623 to 0.581, while whole-graph
-Walktrap modularity remained 0.624. The first level retained 47.5% of
-edge weight inside grouped-row blocks but only 17.0% after shuffling.
-At block width 200 the fractions were 95.1% and 33.7%. This diagnostic
-makes the vertex-order sensitivity visible; it does not provide a
-general quality threshold. Graph-aware partitioning and larger
-real-data checks are still needed. The assignment stage can
-checkpoint the
+The assignment stage can checkpoint the
 resident landmark communities and completed output rows. Checkpoints
 verify graph values and KNN file identity, but do not hash every byte of
 the potentially large KNN files. The initial landmark graph must still
-fit in RAM and is not yet checkpointed during its construction. Since
-exact Walktrap also stores two dense transition matrices, file-backing
-only its input CSR graph would not remove the quadratic memory cost.
-
+fit in RAM and is not yet checkpointed during its construction.
 The CUDA UMAP projection and 2D or 3D fixed-reference t-SNE
 transformation
 routes write one bounded query batch at a time. CUDA zero-epoch UMAP

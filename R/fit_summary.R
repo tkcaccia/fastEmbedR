@@ -71,8 +71,7 @@ fastembedr_summary_fit <- function(x) {
             "fastEmbedR_massive_clusters",
             "fastEmbedR_massive_projection",
             "fastEmbedR_massive_leiden",
-            "fastEmbedR_massive_louvain_level",
-            "fastEmbedR_massive_walktrap"))
+            "fastEmbedR_massive_louvain_level"))
     backend <- fastembedr_summary_backend(x)
     list(backend = backend$backend,
         backend_engine = backend$engine,
@@ -166,11 +165,5 @@ summary.fastEmbedR_massive_leiden <- function(object, ...) {
 #' @rdname fastembedr_fit_summary
 #' @export
 summary.fastEmbedR_massive_louvain_level <- function(object, ...) {
-    fastembedr_summary_fit(object)
-}
-
-#' @rdname fastembedr_fit_summary
-#' @export
-summary.fastEmbedR_massive_walktrap <- function(object, ...) {
     fastembedr_summary_fit(object)
 }

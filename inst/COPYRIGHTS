@@ -86,7 +86,6 @@ Files: src/embedding_cuda_kernels.cpp
        src/graph_clustering_metal_stub.cpp
        src/fast_knn_umap.cpp
        src/tsne_neighbors.cpp
-       src/walktrap.cpp
 Copyright: Stefano Cacciatore
 License: MIT
 Comment: Package-owned implementations. External SDK headers/libraries and

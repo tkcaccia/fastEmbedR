@@ -37,7 +37,7 @@
   reads bounded matrix rows, full-graph cluster labels, and landmark
   membership with confidence. The four result-specific readers are
   internal; replace calls to `massive_read_louvain_rows()`,
-  `massive_read_leiden_rows()`, `massive_read_walktrap_rows()`, or
+  `massive_read_leiden_rows()`, or
   `massive_read_cluster_rows()` with `massive_read_rows()`.
   This reduces exported functions from 59 to 55 without removing the
   underlying readers or result types. The site and vignettes now lead
@@ -319,8 +319,8 @@
   Accelerator local-moving and refinement phases use float32 compressed sparse
   row graphs and atomic community updates; package-owned C++ performs label
   compaction and graph coarsening between levels. No cuGraph source, library,
-  Python module, or runtime symbol is required. Exact Pons-Latapy Walktrap
-  remains CPU-only, and unsupported accelerator requests fail explicitly.
+  Python module, or runtime symbol is required. Unsupported accelerator
+  requests fail explicitly.
 - Adds package-native float32 CPU HNSW, Apple Metal exact/recall-tuned
   IVF-Flat, and direct RAPIDS cuVS CUDA exact/IVF-Flat for one-call embeddings.
   CUDA results remain device-resident through graph or affinity construction

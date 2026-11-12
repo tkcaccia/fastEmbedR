@@ -32,9 +32,6 @@ Current use in `fastEmbedR`:
   orchestration and independent CUDA/Metal local-moving and refinement
   kernels. Public cuGraph documentation informed the CSR/parallel-processing
   design. These native kernels do not copy, link, or call cuGraph.
-- `src/walktrap.cpp` independently implements the Pons-Latapy transition
-  probabilities, degree-scaled random-walk distance, Ward/Lance-Williams
-  updates on adjacent communities, and modularity-selected cut.
 - `tests/testthat/test-graph-clustering.R` compares canonical and stochastic
   graph results with guarded igraph reference implementations. igraph is not a
   runtime dependency.

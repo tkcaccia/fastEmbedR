@@ -32,7 +32,7 @@ test_that("knn_graph builds a compact native graph", {
 test_that("native graph methods recover canonical communities", {
     graph <- three_clique_graph()
     truth <- rep(seq_len(3L), each = 6L)
-    for (method in c("louvain", "leiden", "walktrap")) {
+    for (method in c("louvain", "leiden")) {
         result <- graph_cluster(
             graph,
             method = method,
@@ -70,7 +70,7 @@ test_that("layout merging needs graph support and local continuity", {
     strict <- graph_cluster(graph, method = "leiden", seed = 3L,
         layout_merge = list(layout = layout, min_cross_edges = 2L))
     expect_identical(strict$n_communities, base$n_communities)
-    for (method in c("louvain", "walktrap")) {
+    for (method in c("louvain")) {
         other <- graph_cluster(graph, method = method, seed = 3L,
             layout_merge = list(layout = layout,
                 min_connectivity = 0.05, min_cross_edges = 1L))
@@ -96,14 +96,6 @@ test_that("layout merging needs graph support and local continuity", {
 
 test_that("accelerator clustering never falls back silently", {
     graph <- three_clique_graph()
-    expect_error(
-        graph_cluster(graph, method = "walktrap", backend = "metal"),
-        "supported only.*cpu"
-    )
-    expect_error(
-        graph_cluster(graph, method = "walktrap", backend = "cuda"),
-        "supported only.*cpu"
-    )
 
     if (!fastEmbedR:::graph_clustering_cuda_available_cpp()) {
         expect_error(
@@ -247,62 +239,6 @@ test_that(paste(
     }
 })
 
-test_that("Walktrap agrees with the igraph oracle", {
-    skip_if_not_installed("igraph")
-    graph <- three_clique_graph()
-    igraph_graph <- igraph::graph_from_data_frame(
-        data.frame(from = graph$from, to = graph$to, weight = graph$weight),
-        directed = FALSE,
-        vertices = seq_len(graph$n_vertices)
-    )
-    reference <- igraph::cluster_walktrap(
-        igraph_graph,
-        weights = igraph::E(igraph_graph)$weight,
-        steps = 4L
-    )
-    native <- graph_cluster(graph, method = "walktrap", steps = 4L)
-    expect_equal(
-        adjusted_rand_index(native$membership, igraph::membership(reference)),
-        1
-    )
-    expect_equal(
-        native$modularity, igraph::modularity(reference),
-        tolerance = 1e-10
-    )
-})
-
-test_that("Walktrap preserves sparse-walk partitions and modularity", {
-    skip_if_not_installed("igraph")
-    n <- 600L
-    group <- (seq_len(n) - 1L) %/% 100L
-    from <- rep(seq_len(n), each = 8L)
-    offset <- rep(seq_len(8L), times = n)
-    to <- group[from] * 100L + ((from - 1L + offset) %% 100L) + 1L
-    graph <- structure(list(
-        from = from, to = to, weight = rep(1, length(from)),
-        n_vertices = n, n_edges = length(from)
-    ), class = c("fastEmbedR_graph", "list"))
-    reference_graph <- igraph::graph_from_edgelist(
-        cbind(from, to), directed = FALSE
-    )
-    reference <- igraph::cluster_walktrap(
-        reference_graph, weights = graph$weight, steps = 4L
-    )
-    native <- graph_cluster(graph, method = "walktrap", steps = 4L)
-    expect_equal(
-        adjusted_rand_index(
-            native$membership, igraph::membership(reference)
-        ), 1
-    )
-    expect_equal(
-        native$modularity,
-        igraph::modularity(
-            reference_graph, native$membership,
-            weights = graph$weight
-        ),
-        tolerance = 1e-8
-    )
-})
 
 test_that("Louvain and Leiden remain competitive with igraph", {
     skip_if_not_installed("igraph")
@@ -394,19 +330,11 @@ test_that("Louvain and Leiden remain competitive with igraph", {
     }
 })
 
-test_that("Walktrap fails before unsafe dense allocation", {
-    graph <- structure(
-        list(
-            from = 1L,
-            to = 2L,
-            weight = 1,
-            n_vertices = 4001L,
-            n_edges = 1L
-        ),
-        class = c("fastEmbedR_graph", "list")
-    )
-    expect_error(
-        graph_cluster(graph, method = "walktrap"),
-        "16-million-entry"
-    )
+test_that("removed clustering method is rejected", {
+    graph <- three_clique_graph()
+    expect_error(graph_cluster(graph, method = "walktrap"),
+        "should be one of")
+    expect_error(fastEmbedR:::massive_cluster(
+        matrix(seq_len(80), ncol = 4L), method = "walktrap"),
+        "should be one of")
 })

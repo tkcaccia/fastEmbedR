@@ -12,7 +12,7 @@ Authors@R: person(
 Copyright: See inst/COPYRIGHTS and inst/NOTICE for source-level ownership,
     adapted components, and optional linked dependencies.
 Description: Native UMAP and interpolation-based t-SNE embeddings, PCA, and
-    Louvain, Leiden, and Walktrap graph clustering for data matrices or
+    Louvain and Leiden graph clustering for data matrices or
     precomputed nearest-neighbor graphs. One-call workflows use native CPU
     exact or FAISS HNSW search and Apple Metal exact or IVF-Flat search.
     Optional CUDA support links to the RAPIDS cuVS C API and retains selected
