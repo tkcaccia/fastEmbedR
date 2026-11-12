@@ -467,10 +467,12 @@ std::vector<int> louvain_partition(const Graph& original,
                                    double resolution,
                                    std::uint64_t seed,
                                    int fit_threads = 1) {
-  Graph graph = original;
+  const Graph* current = &original;
+  Graph coarse;
   std::vector<int> original_to_current(static_cast<std::size_t>(original.n));
   std::iota(original_to_current.begin(), original_to_current.end(), 0);
   for (int level = 0; level < 64; ++level) {
+    const Graph& graph = *current;
     std::vector<int> singleton(static_cast<std::size_t>(graph.n));
     std::iota(singleton.begin(), singleton.end(), 0);
     const std::uint64_t level_seed = seed +
@@ -485,7 +487,8 @@ std::vector<int> louvain_partition(const Graph& original,
       node = moved.membership[static_cast<std::size_t>(node)];
     }
     if (count == graph.n) break;
-    graph = aggregate_graph(graph, moved.membership);
+    coarse = aggregate_graph(graph, moved.membership);
+    current = &coarse;
   }
   return compact_membership(original_to_current);
 }
@@ -592,12 +595,14 @@ std::vector<int> leiden_hierarchy(const Graph& original,
                                   double resolution,
                                   std::uint64_t seed,
                                   int fit_threads = 1) {
-  Graph graph = original;
+  const Graph* current = &original;
+  Graph coarse;
   std::vector<int> original_to_current(static_cast<std::size_t>(original.n));
   std::iota(original_to_current.begin(), original_to_current.end(), 0);
   std::vector<int> partition = compact_membership(initial);
 
   for (int level = 0; level < 64; ++level) {
+    const Graph& graph = *current;
     const std::uint64_t level_seed = seed +
       static_cast<std::uint64_t>(level) * 0x9e3779b97f4a7c15ULL;
     LocalMoveResult moved = fit_threads == 1 ?
@@ -625,7 +630,8 @@ std::vector<int> leiden_hierarchy(const Graph& original,
         coarse_partition[static_cast<std::size_t>(child)] = parent;
       }
     }
-    graph = aggregate_graph(graph, refined);
+    coarse = aggregate_graph(graph, refined);
+    current = &coarse;
     partition = compact_membership(coarse_partition);
   }
 
