@@ -32,6 +32,35 @@ SEXP faissr_gpu_multi_knn_cpp(SEXP data, int k,
 }
 
 // [[Rcpp::export]]
+Rcpp::List faissr_gpu_index_build_cpp(SEXP data, int k,
+                                       std::string method,
+                                       Rcpp::IntegerVector devices,
+                                       int nlist, int nprobe,
+                                       bool shard) {
+  Rcpp::Function load_namespace =
+      Rcpp::Environment::base_env()["loadNamespace"];
+  load_namespace("faissR");
+  if (faissR_c_api_version() != 1) {
+    Rcpp::stop("Unsupported faissR C API version");
+  }
+  return faissR_get_gpu_index_build_v1()(
+      data, Rcpp::wrap(k), Rcpp::wrap(method), devices,
+      Rcpp::wrap(nlist), Rcpp::wrap(nprobe), Rcpp::wrap(shard));
+}
+
+// [[Rcpp::export]]
+Rcpp::List faissr_gpu_index_search_cpp(SEXP index, SEXP query, int k) {
+  Rcpp::Function load_namespace =
+      Rcpp::Environment::base_env()["loadNamespace"];
+  load_namespace("faissR");
+  if (faissR_c_api_version() != 1) {
+    Rcpp::stop("Unsupported faissR C API version");
+  }
+  return faissR_get_gpu_index_search_v1()(
+      index, query, Rcpp::wrap(k), Rcpp::wrap("double"));
+}
+
+// [[Rcpp::export]]
 SEXP faissr_metal_knn_cpp(SEXP data, int k,
                           std::string method,
                           std::string metric,

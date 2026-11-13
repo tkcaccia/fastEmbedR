@@ -93,7 +93,7 @@ massive_knn_paths <- function(output, output_bytes, resume = FALSE,
 
 massive_knn_reference <- function(reference, k, method,
         n.cores, backend, resources = NULL, hnsw_build = NULL,
-        ef_search = 0L) {
+        ef_search = 0L, cuda_provider = "native") {
     if (backend == "cpu" && method == "exact" &&
         !requireNamespace("float", quietly = TRUE)) stop(
         "Persistent faissR Flat KNN requires `float`.", call. = FALSE)
@@ -106,24 +106,14 @@ massive_knn_reference <- function(reference, k, method,
             hnsw_build, ef_search))
     if (backend == "metal") return(massive_metal_reference(reference))
     started <- proc.time()[[3L]]
-    native_buffer <- reference$format != "memory" && backend == "cuda"
-    matrix <- if (native_buffer) {
-        massive_reference_buffer_cpp(reference)
-    } else if (reference$format == "memory" &&
-        backend == "cpu" && method == "exact") {
-        float::fl(reference$data)
-    } else {
-        massive_read_rows_cpp(reference, 1,
-            as.integer(reference$nrow),
-            4 * reference$nrow * reference$ncol,
-            backend == "cpu" && method == "exact")
-    }
-    storage <- if (native_buffer) {
-        "native_float32"
-    } else if (backend == "cpu" && method == "exact") {
-        "R_float32"
-    } else "R_double"
+    input <- massive_knn_reference_input(reference, backend,
+        method, cuda_provider)
+    matrix <- input$data
+    storage <- input$storage
     if (backend == "cuda") {
+        if (cuda_provider == "faissR") return(
+            massive_faissr_cuda_reference(
+                matrix, k, method, started, storage))
         index <- native_cuda_index_build_cpp(matrix, k, method, 0.99)
         return(list(matrix = NULL, index = index,
             build_seconds = unname(proc.time()[[3L]] - started),
@@ -136,6 +126,60 @@ massive_knn_reference <- function(reference, k, method,
             reference_storage = storage))
     }
     stop("Unsupported landmark KNN index method.", call. = FALSE)
+}
+
+massive_knn_reference_input <- function(reference, backend, method,
+                                            cuda_provider) {
+    faissr_cuda <- backend == "cuda" && cuda_provider == "faissR"
+    native_buffer <- reference$format != "memory" &&
+        backend == "cuda" && !faissr_cuda
+    data <- if (native_buffer) {
+        massive_reference_buffer_cpp(reference)
+    } else if (faissr_cuda && reference$format == "memory") {
+        reference$data
+    } else if (reference$format == "memory" &&
+        backend == "cpu" && method == "exact") {
+        float::fl(reference$data)
+    } else {
+        massive_read_rows_cpp(reference, 1,
+            as.integer(reference$nrow),
+            4 * reference$nrow * reference$ncol,
+            (backend == "cpu" && method == "exact") || faissr_cuda)
+    }
+    storage <- if (native_buffer) {
+        "native_float32"
+    } else if ((backend == "cpu" && method == "exact") ||
+        (faissr_cuda && reference$format != "memory")) {
+        "R_float32"
+    } else "R_double"
+    list(data = data, storage = storage)
+}
+
+massive_faissr_cuda_reference <- function(data, k, method,
+                                            started, storage) {
+    if (!method %in% c("exact", "ivf")) stop(
+        "faissR CUDA landmark KNN requires exact or IVF search.",
+        call. = FALSE)
+    params <- if (method == "ivf") {
+        utils::getFromNamespace("cuda_ivf_params", "faissR")(
+            nrow(data), ncol(data), k, "euclidean", 0.99)
+    } else list(nlist = 1L, nprobe = 1L,
+        tuning_benchmark_source = "exact_by_construction")
+    device <- as.integer(massive_cuda_memory_cpp()$device)
+    index <- faissr_gpu_index_build_cpp(data, k,
+        if (method == "exact") "flat" else "ivf", device,
+        as.integer(params$nlist), as.integer(params$nprobe), FALSE)
+    if (!identical(index$backend_used, "faiss_gpu_persistent") ||
+        !identical(index$devices, device) ||
+        !identical(index$gpu_count, 1L) ||
+        !identical(index$multi_gpu_mode, "single") ||
+        !isTRUE(index$index_reused)) stop(
+            "faissR did not build the requested persistent CUDA index.",
+            call. = FALSE)
+    list(matrix = NULL, index = index, provider = "faissR",
+        build_seconds = unname(proc.time()[[3L]] - started),
+        reference_storage = storage,
+        tuning_source = params$tuning_benchmark_source)
 }
 
 massive_metal_reference <- function(reference) {
@@ -174,6 +218,21 @@ massive_faiss_hnsw_reference <- function(reference, k, n.cores,
 massive_knn_query <- function(state, query, k, method,
                                 n.cores, backend, ef_search = 0L) {
     if (backend == "cuda") {
+        if (identical(state$provider, "faissR")) {
+            out <- faissr_gpu_index_search_cpp(
+                state$index$pointer, query, k)
+            if (!identical(out$backend_used,
+                    "faiss_gpu_persistent_query") ||
+                !identical(out$devices, state$index$devices) ||
+                !identical(out$gpu_count, 1L) ||
+                !isTRUE(out$index_reused) ||
+                !identical(out$index_base, 1L)) stop(
+                    "faissR persistent CUDA search changed backend.",
+                    call. = FALSE)
+            out$backend <- out$backend_used
+            out$method <- method
+            return(out)
+        }
         return(native_cuda_index_search_cpp(state$index, query, k))
     }
     if (backend == "metal") return(faissr_metal_query_knn_cpp(
@@ -227,7 +286,8 @@ massive_knn_checkpoint <- function(x, setup, resume) {
     settings <- list(
         version = 1L,
         implementation = massive_checkpoint_implementation_identity(),
-        faissr = if (setup$method %in% c("hnsw", "exact"))
+        faissr = if (setup$method %in% c("hnsw", "exact") ||
+            identical(setup$cuda_provider, "faissR"))
             massive_faissr_identity() else NULL,
         query = massive_checkpoint_source_identity(x),
         reference = massive_checkpoint_source_identity(setup$reference),
@@ -235,11 +295,11 @@ massive_knn_checkpoint <- function(x, setup, resume) {
         backend = setup$backend, workers = setup$workers,
         build_threads = if (setup$method == "hnsw") 1L else NULL,
         chunk_rows = setup$resources$chunk_rows)
+    if (!is.null(setup$cuda_provider)) settings$cuda_provider <-
+        setup$cuda_provider
     if ((setup$ef_search %||% 0L) > 0L) settings$ef_search <- setup$ef_search
-    if (setup$method == "stream_exact") {
-        settings$reference_chunk_rows <-
-            setup$resources$reference_chunk_rows
-    }
+    if (setup$method == "stream_exact")
+        settings$reference_chunk_rows <- setup$resources$reference_chunk_rows
     signature <- massive_checkpoint_signature(settings)
     if (resume) {
         state <- tryCatch(readRDS(path), error = function(e) NULL)
@@ -280,7 +340,7 @@ massive_knn_batch <- function(x, state, first, rows, k, method,
     }
     query <- if (identical(method, "hnsw") ||
         (identical(method, "exact") && backend == "cpu") ||
-        backend == "metal") {
+        backend == "metal" || identical(state$provider, "faissR")) {
         massive_read_rows_cpp(x, first, rows,
             4 * rows * x$ncol, TRUE)
     } else if (x$format == "memory") {
@@ -457,10 +517,25 @@ massive_landmark_ef_search <- function(value, method, backend,
     value
 }
 
+massive_knn_cuda_info <- function(provider) {
+    provider <- match.arg(provider, c("native", "faissR"))
+    if (provider == "faissR") {
+        if (!isTRUE(faissR::faiss_gpu_available())) stop(
+            "EXPERIMENTAL CUDA KNN requires faissR FAISS GPU; ",
+            "no CPU fallback was used.", call. = FALSE)
+        return(massive_cuda_memory_cpp())
+    }
+    if (!native_cuda_knn_available_cpp()) stop(
+        "EXPERIMENTAL CUDA KNN requires native cuVS; ",
+        "no CPU fallback was used.", call. = FALSE)
+    native_cuda_memory_info_cpp()
+}
+
 massive_knn_setup <- function(x, reference, k, output, backend,
         n.cores, method, chunk_rows, memory_limit, resume,
         cuda_memory = TRUE, reference_chunk_rows = NULL,
-        allow_final_resume = FALSE, ef_search = 0L) {
+        allow_final_resume = FALSE, ef_search = 0L,
+        cuda_provider = "native") {
     if (!inherits(x, "fastEmbedR_massive_matrix"))
         stop("`x` must be a massive_matrix() descriptor.", call. = FALSE)
     if (is.list(reference) && inherits(reference$data,
@@ -470,9 +545,8 @@ massive_knn_setup <- function(x, reference, k, output, backend,
         reference$nrow > .Machine$integer.max) stop(
         "Reference dimensions must match and fit R integer IDs.", call. = FALSE)
     backend <- match.arg(backend, c("cpu", "cuda", "metal"))
-    if (backend == "cuda" && !native_cuda_knn_available_cpp()) stop(
-        "EXPERIMENTAL CUDA KNN requires native cuVS; ",
-        "no CPU fallback was used.", call. = FALSE)
+    cuda_info <- if (backend == "cuda")
+        massive_knn_cuda_info(cuda_provider) else NULL
     if (backend == "metal" &&
         (!fastembedr_metal_knn_available() || x$ncol > 16384L))
         stop("Metal KNN needs Metal and <=16,384 columns.", call. = FALSE)
@@ -488,15 +562,14 @@ massive_knn_setup <- function(x, reference, k, output, backend,
         (reference$format == "memory" || k > 65536L))
         stop("Stream exact: file-backed reference; k <= 65,536.", call. = FALSE)
     workers <- normalize_nn_threads(n.cores)
-    if (backend == "metal" && workers != 1L)
-        stop("Metal KNN needs `n.cores = 1`.", call. = FALSE)
+    if (backend == "metal" && workers != 1L) stop("Metal needs one core.")
     resources <- if (method == "stream_exact") massive_full_knn_resources(
         x, k, chunk_rows, reference_chunk_rows, memory_limit, reference
     ) else massive_knn_resources(x, reference, k, method,
         chunk_rows, memory_limit)
     if (backend == "cuda" && cuda_memory)
         resources <- massive_knn_cuda_resources(resources, reference,
-            k, method, native_cuda_memory_info_cpp())
+            k, method, cuda_info)
     if (backend == "metal") resources <- c(resources, list(
         metal_memory_model = "unified_shared",
         metal_buffer_bytes_estimate = 8 * reference$nrow * reference$ncol +
@@ -505,7 +578,8 @@ massive_knn_setup <- function(x, reference, k, output, backend,
         resume, allow_final_resume)
     list(reference = reference, k = k, backend = backend,
         method = method, workers = workers, resources = resources,
-        paths = paths, ef_search = ef_search)
+        paths = paths, ef_search = ef_search,
+        cuda_provider = if (backend == "cuda") cuda_provider else NULL)
 }
 
 massive_knn_result <- function(x, setup, state, elapsed,
@@ -523,9 +597,13 @@ massive_knn_result <- function(x, setup, state, elapsed,
         output_identity = massive_checkpoint_file_identity(unname(paths)),
         implementation_identity =
             massive_checkpoint_implementation_identity(),
-        faissr_identity = if (setup$backend == "cpu" &&
-            setup$method != "stream_exact")
+        faissr_identity = if ((setup$backend == "cpu" &&
+            setup$method != "stream_exact") ||
+            identical(state$provider, "faissR"))
             massive_faissr_identity() else NULL,
+        knn_provider = state$provider %||% if (
+            setup$backend == "cuda") "fastEmbedR_native" else NULL,
+        ivf_tuning_source = state$tuning_source %||% NULL,
         metric = "euclidean", backend = setup$backend,
         method = setup$method, exact = setup$method %in% c(
             "exact", "stream_exact", "sharded_exact"),
@@ -546,17 +624,21 @@ massive_knn_result <- function(x, setup, state, elapsed,
         hnsw_settings = if (setup$method == "hnsw")
             c(state$index[c("M", "efConstruction", "efSearch", "tuning_rule")],
                 list(build_threads = state$build_threads)) else NULL,
-        query_storage = if (setup$method == "stream_exact") {
-            "file_backed_float32"
-        } else if (setup$backend %in% c("cpu", "metal")) "R_float32" else if (
-            x$format == "memory") {
-            "R_double"
-        } else "native_float32",
+        query_storage = massive_knn_query_storage(x, setup, state),
         query_seconds = elapsed$seconds, checkpoint = checkpoint,
         experimental = TRUE)
     class(out) <- "fastEmbedR_massive_knn"
     if (!is.null(devices)) out$gpu_devices <- devices
     out
+}
+
+massive_knn_query_storage <- function(x, setup, state) {
+    if (setup$method == "stream_exact") return("file_backed_float32")
+    if (setup$backend %in% c("cpu", "metal") ||
+        identical(state$provider, "faissR"))
+        return("R_float32")
+    if (x$format == "memory") return("R_double")
+    "native_float32"
 }
 
 #' Experimental file-backed query-to-landmark nearest neighbors
@@ -568,7 +650,10 @@ massive_knn_result <- function(x, setup, state, elapsed,
 #' landmark counts. CPU exact and persistent faissR HNSW, and CUDA exact
 #' or IVF-Flat search retain references across query batches. Metal exact
 #' search retains a host float32 reference but reuploads it each batch.
-#' CUDA needs cuVS support. IVF-Flat calibrates on the first query batch;
+#' CUDA needs faissR FAISS GPU support for the single-device landmark route.
+#' Native sharded CUDA routes still need cuVS. faissR IVF uses a heuristic
+#' setting until a separate exact-reference recall audit is run;
+#' native IVF-Flat calibrates on the first query batch;
 #' pilot recall is not guaranteed for later rows. For CUDA IVF,
 #' `pilot_recall` counts distance-equivalent ties at the exact kth distance;
 #' `pilot_id_recall` reports mean neighbor-ID overlap. Persistent sharded
@@ -654,19 +739,19 @@ massive_landmark_knn <- function(x, reference, k, output,
     }
     setup <- massive_knn_setup(x, reference, k, output, backend,
         n.cores, method, chunk_rows, memory_limit, resume,
-        reference_chunk_rows = reference_chunk_rows, ef_search = ef_search)
+        reference_chunk_rows = reference_chunk_rows, ef_search = ef_search,
+        cuda_provider = if (backend == "cuda") "faissR" else "native")
     saved <- if (resume) massive_knn_checkpoint(x, setup, TRUE) else NULL
     message("EXPERIMENTAL landmark KNN: ", setup$method,
         "; backend=", setup$backend, "; CPU workers=", setup$workers,
         "; chunk rows=", setup$resources$chunk_rows)
     state <- massive_knn_reference(setup$reference, setup$k, setup$method,
         if (checkpoint && setup$method == "hnsw") 1L else setup$workers,
-        setup$backend, setup$resources,
-        ef_search = setup$ef_search)
+        setup$backend, setup$resources, ef_search = setup$ef_search,
+        cuda_provider = setup$cuda_provider %||% "native")
     if (checkpoint && !resume) saved <- massive_knn_checkpoint(x,setup,FALSE)
     elapsed <- massive_knn_stream(x, state, setup$k, setup$method,
-        setup$workers, setup$backend, setup$resources,
-        setup$paths, saved)
+        setup$workers, setup$backend, setup$resources, setup$paths, saved)
     massive_knn_result(x, setup, state, elapsed, checkpoint, devices)
 }
 

@@ -301,6 +301,14 @@ faissr_gpu_multi_knn_cpp <- function(data, k, method, devices, nlist, nprobe, sh
     .Call(`_fastEmbedR_faissr_gpu_multi_knn_cpp`, data, k, method, devices, nlist, nprobe, shard, output)
 }
 
+faissr_gpu_index_build_cpp <- function(data, k, method, devices, nlist, nprobe, shard) {
+    .Call(`_fastEmbedR_faissr_gpu_index_build_cpp`, data, k, method, devices, nlist, nprobe, shard)
+}
+
+faissr_gpu_index_search_cpp <- function(index, query, k) {
+    .Call(`_fastEmbedR_faissr_gpu_index_search_cpp`, index, query, k)
+}
+
 faissr_metal_knn_cpp <- function(data, k, method, metric, target_recall) {
     .Call(`_fastEmbedR_faissr_metal_knn_cpp`, data, k, method, metric, target_recall)
 }
