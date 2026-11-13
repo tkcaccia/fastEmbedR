@@ -54,6 +54,12 @@ struct MoveResult {
   std::vector<int> membership;
   int moves = 0;
   int passes = 0;
+  double setup_seconds = 0.0;
+  double totals_seconds = 0.0;
+  double broadcast_launch_seconds = 0.0;
+  double sync_merge_seconds = 0.0;
+  double quality_seconds = 0.0;
+  double teardown_seconds = 0.0;
 };
 
 using MoveFunction = std::function<MoveResult(

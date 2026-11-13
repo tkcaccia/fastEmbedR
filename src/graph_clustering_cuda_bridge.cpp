@@ -92,6 +92,12 @@ Rcpp::List fastembedr_graph_cluster_cuda_devices_cpp(
     n_vertices, force_wide);
   const auto graph_ready = Clock::now();
   double move_seconds = 0.0;
+  double move_setup_seconds = 0.0;
+  double move_totals_seconds = 0.0;
+  double move_broadcast_launch_seconds = 0.0;
+  double move_sync_merge_seconds = 0.0;
+  double move_quality_seconds = 0.0;
+  double move_teardown_seconds = 0.0;
   const auto move = [&](const accel::Graph& graph,
       const std::vector<int>& initial,
       const std::vector<int>* parent, int passes, float gamma,
@@ -112,6 +118,12 @@ Rcpp::List fastembedr_graph_cluster_cuda_devices_cpp(
       passes, gamma, run_seed, refinement, selected);
     move_seconds += std::chrono::duration<double>(
       Clock::now() - move_started).count();
+    move_setup_seconds += moved.setup_seconds;
+    move_totals_seconds += moved.totals_seconds;
+    move_broadcast_launch_seconds += moved.broadcast_launch_seconds;
+    move_sync_merge_seconds += moved.sync_merge_seconds;
+    move_quality_seconds += moved.quality_seconds;
+    move_teardown_seconds += moved.teardown_seconds;
     const int phases = moved.passes * 8;
     color_phases += phases;
     sync_bytes += static_cast<double>(phases) *
@@ -127,6 +139,13 @@ Rcpp::List fastembedr_graph_cluster_cuda_devices_cpp(
     fit_ready - graph_ready).count();
   result["native_graph_build_seconds"] = build_seconds;
   result["native_coordinated_move_seconds"] = move_seconds;
+  result["native_move_setup_seconds"] = move_setup_seconds;
+  result["native_move_totals_seconds"] = move_totals_seconds;
+  result["native_move_broadcast_launch_seconds"] =
+    move_broadcast_launch_seconds;
+  result["native_move_sync_merge_seconds"] = move_sync_merge_seconds;
+  result["native_move_quality_seconds"] = move_quality_seconds;
+  result["native_move_teardown_seconds"] = move_teardown_seconds;
   result["native_host_hierarchy_seconds"] = fit_seconds - move_seconds;
   result["native_total_seconds"] = build_seconds + fit_seconds;
   result["implementation"] = "resident_cuda_coordinated_host_sync";

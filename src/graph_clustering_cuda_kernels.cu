@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstdint>
@@ -1095,6 +1096,8 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_devices_impl(
   MoveResult result;
   result.membership = initial;
   if (graph.n < 2 || !(graph.volume > 0.0f)) return result;
+  using Clock = std::chrono::steady_clock;
+  const auto setup_started = Clock::now();
   std::vector<int> empty_parent;
   if (parent == nullptr) {
     empty_parent.assign(static_cast<std::size_t>(graph.n), 0);
@@ -1129,6 +1132,8 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_devices_impl(
       workers.emplace_back(new CoordinatedDevice(
         devices[i], graph, begin, end, *parent));
     }
+    result.setup_seconds = std::chrono::duration<double>(
+      Clock::now() - setup_started).count();
     std::vector<float> volume(static_cast<std::size_t>(graph.n));
     std::vector<int> count(static_cast<std::size_t>(graph.n));
     const float tolerance = 1e-7f * std::max(
@@ -1138,13 +1143,20 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_devices_impl(
       static_cast<unsigned int>(seed ^ (seed >> 32U));
     for (int pass = 0; pass < max_passes; ++pass) {
       const std::vector<int> previous = result.membership;
+      const auto previous_quality_started = Clock::now();
       const double previous_quality =
         fastembedr_graph_accel::modularity(graph, previous, resolution);
+      result.quality_seconds += std::chrono::duration<double>(
+        Clock::now() - previous_quality_started).count();
       const unsigned int pass_seed = base_seed ^
         (0x9e3779b9U * static_cast<unsigned int>(pass + 1));
       unsigned int pass_moves = 0;
       for (int color = 0; color < kColorCount; ++color) {
+        const auto totals_started = Clock::now();
         coordinated_totals(graph, result.membership, volume, count);
+        result.totals_seconds += std::chrono::duration<double>(
+          Clock::now() - totals_started).count();
+        const auto broadcast_started = Clock::now();
         for (const auto& worker : workers) {
           check_cuda(cudaSetDevice(worker->id),
             "select coordinated CUDA worker");
@@ -1190,6 +1202,9 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_devices_impl(
           else apply(worker->row.data());
           check_cuda(cudaGetLastError(), "coordinated CUDA apply");
         }
+        result.broadcast_launch_seconds += std::chrono::duration<double>(
+          Clock::now() - broadcast_started).count();
+        const auto merge_started = Clock::now();
         for (const auto& worker : workers) {
           check_cuda(cudaSetDevice(worker->id),
             "select coordinated CUDA worker");
@@ -1207,10 +1222,15 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_devices_impl(
             "read coordinated moves");
           pass_moves += moves;
         }
+        result.sync_merge_seconds += std::chrono::duration<double>(
+          Clock::now() - merge_started).count();
       }
       ++result.passes;
+      const auto next_quality_started = Clock::now();
       const double next_quality = fastembedr_graph_accel::modularity(
         graph, result.membership, resolution);
+      result.quality_seconds += std::chrono::duration<double>(
+        Clock::now() - next_quality_started).count();
       if (!std::isfinite(next_quality) ||
           next_quality + 1e-9 < previous_quality) {
         result.membership = previous;
@@ -1224,8 +1244,11 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_devices_impl(
     cudaSetDevice(original_device);
     throw;
   }
+  const auto teardown_started = Clock::now();
   for (auto& worker : workers) worker.reset();
   check_cuda(cudaSetDevice(original_device),
     "restore original CUDA device");
+  result.teardown_seconds = std::chrono::duration<double>(
+    Clock::now() - teardown_started).count();
   return result;
 }
