@@ -50,6 +50,22 @@ test_that("multi-GPU graph reports the verified faissR provider", {
         }, .package = "fastEmbedR")
 })
 
+test_that("multi-GPU KNN setup requests faissR CUDA", {
+    with_mocked_bindings(
+        massive_knn_devices_check = function(...) NULL,
+        massive_knn_setup = function(..., cuda_provider) {
+            expect_identical(cuda_provider, "faissR")
+            list(reference = "reference", k = 3L)
+        },
+        massive_knn_devices_execute = function(...) "faissR",
+        {
+            observed <- fastEmbedR:::massive_knn_devices(
+                list(), list(), 3L, "unused", 1L, "exact",
+                8L, "256MB", FALSE, FALSE, c(0L, 1L))
+            expect_identical(observed, "faissR")
+        }, .package = "fastEmbedR")
+})
+
 test_that("interrupted multi-GPU IVF shards restart from row one", {
     root <- tempfile("ivf_restart_")
     dir.create(root)

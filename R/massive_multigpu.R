@@ -910,7 +910,8 @@ massive_knn_devices <- function(x, reference, k, output, n.cores,
     worker_limit <- massive_memory_bytes(memory_limit) / length(devices)
     setup <- massive_knn_setup(x, reference, k, output, "cuda", 1L,
         method, chunk_rows, worker_limit, resume,
-        cuda_memory = FALSE, allow_final_resume = resume)
+        cuda_memory = FALSE, allow_final_resume = resume,
+        cuda_provider = "faissR")
     arguments <- list(x = x, reference = setup$reference, k = setup$k,
         backend = "cuda", n.cores = 1L, method = setup$method,
         chunk_rows = chunk_rows, memory_limit = worker_limit)

@@ -36,7 +36,7 @@ resolve_native_gpu_backend <- function(need_knn = FALSE,
 available_native_gpu_backend <- function(need_knn = FALSE,
                                             need_embedding = FALSE) {
     cuda_ok <- (!isTRUE(need_knn) ||
-        backend_flag(native_cuda_knn_available_cpp)) &&
+        backend_flag(faissR::faiss_gpu_available)) &&
         (!isTRUE(need_embedding) ||
             backend_flag(embedding_cuda_available_cpp))
     if (cuda_ok) return("cuda")
