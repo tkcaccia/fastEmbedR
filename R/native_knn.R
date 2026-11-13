@@ -956,15 +956,10 @@ fastembedr_native_query_knn <- function(data, query, k,
         stop("`k` must be a positive integer.", call. = FALSE)
     }
     if (identical(backend, "cuda")) {
-        out <- native_cuda_query_knn_cpp(
-            data, query,
-            k = k, method = method, metric = metric,
-            target_recall = target_recall, keep_gpu = isTRUE(keep_gpu)
-        )
-        if (isTRUE(keep_gpu)) {
-            return(out)
-        }
-        return(fastembedr_convert_knn_distances(out, output))
+        return(run_faissr_cuda_query_knn(
+            data, query, k, method, metric, output,
+            target_recall, keep_gpu
+        ))
     }
     if (identical(backend, "metal")) {
         out <- faissr_metal_query_knn_cpp(
@@ -988,4 +983,53 @@ fastembedr_native_query_knn <- function(data, query, k,
         data, query, k, method, metric, output,
         target_recall, n_threads
     )
+}
+
+run_faissr_cuda_query_knn <- function(data, query, k, method, metric,
+                                        output, target_recall, keep_gpu) {
+    if (!requireNamespace("faissR", quietly = TRUE) ||
+        !isTRUE(faissR::faiss_gpu_available())) {
+        stop("The faissR FAISS GPU backend is unavailable.",
+            call. = FALSE)
+    }
+    if (identical(method, "auto")) {
+        method <- fastembedr_cuda_query_method(
+            nrow(data), nrow(query), ncol(data)
+        )
+    }
+    if (!method %in% c("exact", "flat", "bruteforce", "ivf")) {
+        stop("Unsupported faissR CUDA query KNN method.", call. = FALSE)
+    }
+    if (isTRUE(keep_gpu) && identical(method, "ivf")) {
+        stop("faissR has no GPU-resident IVF query result.",
+            call. = FALSE)
+    }
+    args <- list(
+        data = data, points = query, k = k, exclude_self = FALSE,
+        method = method, metric = metric,
+        target_recall = target_recall
+    )
+    if (isTRUE(keep_gpu)) {
+        out <- do.call(faissR::nn_gpu, args)
+        if (!inherits(out, "faissR_gpu_knn") ||
+            !identical(out$result_residency, "cuda") ||
+            !identical(as.integer(out$n_query), as.integer(nrow(query))) ||
+            !identical(as.integer(out$k), as.integer(k)) ||
+            isTRUE(out$cpu_fallback)) stop(
+            "faissR did not return resident CUDA query KNN.",
+            call. = FALSE)
+        return(out)
+    }
+    out <- do.call(faissR::nn, c(args, list(
+        backend = "cuda", tuning = "auto", output = output
+    )))
+    if (!identical(out$accelerator, "cuda") ||
+        !startsWith(out$backend_used %||% "", "faiss_gpu") ||
+        !identical(dim(out$indices), c(nrow(query), as.integer(k))) ||
+        !identical(out$index_base, 1L) || isTRUE(out$cpu_fallback)) {
+        stop("faissR did not return CUDA query KNN.", call. = FALSE)
+    }
+    attr(out, "backend") <- "cuda"
+    attr(out, "exclude_self") <- FALSE
+    out
 }

@@ -174,3 +174,28 @@ test_that("faissR resident CUDA KNN feeds both optimizers", {
     expect_equal(dim(tsne_fit), c(43L, 2L))
     expect_true(all(is.finite(tsne_fit)))
 })
+
+test_that("CUDA reference queries use faissR host and device results", {
+    skip_if_not(faissR::faiss_gpu_available())
+    set.seed(2241)
+    data <- matrix(rnorm(37L * 5L), ncol = 5L)
+    query <- data[c(3L, 11L, 29L), , drop = FALSE] + 0.01
+    distance <- outer(seq_len(nrow(query)), seq_len(nrow(data)),
+        Vectorize(function(i, j) sqrt(sum((query[i, ] - data[j, ])^2))))
+    expected <- t(vapply(seq_len(nrow(query)), function(i) {
+        order(distance[i, ])[seq_len(4L)]
+    }, integer(4L)))
+    host <- fastEmbedR:::fastembedr_native_query_knn(
+        data, query, 4L, backend = "cuda", method = "exact"
+    )
+    expect_identical(host$indices, expected)
+    expect_true(startsWith(host$backend_used, "faiss_gpu"))
+    device <- fastEmbedR:::fastembedr_native_query_knn(
+        data, query, 4L, backend = "cuda", method = "exact",
+        keep_gpu = TRUE
+    )
+    expect_s3_class(device, "faissR_gpu_knn")
+    expect_identical(device$result_residency, "cuda")
+    observed <- fastEmbedR:::fastembedr_gpu_knn_to_host(device)
+    expect_identical(observed$indices, expected)
+})
