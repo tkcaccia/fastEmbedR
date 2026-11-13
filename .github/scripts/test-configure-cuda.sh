@@ -305,7 +305,7 @@ if (
   echo "The removed FAISS GPU switch was unexpectedly accepted." >&2
   exit 1
 fi
-grep -F "FASTEMBEDR_USE_FAISS_GPU was removed" \
+grep -F "FASTEMBEDR_USE_FAISS_GPU is obsolete" \
   "$TMP/removed-faiss.log"
 
 DIAGNOSTIC="$TMP/diagnostic"
