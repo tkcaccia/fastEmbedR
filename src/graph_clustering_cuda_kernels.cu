@@ -1141,13 +1141,13 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_devices_impl(
         static_cast<float>(graph.n));
     const unsigned int base_seed =
       static_cast<unsigned int>(seed ^ (seed >> 32U));
+    const auto initial_quality_started = Clock::now();
+    double previous_quality = fastembedr_graph_accel::modularity(
+      graph, result.membership, resolution);
+    result.quality_seconds += std::chrono::duration<double>(
+      Clock::now() - initial_quality_started).count();
     for (int pass = 0; pass < max_passes; ++pass) {
       const std::vector<int> previous = result.membership;
-      const auto previous_quality_started = Clock::now();
-      const double previous_quality =
-        fastembedr_graph_accel::modularity(graph, previous, resolution);
-      result.quality_seconds += std::chrono::duration<double>(
-        Clock::now() - previous_quality_started).count();
       const unsigned int pass_seed = base_seed ^
         (0x9e3779b9U * static_cast<unsigned int>(pass + 1));
       unsigned int pass_moves = 0;
@@ -1236,6 +1236,7 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_devices_impl(
         result.membership = previous;
         break;
       }
+      previous_quality = next_quality;
       result.moves += static_cast<int>(pass_moves);
       if (pass_moves == 0U) break;
     }
