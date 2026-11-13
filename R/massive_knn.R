@@ -94,6 +94,9 @@ massive_knn_paths <- function(output, output_bytes, resume = FALSE,
 massive_knn_reference <- function(reference, k, method,
         n.cores, backend, resources = NULL, hnsw_build = NULL,
         ef_search = 0L) {
+    if (backend == "cpu" && method == "exact" &&
+        !requireNamespace("float", quietly = TRUE)) stop(
+        "Persistent faissR Flat KNN requires `float`.", call. = FALSE)
     if (method == "stream_exact") return(list(reference = reference,
         reference_chunk_rows = resources$reference_chunk_rows,
         build_seconds = 0,
@@ -103,19 +106,23 @@ massive_knn_reference <- function(reference, k, method,
             hnsw_build, ef_search))
     if (backend == "metal") return(massive_metal_reference(reference))
     started <- proc.time()[[3L]]
-    native_buffer <- reference$format != "memory" &&
-        (backend == "cuda" || method == "exact")
+    native_buffer <- reference$format != "memory" && backend == "cuda"
     matrix <- if (native_buffer) {
         massive_reference_buffer_cpp(reference)
     } else if (reference$format == "memory" &&
         backend == "cpu" && method == "exact") {
-        reference$data
+        float::fl(reference$data)
     } else {
         massive_read_rows_cpp(reference, 1,
             as.integer(reference$nrow),
-            8 * reference$nrow * reference$ncol)
+            4 * reference$nrow * reference$ncol,
+            backend == "cpu" && method == "exact")
     }
-    storage <- if (native_buffer) "native_float32" else "R_double"
+    storage <- if (native_buffer) {
+        "native_float32"
+    } else if (backend == "cpu" && method == "exact") {
+        "R_float32"
+    } else "R_double"
     if (backend == "cuda") {
         index <- native_cuda_index_build_cpp(matrix, k, method, 0.99)
         return(list(matrix = NULL, index = index,
@@ -123,7 +130,7 @@ massive_knn_reference <- function(reference, k, method,
             reference_storage = storage))
     }
     if (method == "exact") {
-        index <- native_exact_index_build_cpp(matrix)
+        index <- faissr_flat_index_build_cpp(matrix, n.cores)
         return(list(matrix = NULL, index = index,
             build_seconds = unname(proc.time()[[3L]] - started),
             reference_storage = storage))
@@ -176,7 +183,7 @@ massive_knn_query <- function(state, query, k, method,
             k, if (ef_search == 0L) state$index$efSearch else ef_search,
             n.cores))
     if (method == "exact") {
-        return(native_exact_index_search_cpp(state$index, query,
+        return(faissr_flat_index_search_cpp(state$index, query,
             k, n_threads = n.cores))
     }
     stop("Unsupported landmark KNN search method.", call. = FALSE)
@@ -220,7 +227,7 @@ massive_knn_checkpoint <- function(x, setup, resume) {
     settings <- list(
         version = 1L,
         implementation = massive_checkpoint_implementation_identity(),
-        faissr = if (setup$method == "hnsw")
+        faissr = if (setup$method %in% c("hnsw", "exact"))
             massive_faissr_identity() else NULL,
         query = massive_checkpoint_source_identity(x),
         reference = massive_checkpoint_source_identity(setup$reference),
@@ -271,7 +278,9 @@ massive_knn_batch <- function(x, state, first, rows, k, method,
             state$reference, first, rows, k,
             state$reference_chunk_rows, n.cores))
     }
-    query <- if (identical(method, "hnsw") || backend == "metal") {
+    query <- if (identical(method, "hnsw") ||
+        (identical(method, "exact") && backend == "cpu") ||
+        backend == "metal") {
         massive_read_rows_cpp(x, first, rows,
             4 * rows * x$ncol, TRUE)
     } else if (x$format == "memory") {
@@ -514,7 +523,8 @@ massive_knn_result <- function(x, setup, state, elapsed,
         output_identity = massive_checkpoint_file_identity(unname(paths)),
         implementation_identity =
             massive_checkpoint_implementation_identity(),
-        faissr_identity = if (setup$method == "hnsw")
+        faissr_identity = if (setup$backend == "cpu" &&
+            setup$method != "stream_exact")
             massive_faissr_identity() else NULL,
         metric = "euclidean", backend = setup$backend,
         method = setup$method, exact = setup$method %in% c(
@@ -538,8 +548,7 @@ massive_knn_result <- function(x, setup, state, elapsed,
                 list(build_threads = state$build_threads)) else NULL,
         query_storage = if (setup$method == "stream_exact") {
             "file_backed_float32"
-        } else if (setup$method == "hnsw" ||
-            setup$backend == "metal") "R_float32" else if (
+        } else if (setup$backend %in% c("cpu", "metal")) "R_float32" else if (
             x$format == "memory") {
             "R_double"
         } else "native_float32",
@@ -1429,7 +1438,8 @@ massive_sharded_probe <- function(x, state, setup, saved, method,
 massive_sharded_query <- function(x, first, rows, method,
         backend = "cpu") {
     view <- massive_matrix_rows(x, first, rows)
-    if (method == "faiss_hnsw" || backend == "metal") return(
+    if (method %in% c("faiss_hnsw", "exact") && backend == "cpu" ||
+        backend == "metal") return(
         massive_read_rows_cpp(
         view, 1L, rows, 4 * rows * x$ncol, TRUE))
     massive_reference_buffer_cpp(view)
@@ -1444,8 +1454,7 @@ massive_sharded_batch <- function(x, setup, parts, state, shard,
         first, count, query_first, method, backend, saved) {
     rows <- as.integer(min(setup$resources$chunk_rows,
         x$nrow - query_first + 1))
-    query <- massive_sharded_query(x, query_first, rows, method,
-        backend)
+    query <- massive_sharded_query(x, query_first, rows, method, backend)
     local_k <- as.integer(min(setup$k + 1, count))
     found <- massive_knn_query(state, query, local_k,
         method, setup$workers, backend, setup$ef_search %||% 0L)
@@ -1459,10 +1468,11 @@ massive_sharded_batch <- function(x, setup, parts, state, shard,
         identical(found$backend, expected) &&
             identical(found$method, method)
     } else identical(found$backend, "cpu") &&
-        identical(found$method, "faissr_hnsw_query_reused") &&
+        identical(found$method,
+            ifelse(method == "exact", "faissr_flat_query_reused",
+                "faissr_hnsw_query_reused")) &&
         isTRUE(found$index_reused)
-    if (!valid) stop("Sharded KNN changed algorithm or backend.",
-        call. = FALSE)
+    if (!valid) stop("Sharded KNN changed algorithm or backend.", call. = FALSE)
     ivf_setting <- if (method == "ivf") {
         massive_sharded_ivf_setting(found, shard, first, count)
     } else NULL

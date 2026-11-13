@@ -242,6 +242,9 @@ fastembedr_nn_policy_engine <- function(policy, keep_gpu = FALSE,
             identical(metric, "euclidean")) {
             return("faissr_cpu_hnsw")
         }
+        if (identical(policy$method, "exact")) {
+            return("faissr_cpu_flat")
+        }
         return(paste0("native_cpu_", policy$method %||% "exact"))
     }
     if (is.list(policy) && identical(policy$backend, "metal")) {
@@ -348,7 +351,7 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' @param checkpoint_every Save progress after this many query blocks.
 #'
 #' @details
-#' CPU uses native exhaustive float32 search below 5,000 observations and
+#' CPU uses faissR Flat exact search below 5,000 observations and
 #' faissR's compiled FAISS HNSW interface for Euclidean distance otherwise.
 #' Cosine and correlation retain native HNSW. HNSW targets recall 0.99; its
 #' recall is not audited during each call. Metal uses native exact search below
@@ -509,7 +512,7 @@ run_precompute_query_knn <- function(reference, query, k, metric,
 #' @inheritParams precompute_knn
 #'
 #' @details
-#' CPU uses exhaustive reference-query search when the reference has fewer than
+#' CPU uses faissR Flat search when the reference has fewer than
 #' 5,000 rows and faissR's compiled FAISS HNSW interface for Euclidean
 #' distance otherwise. Cosine and correlation retain native HNSW. HNSW
 #' targets recall 0.99 but does not claim a per-call recall audit. Metal
@@ -733,6 +736,45 @@ run_faissr_hnsw <- function(data, query, k, output,
     fastembedr_convert_knn_distances(out, output)
 }
 
+run_faissr_cpu_exact <- function(data, query, k, metric, output,
+                                    target_recall, n_threads) {
+    if (!requireNamespace("faissR", quietly = TRUE) ||
+        !isTRUE(faissR::faiss_available())) {
+        stop("The faissR CPU Flat backend is unavailable.",
+            call. = FALSE)
+    }
+    self <- is.null(query)
+    args <- list(
+        data = data, k = k, exclude_self = self,
+        backend = "cpu", method = "flat", metric = metric,
+        output = output, n_threads = normalize_nn_threads(n_threads),
+        target_recall = target_recall
+    )
+    if (!self) args$points <- query
+    out <- do.call(faissR::nn, args)
+    if (!isTRUE(out$exact) ||
+        !identical(dim(out$indices), c(if (self) nrow(data) else
+            nrow(query), as.integer(k))) ||
+        !identical(out$index_base, 1L) ||
+        !startsWith(out$backend_used %||% "", "faiss_flat_")) {
+        stop("faissR did not return CPU Flat KNN.", call. = FALSE)
+    }
+    out$backend <- "cpu"
+    out$method <- if (self) "faissr_flat" else "faissr_flat_query"
+    out$target_recall <- target_recall
+    out$target_met <- TRUE
+    out$exact_recall_by_construction <- TRUE
+    out$expected_recall_at_k <- 1
+    out$recall_audited <- TRUE
+    out$recall_status <- "exact_by_construction"
+    out$tuning_policy <- "exact_below_5000"
+    out$cpu_fallback <- FALSE
+    attr(out, "backend") <- "cpu"
+    attr(out, "method") <- out$method
+    attr(out, "exclude_self") <- self
+    out
+}
+
 run_native_cpu_knn <- function(data, k, method, metric, output,
                                 target_recall, n_threads) {
     if (!method %in% c("auto", "exact", "hnsw")) {
@@ -753,9 +795,9 @@ run_native_cpu_knn <- function(data, k, method, metric, output,
             data, NULL, k, output, target_recall, n_threads
         ))
     }
-    native <- if (identical(method, "hnsw")) {
-        native_hnsw_knn_cpp
-    } else native_exact_knn_cpp
+    if (identical(method, "exact")) return(run_faissr_cpu_exact(
+        data, NULL, k, metric, output, target_recall, n_threads))
+    native <- native_hnsw_knn_cpp
     out <- native(
         data,
         k = k,
@@ -869,9 +911,9 @@ run_native_cpu_query_knn <- function(data, query, k, method, metric,
             data, query, k, output, target_recall, n_threads
         ))
     }
-    native <- if (identical(method, "hnsw")) {
-        native_hnsw_query_cpp
-    } else native_exact_query_cpp
+    if (identical(method, "exact")) return(run_faissr_cpu_exact(
+        data, query, k, metric, output, target_recall, n_threads))
+    native <- native_hnsw_query_cpp
     out <- native(
         data, query, k = k,
         n_threads = normalize_nn_threads(n_threads),

@@ -760,7 +760,7 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #'   source, reference, neighbor count, and backend must match.
 #' @param seed Random seed.
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. CPU KNN
-#'   uses native exact search below 5,000 rows, compiled FAISS HNSW for larger
+#'   uses faissR Flat exact search below 5,000 rows, FAISS HNSW for larger
 #'   Euclidean searches, and native HNSW for other supported metrics.
 #'   Metal KNN uses faissR's native exact or IVF-Flat route. CUDA matrix KNN
 #'   uses faissR FAISS GPU Flat below 100,000 rows or IVF-Flat above that

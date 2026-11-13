@@ -1360,6 +1360,32 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// faissr_flat_index_build_cpp
+SEXP faissr_flat_index_build_cpp(SEXP data, int n_threads);
+RcppExport SEXP _fastEmbedR_faissr_flat_index_build_cpp(SEXP dataSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_flat_index_build_cpp(data, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
+// faissr_flat_index_search_cpp
+Rcpp::List faissr_flat_index_search_cpp(SEXP index, SEXP query, int k, int n_threads);
+RcppExport SEXP _fastEmbedR_faissr_flat_index_search_cpp(SEXP indexSEXP, SEXP querySEXP, SEXP kSEXP, SEXP n_threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type index(indexSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type query(querySEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_flat_index_search_cpp(index, query, k, n_threads));
+    return rcpp_result_gen;
+END_RCPP
+}
 // knn_connectivity_range_cpp
 Rcpp::List knn_connectivity_range_cpp(IntegerMatrix indices, int col_start, int n_cols);
 RcppExport SEXP _fastEmbedR_knn_connectivity_range_cpp(SEXP indicesSEXP, SEXP col_startSEXP, SEXP n_colsSEXP) {
@@ -3178,62 +3204,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// native_exact_knn_cpp
-Rcpp::List native_exact_knn_cpp(SEXP data, int k, int n_threads, std::string metric, double target_recall);
-RcppExport SEXP _fastEmbedR_native_exact_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP n_threadsSEXP, SEXP metricSEXP, SEXP target_recallSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
-    Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
-    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_exact_knn_cpp(data, k, n_threads, metric, target_recall));
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_exact_query_cpp
-Rcpp::List native_exact_query_cpp(SEXP data, SEXP query, int k, int n_threads, std::string metric, double target_recall);
-RcppExport SEXP _fastEmbedR_native_exact_query_cpp(SEXP dataSEXP, SEXP querySEXP, SEXP kSEXP, SEXP n_threadsSEXP, SEXP metricSEXP, SEXP target_recallSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type query(querySEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
-    Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
-    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_exact_query_cpp(data, query, k, n_threads, metric, target_recall));
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_exact_index_build_cpp
-SEXP native_exact_index_build_cpp(SEXP data);
-RcppExport SEXP _fastEmbedR_native_exact_index_build_cpp(SEXP dataSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_exact_index_build_cpp(data));
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_exact_index_search_cpp
-Rcpp::List native_exact_index_search_cpp(SEXP pointer, SEXP query, int k, int n_threads);
-RcppExport SEXP _fastEmbedR_native_exact_index_search_cpp(SEXP pointerSEXP, SEXP querySEXP, SEXP kSEXP, SEXP n_threadsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type pointer(pointerSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type query(querySEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_exact_index_search_cpp(pointer, query, k, n_threads));
-    return rcpp_result_gen;
-END_RCPP
-}
 // native_cuda_knn_available_cpp
 bool native_cuda_knn_available_cpp();
 RcppExport SEXP _fastEmbedR_native_cuda_knn_available_cpp() {
@@ -3597,6 +3567,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_faissr_metal_query_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_query_knn_cpp, 6},
     {"_fastEmbedR_faissr_hnsw_index_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_build_cpp, 7},
     {"_fastEmbedR_faissr_hnsw_index_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_search_cpp, 5},
+    {"_fastEmbedR_faissr_flat_index_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_flat_index_build_cpp, 2},
+    {"_fastEmbedR_faissr_flat_index_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_flat_index_search_cpp, 4},
     {"_fastEmbedR_knn_connectivity_range_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_range_cpp, 3},
     {"_fastEmbedR_knn_connectivity_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_cpp, 1},
     {"_fastEmbedR_umap_graph_csr_cpp", (DL_FUNC) &_fastEmbedR_umap_graph_csr_cpp, 6},
@@ -3699,10 +3671,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_native_hnsw_query_cpp", (DL_FUNC) &_fastEmbedR_native_hnsw_query_cpp, 6},
     {"_fastEmbedR_native_hnsw_index_build_cpp", (DL_FUNC) &_fastEmbedR_native_hnsw_index_build_cpp, 5},
     {"_fastEmbedR_native_hnsw_index_search_cpp", (DL_FUNC) &_fastEmbedR_native_hnsw_index_search_cpp, 5},
-    {"_fastEmbedR_native_exact_knn_cpp", (DL_FUNC) &_fastEmbedR_native_exact_knn_cpp, 5},
-    {"_fastEmbedR_native_exact_query_cpp", (DL_FUNC) &_fastEmbedR_native_exact_query_cpp, 6},
-    {"_fastEmbedR_native_exact_index_build_cpp", (DL_FUNC) &_fastEmbedR_native_exact_index_build_cpp, 1},
-    {"_fastEmbedR_native_exact_index_search_cpp", (DL_FUNC) &_fastEmbedR_native_exact_index_search_cpp, 4},
     {"_fastEmbedR_native_cuda_knn_available_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_available_cpp, 0},
     {"_fastEmbedR_native_cuda_memory_info_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_memory_info_cpp, 0},
     {"_fastEmbedR_native_cuda_knn_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_cpp, 7},

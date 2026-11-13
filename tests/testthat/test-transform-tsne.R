@@ -388,7 +388,7 @@ test_that("tsne landmark mode uses native exact CPU projection KNN", {
     expect_equal(fit$parameters$projection_nn_backend, "cpu")
     expect_equal(
         fit$parameters$projection_strategy,
-        "native_exact_reference_query_knn"
+        "faissr_exact_reference_query_knn"
     )
     expect_true(is.list(attr(fit$landmarks$projection_knn, "approximation")))
 })

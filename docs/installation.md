@@ -11,10 +11,9 @@
 
 A CPU build needs R 4.6 or later, Rcpp, faissR (including its FAISS
 dependency), and the C++17 toolchain configured for that R installation.
-It does not need CUDA or
-cuVS. In-memory Euclidean CPU searches with at least 5,000 rows call faissR's
-compiled HNSW interface directly. Smaller searches use fastEmbedR's native
-exact implementation; cosine and correlation HNSW remain package-native.
+It does not need CUDA or cuVS. In-memory CPU exact searches use faissR Flat;
+larger Euclidean searches call its compiled HNSW interface. Cosine and
+correlation HNSW remain package-native.
 
 Install faissR first, following its
 [installation guide](https://github.com/tkcaccia/faissR/blob/main/docs/installation.md).

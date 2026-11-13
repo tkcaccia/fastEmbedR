@@ -10,6 +10,20 @@ exact_knn_reference <- function(x, k) {
     )], nrow(x), k, byrow = TRUE), 0)))
 }
 
+faissr_exact_knn_test <- function(data, k, n_threads = 1L,
+                                    metric = "euclidean",
+                                    target_recall = 0.99) {
+    run_faissr_cpu_exact(data, NULL, k, metric, "double",
+        target_recall, n_threads)
+}
+
+faissr_exact_query_test <- function(data, query, k, n_threads = 1L,
+                                    metric = "euclidean",
+                                    target_recall = 0.99) {
+    run_faissr_cpu_exact(data, query, k, metric, "double",
+        target_recall, n_threads)
+}
+
 knn_recall_test <- function(observed, expected) {
     k <- ncol(expected$indices)
     mean(vapply(seq_len(nrow(expected$indices)), function(i) {
@@ -134,22 +148,22 @@ test_that("native CPU exact search matches exhaustive references", {
     x <- matrix(rnorm(180 * 11), nrow = 180)
     for (metric in c("euclidean", "cosine", "correlation")) {
         truth <- metric_knn_reference(x, 9L, metric)
-        serial <- native_exact_knn_cpp(x, 9L, 1L, metric, 0.99)
-        parallel <- native_exact_knn_cpp(x, 9L, 3L, metric, 0.99)
+        serial <- faissr_exact_knn_test(x, 9L, 1L, metric, 0.99)
+        parallel <- faissr_exact_knn_test(x, 9L, 3L, metric, 0.99)
         expect_equal(knn_recall_test(serial, truth), 1)
         expect_identical(parallel$indices, serial$indices)
         expect_identical(parallel$distances, serial$distances)
         expect_true(serial$exact)
         expect_true(serial$exact_recall_by_construction)
         expect_true(serial$target_met)
-        expect_identical(serial$backend_used, "native_cpu_exact")
+        expect_match(serial$backend_used, "^faiss_flat_")
         expect_identical(serial$recall_status, "exact_by_construction")
     }
 })
 
 test_that("native CPU exact search handles zero normalized rows", {
     x <- rbind(c(0, 0), c(0, 0), c(1, 0), c(-1, 0))
-    observed <- native_exact_knn_cpp(x, 2L, 2L, "cosine", 0.99)
+    observed <- faissr_exact_knn_test(x, 2L, 2L, "cosine", 0.99)
 
     expect_identical(observed$indices[1L, 1L], 2L)
     expect_equal(observed$distances[1L, ], c(0, 1))
@@ -176,7 +190,7 @@ test_that(paste(
     expect_equal(knn_recall_test(observed, truth), 1)
     expect_identical(observed$backend_requested, "cpu")
     expect_identical(observed$execution_backend, "cpu")
-    expect_identical(observed$engine, "native_cpu_exact")
+    expect_identical(observed$engine, "faissr_cpu_flat")
     expect_identical(observed$result_residency, "host")
     expect_equal(observed$target_recall, 0.99)
     expect_true(observed$recall_audited)
@@ -221,7 +235,7 @@ test_that("native exact KNN agrees across numeric input storage", {
     skip_if_not_installed("float")
     set.seed(47)
     integers <- matrix(sample.int(255L, 40L * 12L, replace = TRUE), 40L)
-    reference <- native_exact_knn_cpp(
+    reference <- faissr_exact_knn_test(
         integers, 7L, 1L, "euclidean", 0.99
     )
     inputs <- list(
@@ -229,7 +243,7 @@ test_that("native exact KNN agrees across numeric input storage", {
         float::fl(integers)
     )
     for (input in inputs) {
-        observed <- native_exact_knn_cpp(
+        observed <- faissr_exact_knn_test(
             input, 7L, 1L, "euclidean", 0.99
         )
         expect_identical(observed$indices, reference$indices)
@@ -300,8 +314,8 @@ test_that("native CPU HNSW supports query-to-reference search", {
     expect_equal(public$target_recall, 0.99)
     expect_true(public$recall_audited)
     expect_true(public$target_met)
-    expect_identical(public$method, "native_exact_query")
-    expect_identical(public$engine, "native_cpu_exact")
+    expect_identical(public$method, "faissr_flat_query")
+    expect_identical(public$engine, "faissr_cpu_flat")
     expect_identical(public$tuning_policy, "exact_below_5000")
     expect_equal(knn_recall_test(public, truth), 1)
 })
@@ -311,13 +325,13 @@ test_that("native CPU exact query search matches an exhaustive reference", {
     reference <- matrix(rnorm(120 * 8), nrow = 120)
     query <- matrix(rnorm(30 * 8), nrow = 30)
     truth <- test_exact_knn(reference, query, k = 7L)
-    observed <- native_exact_query_cpp(
+    observed <- faissr_exact_query_test(
         reference, query, 7L, 3L, "euclidean", 0.99
     )
 
     expect_identical(observed$indices, truth$indices)
     expect_equal(observed$distances, truth$distances, tolerance = 1e-5)
-    expect_identical(observed$method, "native_exact_query")
+    expect_identical(observed$method, "faissr_flat_query")
     expect_true(observed$exact_recall_by_construction)
 })
 

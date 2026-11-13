@@ -88,7 +88,7 @@ source, reference, neighbor count, and backend must match.}
 \item{seed}{Random seed.}
 
 \item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. CPU KNN
-uses native exact search below 5,000 rows, compiled FAISS HNSW for larger
+uses faissR Flat exact search below 5,000 rows, FAISS HNSW for larger
 Euclidean searches, and native HNSW for other supported metrics.
 Metal KNN uses faissR's native exact or IVF-Flat route. CUDA matrix KNN
 uses faissR FAISS GPU Flat below 100,000 rows or IVF-Flat above that

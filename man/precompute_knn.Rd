@@ -65,7 +65,7 @@ by fastEmbedR for the requested backend and is deliberately not a user
 parameter.
 }
 \details{
-CPU uses native exhaustive float32 search below 5,000 observations and
+CPU uses faissR Flat exact search below 5,000 observations and
 faissR's compiled FAISS HNSW interface for Euclidean distance otherwise.
 Cosine and correlation retain native HNSW. HNSW targets recall 0.99; its
 recall is not audited during each call. Metal uses native exact search below

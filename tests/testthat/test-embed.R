@@ -343,7 +343,7 @@ test_that("float32 finiteness validation avoids coercion", {
     expect_s4_class(prepare_embedding_data(x, FALSE, NULL, 1L)$data, "float32")
 })
 
-test_that("float32 KNN bridge uses native exact search below 5000 rows", {
+test_that("float32 KNN bridge uses faissR Flat below 5000 rows", {
     skip_if_not_installed("float")
     set.seed(44)
     x <- float::fl(matrix(rnorm(40L), 10L, 4L))
@@ -359,7 +359,7 @@ test_that("float32 KNN bridge uses native exact search below 5000 rows", {
     expect_equal(dim(out$indices), c(10L, 3L))
     expect_s4_class(out$distances, "float32")
     expect_identical(attr(out, "backend"), "cpu")
-    expect_identical(attr(out, "method"), "native_exact")
+    expect_identical(attr(out, "method"), "faissr_flat")
 })
 
 test_that("one-call KNN policy selects native CPU and Metal defaults", {
@@ -403,7 +403,7 @@ test_that("one-call KNN policy selects native CPU and Metal defaults", {
     )
 })
 
-test_that("CPU matrix input uses native exact and FAISS HNSW search", {
+test_that("CPU matrix input uses faissR Flat and HNSW search", {
     set.seed(45)
     x <- matrix(rnorm(40L), 10L, 4L)
     out <- fastEmbedR:::fastembedr_nn_without_self(
@@ -423,7 +423,7 @@ test_that("CPU matrix input uses native exact and FAISS HNSW search", {
         x,
         k = 2L, backend = "cpu", method = "exact"
     )
-    expect_identical(attr(exact, "method"), "native_exact")
+    expect_identical(attr(exact, "method"), "faissr_flat")
     expect_true(exact$exact_recall_by_construction)
 })
 

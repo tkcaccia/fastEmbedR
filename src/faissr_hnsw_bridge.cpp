@@ -118,3 +118,27 @@ Rcpp::List faissr_hnsw_index_search_cpp(SEXP index, SEXP query,
   result["method"] = "faissr_hnsw_query_reused";
   return result;
 }
+
+// [[Rcpp::export]]
+SEXP faissr_flat_index_build_cpp(SEXP data, int n_threads) {
+  Rcpp::Function load_namespace =
+      Rcpp::Environment::base_env()["loadNamespace"];
+  load_namespace("faissR");
+  if (faissR_c_api_version() != 1) {
+    Rcpp::stop("Unsupported faissR C API version");
+  }
+  return faissR_get_flat_index_build_v1()(data, Rcpp::wrap(n_threads));
+}
+
+// [[Rcpp::export]]
+Rcpp::List faissr_flat_index_search_cpp(SEXP index, SEXP query,
+                                         int k, int n_threads) {
+  if (faissR_c_api_version() != 1) {
+    Rcpp::stop("Unsupported faissR C API version");
+  }
+  Rcpp::List result = faissR_get_flat_index_search_v1()(
+      index, query, Rcpp::wrap(k), Rcpp::wrap(n_threads));
+  result["backend"] = "cpu";
+  result["method"] = "faissr_flat_query_reused";
+  return result;
+}

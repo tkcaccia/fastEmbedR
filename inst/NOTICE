@@ -61,19 +61,16 @@ Adapted or vendored source
    License: MIT
    Copyright: Stefano Cacciatore
    Package files: src/native_knn_cuda_impl.cpp,
-                  src/native_knn_hnsw_tuning.h,
-                  src/native_knn_exact.cpp
+                  src/native_knn_hnsw_tuning.h
    Upstream files: src/nn_cuvs_impl.cpp, src/nn_cuda_impl.cpp,
                    src/nn_cuda_kernels.cpp, src/nn_auto_select.cpp,
                    src/nn_faiss_impl.cpp, src/nn_faiss_bridge.cpp,
                    benchmark_scripts/
    Boundary: CUDA adapter, buffer-ownership, and tuning organization was
              distilled into fastEmbedR. The CPU HNSW recall-0.99 selector
-             adapts only the metric/shape/k parameter policy. Exhaustive CPU
-             search adapts exact-route preprocessing, distance, and metadata
-             behavior in package-owned C++. The faissR R package and FAISS
-             library are not imported, linked, or called by fastEmbedR
-             production code.
+             adapts only the metric/shape/k parameter policy. CPU Flat,
+             Euclidean HNSW, Metal, and multi-GPU FAISS KNN call the
+             installed faissR package through its private compiled interface.
    License copy: LICENSES/FAISSR-LICENSE
 
 4. DLPack 1.0

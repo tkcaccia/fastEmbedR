@@ -23,22 +23,6 @@ Rcpp::List native_hnsw_index_search_impl(SEXP pointer,
                                          int k,
                                          int n_threads,
                                          int ef_search);
-Rcpp::List native_exact_knn_impl(SEXP data,
-                                 int k,
-                                 int n_threads,
-                                 const std::string& metric,
-                                 double target_recall);
-Rcpp::List native_exact_query_impl(SEXP data,
-                                   SEXP query,
-                                   int k,
-                                   int n_threads,
-                                   const std::string& metric,
-                                   double target_recall);
-SEXP native_exact_index_build_impl(SEXP data);
-Rcpp::List native_exact_index_search_impl(SEXP pointer,
-                                          SEXP query,
-                                          int k,
-                                          int n_threads);
 bool native_cuda_knn_available_impl();
 Rcpp::List native_cuda_memory_info_impl();
 Rcpp::List native_cuda_knn_impl(SEXP data,
@@ -105,42 +89,6 @@ Rcpp::List native_hnsw_index_search_cpp(SEXP pointer,
   return native_hnsw_index_search_impl(
     pointer, query, k, n_threads, ef_search
   );
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_exact_knn_cpp(SEXP data,
-                                int k,
-                                int n_threads = 1,
-                                std::string metric = "euclidean",
-                                double target_recall = 0.99) {
-  return native_exact_knn_impl(
-    data, k, n_threads, metric, target_recall
-  );
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_exact_query_cpp(SEXP data,
-                                  SEXP query,
-                                  int k,
-                                  int n_threads = 1,
-                                  std::string metric = "euclidean",
-                                  double target_recall = 0.99) {
-  return native_exact_query_impl(
-    data, query, k, n_threads, metric, target_recall
-  );
-}
-
-// [[Rcpp::export]]
-SEXP native_exact_index_build_cpp(SEXP data) {
-  return native_exact_index_build_impl(data);
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_exact_index_search_cpp(SEXP pointer,
-                                         SEXP query,
-                                         int k,
-                                         int n_threads = 1) {
-  return native_exact_index_search_impl(pointer, query, k, n_threads);
 }
 
 // [[Rcpp::export]]

@@ -23,7 +23,7 @@ primary contributions are:
 - native CPU, Apple Metal, and CUDA embedding backends where available;
 - float32 input/output support with float32 native optimizer buffers;
 - explicit backend reporting, with no silent CPU fallback labelled as GPU;
-- native CPU exact and faissR HNSW KNN; faissR supplies Apple Metal
+- faissR CPU Flat and HNSW KNN; faissR supplies Apple Metal
   exact/IVF-Flat KNN for one-call embeddings;
 - optional GPU-resident exact/IVF-Flat CUDA KNN through RAPIDS cuVS.
 
@@ -86,16 +86,16 @@ UMAP graph starts a new fit; it does not resume an interrupted optimizer.
 
 For the one-call functions `tsne()` and `umap()`, the embedding backend is
 deliberately limited to `backend = "cpu"`, `"metal"`, or `"cuda"`. Internal
-CPU one-call embeddings use package-native exhaustive float32 search below
+CPU one-call embeddings use faissR Flat exact search below
 5,000 observations and HNSW otherwise. The HNSW route uses a metric-, shape-,
 and `k`-aware target-0.99 tuning policy. Metal uses native exact search below
 4,096 rows and for inputs up to 50,000 rows and 16,384 columns when the
 estimated search work is at most 125 billion row-pair feature operations.
 It uses recall-tuned IVF-Flat otherwise.
-CUDA uses cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat
-above that threshold, then passes package-owned device pointers into UMAP or
-t-SNE. It does not call another R package for KNN. No unavailable GPU backend
-is silently relabelled as CPU.
+One-call CUDA matrix KNN uses faissR FAISS GPU Flat below 100,000 rows and
+IVF-Flat above that threshold; its host neighbors feed UMAP or t-SNE.
+Resident `precompute_knn()` retains a separate device-resident cuVS route.
+No unavailable GPU backend is silently relabelled as CPU.
 
 ## Quick Start
 

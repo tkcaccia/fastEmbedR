@@ -26,12 +26,13 @@ test_that("persistent HNSW reaches every reference at full effort", {
     query <- matrix(rnorm(24L * 20L), ncol = 20L)
     index <- fastEmbedR:::native_hnsw_index_build_cpp(
         reference, 8L, n_threads = 2L)
-    exact <- fastEmbedR:::native_exact_index_build_cpp(reference)
+    exact <- fastEmbedR:::faissr_flat_index_build_cpp(
+        float::fl(reference), 2L)
     observed <- fastEmbedR:::native_hnsw_index_search_cpp(
         index$pointer, query, 8L, n_threads = 2L,
         ef_search = nrow(reference))
-    expected <- fastEmbedR:::native_exact_index_search_cpp(
-        exact, query, 8L, n_threads = 2L)
+    expected <- fastEmbedR:::faissr_flat_index_search_cpp(
+        exact, float::fl(query), 8L, n_threads = 2L)
     expect_true(observed$spanning_links)
     expect_identical(observed$indices, expected$indices)
     expect_equal(observed$distances, expected$distances,

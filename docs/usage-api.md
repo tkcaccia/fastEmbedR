@@ -111,7 +111,7 @@ and confidence for landmark clustering.
 
 The one-call functions and `precompute_knn()` intentionally hide the KNN
 algorithm choice. Their `backend` accepts only `"cpu"`, `"metal"`, or
-`"cuda"`. CPU KNN uses exhaustive exact search below 5,000 observations and
+`"cuda"`. CPU KNN uses faissR Flat exact search below 5,000 observations and
 compiled faissR HNSW for larger Euclidean searches, and native HNSW for
 larger cosine or correlation searches. Metal uses native exact/IVF-Flat;
 CUDA uses RAPIDS cuVS

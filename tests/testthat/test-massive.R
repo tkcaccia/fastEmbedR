@@ -2351,7 +2351,7 @@ test_that("sharded CUDA landmark KNN keeps reference off device", {
         method = "sharded_exact", chunk_rows = 4L,
         reference_chunk_rows = 7L, memory_limit = "256MB")
     observed <- read_massive_knn(graph)
-    expected <- fastEmbedR:::native_exact_query_cpp(reference,
+    expected <- test_exact_knn(reference,
         query, 3L, n_threads = 1L, metric = "euclidean")
     expect_equal(observed$indices, expected$indices)
     expect_equal(observed$distances, expected$distances,
@@ -2386,7 +2386,7 @@ test_that("sharded CUDA landmark KNN accepts 256 neighbors", {
         method = "sharded_exact", chunk_rows = 2L,
         reference_chunk_rows = 65L, memory_limit = "256MB")
     observed <- read_massive_knn(graph)
-    expected <- fastEmbedR:::native_exact_query_cpp(reference,
+    expected <- test_exact_knn(reference,
         query, 256L, n_threads = 1L, metric = "euclidean")
     expect_equal(observed$indices, expected$indices)
     expect_equal(observed$distances, expected$distances,
@@ -2552,7 +2552,7 @@ test_that("KNN resumes before the first output file was created", {
     graph <- massive_landmark_knn(source, landmarks, 3L, prefix,
         chunk_rows = 5L, memory_limit = "256MB",
         checkpoint = TRUE, resume = TRUE)
-    expected <- fastEmbedR:::native_exact_query_cpp(landmarks$data,
+    expected <- test_exact_knn(landmarks$data,
         source$data, 3L, 1L, "euclidean", 0.99)
     expect_equal(read_massive_knn(graph)$indices, expected$indices)
     expect_false(file.exists(paste0(prefix, ".checkpoint.rds")))
@@ -2594,7 +2594,7 @@ test_that("streamed exact landmark KNN retains every query row", {
     graph <- massive_landmark_knn(source, landmarks, 5L, prefix,
         chunk_rows = 11L, memory_limit = "256MB")
     observed <- read_massive_knn(graph)
-    expected <- fastEmbedR:::native_exact_query_cpp(
+    expected <- test_exact_knn(
         reference, query, 5L, 1L, "euclidean", 0.99)
     expect_identical(graph$method, "exact")
     expect_true(graph$index_reused)
@@ -2671,12 +2671,12 @@ test_that("exact landmark search can stream a nonresident reference", {
         file.path(directory, "streamed"), method = "stream_exact",
         chunk_rows = 7L, reference_chunk_rows = 9L,
         n.cores = 2L, memory_limit = "256MB")
-    native <- fastEmbedR:::massive_knn_reference(
+    faissr <- fastEmbedR:::massive_knn_reference(
         landmarks, 5L, "exact", 1L, "cpu")
-    first <- fastEmbedR:::massive_knn_batch(source, native,
+    first <- fastEmbedR:::massive_knn_batch(source, faissr,
         1L, 7L, 5L, "exact", 1L, "cpu")
     expect_identical(first$input_type, "float32")
-    expect_identical(resident$query_storage, "native_float32")
+    expect_identical(resident$query_storage, "R_float32")
     expect_identical(streamed$query_storage, "file_backed_float32")
     expect_identical(streamed$method, "stream_exact")
     expect_identical(streamed$reference_storage, "file_backed_float32")
@@ -2780,7 +2780,7 @@ test_that("persistent CUDA landmark search preserves exact neighbors", {
         prefix, backend = "cuda", method = "exact", chunk_rows = 7L,
         memory_limit = "256MB")
     observed <- read_massive_knn(graph)
-    expected <- fastEmbedR:::native_exact_query_cpp(
+    expected <- test_exact_knn(
         reference, query, 6L, 1L, "euclidean", 0.99)
     expect_identical(graph$backend, "cuda")
     expect_identical(graph$method, "exact")
@@ -2809,7 +2809,7 @@ test_that("persistent CUDA search reuses bounded query buffers", {
         rows <- batches[[i]]
         found <- fastEmbedR:::native_cuda_index_search_cpp(
             index, query[rows, , drop = FALSE], 5L)
-        expected <- fastEmbedR:::native_exact_query_cpp(
+        expected <- test_exact_knn(
             reference, query[rows, , drop = FALSE],
             5L, 1L, "euclidean", 0.99)
         expect_identical(found$backend, "native_cuda_cuvs_exact")
@@ -2884,7 +2884,7 @@ test_that("persistent CUDA IVF reports calibrated pilot recall", {
         prefix, backend = "cuda", method = "ivf",
         chunk_rows = 64L, memory_limit = "256MB")
     observed <- read_massive_knn(graph)
-    expected <- fastEmbedR:::native_exact_query_cpp(
+    expected <- test_exact_knn(
         reference, query, 10L, 1L, "euclidean", 0.99)
     recall <- mean(vapply(seq_len(nrow(query)), function(i) {
         length(intersect(observed$indices[i, ],
@@ -2947,16 +2947,16 @@ test_that("persistent CPU exact search reuses a float32 reference", {
         method = "exact", chunk_rows = 7L, n.cores = 2L,
         memory_limit = "256MB")
     observed <- read_massive_knn(graph)
-    expected <- fastEmbedR:::native_exact_query_cpp(
+    expected <- test_exact_knn(
         reference, query, 5L, 2L)
     expect_identical(observed$indices, expected$indices)
     expect_equal(observed$distances, expected$distances,
         tolerance = 1e-5)
     expect_true(graph$index_reused)
-    expect_identical(graph$reference_storage, "native_float32")
-    expect_identical(graph$query_storage, "native_float32")
-    expect_error(fastEmbedR:::native_exact_index_search_cpp(
-        new.env(), query, 5L), "persistent exact index")
+    expect_identical(graph$reference_storage, "R_float32")
+    expect_identical(graph$query_storage, "R_float32")
+    expect_error(fastEmbedR:::faissr_flat_index_search_cpp(
+        new.env(), float::fl(query), 5L, 1L))
 })
 
 test_that("persistent HNSW agrees across bounded query batches", {

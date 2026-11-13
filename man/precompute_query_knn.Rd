@@ -40,7 +40,7 @@ policy as \code{\link[=precompute_knn]{precompute_knn()}}, but does not compute 
 reference-to-reference or query-to-query neighbors.
 }
 \details{
-CPU uses exhaustive reference-query search when the reference has fewer than
+CPU uses faissR Flat search when the reference has fewer than
 5,000 rows and faissR's compiled FAISS HNSW interface for Euclidean
 distance otherwise. Cosine and correlation retain native HNSW. HNSW
 targets recall 0.99 but does not claim a per-call recall audit. Metal

@@ -535,9 +535,9 @@ landmark_projection_knn <- function(x_landmarks,
         keep_gpu = identical(policy$backend, "cuda")
     )
     attr(result, "approximation") <- list(
-        strategy = paste0(
-            "native_", policy$method, "_reference_query_knn"
-        ),
+        strategy = paste0(if (policy$backend == "cpu" &&
+            policy$method == "exact") "faissr_" else "native_",
+            policy$method, "_reference_query_knn"),
         backend = policy$backend,
         target_recall = policy$target_recall,
         seed = as.integer(seed)

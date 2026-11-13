@@ -16,7 +16,7 @@ interpolation-based t-SNE. UMAP follows the fuzzy simplicial-set graph formulati
 introduced by McInnes and colleagues [7,13]. The t-SNE path follows the
 probabilistic neighbor-embedding objective of van der Maaten and Hinton [1],
 with modern interpolation-based optimization ideas from FIt-SNE and openTSNE [3-4].
-The package is intentionally KNN-first. CPU one-call KNN uses native exact
+The package is intentionally KNN-first. CPU one-call KNN uses faissR Flat
 search or faissR HNSW. Metal exact/IVF-Flat KNN runs in faissR. One-call
 CUDA matrix KNN uses faissR's FAISS GPU route; selected other CUDA routes
 use the Apache-2.0 RAPIDS cuVS C API. Embedding does not call Python or
@@ -155,13 +155,13 @@ recall target applies to the pilot mean; it does not certify every row.
 For reproducibility, the one-call API fixes only the requested KNN device class
 and a small/large data policy:
 
-- CPU one-call embeddings use native exact KNN below 5,000 observations and
+- CPU one-call embeddings use faissR Flat KNN below 5,000 observations and
   faissR HNSW otherwise. Metal uses native exact KNN below 4,096 observations,
   or up to 50,000 rows and 16,384 columns when the exhaustive work is
   at most 125 billion row-pair feature operations. It uses recall-tuned
   IVF-Flat otherwise.
-- CUDA one-call embeddings use cuVS brute force below 100,000 samples and
-  recall-tuned cuVS IVF-Flat at or above 100,000 samples. Input is converted
+- CUDA one-call embeddings use faissR FAISS GPU Flat below 100,000 samples
+  and IVF-Flat at or above 100,000 samples. Input is converted
   once to the row-major float32 layout expected by cuVS. IVF starts from a
   deterministic shape rule, compares evenly spaced pilot queries against a
   cuVS exact oracle, and expands `nprobe` until it reaches the requested recall

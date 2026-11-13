@@ -317,6 +317,14 @@ faissr_hnsw_index_search_cpp <- function(index, query, k, ef_search, n_threads) 
     .Call(`_fastEmbedR_faissr_hnsw_index_search_cpp`, index, query, k, ef_search, n_threads)
 }
 
+faissr_flat_index_build_cpp <- function(data, n_threads) {
+    .Call(`_fastEmbedR_faissr_flat_index_build_cpp`, data, n_threads)
+}
+
+faissr_flat_index_search_cpp <- function(index, query, k, n_threads) {
+    .Call(`_fastEmbedR_faissr_flat_index_search_cpp`, index, query, k, n_threads)
+}
+
 knn_connectivity_range_cpp <- function(indices, col_start, n_cols) {
     .Call(`_fastEmbedR_knn_connectivity_range_cpp`, indices, col_start, n_cols)
 }
@@ -723,22 +731,6 @@ native_hnsw_index_build_cpp <- function(data, k, n_threads = 1L, metric = "eucli
 
 native_hnsw_index_search_cpp <- function(pointer, query, k, n_threads = 1L, ef_search = 0L) {
     .Call(`_fastEmbedR_native_hnsw_index_search_cpp`, pointer, query, k, n_threads, ef_search)
-}
-
-native_exact_knn_cpp <- function(data, k, n_threads = 1L, metric = "euclidean", target_recall = 0.99) {
-    .Call(`_fastEmbedR_native_exact_knn_cpp`, data, k, n_threads, metric, target_recall)
-}
-
-native_exact_query_cpp <- function(data, query, k, n_threads = 1L, metric = "euclidean", target_recall = 0.99) {
-    .Call(`_fastEmbedR_native_exact_query_cpp`, data, query, k, n_threads, metric, target_recall)
-}
-
-native_exact_index_build_cpp <- function(data) {
-    .Call(`_fastEmbedR_native_exact_index_build_cpp`, data)
-}
-
-native_exact_index_search_cpp <- function(pointer, query, k, n_threads = 1L) {
-    .Call(`_fastEmbedR_native_exact_index_search_cpp`, pointer, query, k, n_threads)
 }
 
 native_cuda_knn_available_cpp <- function() {
