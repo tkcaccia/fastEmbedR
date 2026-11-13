@@ -121,7 +121,7 @@ massive_embedding_request <- function(data, landmarks, backend,
         "float32 reference fitting.", call. = FALSE)
     if (backend == "cuda" &&
         (!isTRUE(embedding_cuda_available_cpp()) ||
-            !isTRUE(native_cuda_knn_available_cpp()))) {
+            !isTRUE(faissR::faiss_gpu_available()))) {
         stop("EXPERIMENTAL CUDA landmark mode is unavailable; ",
             "no CPU fallback was used.", call. = FALSE)
     }

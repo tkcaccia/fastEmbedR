@@ -72,3 +72,33 @@ test_that("single-device IVF returns distances for its selected IDs", {
     expect_false(found$recall_audited)
     expect_true(found$nlist > 0L && found$nprobe > 0L)
 })
+
+test_that("CUDA landmark embeddings run with faissR and no cuVS", {
+    skip_if_not_installed("float")
+    skip_if_not(faissR::faiss_gpu_available())
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    skip_if(fastEmbedR:::native_cuda_knn_available_cpp())
+    set.seed(1149)
+    data <- matrix(rnorm(57L * 4L), ncol = 4L)
+    directory <- tempfile()
+    dir.create(directory)
+    on.exit(unlink(directory, recursive = TRUE))
+    input <- file.path(directory, "data.f32")
+    writeBin(as.vector(t(data)), input, size = 4L, endian = "little")
+    source <- massive_matrix(input, 57L, 4L)
+    embedding <- umap(source, massive = "landmark", landmarks = 20L,
+        output = file.path(directory, "umap.f32"), backend = "cuda",
+        n_neighbors = 5L, transform_k = 5L, chunk_rows = 9L,
+        memory_limit = "512MB")
+    expect_identical(embedding$graph$knn_provider, "faissR")
+    expect_identical(embedding$backend, "cuda")
+    expect_true(all(is.finite(as.matrix(embedding$layout))))
+    transformed <- tsne(source, massive = "landmark", landmarks = 20L,
+        output = file.path(directory, "tsne.f32"), backend = "cuda",
+        perplexity = 3, early_exaggeration_iter = 3L, n_iter = 3L,
+        transform_perplexity = 3, transform_iter = 3L,
+        chunk_rows = 9L, memory_limit = "512MB")
+    expect_identical(transformed$graph$knn_provider, "faissR")
+    expect_identical(transformed$backend, "cuda")
+    expect_true(all(is.finite(as.matrix(transformed$layout))))
+})
