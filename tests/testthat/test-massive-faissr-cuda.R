@@ -141,6 +141,39 @@ test_that("sharded CUDA IVF reports faissR settings and valid rows", {
         logical(1L))))
 })
 
+test_that("full-graph exact CUDA KNN uses faissR and excludes self", {
+    skip_if_not_installed("float")
+    skip_if_not(faissR::faiss_gpu_available())
+    skip_if(fastEmbedR:::native_cuda_knn_available_cpp())
+    set.seed(1151)
+    data <- matrix(rnorm(43L * 5L), ncol = 5L)
+    directory <- tempfile()
+    dir.create(directory)
+    on.exit(unlink(directory, recursive = TRUE))
+    path <- file.path(directory, "data.f32")
+    writeBin(as.vector(t(data)), path, size = 4L, endian = "little")
+    graph <- massive_full_knn_graph(
+        massive_matrix(path, 43L, 5L), k = 5L,
+        output = file.path(directory, "graph"), backend = "cuda",
+        method = "exact", chunk_rows = 9L,
+        reference_chunk_rows = 11L, memory_limit = "256MB",
+        audit_rows = 5L
+    )
+    expect_identical(graph$method, "faiss_gpu_flat_sharded")
+    expect_identical(graph$knn_provider, "faissR")
+    expect_identical(graph$query_storage, "R_float32")
+    expect_true(graph$exact)
+    expect_true(graph$recall_audited)
+    expect_equal(graph$observed_recall, 1)
+    distance <- as.matrix(stats::dist(data))
+    diag(distance) <- Inf
+    for (row in seq_len(nrow(data))) {
+        edges <- fastEmbedR:::massive_read_graph_edges(graph, row, 1L)
+        expected <- order(distance[row, ])[seq_len(5L)]
+        expect_equal(edges$to, expected)
+    }
+})
+
 test_that("CUDA landmark embeddings run with faissR and no cuVS", {
     skip_if_not_installed("float")
     skip_if_not(faissR::faiss_gpu_available())

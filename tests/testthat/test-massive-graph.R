@@ -670,7 +670,8 @@ test_that("streamed full exact KNN matches an independent distance matrix", {
         memory_limit = "256MB")
     expect_equal(massive_read_graph_edges(fbin_graph, 1, nrow(x)),
         observed)
-    if (!fastEmbedR:::native_cuda_knn_available_cpp()) {
+    if (!faissR::faiss_gpu_available() &&
+        !fastEmbedR:::native_cuda_knn_available_cpp()) {
         expect_error(massive_full_knn_graph(source, 3L, tempfile(),
             backend = "cuda"), "no CPU fallback")
     }
@@ -980,7 +981,7 @@ test_that("sharded checkpoint interval replays pending query blocks", {
 })
 
 test_that("sharded CUDA exact KNN matches the streamed CPU graph", {
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+    skip_if_not(faissR::faiss_gpu_available())
     set.seed(1603)
     x <- matrix(stats::rnorm(41L * 6L), ncol = 6L)
     source_path <- write_massive_matrix_fixture(x)
@@ -1002,9 +1003,9 @@ test_that("sharded CUDA exact KNN matches the streamed CPU graph", {
         backend = "cuda", chunk_rows = 7L,
         reference_chunk_rows = 13L, memory_limit = "512MB")
     expect_identical(gpu$backend, "cuda")
-    expect_identical(gpu$method,
-        "native_cuda_cuvs_exact_sharded")
-    expect_identical(gpu$query_storage, "native_float32")
+    expect_identical(gpu$method, "faiss_gpu_flat_sharded")
+    expect_identical(gpu$query_storage, "R_float32")
+    expect_identical(gpu$knn_provider, "faissR")
     expect_true(gpu$exact)
     expect_gt(gpu$resources$n_shards, 1L)
     expect_gt(gpu$resources$peak_vram_bytes, 0)
@@ -1020,7 +1021,8 @@ test_that("sharded CUDA exact KNN matches the streamed CPU graph", {
     parts <- stats::setNames(paste0(unname(paths), ".part"),
         names(paths))
     setup <- list(k = 5L, workers = 1L, resources = resources,
-        method = "exact", checkpoint_every = 2L)
+        method = "exact", checkpoint_every = 2L,
+        cuda_provider = "faissR")
     saved <- fastEmbedR:::massive_sharded_checkpoint(source,
         setup, paths, "cuda", FALSE)
     fastEmbedR:::massive_index_shard(source, setup, parts, 0L,
@@ -3132,16 +3134,24 @@ test_that("CUDA streams fuzzy UMAP edges without CPU fallback", {
     expect_gt(max(abs(layout - start)), 1e-4)
     expect_gt(fitted$updates$edge_visits, graph$n_edges)
     expect_equal(file.info(output)$size, n * 2L * 4L)
-    explicit <- massive_umap_optimize(graph, init, explicit_path,
-        n_epochs = 30L, negative_sample_rate = 2L,
-        learning_rate = 0.05, chunk_rows = 3L,
-        memory_limit = "256MB", backend = "cuda", devices = 0L)
-    expect_identical(explicit$optimizer, "synchronized_cuda_nccl")
-    expect_identical(explicit$gpu_devices, 0L)
-    expect_equal(explicit$resources$layout_replication_bytes, 0)
-    expect_gt(explicit$resources$per_device_edge_visits[1L], 0)
-    expect_true(all(is.finite(massive_read_rows(explicit,
-        1L, n))))
+    if (fastEmbedR:::massive_nccl_available_cpp()) {
+        explicit <- massive_umap_optimize(graph, init, explicit_path,
+            n_epochs = 30L, negative_sample_rate = 2L,
+            learning_rate = 0.05, chunk_rows = 3L,
+            memory_limit = "256MB", backend = "cuda", devices = 0L)
+        expect_identical(explicit$optimizer, "synchronized_cuda_nccl")
+        expect_identical(explicit$gpu_devices, 0L)
+        expect_equal(explicit$resources$layout_replication_bytes, 0)
+        expect_gt(explicit$resources$per_device_edge_visits[1L], 0)
+        expect_true(all(is.finite(massive_read_rows(explicit,
+            1L, n))))
+    } else {
+        expect_error(massive_umap_optimize(graph, init, explicit_path,
+            n_epochs = 30L, negative_sample_rate = 2L,
+            learning_rate = 0.05, chunk_rows = 3L,
+            memory_limit = "256MB", backend = "cuda", devices = 0L),
+            "NCCL-enabled build")
+    }
     edges <- massive_read_graph_edges(graph, 1L, n)
     periods <- max(edges$weight) / pmax(edges$weight, 1e-6)
     reference <- fastEmbedR:::umap_cuda_optimize_coo_cpp(

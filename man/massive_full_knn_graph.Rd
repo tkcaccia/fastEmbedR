@@ -107,7 +107,7 @@ passes can be I/O-heavy.
 Checkpointed HNSW builds each shard with one thread for reproducible
 resume; queries still use \code{n.cores} threads. Each shard records the
 effective build thread count in \code{hnsw_settings}.
-CUDA \code{method = "exact"} builds and queries bounded cuVS reference shards.
+CUDA \code{method = "exact"} builds and queries bounded faissR GPU Flat shards.
 It also scans the full query source per shard, so this exact route is a
 correctness baseline rather than a billion-row ANN solution. A CUDA
 \code{method = "ivf_sharded"} uses the existing native cuVS IVF-Flat index

@@ -84,7 +84,7 @@ landmark counts. CPU exact and persistent faissR HNSW, and CUDA exact
 or IVF-Flat search retain references across query batches. Metal exact
 search retains a host float32 reference but reuploads it each batch.
 CUDA needs faissR FAISS GPU support for the single-device landmark route.
-Sharded landmark CUDA search also uses faissR. Full-graph CUDA KNN still
+Sharded landmark CUDA search also uses faissR. Full-graph CUDA IVF still
 needs native cuVS. faissR IVF uses a heuristic
 setting until a separate exact-reference recall audit is run;
 native IVF-Flat calibrates on the first query batch;
