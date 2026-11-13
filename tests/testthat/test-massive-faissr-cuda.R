@@ -175,6 +175,36 @@ test_that("faissR resident CUDA KNN feeds both optimizers", {
     expect_true(all(is.finite(tsne_fit)))
 })
 
+test_that("faissR owns retained CUDA features for t-SNE PCA init", {
+    skip_if_not(faissR::faiss_gpu_available())
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    skip_if(fastEmbedR:::native_cuda_knn_available_cpp())
+    set.seed(2240)
+    data <- matrix(rnorm(43L * 5L), ncol = 5L)
+    knn <- fastEmbedR:::fastembedr_nn_without_self(
+        data, 5L, "cuda", "exact", "euclidean",
+        keep_gpu = TRUE, retain_data = TRUE
+    )
+    expect_s3_class(knn, "faissR_gpu_knn")
+    expect_identical(knn$data_residency, "cuda_device")
+    expect_identical(knn$data_layout,
+        "row_major_observation_by_feature")
+    expect_true(knn$pca_data_compatible)
+    expect_identical(knn$n_features, 5L)
+    expect_type(knn$data_ptr, "externalptr")
+    expect_error(
+        fastEmbedR:::faissr_gpu_knn_retain_data_cpp(knn, data),
+        "already retains data"
+    )
+    fit <- fastEmbedR:::tsne_knn(
+        knn, backend = "cuda", init_data = data,
+        perplexity = 1.5, n_neighbors = 5L,
+        early_exaggeration_iter = 3L, n_iter = 3L
+    )
+    expect_equal(dim(fit), c(43L, 2L))
+    expect_true(all(is.finite(fit)))
+})
+
 test_that("CUDA reference queries use faissR host and device results", {
     skip_if_not(faissR::faiss_gpu_available())
     set.seed(2241)
@@ -207,7 +237,7 @@ test_that("resident faissR IVF is checked against exact pilot rows", {
     result <- fastEmbedR:::fastembedr_nn_without_self(
         data, 5L, backend = "cuda", method = "ivf",
         metric = "euclidean", target_recall = 0.99,
-        keep_gpu = TRUE
+        keep_gpu = TRUE, retain_data = TRUE
     )
     expect_s3_class(result, "faissR_gpu_knn")
     expect_identical(result$result_residency, "cuda")
@@ -215,6 +245,8 @@ test_that("resident faissR IVF is checked against exact pilot rows", {
     expect_true(isTRUE(result$recall_audited))
     expect_gte(result$pilot_recall, 0.99)
     expect_length(result$pilot_rows, 256L)
+    expect_identical(result$data_residency, "cuda_device")
+    expect_true(result$pca_data_compatible)
     weak <- fastEmbedR:::faissr_gpu_multi_knn_cpp(
         data, 5L, "ivf", 0L, 240L, 1L, FALSE, "gpu"
     )

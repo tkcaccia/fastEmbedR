@@ -590,12 +590,15 @@ run_native_cuda_knn <- function(data, k, method, metric, output,
     }
     exact <- method %in% c("exact", "flat", "bruteforce") ||
         (method == "auto" && nrow(data) < 100000L)
-    if (isTRUE(keep_gpu) && !isTRUE(retain_data)) {
-        if (exact) return(run_faissr_cuda_resident_exact(
-            data, k, metric, target_recall))
+    if (isTRUE(keep_gpu)) {
+        if (exact && (!isTRUE(retain_data) ||
+            identical(metric, "euclidean"))) {
+            return(run_faissr_cuda_resident_exact(
+                data, k, metric, target_recall, retain_data))
+        }
         if (identical(metric, "euclidean")) {
             return(run_faissr_cuda_resident_ivf(
-                data, k, target_recall))
+                data, k, target_recall, retain_data))
         }
     }
     if (!isTRUE(native_cuda_knn_available_cpp())) {
@@ -616,7 +619,8 @@ run_native_cuda_knn <- function(data, k, method, metric, output,
 }
 
 run_faissr_cuda_resident_exact <- function(data, k, metric,
-                                            target_recall) {
+                                            target_recall,
+                                            retain_data = FALSE) {
     if (!isTRUE(faissR::faiss_gpu_available())) stop(
         "faissR CUDA KNN is unavailable; no fallback was used.",
         call. = FALSE)
@@ -631,6 +635,9 @@ run_faissr_cuda_resident_exact <- function(data, k, metric,
         isTRUE(out$cpu_fallback)) stop(
         "faissR did not return exact resident CUDA KNN.",
         call. = FALSE)
+    if (isTRUE(retain_data)) {
+        out <- faissr_gpu_knn_retain_data_cpp(out, data)
+    }
     out
 }
 
@@ -673,7 +680,8 @@ fastembedr_audit_resident_ivf <- function(data, knn, k, target_recall) {
     )
 }
 
-run_faissr_cuda_resident_ivf <- function(data, k, target_recall) {
+run_faissr_cuda_resident_ivf <- function(data, k, target_recall,
+                                            retain_data = FALSE) {
     if (!isTRUE(faissR::faiss_gpu_available())) stop(
         "faissR CUDA KNN is unavailable; no fallback was used.",
         call. = FALSE)
@@ -704,6 +712,9 @@ run_faissr_cuda_resident_ivf <- function(data, k, target_recall) {
     out$recall_audited <- TRUE
     out$recall_status <- "fixed_rows_exact_reference"
     out$target_met <- TRUE
+    if (isTRUE(retain_data)) {
+        out <- faissr_gpu_knn_retain_data_cpp(out, data)
+    }
     out
 }
 

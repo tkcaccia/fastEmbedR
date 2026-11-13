@@ -305,6 +305,10 @@ faissr_gpu_knn_sample_cpp <- function(result, rows) {
     .Call(`_fastEmbedR_faissr_gpu_knn_sample_cpp`, result, rows)
 }
 
+faissr_gpu_knn_retain_data_cpp <- function(result, data) {
+    .Call(`_fastEmbedR_faissr_gpu_knn_retain_data_cpp`, result, data)
+}
+
 faissr_cuda_resident_knn_cpp <- function(data, k, method, metric, target_recall) {
     .Call(`_fastEmbedR_faissr_cuda_resident_knn_cpp`, data, k, method, metric, target_recall)
 }
