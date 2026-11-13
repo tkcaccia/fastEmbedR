@@ -451,26 +451,31 @@ summarize_tsne_gpu_knn <- function(knn, n, n_neighbors) {
 
 compute_tsne_matrix_knn <- function(
     x, nn, n, n_neighbors, backend, metric, n_threads, keep_knn,
-    retain_cuda_data
+    retain_cuda_data, devices = NULL
 ) {
     engine <- "supplied"
     if (is.null(nn)) {
         policy <- fastembedr_embedding_nn_policy(
             backend, n = n, p = ncol(x))
-        engine <- fastembedr_nn_policy_engine(
-            policy, keep_gpu = policy$backend == "cuda",
-            metric = metric
-        )
-        nn <- fastembedr_nn_without_self(
-            x,
-            k = n_neighbors, backend = policy$backend,
-            method = policy$method, metric = metric,
-            output = fastembedr_knn_output_type(x, policy$backend),
-            n_threads = n_threads, tuning = policy$tuning,
-            target_recall = policy$target_recall,
-            keep_gpu = policy$backend == "cuda",
-            retain_data = isTRUE(retain_cuda_data)
-        )
+        if (identical(policy$backend, "cuda")) {
+            nn <- run_faissr_cuda_embedding_knn(
+                x, n_neighbors, policy$method, metric,
+                fastembedr_knn_output_type(x, policy$backend),
+                policy$target_recall, devices
+            )
+            engine <- nn$backend_used
+        } else {
+            engine <- fastembedr_nn_policy_engine(
+                policy, keep_gpu = FALSE, metric = metric
+            )
+            nn <- fastembedr_nn_without_self(
+                x, k = n_neighbors, backend = policy$backend,
+                method = policy$method, metric = metric,
+                output = fastembedr_knn_output_type(x, policy$backend),
+                n_threads = n_threads, tuning = policy$tuning,
+                target_recall = policy$target_recall
+            )
+        }
     }
     if (fastembedr_is_gpu_knn(nn)) {
         nn <- fastembedr_as_gpu_knn(nn)
@@ -480,7 +485,9 @@ compute_tsne_matrix_knn <- function(
             nn, n, n_neighbors,
             keep_self = keep_knn
         )
-        result$nn_backend <- attr(nn, "backend") %||% "supplied"
+        backend_used <- if (is.list(nn)) nn$backend_used else NULL
+        result$nn_backend <- backend_used %||%
+            attr(nn, "backend") %||% "supplied"
     }
     list(result = result, input = nn, engine = engine)
 }
@@ -648,7 +655,8 @@ run_matrix_input_tsne <- function(data, nn, settings, extra, input_float) {
         is.null(settings$init_data)
     knn <- timed_do_call(compute_tsne_matrix_knn, list(
         x, nn, nrow(x), policy$n_neighbors, settings$backend, metric,
-        settings$n_threads, settings$keep_knn, retain_cuda_data
+        settings$n_threads, settings$keep_knn, retain_cuda_data,
+        settings$devices
     ))
     init <- timed_do_call(prepare_tsne_matrix_init, list(
         x, knn$value$input, settings, nrow(x)
@@ -754,10 +762,10 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. CPU KNN
 #'   uses native exact search below 5,000 rows, compiled FAISS HNSW for larger
 #'   Euclidean searches, and native HNSW for other supported metrics.
-#'   Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
-#'   cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
-#'   that threshold. Single-GPU device pointers pass directly to the native
-#'   CUDA optimizer; coordinated fits materialize KNN in host RAM.
+#'   Metal KNN uses faissR's native exact or IVF-Flat route. CUDA matrix KNN
+#'   uses faissR FAISS GPU Flat below 100,000 rows or IVF-Flat above that
+#'   threshold. Neighbor results are materialized in host RAM before the
+#'   CUDA optimizer; multiple devices request FAISS GPU replicas.
 #'   Unsupported GPU requests fail clearly and are not relabelled CPU runs.
 #'   Above 5,000 rows, one-call file-backed Metal t-SNE prepares neighbors
 #'   with CPU HNSW; the returned pipeline records that stage separately.
@@ -844,8 +852,10 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #'   One-call recovery requires a committed stage or native checkpoint;
 #'   an incomplete stage with no valid checkpoint fails closed.
 #' @param devices Optional CUDA device indices. In resident full-data mode,
-#'   multiple devices coordinate one 2D or 3D fit with host KNN
-#'   affinities and NCCL. The experimental file-backed full-graph route
+#'   one-call matrix KNN currently uses faissR on GPU 0 and returns host
+#'   neighbors. Multiple-device one-call fits use an experimental faissR
+#'   FAISS GPU replica KNN route with host results; its scaling needs audit.
+#'   The experimental file-backed full-graph route
 #'   also accepts multiple CUDA devices.
 #'   Resident landmark fits coordinate the reference optimizer across
 #'   devices and shard the fixed-reference query transform across them.

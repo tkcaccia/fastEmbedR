@@ -49,8 +49,12 @@ Use `backend = "metal"` on Apple Silicon or `backend = "cuda"` on a CUDA build.
 Explicit GPU requests fail clearly if the backend is unavailable.
 For matrix input, CPU uses exhaustive exact search below 5,000 observations
 and compiled faissR HNSW for larger Euclidean searches. Other supported
-CPU metrics use native HNSW. Metal uses native exact or recall-tuned IVF-Flat.
-CUDA uses package-native cuVS GPU-resident KNN. The default compact non-self
+CPU metrics use native HNSW. Metal uses faissR's native exact or IVF-Flat KNN.
+CUDA one-call embeddings use faissR's FAISS GPU Flat or IVF-Flat KNN and
+materialize its neighbor result in host memory. With multiple CUDA devices,
+the experimental FAISS replica route divides queries across those GPUs.
+Its recall and speed need a source-locked audit before performance claims.
+The default compact non-self
 affinity support is `ceiling(perplexity)`. The supplied KNN is trimmed to that
 width. Use `tsne_knn()` with a plain
 precomputed host KNN list when benchmarking another search implementation.

@@ -616,6 +616,34 @@ test_that("native CUDA KNN never silently falls back", {
     }
 })
 
+test_that("CUDA embedding KNN uses the faissR GPU provider", {
+    skip_if_not(isTRUE(faissR::faiss_gpu_available()))
+    set.seed(817)
+    x <- matrix(rnorm(200L * 16L), nrow = 200L)
+    truth <- exact_knn_reference(x, 8L)
+    for (method in c("exact", "ivf")) {
+        out <- fastEmbedR:::run_faissr_cuda_embedding_knn(
+            x, 8L, method, "euclidean", "float", 0.99
+        )
+        expect_identical(out$backend_used, "faiss_gpu_single_self")
+        expect_identical(out$multi_gpu_mode, "single")
+        expect_identical(out$result_residency, "host")
+        expect_identical(dim(out$indices), c(200L, 8L))
+        expect_false(any(out$indices == row(out$indices)))
+        expect_false(isTRUE(out$cpu_fallback))
+        if (method == "exact") {
+            expect_equal(knn_recall_test(out, truth), 1)
+        }
+    }
+    expect_error(
+        fastEmbedR:::run_faissr_cuda_embedding_knn(
+            x, 8L, "ivf", "euclidean", "float", 0.99,
+            devices = c(0L, 1L)
+        ),
+        "device"
+    )
+})
+
 test_that("precompute_knn CUDA output stays resident or fails explicitly", {
     set.seed(26)
     x <- matrix(rnorm(128 * 8), nrow = 128)

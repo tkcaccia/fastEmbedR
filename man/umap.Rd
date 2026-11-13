@@ -73,11 +73,10 @@ source, reference, neighbor count, and backend must match.}
 \item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. CPU KNN
 uses native exact search below 5,000 rows, compiled FAISS HNSW for larger
 Euclidean searches, and native HNSW for other supported metrics.
-Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
-cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
-that threshold. Resident CUDA KNN can stay on the device through
-graph construction and optimization; other routes record their
-actual backend by stage.
+Metal KNN uses faissR's native exact or IVF-Flat route. CUDA matrix KNN
+uses faissR FAISS GPU Flat below 100,000 rows or IVF-Flat above that
+threshold, then passes host neighbors to graph construction.
+Multiple devices request FAISS GPU replicas.
 A resident 2D Metal fit uses one CPU thread for the first half of the
 optimizer epochs, then a native Metal kernel for the remaining epochs.
 The stage counts are recorded in \code{fit$parameters}. Resident 3D Metal
@@ -151,9 +150,11 @@ refinement in massive landmark mode. Requires CPU and positive epochs.}
 at least \code{local_neighbors}.}
 
 \item{devices}{Optional CUDA device indices. In resident full-data mode,
-multiple devices coordinate one 2D or 3D fit with host-RAM graph
-construction. Native CUDA KNN is materialized in host RAM for this
-route. In experimental landmark mode, devices distribute query
+one-call matrix KNN currently uses faissR on GPU 0 and returns host
+neighbors. Multiple-device one-call fits use an experimental faissR
+FAISS GPU replica KNN route with host results; its scaling needs audit.
+In experimental landmark mode, devices
+distribute query
 projection while reference fitting and KNN use the first device.
 Resident landmark mode coordinates the reference fit and shards query
 projection across the selected devices. Query KNN is materialized in
@@ -212,7 +213,7 @@ bounded output rows without loading the full result.
 \description{
 \code{umap()} is a small convenience wrapper. If \code{data} is already a list of KNN
 \code{indices} and \code{distances}, it calls \code{\link[=umap_knn]{umap_knn()}} directly. Otherwise it
-preprocesses the data, computes KNN once with fastEmbedR's native backend,
+preprocesses the data, computes KNN once with the selected backend,
 and embeds from that KNN graph.
 }
 \details{

@@ -90,10 +90,10 @@ source, reference, neighbor count, and backend must match.}
 \item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. CPU KNN
 uses native exact search below 5,000 rows, compiled FAISS HNSW for larger
 Euclidean searches, and native HNSW for other supported metrics.
-Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
-cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
-that threshold. Single-GPU device pointers pass directly to the native
-CUDA optimizer; coordinated fits materialize KNN in host RAM.
+Metal KNN uses faissR's native exact or IVF-Flat route. CUDA matrix KNN
+uses faissR FAISS GPU Flat below 100,000 rows or IVF-Flat above that
+threshold. Neighbor results are materialized in host RAM before the
+CUDA optimizer; multiple devices request FAISS GPU replicas.
 Unsupported GPU requests fail clearly and are not relabelled CPU runs.
 Above 5,000 rows, one-call file-backed Metal t-SNE prepares neighbors
 with CPU HNSW; the returned pipeline records that stage separately.
@@ -189,8 +189,10 @@ file-backed input, uses \code{options(memory_limit = ...)}, or
 \code{"8GB"}.}
 
 \item{devices}{Optional CUDA device indices. In resident full-data mode,
-multiple devices coordinate one 2D or 3D fit with host KNN
-affinities and NCCL. The experimental file-backed full-graph route
+one-call matrix KNN currently uses faissR on GPU 0 and returns host
+neighbors. Multiple-device one-call fits use an experimental faissR
+FAISS GPU replica KNN route with host results; its scaling needs audit.
+The experimental file-backed full-graph route
 also accepts multiple CUDA devices.
 Resident landmark fits coordinate the reference optimizer across
 devices and shard the fixed-reference query transform across them.

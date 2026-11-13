@@ -297,6 +297,14 @@ faissr_hnsw_search_cpp <- function(data, query, n, p, k, target_recall, n_thread
     .Call(`_fastEmbedR_faissr_hnsw_search_cpp`, data, query, n, p, k, target_recall, n_threads, distance_storage)
 }
 
+faissr_gpu_multi_knn_cpp <- function(data, k, method, devices, nlist, nprobe, shard, output) {
+    .Call(`_fastEmbedR_faissr_gpu_multi_knn_cpp`, data, k, method, devices, nlist, nprobe, shard, output)
+}
+
+faissr_metal_knn_cpp <- function(data, k, method, metric, target_recall) {
+    .Call(`_fastEmbedR_faissr_metal_knn_cpp`, data, k, method, metric, target_recall)
+}
+
 faissr_hnsw_index_build_cpp <- function(data, n, p, k, n_threads, m = 0L, ef_construction = 0L) {
     .Call(`_fastEmbedR_faissr_hnsw_index_build_cpp`, data, n, p, k, n_threads, m, ef_construction)
 }

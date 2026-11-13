@@ -2,7 +2,7 @@
 #'
 #' `umap()` is a small convenience wrapper. If `data` is already a list of KNN
 #' `indices` and `distances`, it calls [umap_knn()] directly. Otherwise it
-#' preprocesses the data, computes KNN once with fastEmbedR's native backend,
+#' preprocesses the data, computes KNN once with the selected backend,
 #' and embeds from that KNN graph.
 #'
 #' @param data Numeric matrix/data frame, `float::float32` matrix,
@@ -30,11 +30,10 @@
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. CPU KNN
 #'   uses native exact search below 5,000 rows, compiled FAISS HNSW for larger
 #'   Euclidean searches, and native HNSW for other supported metrics.
-#'   Metal uses package-native exact or recall-tuned IVF-Flat search. CUDA uses
-#'   cuVS brute-force exact search below 100,000 rows and cuVS IVF-Flat above
-#'   that threshold. Resident CUDA KNN can stay on the device through
-#'   graph construction and optimization; other routes record their
-#'   actual backend by stage.
+#'   Metal KNN uses faissR's native exact or IVF-Flat route. CUDA matrix KNN
+#'   uses faissR FAISS GPU Flat below 100,000 rows or IVF-Flat above that
+#'   threshold, then passes host neighbors to graph construction.
+#'   Multiple devices request FAISS GPU replicas.
 #'   A resident 2D Metal fit uses one CPU thread for the first half of the
 #'   optimizer epochs, then a native Metal kernel for the remaining epochs.
 #'   The stage counts are recorded in `fit$parameters`. Resident 3D Metal
@@ -226,24 +225,34 @@ validate_umap_supplied_knn <- function(nn, backend, n, n_neighbors) {
     nn
 }
 
-compute_umap_matrix_knn <- function(x, nn, n_neighbors, metric, state) {
+compute_umap_matrix_knn <- function(x, nn, n_neighbors, metric, state,
+                                    devices = NULL) {
     engine <- "supplied"
     timed <- system.time({
         result <- if (is.null(nn)) {
             policy <- fastembedr_embedding_nn_policy(
                 state$backend, nrow(x), ncol(x))
-            keep_gpu <- identical(state$backend, "cuda")
-            engine <- fastembedr_nn_policy_engine(
-                policy, keep_gpu = keep_gpu, metric = metric
-            )
-            fastembedr_nn_without_self(
-                x,
-                k = as.integer(n_neighbors), backend = policy$backend,
-                method = policy$method, metric = metric,
-                output = fastembedr_knn_output_type(x, policy$backend),
-                n_threads = state$n_threads, tuning = policy$tuning,
-                target_recall = policy$target_recall, keep_gpu = keep_gpu
-            )
+            if (identical(policy$backend, "cuda")) {
+                result <- run_faissr_cuda_embedding_knn(
+                    x, as.integer(n_neighbors), policy$method, metric,
+                    fastembedr_knn_output_type(x, policy$backend),
+                    policy$target_recall, devices
+                )
+                engine <- result$backend_used
+                result
+            } else {
+                engine <- fastembedr_nn_policy_engine(
+                    policy, keep_gpu = FALSE, metric = metric
+                )
+                fastembedr_nn_without_self(
+                    x, k = as.integer(n_neighbors),
+                    backend = policy$backend, method = policy$method,
+                    metric = metric,
+                    output = fastembedr_knn_output_type(x, policy$backend),
+                    n_threads = state$n_threads, tuning = policy$tuning,
+                    target_recall = policy$target_recall
+                )
+            }
         } else {
             validate_umap_supplied_knn(nn, state$backend, nrow(x), n_neighbors)
         }
@@ -352,9 +361,11 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #'   `"synchronized"` enables deterministic multicore CPU updates for
 #'   full-graph UMAP. Other modes and backends reject this choice.
 #' @param devices Optional CUDA device indices. In resident full-data mode,
-#'   multiple devices coordinate one 2D or 3D fit with host-RAM graph
-#'   construction. Native CUDA KNN is materialized in host RAM for this
-#'   route. In experimental landmark mode, devices distribute query
+#'   one-call matrix KNN currently uses faissR on GPU 0 and returns host
+#'   neighbors. Multiple-device one-call fits use an experimental faissR
+#'   FAISS GPU replica KNN route with host results; its scaling needs audit.
+#'   In experimental landmark mode, devices
+#'   distribute query
 #'   projection while reference fitting and KNN use the first device.
 #'   Resident landmark mode coordinates the reference fit and shards query
 #'   projection across the selected devices. Query KNN is materialized in
@@ -445,7 +456,9 @@ run_umap_matrix_request <- function(data, n_neighbors,
     } else auto_embedding_k(nrow(x), "umap", include_self = FALSE)
     n_neighbors <- validate_umap_n_neighbors(n_neighbors, nrow(x))
     state$n_neighbors <- n_neighbors
-    knn_state <- compute_umap_matrix_knn(x, nn, n_neighbors, metric, state)
+    knn_state <- compute_umap_matrix_knn(
+        x, nn, n_neighbors, metric, state, devices
+    )
     embedding <- timed_do_call(fast_knn_umap, list(
         indices = knn_state$knn, n_components = state$n_components,
         seed = seed, verbose = verbose, backend = state$backend,

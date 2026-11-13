@@ -595,47 +595,25 @@ test_that("CUDA UMAP keeps native fastEmbedR GPU KNN on device", {
     expect_equal(fit$parameters$knn_residency, "cuda_device")
 })
 
-test_that("one-call CUDA embeddings use the intended KNN residency policy", {
+test_that("one-call CUDA embeddings use faissR host KNN", {
     x <- matrix(stats::rnorm(32L), 8L, 4L)
     y_init <- matrix(0, 8L, 2L)
-    gpu_knn <- structure(
-        list(
-            handle = "mock",
-            backend_used = "cuda_auto",
-            result_residency = "cuda",
-            distance_type = "float32",
-            metric = "euclidean",
-            layout = "column_major_query_by_k",
-            exclude_self = TRUE,
-            n_query = 8L,
-            k = 6L
-        ),
-        class = "fastEmbedR_gpu_knn"
-    )
     captured <- new.env(parent = emptyenv())
-    captured$keep_gpu <- list()
-    captured$retain_data <- list()
+    captured$methods <- list()
     with_mocked_bindings(
-        fastembedr_nn_without_self = function(
-                data, k, backend, method, metric, output,
-                n_threads, tuning, target_recall, keep_gpu,
-                retain_data = FALSE) {
-            captured$keep_gpu[[length(captured$keep_gpu) + 1L]] <- keep_gpu
-            captured$retain_data[[length(captured$retain_data) + 1L]] <-
-                retain_data
-            expect_identical(backend, "cuda")
-            if (isTRUE(keep_gpu)) {
-                gpu_knn
-            } else {
-                structure(
-                    list(
-                        indices = matrix(rep(1:3, each = 8L), 8L, 3L),
-                        distances = matrix(1, 8L, 3L),
-                        backend_used = "cuda_host_exact"
-                    ),
-                    class = "list"
-                )
-            }
+        run_faissr_cuda_embedding_knn = function(
+                data, k, method, metric, output, target_recall,
+                devices = NULL) {
+            captured$methods[[length(captured$methods) + 1L]] <- method
+            idx <- t(vapply(seq_len(nrow(data)), function(i) {
+                head(setdiff(seq_len(nrow(data)), i), k)
+            }, integer(k)))
+            list(
+                indices = idx,
+                distances = matrix(1, nrow(data), k),
+                backend_used = "faiss_gpu_flat_l2",
+                result_residency = "host"
+            )
         },
         fast_knn_umap = function(indices, distances = NULL, ...) {
             captured$umap_gpu_input <-
@@ -645,7 +623,7 @@ test_that("one-call CUDA embeddings use the intended KNN residency policy", {
             attr(out, "fastEmbedR_config") <- list(
                 knn_n_neighbors = 3L,
                 n_neighbors = 3L,
-                knn_residency = "host_materialized_from_cuda",
+                knn_residency = "host_from_faiss_gpu",
                 graph_storage = "cpu_binary_csr"
             )
             out
@@ -658,7 +636,7 @@ test_that("one-call CUDA embeddings use the intended KNN residency policy", {
             attr(out, "fastEmbedR_config") <- list(
                 n_neighbors = 6L,
                 perplexity = 2,
-                knn_residency = "cuda_device"
+                knn_residency = "host_from_faiss_gpu"
             )
             out
         },
@@ -671,22 +649,19 @@ test_that("one-call CUDA embeddings use the intended KNN residency policy", {
                 x, perplexity = 2, Y_init = y_init,
                 backend = "cuda", keep_knn = TRUE
             )
-            fit_tsne_pca <- tsne(
-                x, perplexity = 2, backend = "cuda", keep_knn = TRUE
-            )
         },
         .package = "fastEmbedR"
     )
 
-    expect_equal(captured$keep_gpu, list(TRUE, TRUE, TRUE))
-    expect_equal(captured$retain_data, list(FALSE, FALSE, TRUE))
-    expect_true(captured$umap_gpu_input)
+    expect_equal(captured$methods, list("exact", "exact"))
+    expect_false(captured$umap_gpu_input)
     expect_true(captured$umap_distances_null)
-    expect_true(captured$tsne_gpu_input)
+    expect_false(captured$tsne_gpu_input)
     expect_true(captured$tsne_distances_null)
-    expect_s3_class(fit_umap$knn, "fastEmbedR_gpu_knn")
-    expect_s3_class(fit_tsne$knn, "fastEmbedR_gpu_knn")
-    expect_s3_class(fit_tsne_pca$knn, "fastEmbedR_gpu_knn")
+    expect_true(is.list(fit_umap$knn))
+    expect_true(is.list(fit_tsne$knn))
+    expect_identical(fit_tsne$parameters$nn_backend,
+        "faiss_gpu_flat_l2")
 })
 
 test_that("float32 KNN distances use less memory than double distances", {

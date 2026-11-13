@@ -157,7 +157,7 @@ print_probe_failure() {
 }
 
 if [ "${FASTEMBEDR_USE_FAISS_GPU+set}" = "set" ]; then
-  fatal "FASTEMBEDR_USE_FAISS_GPU was removed; CUDA KNN uses cuVS."
+  fatal "FASTEMBEDR_USE_FAISS_GPU is obsolete; FAISS GPU KNN comes from faissR."
 fi
 
 os_name=$(uname -s 2>/dev/null || echo unknown)

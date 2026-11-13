@@ -1279,6 +1279,39 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// faissr_gpu_multi_knn_cpp
+SEXP faissr_gpu_multi_knn_cpp(SEXP data, int k, std::string method, Rcpp::IntegerVector devices, int nlist, int nprobe, bool shard, std::string output);
+RcppExport SEXP _fastEmbedR_faissr_gpu_multi_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP devicesSEXP, SEXP nlistSEXP, SEXP nprobeSEXP, SEXP shardSEXP, SEXP outputSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type devices(devicesSEXP);
+    Rcpp::traits::input_parameter< int >::type nlist(nlistSEXP);
+    Rcpp::traits::input_parameter< int >::type nprobe(nprobeSEXP);
+    Rcpp::traits::input_parameter< bool >::type shard(shardSEXP);
+    Rcpp::traits::input_parameter< std::string >::type output(outputSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_gpu_multi_knn_cpp(data, k, method, devices, nlist, nprobe, shard, output));
+    return rcpp_result_gen;
+END_RCPP
+}
+// faissr_metal_knn_cpp
+SEXP faissr_metal_knn_cpp(SEXP data, int k, std::string method, std::string metric, double target_recall);
+RcppExport SEXP _fastEmbedR_faissr_metal_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP metricSEXP, SEXP target_recallSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
+    Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
+    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_metal_knn_cpp(data, k, method, metric, target_recall));
+    return rcpp_result_gen;
+END_RCPP
+}
 // faissr_hnsw_index_build_cpp
 Rcpp::List faissr_hnsw_index_build_cpp(SEXP data, int n, int p, int k, int n_threads, int m, int ef_construction);
 RcppExport SEXP _fastEmbedR_faissr_hnsw_index_build_cpp(SEXP dataSEXP, SEXP nSEXP, SEXP pSEXP, SEXP kSEXP, SEXP n_threadsSEXP, SEXP mSEXP, SEXP ef_constructionSEXP) {
@@ -3584,6 +3617,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_project_embedding_affine_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_cpp, 8},
     {"_fastEmbedR_project_embedding_affine_parallel_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_parallel_cpp, 9},
     {"_fastEmbedR_faissr_hnsw_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_search_cpp, 8},
+    {"_fastEmbedR_faissr_gpu_multi_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_multi_knn_cpp, 8},
+    {"_fastEmbedR_faissr_metal_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_knn_cpp, 5},
     {"_fastEmbedR_faissr_hnsw_index_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_build_cpp, 7},
     {"_fastEmbedR_faissr_hnsw_index_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_search_cpp, 5},
     {"_fastEmbedR_knn_connectivity_range_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_range_cpp, 3},

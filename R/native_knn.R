@@ -595,6 +595,99 @@ run_native_cuda_knn <- function(data, k, method, metric, output,
     if (keep_gpu) out else fastembedr_convert_knn_distances(out, output)
 }
 
+run_faissr_cuda_embedding_knn <- function(data, k, method, metric,
+                                            output, target_recall,
+                                            devices = NULL) {
+    if (identical(metric, "euclidean")) {
+        return(run_faissr_cuda_multi_knn(
+            data, k, method, metric, output, target_recall,
+            if (is.null(devices)) 0L else devices
+        ))
+    }
+    if (!is.null(devices) && !identical(as.integer(devices), 0L)) {
+        stop(
+            "Non-Euclidean faissR CUDA KNN currently uses GPU 0.",
+            call. = FALSE
+        )
+    }
+    method <- if (method %in% c("exact", "flat")) "flat" else method
+    if (!method %in% c("flat", "ivf")) {
+        stop("Unsupported faissR CUDA embedding KNN method.",
+            call. = FALSE)
+    }
+    if (!requireNamespace("faissR", quietly = TRUE) ||
+        !isTRUE(faissR::faiss_gpu_available())) {
+        stop("The faissR FAISS GPU backend is unavailable.", call. = FALSE)
+    }
+    out <- faissR::nn(
+        data, k = k, exclude_self = TRUE, backend = "cuda",
+        method = method, metric = metric, tuning = "auto",
+        target_recall = target_recall, output = output
+    )
+    expected <- if (identical(method, "flat")) {
+        paste0("faiss_gpu_flat_", if (identical(metric, "euclidean")) {
+            "l2"
+        } else metric)
+    } else "faiss_gpu_ivf_flat"
+    actual <- out$backend_used %||% attr(out, "backend_used")
+    if (!identical(actual, expected) ||
+        !identical(out$accelerator, "cuda") ||
+        !identical(dim(out$indices), c(nrow(data), as.integer(k))) ||
+        !identical(out$index_base, 1L) ||
+        isTRUE(out$cpu_fallback)) {
+        stop("faissR did not return the requested FAISS CUDA KNN.",
+            call. = FALSE)
+    }
+    out$result_residency <- "host"
+    out$exclude_self <- TRUE
+    out
+}
+
+run_faissr_cuda_multi_knn <- function(data, k, method, metric,
+                                        output, target_recall, devices) {
+    if (!identical(metric, "euclidean")) {
+        stop("faissR multi-GPU KNN currently requires Euclidean distance.",
+            call. = FALSE)
+    }
+    method <- if (method %in% c("exact", "flat")) "flat" else method
+    if (!method %in% c("flat", "ivf")) {
+        stop("faissR multi-GPU KNN requires Flat or IVF.", call. = FALSE)
+    }
+    if (!requireNamespace("faissR", quietly = TRUE) ||
+        !isTRUE(faissR::faiss_gpu_available())) {
+        stop("The faissR FAISS GPU backend is unavailable.", call. = FALSE)
+    }
+    params <- if (identical(method, "ivf")) {
+        getFromNamespace("cuda_ivf_params", "faissR")(
+            nrow(data), ncol(data), k, metric, target_recall
+        )
+    } else list(nlist = 1L, nprobe = 1L)
+    out <- faissr_gpu_multi_knn_cpp(
+        data, as.integer(k), method, as.integer(devices),
+        as.integer(params$nlist), as.integer(params$nprobe),
+        FALSE, output
+    )
+    expected_mode <- if (length(devices) == 1L) "single" else "replicate"
+    expected_backend <- if (length(devices) == 1L) {
+        "faiss_gpu_single_self"
+    } else "faiss_gpu_multi_replicate"
+    if (!identical(out$accelerator, "cuda") ||
+        !identical(out$multi_gpu_mode, expected_mode) ||
+        !identical(out$backend_used, expected_backend) ||
+        !identical(out$devices, as.integer(devices)) ||
+        !identical(dim(out$indices), c(nrow(data), as.integer(k))) ||
+        !identical(out$index_base, 1L) || isTRUE(out$cpu_fallback)) {
+        stop("faissR did not return the requested multi-GPU KNN.",
+            call. = FALSE)
+    }
+    out$target_recall <- target_recall
+    out$recall_audited <- FALSE
+    out$recall_status <- if (identical(method, "flat")) {
+        "exact_by_construction"
+    } else "calibration_informed_not_runtime_audited"
+    out
+}
+
 faissr_hnsw_input <- function(x) {
     if (is_float32_matrix(x)) return(float::dbl(x))
     if (is.integer(x)) return(matrix(as.double(x), nrow(x), ncol(x)))
@@ -701,12 +794,13 @@ run_native_metal_knn <- function(data, k, method, metric, output,
             call. = FALSE
         )
     }
-    if (!isTRUE(native_metal_knn_available_cpp())) {
+    if (!requireNamespace("faissR", quietly = TRUE) ||
+        !isTRUE(getFromNamespace("nn_metal_available_cpp", "faissR")())) {
         stop("Native Metal KNN is unavailable in this build.",
             call. = FALSE
         )
     }
-    out <- native_metal_knn_cpp(
+    out <- faissr_metal_knn_cpp(
         data,
         k = k,
         method = method,
