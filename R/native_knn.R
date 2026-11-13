@@ -658,7 +658,7 @@ run_faissr_cuda_multi_knn <- function(data, k, method, metric,
         stop("The faissR FAISS GPU backend is unavailable.", call. = FALSE)
     }
     params <- if (identical(method, "ivf")) {
-        getFromNamespace("cuda_ivf_params", "faissR")(
+        utils::getFromNamespace("cuda_ivf_params", "faissR")(
             nrow(data), ncol(data), k, metric, target_recall
         )
     } else list(nlist = 1L, nprobe = 1L)
@@ -771,7 +771,8 @@ run_native_cpu_knn <- function(data, k, method, metric, output,
 
 fastembedr_metal_knn_available <- function() {
     requireNamespace("faissR", quietly = TRUE) &&
-        isTRUE(getFromNamespace("nn_metal_available_cpp", "faissR")())
+        isTRUE(utils::getFromNamespace("nn_metal_available_cpp",
+            "faissR")())
 }
 
 validate_faissr_metal_knn <- function(out) {
