@@ -15,8 +15,8 @@ pca_resident_cuda_input <- function(x, ncomp, center, scale,
         rank >= nrow(x) || ncol(x) > 2048L) stop(
         "Resident multi-GPU PCA needs rank < nrow and <=2048 columns.",
         call. = FALSE)
-    if (length(devices) < 2L) stop(
-        "Resident multi-GPU PCA needs at least two CUDA devices.",
+    if (length(devices) < 1L) stop(
+        "Resident CUDA PCA needs at least one CUDA device.",
         call. = FALSE)
     devices <- massive_validate_devices(devices, backend, nrow(x))
     list(rank = rank, devices = devices)
@@ -50,7 +50,8 @@ pca_resident_cuda_fit <- function(x, ncomp, xtest, center, scale,
             seq_len(request$rank)], 0) * (nrow(x) - 1)),
         center = stats$center, scale = deviations,
         ncomp = request$rank, method = "resident_covariance",
-        backend = "cuda", engine = "native_cuda_multigpu_covariance",
+        backend = "cuda", engine = if (length(devices) == 1L)
+            "native_cuda_covariance" else "native_cuda_multigpu_covariance",
         decomposition_backend = "cpu_eigen",
         precision = "float32_gpu_float64_output",
         gpu_devices = devices, gpu_identity = identity,

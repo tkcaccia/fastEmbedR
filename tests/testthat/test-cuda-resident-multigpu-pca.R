@@ -33,10 +33,29 @@ test_that("resident PCA device requests do not fall back", {
     x <- matrix(seq_len(24L) / 24, nrow = 8L)
     expect_error(pca(x, backend = "cpu", devices = c(0L, 1L)),
         "requires CUDA")
-    expect_error(pca(x, backend = "cuda", devices = 0L),
-        "at least two")
+    expect_error(pca(x, backend = "cuda", devices = integer()),
+        "at least one")
     expect_error(pca(x, backend = "cuda", devices = c(0L, 1L),
         checkpoint = TRUE), "out_of_core")
+})
+
+test_that("resident PCA permits a matched one-GPU covariance baseline", {
+    x <- matrix(seq_len(24L) / 24, nrow = 8L)
+    with_mocked_bindings({
+        fit <- pca(x, ncomp = 2L, backend = "cuda", devices = 0L)
+        expect_identical(fit$engine, "native_cuda_covariance")
+        expect_identical(fit$gpu_devices, 0L)
+        expect_identical(dim(fit$scores), c(8L, 2L))
+    },
+    massive_validate_devices = function(devices, ...) devices,
+    massive_cuda_device_uuids = function(...) "GPU-A",
+    pca_cuda_resident_covariance_cpp = function(...) {
+        list(center = colMeans(x), covariance = diag(c(3, 2, 1)))
+    },
+    pca_cuda_resident_project_cpp = function(input, devices, center,
+            scale, loadings) {
+        matrix(1, nrow(input), ncol(loadings))
+    }, .package = "fastEmbedR")
 })
 
 test_that("auto PCA retains the resident CUDA device request", {

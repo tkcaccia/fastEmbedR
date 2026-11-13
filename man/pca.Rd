@@ -89,8 +89,9 @@ completed score batches beside \code{output} for recovery.}
 file. Available when out-of-core processing is selected.}
 
 \item{devices}{Optional distinct CUDA device IDs. With resident matrix
-input, multiple devices split covariance and score projection;
-the small eigendecomposition runs on CPU. Out-of-core CUDA PCA shards
+input, one or more devices use the same covariance and score-projection
+algorithm; the small eigendecomposition runs on CPU. Multiple devices
+split the rows. Out-of-core CUDA PCA shards
 file-backed fitting and score projection across devices.}
 
 \item{landmarks}{\code{FALSE} fits all rows. For resident PCA, a count,
