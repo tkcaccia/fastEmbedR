@@ -24,33 +24,7 @@ The terms used below are deliberately distinct:
 Adapted or vendored source
 --------------------------
 
-1. FAISS 1.14.3
-
-   Repository: https://github.com/facebookresearch/faiss
-   Commit: 0ca9df4792b173d573044ee14ca0704780176e82
-   License: MIT
-   Copyright: Meta Platforms, Inc. and affiliates
-   Package file: src/native_knn_metal_impl.mm
-   Upstream files: faiss/IndexIVF.{h,cpp}, faiss/IndexIVFFlat.{h,cpp}
-   Boundary: Metal IVF organization is adapted into native fastEmbedR source.
-             FAISS source and binaries are not
-             bundled or linked.
-   License copy: LICENSES/FAISS-LICENSE
-
-2. MLXPorts/Faiss-mlx
-
-   Repository: https://github.com/MLXPorts/Faiss-mlx
-   Commit: d092af559375144fc719cd88a10e414f92c625fa
-   License: Apache-2.0
-   Copyright: 2024 Sydney Bach, The Solace Project
-   Package file: src/native_knn_metal_impl.mm
-   Upstream file: python/metalfaiss/faissmlx/kernels/ivf_kernels.py
-   Boundary: the fused ivf_list_topk_l2 and batched list-scan/top-k
-             organization was adapted to package-native Objective-C++/Metal.
-             No MLX or Python source/runtime is bundled or called.
-   License copy: LICENSES/FAISS-MLX-LICENSE
-
-3. faissR
+1. faissR
 
    Repository: https://github.com/tkcaccia/faissR
    Commit: f37ea97c5774200025b1480770b8ecbf1d2d7919
@@ -63,11 +37,11 @@ Adapted or vendored source
                    src/nn_faiss_impl.cpp, src/nn_faiss_bridge.cpp,
                    benchmark_scripts/
    Boundary: CUDA adapter and buffer-ownership organization was distilled
-             into fastEmbedR. CPU Flat, CPU HNSW, Metal, and multi-GPU FAISS KNN call the
-             installed faissR package through its private compiled interface.
+             into fastEmbedR. CPU Flat, CPU HNSW, Metal, and multi-GPU
+             FAISS KNN call the installed faissR package.
    License copy: LICENSES/FAISSR-LICENSE
 
-4. DLPack 1.0
+2. DLPack 1.0
 
    Repository: https://github.com/dmlc/dlpack
    Commit: bbd2f4d32427e548797929af08cfe2a9cbb3cf12
@@ -79,7 +53,7 @@ Adapted or vendored source
              device matrices through the optional cuVS C API.
    License copy: LICENSES/DLPACK-LICENSE
 
-5. fastPLS
+3. fastPLS
 
    Repository: https://github.com/tkcaccia/fastPLS
    Commit: 82bbc48a0d69e4bd0d7c261fdcc8e636694133b1
@@ -92,7 +66,7 @@ Adapted or vendored source
              fastPLS R package is not imported, linked, or called.
    License copy: LICENSES/FASTPLS-LICENSE
 
-6. AppleSiliconFFT
+4. AppleSiliconFFT
 
    Repository: https://github.com/aminems/AppleSiliconFFT
    Commit: 5d0d51dbd983691ee99822ed74bc3f9a47136511
@@ -104,6 +78,15 @@ Adapted or vendored source
              512-point row/column organization were adapted for the native
              openTSNE FFT-grid path.
    License copy: LICENSES/APPLESILICONFFT-LICENSE
+
+Historical KNN design references
+--------------------------------
+
+FAISS 1.14.3 (commit 0ca9df4792b173d573044ee14ca0704780176e82)
+and MLXPorts/Faiss-mlx (commit d092af559375144fc719cd88a10e414f92c625fa)
+informed earlier KNN designs. fastEmbedR no longer ships their Metal or CPU
+HNSW derivatives. The installed faissR package owns the current KNN code.
+Their license texts are retained for provenance under LICENSES/.
 
 Optional linked or compile-time dependencies
 --------------------------------------------

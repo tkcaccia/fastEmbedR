@@ -30,9 +30,8 @@ file mapping, SPDX header, notice, or license copy is missing.
 
 ## Adapted And Linked Components
 
-The native nearest-neighbor implementation retains notices for FAISS-derived
-HNSW and IVF organization and the exact-search behavior adapted from faissR.
-Metal list scanning retains the Faiss-mlx Apache-2.0 notice. Reduced DLPack
+CPU and Metal nearest-neighbor implementations reside in faissR. The remaining
+native CUDA KNN adapter retains its faissR-derived notice. Reduced DLPack
 declarations and the AppleSiliconFFT-derived Stockham organization retain
 their upstream notices. The precise upstream commits and package-file mappings
 are recorded in the inventory and notice files above.

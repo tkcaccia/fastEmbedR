@@ -81,9 +81,9 @@ the separate benchmark environment; they are not part of the package
 dependency graph.
 
 `fastEmbedR` does not vendor the full FAISS, cuVS, RAFT, or cuML libraries, or
-`uwot`, `Rtsne`, or Python openTSNE source. Its compact FAISS-derived HNSW and
-Faiss-mlx-informed Metal files retain their permissive licenses under
-`inst/LICENSES/`.
+`uwot`, `Rtsne`, or Python openTSNE source. CPU and Metal KNN call the required
+faissR package; historical FAISS and Faiss-mlx references remain in
+`inst/NOTICE`.
 
 ## Native KNN Boundary
 

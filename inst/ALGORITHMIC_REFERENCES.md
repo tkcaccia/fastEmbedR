@@ -387,18 +387,15 @@ Ideas reviewed:
 - Faiss-mlx repository: <https://github.com/MLXPorts/Faiss-mlx>
 - Faiss-mlx source commit: `d092af559375144fc719cd88a10e414f92c625fa`
 - Faiss-mlx license: Apache-2.0
-- Current use in `fastEmbedR`: CPU Flat and HNSW search call the installed
-  faissR package. Metal exact and IVF-Flat still have native package code.
-  The Metal fused list-scan/top-k structure was adapted from FAISS and
-  Faiss-mlx.
-  The package does not link FAISS or MLX.
+- Current use in `fastEmbedR`: CPU Flat and HNSW, Metal exact and IVF-Flat,
+  and resident CUDA FAISS KNN call the installed faissR package. FAISS and
+  Faiss-mlx are historical design references; their KNN derivatives are no
+  longer shipped in fastEmbedR.
 
 Implemented locations:
 
-- `src/native_knn_metal_impl.mm`: 128-dimensional signed coarse projection,
-  four-pass Metal centroid assignment/update, adaptive 288/384/512-candidate
-  shortlist construction, exact full-dimensional reranking, four-stratum
-  pilot validation, and recall-aware `nprobe` selection.
+- `src/faissr_hnsw_bridge.cpp`: private compiled entry points into faissR for
+  persistent CPU indexes, Metal KNN, and coordinated CUDA KNN.
 - `inst/LICENSES/`: full upstream licenses, copyright notices, and pinned
   provenance.
 

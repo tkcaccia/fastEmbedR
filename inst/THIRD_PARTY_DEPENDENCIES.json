@@ -24,7 +24,7 @@
     {
       "id": "faiss",
       "name": "FAISS",
-      "classification": "adapted_source",
+      "classification": "design_reference",
       "repository": "https://github.com/facebookresearch/faiss",
       "revision": "0ca9df4792b173d573044ee14ca0704780176e82",
       "version": "1.14.3",
@@ -33,10 +33,8 @@
       "redistributed_source": false,
       "redistributed_binary": false,
       "linked": false,
-      "linkage": "Metal IVF organization is adapted into package source; no FAISS library is linked.",
-      "package_files": [
-        "src/native_knn_metal_impl.mm"
-      ],
+      "linkage": "FAISS KNN runs in the required faissR package; no FAISS source or binary is linked by fastEmbedR.",
+      "package_files": [],
       "upstream_files": [
         "faiss/IndexIVF.h",
         "faiss/IndexIVF.cpp",
@@ -49,7 +47,7 @@
     {
       "id": "faiss-mlx",
       "name": "MLXPorts/Faiss-mlx",
-      "classification": "adapted_source",
+      "classification": "design_reference",
       "repository": "https://github.com/MLXPorts/Faiss-mlx",
       "revision": "d092af559375144fc719cd88a10e414f92c625fa",
       "version": null,
@@ -58,8 +56,8 @@
       "redistributed_source": false,
       "redistributed_binary": false,
       "linked": false,
-      "linkage": "No MLX or Python runtime; fused IVF list-scan/top-k organization was adapted to Objective-C++/Metal.",
-      "package_files": ["src/native_knn_metal_impl.mm"],
+      "linkage": "Historical Metal KNN design reference; current Metal KNN executes in faissR without MLX or Python runtime.",
+      "package_files": [],
       "upstream_files": ["python/metalfaiss/faissmlx/kernels/ivf_kernels.py"],
       "license_file": "inst/LICENSES/FAISS-MLX-LICENSE",
       "notice_file": "inst/NOTICE"
@@ -76,7 +74,7 @@
       "redistributed_source": false,
       "redistributed_binary": false,
       "linked": false,
-      "linkage": "The R package is not called or linked; its CUDA adapter organization was distilled into package-owned native code.",
+      "linkage": "The native CUDA adapter organization was distilled into package-owned code. The required faissR package is called at runtime for CPU, Metal, and resident FAISS CUDA KNN; its shared object is not linked at build time.",
       "package_files": ["src/native_knn_cuda_impl.cpp"],
       "upstream_files": [
         "src/nn_cuvs_impl.cpp",
@@ -268,7 +266,7 @@
       "redistributed_binary": false,
       "linked": true,
       "linkage": "Foundation, Accelerate, Metal, MetalPerformanceShaders, and MetalPerformanceShadersGraph system frameworks.",
-      "package_files": ["configure", "src/embedding_metal_impl.mm", "src/embedding_utils.cpp", "src/native_knn_metal_impl.mm"],
+      "package_files": ["configure", "src/embedding_metal_impl.mm", "src/embedding_utils.cpp"],
       "upstream_files": [],
       "license_file": null,
       "license_url": "https://www.apple.com/legal/sla/",

@@ -212,8 +212,7 @@ the current numerical diagnostic has also executed on an RTX 5060 Ti
 
 ## External Libraries
 
-`fastEmbedR` does not vendor the full FAISS or RAPIDS libraries. It contains a
-small FAISS-derived HNSW implementation and a native Metal IVF design informed
-by FAISS and Faiss-mlx; their permissive licenses and pinned source commits are
-installed under `inst/LICENSES/`. Installed cuVS libraries are linked directly
-by optional CUDA builds; fastEmbedR does not vendor them.
+`fastEmbedR` does not vendor the full FAISS or RAPIDS libraries. CPU and Metal
+KNN use the required faissR package. FAISS and Faiss-mlx remain historical
+design references in `inst/NOTICE`. Installed cuVS libraries are linked
+directly by optional CUDA builds; fastEmbedR does not vendor them.

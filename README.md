@@ -243,10 +243,9 @@ Accelerator libraries are optional and detected during source installation.
 
 `fastEmbedR` is distributed under the MIT license. GPL packages such as `uwot`
 are used only as optional external benchmark/reference tools, not as required
-runtime dependencies or vendored source. Native KNN derivatives and optional
-adapted code and linked libraries retain the FAISS MIT, Faiss-mlx Apache-2.0,
-and RAPIDS cuVS
-Apache-2.0 notices under `inst/LICENSES/`.
+runtime dependencies or vendored source. Optional adapted code and linked
+libraries retain their notices under `inst/LICENSES/`. FAISS and Faiss-mlx
+are historical KNN design references; Metal KNN executes in faissR.
 
 See [Source provenance and licensing][provenance] for the
 audit structure. Source-level records are maintained in
