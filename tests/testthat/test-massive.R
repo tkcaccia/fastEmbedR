@@ -2332,8 +2332,8 @@ test_that("multi-GPU KNN uses both requested devices without fallback", {
         ".multigpu.checkpoint.rds")))
 })
 
-test_that("sharded CUDA landmark KNN keeps reference off device", {
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+test_that("sharded CUDA landmark KNN keeps one shard on device", {
+    skip_if_not(faissR::faiss_gpu_available())
     set.seed(748)
     reference <- matrix(rnorm(23L * 5L), ncol = 5L)
     query <- matrix(rnorm(11L * 5L), ncol = 5L)
@@ -2358,10 +2358,11 @@ test_that("sharded CUDA landmark KNN keeps reference off device", {
         tolerance = 1e-4)
     expect_identical(graph$backend, "cuda")
     expect_identical(graph$method, "sharded_exact")
-    expect_identical(graph$query_storage, "native_float32")
+    expect_identical(graph$query_storage, "R_float32")
     expect_true(graph$exact)
     expect_gt(graph$resources$n_shards, 1L)
-    expect_identical(graph$reference_storage, "native_float32")
+    expect_identical(graph$reference_storage, "R_float32")
+    expect_identical(graph$knn_provider, "faissR")
     expect_identical(observed$indices[1L, 1L], 1L)
     expect_equal(massive_audit_landmark_knn(graph, source,
         landmarks, sample_rows = 5L,
@@ -2369,7 +2370,7 @@ test_that("sharded CUDA landmark KNN keeps reference off device", {
 })
 
 test_that("sharded CUDA landmark KNN accepts 256 neighbors", {
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+    skip_if_not(faissR::faiss_gpu_available())
     set.seed(749)
     reference <- matrix(rnorm(260L * 3L), ncol = 3L)
     query <- matrix(rnorm(2L * 3L), ncol = 3L)
@@ -2394,7 +2395,7 @@ test_that("sharded CUDA landmark KNN accepts 256 neighbors", {
 })
 
 test_that("sharded CUDA landmark KNN resumes committed query rows", {
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+    skip_if_not(faissR::faiss_gpu_available())
     set.seed(750)
     reference <- matrix(rnorm(23L * 5L), ncol = 5L)
     query <- matrix(rnorm(11L * 5L), ncol = 5L)
@@ -2418,7 +2419,7 @@ test_that("sharded CUDA landmark KNN resumes committed query rows", {
         request$setup$resources$n_shards)
     view <- fastEmbedR:::massive_matrix_rows(landmarks, 1L, count)
     state <- fastEmbedR:::massive_knn_reference(view, 3L,
-        "exact", 1L, "cuda")
+        "exact", 1L, "cuda", cuda_provider = "faissR")
     first <- fastEmbedR:::massive_landmark_shard_batch(
         source, landmarks, request$setup, state, 1L, count,
         1L, TRUE, TRUE)

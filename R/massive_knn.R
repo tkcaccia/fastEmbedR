@@ -651,7 +651,8 @@ massive_knn_query_storage <- function(x, setup, state) {
 #' or IVF-Flat search retain references across query batches. Metal exact
 #' search retains a host float32 reference but reuploads it each batch.
 #' CUDA needs faissR FAISS GPU support for the single-device landmark route.
-#' Native sharded CUDA routes still need cuVS. faissR IVF uses a heuristic
+#' Sharded landmark CUDA search also uses faissR. Full-graph CUDA KNN still
+#' needs native cuVS. faissR IVF uses a heuristic
 #' setting until a separate exact-reference recall audit is run;
 #' native IVF-Flat calibrates on the first query batch;
 #' pilot recall is not guaranteed for later rows. For CUDA IVF,
@@ -760,16 +761,17 @@ massive_landmark_shard_batch <- function(x, reference, setup,
         capture_pilot = FALSE) {
     rows <- as.integer(min(setup$resources$chunk_rows,
         x$nrow - query_first + 1))
-    query <- massive_reference_buffer_cpp(
-        massive_matrix_rows(x, query_first, rows))
-    found <- native_cuda_index_search_cpp(state$index, query,
-        as.integer(min(setup$k, shard_rows)))
-    expected <- if (setup$method == "sharded_ivf") {
-        "native_cuda_cuvs_ivf_flat"
-    } else "native_cuda_cuvs_exact"
+    query <- massive_read_rows_cpp(x, query_first, rows,
+        4 * rows * x$ncol, TRUE)
+    found <- massive_knn_query(state, query,
+        as.integer(min(setup$k, shard_rows)),
+        if (setup$method == "sharded_ivf") "ivf" else "exact",
+        setup$workers, "cuda")
     search <- if (setup$method == "sharded_ivf") "ivf" else "exact"
-    if (!identical(found$backend, expected) ||
-        !identical(found$method, search)) stop(
+    if (!identical(found$backend_used,
+            "faiss_gpu_persistent_query") ||
+        !identical(found$method, search) ||
+        !isTRUE(found$index_reused)) stop(
         "Sharded landmark KNN changed CUDA algorithm.",
         call. = FALSE)
     massive_merge_knn_shard_cpp(
@@ -788,10 +790,12 @@ massive_landmark_shard_probe <- function(x, setup, state,
     if (is.null(saved) || saved$state$completed_rows == 0)
         return(invisible(NULL))
     rows <- as.integer(min(setup$resources$chunk_rows, x$nrow))
-    query <- massive_reference_buffer_cpp(
-        massive_matrix_rows(x, 1, rows))
-    found <- native_cuda_index_search_cpp(state$index, query,
-        as.integer(min(setup$k, shard_rows)))
+    query <- massive_read_rows_cpp(x, 1L, rows,
+        4 * rows * x$ncol, TRUE)
+    found <- massive_knn_query(state, query,
+        as.integer(min(setup$k, shard_rows)),
+        if (setup$method == "sharded_ivf") "ivf" else "exact",
+        setup$workers, "cuda")
     if (!identical(massive_knn_probe_signature(found),
         saved$state$pilot_signature)) stop(
         "Rebuilt landmark shard differs from checkpoint pilot.",
@@ -830,7 +834,8 @@ massive_landmark_run_shard <- function(x, reference, setup,
     view <- massive_matrix_rows(reference, first, count)
     search <- if (setup$method == "sharded_ivf") "ivf" else "exact"
     state <- massive_knn_reference(view,
-        as.integer(min(setup$k, count)), search, setup$workers, "cuda")
+        as.integer(min(setup$k, count)), search, setup$workers,
+        "cuda", cuda_provider = "faissR")
     massive_landmark_shard_probe(x, setup, state, saved, count)
     if (shard == 0L && !is.null(saved))
         massive_sharded_restore_first(setup$parts,
@@ -846,8 +851,7 @@ massive_landmark_run_shard <- function(x, reference, setup,
             !is.null(saved) &&
                 is.null(saved$state$pilot_signature))
         if (is.null(metadata)) metadata <- batch$metadata
-        query_seconds <- query_seconds +
-            unname(proc.time()[[3L]] - started)
+        query_seconds <- query_seconds + unname(proc.time()[[3L]] - started)
         done <- query_first + batch$rows - 1
         saved <- massive_landmark_shard_commit(saved, batch, done,
             x$nrow, setup)
@@ -931,7 +935,8 @@ massive_landmark_sharded_setup <- function(x, reference, k, output,
     setup <- list(paths = paths, reference = reference, k = k,
         backend = backend, method = method,
         workers = normalize_nn_threads(n.cores),
-        resources = resources, checkpoint_every = checkpoint_every)
+        resources = resources, checkpoint_every = checkpoint_every,
+        cuda_provider = "faissR")
     identity <- list(query = massive_checkpoint_source_identity(x),
         reference = massive_checkpoint_source_identity(reference))
     parts <- stats::setNames(paste0(paths, ".part"), names(paths))
@@ -971,7 +976,7 @@ massive_landmark_knn_sharded <- function(x, reference, k, output,
     committed <- TRUE
     if (!is.null(elapsed$saved)) unlink(elapsed$saved$path)
     state <- list(build_seconds = elapsed$build_seconds,
-        reference_storage = "native_float32")
+        reference_storage = "R_float32", provider = "faissR")
     timing <- list(seconds = elapsed$query_seconds,
         pilot_recall = NA_real_, pilot_rows = 0L,
         nlist = if (method == "sharded_ivf") NA_integer_ else 0L,
@@ -1352,11 +1357,8 @@ massive_cuda_sharded_resources <- function(x, k, chunk_rows,
         exclude_self = TRUE, method = "exact") {
     if (x$format == "memory") stop(
         "Sharded CUDA search needs a file source.", call. = FALSE)
-    if (!native_cuda_knn_available_cpp()) stop(
-        "Full CUDA KNN requires native cuVS; no CPU fallback was used.",
-        call. = FALSE)
+    info <- massive_cuda_shard_info(exclude_self)
     if (exclude_self && k > 255L) stop("CUDA k exceeds 255.", call. = FALSE)
-    info <- native_cuda_memory_info_cpp()
     limit <- massive_memory_bytes(memory_limit)
     requested <- reference_chunk_rows %||% min(x$nrow, 250000L)
     requested_query <- chunk_rows %||% 8192L
@@ -1396,6 +1398,18 @@ massive_cuda_sharded_resources <- function(x, k, chunk_rows,
             rows * per_query,
         free_vram_bytes = info$free_bytes, gpu_device = info$device,
         output_bytes = query_rows * k * 8, memory_limit_bytes = limit)
+}
+
+massive_cuda_shard_info <- function(exclude_self) {
+    if (!exclude_self) {
+        if (!isTRUE(faissR::faiss_gpu_available())) stop(
+            "Sharded CUDA KNN requires faissR GPU.", call. = FALSE)
+        return(massive_cuda_memory_cpp())
+    }
+    if (!native_cuda_knn_available_cpp()) stop(
+        "Full CUDA KNN requires native cuVS; no CPU fallback was used.",
+        call. = FALSE)
+    native_cuda_memory_info_cpp()
 }
 
 massive_metal_sharded_resources <- function(x, k, chunk_rows,
@@ -1445,23 +1459,30 @@ massive_metal_sharded_resources <- function(x, k, chunk_rows,
         memory_limit_bytes = limit)
 }
 
-massive_sharded_checkpoint <- function(x, setup, paths, backend,
-        resume, source_identity = massive_checkpoint_source_identity(x)) {
-    path <- sub("\\.indices\\.u32$", ".checkpoint.rds", paths[["indices"]])
-    signature <- massive_checkpoint_signature(Filter(Negate(is.null), list(
-        version = if (backend == "cpu") 4L else 2L, source = source_identity,
+massive_sharded_signature <- function(setup, backend, source_identity) {
+    faissr_cuda <- identical(setup$cuda_provider, "faissR")
+    massive_checkpoint_signature(Filter(Negate(is.null), list(
+        version = if (backend == "cpu") 4L else if (faissr_cuda) 3L else 2L,
+        source = source_identity,
         implementation = massive_checkpoint_implementation_identity(),
-        faissr = if (backend == "cpu") massive_faissr_identity() else NULL,
+        faissr = if (backend == "cpu" || faissr_cuda)
+            massive_faissr_identity() else NULL,
         ef_search = setup$ef_search %||% 0L, hnsw_build = setup$hnsw_build,
         k = setup$k, backend = backend, method = setup$method,
-        workers = setup$workers, build_threads =
-            setup$build_workers %||% setup$workers,
+        workers = setup$workers,
+        build_threads = setup$build_workers %||% setup$workers,
         query_rows = setup$resources$chunk_rows,
         reference_rows = setup$resources$reference_chunk_rows,
         n_shards = setup$resources$n_shards,
         memory_limit = setup$resources$memory_limit_bytes,
-        checkpoint_every = setup$checkpoint_every, gpu_device =
-            setup$resources$gpu_device %||% NA_integer_)))
+        checkpoint_every = setup$checkpoint_every,
+        gpu_device = setup$resources$gpu_device %||% NA_integer_)))
+}
+
+massive_sharded_checkpoint <- function(x, setup, paths, backend,
+        resume, source_identity = massive_checkpoint_source_identity(x)) {
+    path <- sub("\\.indices\\.u32$", ".checkpoint.rds", paths[["indices"]])
+    signature <- massive_sharded_signature(setup, backend, source_identity)
     if (!resume) {
         if (file.exists(path)) stop("Sharded checkpoint exists; use resume.")
         state <- list(signature = signature, shard = 0L,

@@ -73,6 +73,74 @@ test_that("single-device IVF returns distances for its selected IDs", {
     expect_true(found$nlist > 0L && found$nprobe > 0L)
 })
 
+test_that("sharded CUDA landmarks use persistent faissR indices", {
+    skip_if_not_installed("float")
+    skip_if_not(faissR::faiss_gpu_available())
+    skip_if(fastEmbedR:::native_cuda_knn_available_cpp())
+    set.seed(1146)
+    reference <- matrix(rnorm(23L * 5L), ncol = 5L)
+    query <- matrix(rnorm(11L * 5L), ncol = 5L)
+    directory <- tempfile()
+    dir.create(directory)
+    on.exit(unlink(directory, recursive = TRUE))
+    reference_path <- file.path(directory, "reference.f32")
+    query_path <- file.path(directory, "query.f32")
+    writeBin(as.vector(t(reference)), reference_path,
+        size = 4L, endian = "little")
+    writeBin(as.vector(t(query)), query_path,
+        size = 4L, endian = "little")
+    found <- massive_landmark_knn(
+        massive_matrix(query_path, 11L, 5L),
+        massive_matrix(reference_path, 23L, 5L),
+        3L, file.path(directory, "knn"), backend = "cuda",
+        method = "sharded_exact", chunk_rows = 4L,
+        reference_chunk_rows = 7L, memory_limit = "256MB"
+    )
+    expected <- test_exact_knn(reference, query, 3L,
+        n_threads = 1L, metric = "euclidean")
+    observed <- fastEmbedR:::massive_read_knn_rows(found, n = 11L)
+    expect_equal(observed$indices, expected$indices)
+    expect_equal(observed$distances, expected$distances,
+        tolerance = 1e-4)
+    expect_identical(found$knn_provider, "faissR")
+    expect_identical(found$reference_storage, "R_float32")
+})
+
+test_that("sharded CUDA IVF reports faissR settings and valid rows", {
+    skip_if_not_installed("float")
+    skip_if_not(faissR::faiss_gpu_available())
+    skip_if(fastEmbedR:::native_cuda_knn_available_cpp())
+    set.seed(1150)
+    reference <- matrix(rnorm(10000L * 8L), ncol = 8L)
+    query <- matrix(rnorm(12L * 8L), ncol = 8L)
+    directory <- tempfile()
+    dir.create(directory)
+    on.exit(unlink(directory, recursive = TRUE))
+    reference_path <- file.path(directory, "reference.f32")
+    query_path <- file.path(directory, "query.f32")
+    writeBin(as.vector(t(reference)), reference_path,
+        size = 4L, endian = "little")
+    writeBin(as.vector(t(query)), query_path,
+        size = 4L, endian = "little")
+    found <- massive_landmark_knn(
+        massive_matrix(query_path, 12L, 8L),
+        massive_matrix(reference_path, 10000L, 8L),
+        5L, file.path(directory, "knn"), backend = "cuda",
+        method = "sharded_ivf", chunk_rows = 6L,
+        reference_chunk_rows = 3000L, memory_limit = "512MB"
+    )
+    observed <- fastEmbedR:::massive_read_knn_rows(found, n = 12L)
+    expect_true(all(observed$indices >= 1L))
+    expect_true(all(observed$indices <= 10000L))
+    expect_true(all(is.finite(observed$distances)))
+    expect_identical(found$knn_provider, "faissR")
+    expect_identical(found$reference_storage, "R_float32")
+    expect_length(found$ivf_settings, found$resources$n_shards)
+    expect_true(all(vapply(found$ivf_settings,
+        function(x) x$nlist >= x$nprobe && x$nprobe >= 1L,
+        logical(1L))))
+})
+
 test_that("CUDA landmark embeddings run with faissR and no cuVS", {
     skip_if_not_installed("float")
     skip_if_not(faissR::faiss_gpu_available())
