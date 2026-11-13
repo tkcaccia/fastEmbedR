@@ -305,6 +305,10 @@ faissr_metal_knn_cpp <- function(data, k, method, metric, target_recall) {
     .Call(`_fastEmbedR_faissr_metal_knn_cpp`, data, k, method, metric, target_recall)
 }
 
+faissr_metal_query_knn_cpp <- function(data, query, k, method, metric, target_recall) {
+    .Call(`_fastEmbedR_faissr_metal_query_knn_cpp`, data, query, k, method, metric, target_recall)
+}
+
 faissr_hnsw_index_build_cpp <- function(data, n, p, k, n_threads, m = 0L, ef_construction = 0L) {
     .Call(`_fastEmbedR_faissr_hnsw_index_build_cpp`, data, n, p, k, n_threads, m, ef_construction)
 }
@@ -735,18 +739,6 @@ native_exact_index_build_cpp <- function(data) {
 
 native_exact_index_search_cpp <- function(pointer, query, k, n_threads = 1L) {
     .Call(`_fastEmbedR_native_exact_index_search_cpp`, pointer, query, k, n_threads)
-}
-
-native_metal_knn_available_cpp <- function() {
-    .Call(`_fastEmbedR_native_metal_knn_available_cpp`)
-}
-
-native_metal_knn_cpp <- function(data, k, method = "auto", metric = "euclidean", target_recall = 0.99) {
-    .Call(`_fastEmbedR_native_metal_knn_cpp`, data, k, method, metric, target_recall)
-}
-
-native_metal_query_knn_cpp <- function(data, query, k, method = "auto", metric = "euclidean", target_recall = 0.99) {
-    .Call(`_fastEmbedR_native_metal_query_knn_cpp`, data, query, k, method, metric, target_recall)
 }
 
 native_cuda_knn_available_cpp <- function() {

@@ -169,7 +169,7 @@ massive_knn_query <- function(state, query, k, method,
     if (backend == "cuda") {
         return(native_cuda_index_search_cpp(state$index, query, k))
     }
-    if (backend == "metal") return(native_metal_query_knn_cpp(
+    if (backend == "metal") return(faissr_metal_query_knn_cpp(
         state$matrix, query, k, "exact", "euclidean", 0.99))
     if (method %in% c("faiss_hnsw", "hnsw")) return(
         faissr_hnsw_index_search_cpp(state$index$pointer, query,
@@ -465,7 +465,7 @@ massive_knn_setup <- function(x, reference, k, output, backend,
         "EXPERIMENTAL CUDA KNN requires native cuVS; ",
         "no CPU fallback was used.", call. = FALSE)
     if (backend == "metal" &&
-        (!native_metal_knn_available_cpp() || x$ncol > 16384L))
+        (!fastembedr_metal_knn_available() || x$ncol > 16384L))
         stop("Metal KNN needs Metal and <=16,384 columns.", call. = FALSE)
     k <- integer_scalar(k)
     if (is.na(k) || k < 1L || k > reference$nrow)
@@ -1308,7 +1308,7 @@ massive_metal_sharded_resources <- function(x, k, chunk_rows,
         reference_chunk_rows, memory_limit) {
     if (x$format == "memory") stop(
         "Sharded Metal search needs a file source.", call. = FALSE)
-    if (!native_metal_knn_available_cpp()) stop(
+    if (!fastembedr_metal_knn_available()) stop(
         "Full Metal KNN requires native Metal; no CPU fallback.",
         call. = FALSE)
     if (x$ncol > 16384L || k > 127L) stop(

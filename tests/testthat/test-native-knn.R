@@ -253,7 +253,7 @@ test_that("precompute_knn exposes no search-algorithm selector", {
 test_that("precompute_knn Metal output is native or fails explicitly", {
     set.seed(27)
     x <- matrix(rnorm(96 * 6), nrow = 96)
-    if (!isTRUE(native_metal_knn_available_cpp())) {
+    if (!isTRUE(fastembedr_metal_knn_available())) {
         expect_error(
             precompute_knn(x, k = 7L, backend = "metal"),
             "Native Metal KNN"
@@ -382,18 +382,18 @@ test_that("native KNN consumes float32 input without a double input copy", {
 
 test_that("native Metal exact and IVF searches are recall checked", {
     skip_if_not(
-        isTRUE(native_metal_knn_available_cpp()),
+        isTRUE(fastembedr_metal_knn_available()),
         "Metal is unavailable"
     )
     set.seed(4)
     exact_data <- matrix(rnorm(400 * 10), nrow = 400)
     truth <- exact_knn_reference(exact_data, 10L)
-    exact <- native_metal_knn_cpp(exact_data, 10L, "exact", "euclidean", 0.99)
+    exact <- faissr_metal_knn_cpp(exact_data, 10L, "exact", "euclidean", 0.99)
     expect_equal(knn_recall_test(exact, truth), 1, tolerance = 1e-8)
 
     ivf_data <- matrix(rnorm(2000 * 32), nrow = 2000)
     ivf_truth <- exact_knn_reference(ivf_data, 10L)
-    ivf <- native_metal_knn_cpp(ivf_data, 10L, "ivf", "euclidean", 0.99)
+    ivf <- faissr_metal_knn_cpp(ivf_data, 10L, "ivf", "euclidean", 0.99)
     expect_true(isTRUE(ivf$target_met))
     expect_gte(knn_recall_test(ivf, ivf_truth), 0.99)
     pilot_starts <- round((0:3) * (nrow(ivf_data) - 64L) / 3L)
@@ -411,24 +411,25 @@ test_that("native Metal exact and IVF searches are recall checked", {
         ivf$pilot_max_k_distance_ratio, max(1, distance_ratio),
         tolerance = 1e-4
     )
-    expect_identical(attr(ivf, "backend"), "metal")
+    expect_identical(ivf$accelerator, "metal")
+    expect_identical(ivf$backend_used, "faissr_native_metal_ivf")
 })
 
 test_that("native Metal exact search supports high-dimensional rows", {
     skip_if_not(
-        isTRUE(native_metal_knn_available_cpp()),
+        isTRUE(fastembedr_metal_knn_available()),
         "Metal is unavailable"
     )
     set.seed(41)
     high_dimensional <- matrix(rnorm(40 * 1536), nrow = 40)
     truth <- exact_knn_reference(high_dimensional, 6L)
-    observed <- native_metal_knn_cpp(
+    observed <- faissr_metal_knn_cpp(
         high_dimensional, 6L, "exact", "euclidean", 1
     )
     expect_equal(knn_recall_test(observed, truth), 1, tolerance = 1e-8)
 
     query <- high_dimensional[1:5, , drop = FALSE]
-    query_result <- native_metal_query_knn_cpp(
+    query_result <- faissr_metal_query_knn_cpp(
         high_dimensional, query, 6L, "exact", "euclidean", 1
     )
     expect_identical(dim(query_result$indices), c(5L, 6L))
@@ -437,13 +438,13 @@ test_that("native Metal exact search supports high-dimensional rows", {
 
 test_that("native Metal top-k supports standard t-SNE affinity width", {
     skip_if_not(
-        isTRUE(native_metal_knn_available_cpp()),
+        isTRUE(fastembedr_metal_knn_available()),
         "Metal is unavailable"
     )
     set.seed(42)
     reference <- matrix(rnorm(140 * 12), nrow = 140)
     query <- matrix(rnorm(20 * 12), nrow = 20)
-    observed <- native_metal_query_knn_cpp(
+    observed <- faissr_metal_query_knn_cpp(
         reference, query, 90L, "exact", "euclidean", 1
     )
     truth <- t(vapply(seq_len(nrow(query)), function(i) {
@@ -461,16 +462,16 @@ test_that("native Metal top-k supports standard t-SNE affinity width", {
 
 test_that("native Metal query IVF is recall-gated against exact query KNN", {
     skip_if_not(
-        isTRUE(native_metal_knn_available_cpp()),
+        isTRUE(fastembedr_metal_knn_available()),
         "Metal is unavailable"
     )
     set.seed(940)
     reference <- matrix(rnorm(5000 * 24), nrow = 5000)
     query <- matrix(rnorm(400 * 24), nrow = 400)
-    exact <- native_metal_query_knn_cpp(
+    exact <- faissr_metal_query_knn_cpp(
         reference, query, 15L, "exact", "euclidean", 1
     )
-    approximate <- native_metal_query_knn_cpp(
+    approximate <- faissr_metal_query_knn_cpp(
         reference, query, 15L, "ivf", "euclidean", 0.99
     )
     recall <- mean(vapply(seq_len(nrow(query)), function(row) {

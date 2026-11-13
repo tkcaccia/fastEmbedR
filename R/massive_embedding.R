@@ -127,7 +127,7 @@ massive_embedding_request <- function(data, landmarks, backend,
     }
     if (backend == "metal" &&
         (!isTRUE(embedding_metal_available_cpp()) ||
-            !isTRUE(native_metal_knn_available_cpp()))) stop(
+            !isTRUE(fastembedr_metal_knn_available()))) stop(
         "EXPERIMENTAL Metal landmark mode is unavailable; ",
         "no backend fallback was used.", call. = FALSE)
     if (!is.null(chunk_rows) &&

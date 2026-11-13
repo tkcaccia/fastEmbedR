@@ -48,6 +48,22 @@ SEXP faissr_metal_knn_cpp(SEXP data, int k,
 }
 
 // [[Rcpp::export]]
+SEXP faissr_metal_query_knn_cpp(SEXP data, SEXP query, int k,
+                                std::string method,
+                                std::string metric,
+                                double target_recall) {
+  Rcpp::Function load_namespace =
+      Rcpp::Environment::base_env()["loadNamespace"];
+  load_namespace("faissR");
+  if (faissR_c_api_version() != 1) {
+    Rcpp::stop("Unsupported faissR C API version");
+  }
+  return faissR_get_metal_query_knn_v1()(
+      data, query, Rcpp::wrap(k), Rcpp::wrap(method),
+      Rcpp::wrap(metric), Rcpp::wrap(target_recall));
+}
+
+// [[Rcpp::export]]
 Rcpp::List faissr_hnsw_index_build_cpp(SEXP data, int n, int p,
                                         int k, int n_threads,
                                         int m = 0,

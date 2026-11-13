@@ -3,6 +3,9 @@ test_that("CSR tiles preserve rows across a 32-bit boundary", {
     skip_if(!nzchar(compiler), "C++ compiler unavailable")
     source <- testthat::test_path("..", "test_csr_edge_tiles.cpp")
     skip_if(!file.exists(source), "native CSR fixture unavailable")
+    header <- testthat::test_path("..", "..", "src",
+        "csr_edge_tiles.h")
+    skip_if(!file.exists(header), "source header unavailable")
     output <- tempfile("csr-tiles-")
     on.exit(unlink(output), add = TRUE)
     build <- suppressWarnings(system2(compiler,

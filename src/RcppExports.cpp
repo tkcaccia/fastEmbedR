@@ -1312,6 +1312,22 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// faissr_metal_query_knn_cpp
+SEXP faissr_metal_query_knn_cpp(SEXP data, SEXP query, int k, std::string method, std::string metric, double target_recall);
+RcppExport SEXP _fastEmbedR_faissr_metal_query_knn_cpp(SEXP dataSEXP, SEXP querySEXP, SEXP kSEXP, SEXP methodSEXP, SEXP metricSEXP, SEXP target_recallSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type query(querySEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
+    Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
+    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_metal_query_knn_cpp(data, query, k, method, metric, target_recall));
+    return rcpp_result_gen;
+END_RCPP
+}
 // faissr_hnsw_index_build_cpp
 Rcpp::List faissr_hnsw_index_build_cpp(SEXP data, int n, int p, int k, int n_threads, int m, int ef_construction);
 RcppExport SEXP _fastEmbedR_faissr_hnsw_index_build_cpp(SEXP dataSEXP, SEXP nSEXP, SEXP pSEXP, SEXP kSEXP, SEXP n_threadsSEXP, SEXP mSEXP, SEXP ef_constructionSEXP) {
@@ -3218,47 +3234,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// native_metal_knn_available_cpp
-bool native_metal_knn_available_cpp();
-RcppExport SEXP _fastEmbedR_native_metal_knn_available_cpp() {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    rcpp_result_gen = Rcpp::wrap(native_metal_knn_available_cpp());
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_metal_knn_cpp
-Rcpp::List native_metal_knn_cpp(SEXP data, int k, std::string method, std::string metric, double target_recall);
-RcppExport SEXP _fastEmbedR_native_metal_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP metricSEXP, SEXP target_recallSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
-    Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
-    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_metal_knn_cpp(data, k, method, metric, target_recall));
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_metal_query_knn_cpp
-Rcpp::List native_metal_query_knn_cpp(SEXP data, SEXP query, int k, std::string method, std::string metric, double target_recall);
-RcppExport SEXP _fastEmbedR_native_metal_query_knn_cpp(SEXP dataSEXP, SEXP querySEXP, SEXP kSEXP, SEXP methodSEXP, SEXP metricSEXP, SEXP target_recallSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type query(querySEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
-    Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
-    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_metal_query_knn_cpp(data, query, k, method, metric, target_recall));
-    return rcpp_result_gen;
-END_RCPP
-}
 // native_cuda_knn_available_cpp
 bool native_cuda_knn_available_cpp();
 RcppExport SEXP _fastEmbedR_native_cuda_knn_available_cpp() {
@@ -3619,6 +3594,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_faissr_hnsw_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_search_cpp, 8},
     {"_fastEmbedR_faissr_gpu_multi_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_multi_knn_cpp, 8},
     {"_fastEmbedR_faissr_metal_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_knn_cpp, 5},
+    {"_fastEmbedR_faissr_metal_query_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_query_knn_cpp, 6},
     {"_fastEmbedR_faissr_hnsw_index_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_build_cpp, 7},
     {"_fastEmbedR_faissr_hnsw_index_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_search_cpp, 5},
     {"_fastEmbedR_knn_connectivity_range_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_range_cpp, 3},
@@ -3727,9 +3703,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_native_exact_query_cpp", (DL_FUNC) &_fastEmbedR_native_exact_query_cpp, 6},
     {"_fastEmbedR_native_exact_index_build_cpp", (DL_FUNC) &_fastEmbedR_native_exact_index_build_cpp, 1},
     {"_fastEmbedR_native_exact_index_search_cpp", (DL_FUNC) &_fastEmbedR_native_exact_index_search_cpp, 4},
-    {"_fastEmbedR_native_metal_knn_available_cpp", (DL_FUNC) &_fastEmbedR_native_metal_knn_available_cpp, 0},
-    {"_fastEmbedR_native_metal_knn_cpp", (DL_FUNC) &_fastEmbedR_native_metal_knn_cpp, 5},
-    {"_fastEmbedR_native_metal_query_knn_cpp", (DL_FUNC) &_fastEmbedR_native_metal_query_knn_cpp, 6},
     {"_fastEmbedR_native_cuda_knn_available_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_available_cpp, 0},
     {"_fastEmbedR_native_cuda_memory_info_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_memory_info_cpp, 0},
     {"_fastEmbedR_native_cuda_knn_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_cpp, 7},

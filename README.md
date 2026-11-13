@@ -23,8 +23,8 @@ primary contributions are:
 - native CPU, Apple Metal, and CUDA embedding backends where available;
 - float32 input/output support with float32 native optimizer buffers;
 - explicit backend reporting, with no silent CPU fallback labelled as GPU;
-- native CPU exact, faissR HNSW, and Apple Metal exact/IVF-Flat KNN for one-call
-  embeddings;
+- native CPU exact and faissR HNSW KNN; faissR supplies Apple Metal
+  exact/IVF-Flat KNN for one-call embeddings;
 - optional GPU-resident exact/IVF-Flat CUDA KNN through RAPIDS cuVS.
 
 Resident 2D Metal UMAP currently uses one CPU thread for the first half of

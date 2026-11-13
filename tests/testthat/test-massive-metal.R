@@ -7,7 +7,7 @@ test_that("Metal landmark clustering never falls back silently", {
 })
 
 test_that("file-backed Metal exact KNN matches streamed CPU search", {
-    skip_if_not(fastEmbedR:::native_metal_knn_available_cpp())
+    skip_if_not(fastEmbedR:::fastembedr_metal_knn_available())
     skip_if_not(requireNamespace("float", quietly = TRUE))
     set.seed(1942)
     values <- matrix(stats::rnorm(37L * 5L), ncol = 5L)
@@ -57,7 +57,7 @@ test_that("file-backed Metal KNN rejects unsupported routes", {
         backend = "metal", method = "exact", devices = 0L),
         "requires CUDA")
     with_mocked_bindings(
-        native_metal_knn_available_cpp = function() TRUE,
+        fastembedr_metal_knn_available = function() TRUE,
         {
             expect_error(massive_landmark_knn(source, source, 2L,
                 tempfile(), backend = "metal", method = "hnsw"),
@@ -142,7 +142,7 @@ test_that("Metal PCA resumes a saved fit without repeating covariance", {
 })
 
 test_that("Metal landmark UMAP and t-SNE write file-backed layouts", {
-    skip_if_not(fastEmbedR:::native_metal_knn_available_cpp())
+    skip_if_not(fastEmbedR:::fastembedr_metal_knn_available())
     skip_if_not_installed("float")
     set.seed(1943)
     values <- matrix(stats::rnorm(48L * 4L), ncol = 4L)
@@ -194,7 +194,7 @@ test_that("Metal landmark UMAP and t-SNE write file-backed layouts", {
 
 test_that("Metal landmark communities retain every source row", {
     skip_if_not(fastEmbedR:::graph_clustering_metal_available_cpp())
-    skip_if_not(fastEmbedR:::native_metal_knn_available_cpp())
+    skip_if_not(fastEmbedR:::fastembedr_metal_knn_available())
     skip_if_not_installed("float")
     set.seed(1947)
     values <- rbind(

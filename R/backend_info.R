@@ -41,7 +41,7 @@ available_native_gpu_backend <- function(need_knn = FALSE,
             backend_flag(embedding_cuda_available_cpp))
     if (cuda_ok) return("cuda")
     metal_ok <- (!isTRUE(need_knn) ||
-        backend_flag(native_metal_knn_available_cpp)) &&
+        backend_flag(fastembedr_metal_knn_available)) &&
         (!isTRUE(need_embedding) ||
             backend_flag(embedding_metal_available_cpp))
     if (metal_ok) return("metal")

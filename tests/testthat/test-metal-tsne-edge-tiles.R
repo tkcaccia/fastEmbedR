@@ -4,6 +4,9 @@ test_that("Metal 3D t-SNE tiles retain global offsets past int32", {
     source <- testthat::test_path("..",
         "test_metal_tsne_3d_tiles.cpp")
     skip_if(!file.exists(source), "native tile fixture unavailable")
+    header <- testthat::test_path("..", "..", "src",
+        "metal_tsne_3d_tiles.h")
+    skip_if(!file.exists(header), "source header unavailable")
     output <- tempfile("metal-tsne-tiles-")
     on.exit(unlink(output), add = TRUE)
     build <- suppressWarnings(system2(compiler,

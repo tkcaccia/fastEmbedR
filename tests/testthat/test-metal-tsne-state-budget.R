@@ -4,6 +4,9 @@ test_that("Metal file-backed t-SNE admission rejects oversized state", {
     source <- testthat::test_path("..",
         "test_metal_tsne_state_budget.cpp")
     skip_if(!file.exists(source), "native budget fixture unavailable")
+    header <- testthat::test_path("..", "..", "src",
+        "metal_tsne_state_budget.h")
+    skip_if(!file.exists(header), "source header unavailable")
     output <- tempfile("metal-tsne-budget-")
     on.exit(unlink(output), add = TRUE)
     build <- suppressWarnings(system2(compiler,

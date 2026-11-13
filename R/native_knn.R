@@ -769,7 +769,12 @@ run_native_cpu_knn <- function(data, k, method, metric, output,
     fastembedr_convert_knn_distances(out, output)
 }
 
-validate_native_metal_knn <- function(out) {
+fastembedr_metal_knn_available <- function() {
+    requireNamespace("faissR", quietly = TRUE) &&
+        isTRUE(getFromNamespace("nn_metal_available_cpp", "faissR")())
+}
+
+validate_faissr_metal_knn <- function(out) {
     failed <- identical(out$method, "native_metal_ivf") &&
         !isTRUE(out$target_met)
     if (failed) {
@@ -782,7 +787,7 @@ validate_native_metal_knn <- function(out) {
     out
 }
 
-run_native_metal_knn <- function(data, k, method, metric, output,
+run_faissr_metal_knn <- function(data, k, method, metric, output,
                                     target_recall) {
     if (!method %in% c("auto", "exact", "ivf")) {
         stop("Native Metal KNN supports `auto`, `exact`, and `ivf`.",
@@ -794,8 +799,7 @@ run_native_metal_knn <- function(data, k, method, metric, output,
             call. = FALSE
         )
     }
-    if (!requireNamespace("faissR", quietly = TRUE) ||
-        !isTRUE(getFromNamespace("nn_metal_available_cpp", "faissR")())) {
+    if (!fastembedr_metal_knn_available()) {
         stop("Native Metal KNN is unavailable in this build.",
             call. = FALSE
         )
@@ -807,7 +811,7 @@ run_native_metal_knn <- function(data, k, method, metric, output,
         metric = metric,
         target_recall = target_recall
     )
-    out <- validate_native_metal_knn(out)
+    out <- validate_faissr_metal_knn(out)
     attr(out, "backend") <- "metal"
     attr(out, "exclude_self") <- TRUE
     fastembedr_convert_knn_distances(out, output)
@@ -837,7 +841,7 @@ fastembedr_nn_without_self <- function(data,
         cpu = run_native_cpu_knn(
             data, k, method, metric, output, target_recall, n_threads
         ),
-        metal = run_native_metal_knn(
+        metal = run_faissr_metal_knn(
             data, k, method, metric, output, target_recall
         ),
         stop("Unknown native KNN backend: ", backend, call. = FALSE)
@@ -899,7 +903,7 @@ fastembedr_native_query_knn <- function(data, query, k,
         return(fastembedr_convert_knn_distances(out, output))
     }
     if (identical(backend, "metal")) {
-        out <- native_metal_query_knn_cpp(
+        out <- faissr_metal_query_knn_cpp(
             data, query,
             k = k, method = method, metric = metric,
             target_recall = target_recall

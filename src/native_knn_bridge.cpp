@@ -39,18 +39,6 @@ Rcpp::List native_exact_index_search_impl(SEXP pointer,
                                           SEXP query,
                                           int k,
                                           int n_threads);
-bool native_metal_knn_available_impl();
-Rcpp::List native_metal_knn_impl(SEXP data,
-                                 int k,
-                                 const std::string& method,
-                                 const std::string& metric,
-                                 double target_recall);
-Rcpp::List native_metal_query_knn_impl(SEXP data,
-                                       SEXP query,
-                                       int k,
-                                       const std::string& method,
-                                       const std::string& metric,
-                                       double target_recall);
 bool native_cuda_knn_available_impl();
 Rcpp::List native_cuda_memory_info_impl();
 Rcpp::List native_cuda_knn_impl(SEXP data,
@@ -153,32 +141,6 @@ Rcpp::List native_exact_index_search_cpp(SEXP pointer,
                                          int k,
                                          int n_threads = 1) {
   return native_exact_index_search_impl(pointer, query, k, n_threads);
-}
-
-// [[Rcpp::export]]
-bool native_metal_knn_available_cpp() {
-  return native_metal_knn_available_impl();
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_metal_knn_cpp(SEXP data,
-                                int k,
-                                std::string method = "auto",
-                                std::string metric = "euclidean",
-                                double target_recall = 0.99) {
-  return native_metal_knn_impl(data, k, method, metric, target_recall);
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_metal_query_knn_cpp(SEXP data,
-                                      SEXP query,
-                                      int k,
-                                      std::string method = "auto",
-                                      std::string metric = "euclidean",
-                                      double target_recall = 0.99) {
-  return native_metal_query_knn_impl(
-    data, query, k, method, metric, target_recall
-  );
 }
 
 // [[Rcpp::export]]

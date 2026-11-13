@@ -243,7 +243,6 @@ if [ -n "$cuda_host_cxx" ] && [ ! -x "$cuda_host_cxx" ]; then
 fi
 
 metal_objects="embedding_metal_bridge.o embedding_metal_stub.o"
-metal_objects="$metal_objects native_knn_metal_stub.o"
 metal_objects="$metal_objects graph_clustering_metal_stub.o"
 cppflags=""
 libs="-pthread"
@@ -298,7 +297,6 @@ fi
 if [ "$os_name" = "Darwin" ] && ! is_true "$diagnostic_only"; then
   metal_enabled=1
   metal_objects="embedding_metal_bridge.o embedding_metal_impl.o"
-  metal_objects="$metal_objects native_knn_metal_impl.o"
   metal_objects="$metal_objects graph_clustering_metal_impl.o"
   cppflags="$cppflags -DHAVE_METAL=1"
   objcxxflags='$(CXXFLAGS) -pthread'

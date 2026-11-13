@@ -427,8 +427,12 @@ test_that("tsne landmark mode uses native Metal reference-query KNN", {
         "native_exact_reference_query_knn"
     )
     expect_equal(
-        attr(fit$landmarks$projection_knn, "method"),
+        fit$landmarks$projection_knn$method,
         "native_metal_exact_query"
+    )
+    expect_identical(
+        fit$landmarks$projection_knn$backend_used,
+        "faissr_native_metal_exact_query"
     )
 })
 

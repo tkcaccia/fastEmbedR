@@ -326,7 +326,7 @@ test_that("one-call full UMAP finishes cleanup after interruption", {
 })
 
 test_that("one-call 3D Metal UMAP resumes without CPU fallback", {
-    skip_if_not(fastEmbedR:::native_metal_knn_available_cpp())
+    skip_if_not(fastEmbedR:::fastembedr_metal_knn_available())
     skip_if_not(fastEmbedR:::embedding_metal_available_cpp())
     x <- as.matrix(iris[, 1:4])
     work <- tempfile("full-metal-recovery-")

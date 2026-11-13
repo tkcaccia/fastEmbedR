@@ -369,7 +369,9 @@ test_that("3D Metal one-call fit retains native PCA and FFT", {
     )
     expect_identical(dim(fit$layout), c(120L, 3L))
     expect_true(all(is.finite(fit$layout)))
-    expect_identical(fit$parameters$nn_backend, "metal")
+    expect_identical(
+        fit$parameters$nn_backend, "faissr_native_metal_exact"
+    )
     expect_identical(fit$parameters$init_backend, "metal_mps_rsvd")
     expect_identical(fit$parameters$repulsion, "fft_grid_3d_metal")
     expect_gt(fit$parameters$metal_allocated_bytes_observed, 0)

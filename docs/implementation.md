@@ -17,8 +17,9 @@ introduced by McInnes and colleagues [7,13]. The t-SNE path follows the
 probabilistic neighbor-embedding objective of van der Maaten and Hinton [1],
 with modern interpolation-based optimization ideas from FIt-SNE and openTSNE [3-4].
 The package is intentionally KNN-first. CPU one-call KNN uses native exact
-search or faissR HNSW. Metal exact/IVF-Flat is native; CUDA builds link to
-the Apache-2.0 RAPIDS cuVS C API. Embedding does not call Python or
+search or faissR HNSW. Metal exact/IVF-Flat KNN runs in faissR. One-call
+CUDA matrix KNN uses faissR's FAISS GPU route; selected other CUDA routes
+use the Apache-2.0 RAPIDS cuVS C API. Embedding does not call Python or
 `reticulate`. Graph/affinity
 construction,
 initialization, stochastic optimization, native fixed-reference transforms,
@@ -29,7 +30,7 @@ The public package surface is deliberately small:
 - `precompute_knn()` exposes the same backend policy used by the
   one-call functions, while keeping algorithm and recall tuning internal.
 - `tsne_knn()` and `umap_knn()` consume a supplied KNN object.
-- `tsne()` and `umap()` select CPU/Metal KNN or direct cuVS CUDA KNN and
+- `tsne()` and `umap()` select CPU, faissR Metal, or faissR CUDA KNN and
   then call the corresponding KNN entry point.
 - `pca()` computes backend-native truncated PCA scores and loadings. CPU uses
   fastEmbedR's native blocked rSVD implementation, Metal uses a resident
