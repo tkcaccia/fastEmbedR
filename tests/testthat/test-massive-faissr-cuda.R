@@ -102,3 +102,41 @@ test_that("CUDA landmark embeddings run with faissR and no cuVS", {
     expect_identical(transformed$backend, "cuda")
     expect_true(all(is.finite(as.matrix(transformed$layout))))
 })
+
+test_that("resident CUDA host KNN uses faissR without cuVS", {
+    skip_if_not(faissR::faiss_gpu_available())
+    skip_if(fastEmbedR:::native_cuda_knn_available_cpp())
+    set.seed(1817)
+    data <- matrix(rnorm(61L * 5L), ncol = 5L)
+    found <- fastEmbedR:::fastembedr_nn_without_self(
+        data, k = 4L, backend = "cuda", method = "auto",
+        metric = "euclidean", keep_gpu = FALSE
+    )
+    expect_identical(found$backend_used, "faiss_gpu_single_self")
+    expect_identical(found$result_residency, "host")
+    expect_identical(found$gpu_provider, "faiss_gpu")
+    expect_equal(dim(found$indices), c(61L, 4L))
+    expect_false(any(found$indices == row(found$indices)))
+    distance <- as.matrix(stats::dist(data))
+    diag(distance) <- Inf
+    expected <- t(vapply(seq_len(nrow(data)), function(index) {
+        order(distance[index, ])[seq_len(4L)]
+    }, integer(4L)))
+    expect_equal(found$indices, expected)
+    for (metric in c("cosine", "correlation")) {
+        values <- if (metric == "correlation") {
+            data - rowMeans(data)
+        } else data
+        unit <- values / sqrt(rowSums(values^2))
+        similarity <- tcrossprod(unit)
+        diag(similarity) <- -Inf
+        expected <- t(vapply(seq_len(nrow(data)), function(index) {
+            order(similarity[index, ], decreasing = TRUE)[seq_len(4L)]
+        }, integer(4L)))
+        found <- fastEmbedR:::fastembedr_nn_without_self(
+            data, k = 4L, backend = "cuda", method = "exact",
+            metric = metric, keep_gpu = FALSE
+        )
+        expect_equal(found$indices, expected)
+    }
+})

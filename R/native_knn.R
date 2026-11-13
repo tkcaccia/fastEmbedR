@@ -873,7 +873,14 @@ fastembedr_nn_without_self <- function(data,
     }
     target_recall <- target_recall %||% 0.99
     switch(backend,
-        cuda = run_native_cuda_knn(
+        cuda = if (!isTRUE(keep_gpu) && !isTRUE(retain_data)) {
+            resolved <- if (method == "auto") {
+                fastembedr_embedding_nn_policy("cuda", nrow(data))$method
+            } else if (method == "bruteforce") "exact" else method
+            run_faissr_cuda_embedding_knn(
+                data, k, resolved, metric, output, target_recall
+            )
+        } else run_native_cuda_knn(
             data, k, method, metric, output, target_recall, keep_gpu,
             retain_data
         ),
