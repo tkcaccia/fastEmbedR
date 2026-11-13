@@ -238,8 +238,7 @@ fastembedr_nn_policy_engine <- function(policy, keep_gpu = FALSE,
         return(paste0(prefix, policy$method %||% "auto"))
     }
     if (is.list(policy) && identical(policy$backend, "cpu")) {
-        if (identical(policy$method, "hnsw") &&
-            identical(metric, "euclidean")) {
+        if (identical(policy$method, "hnsw")) {
             return("faissr_cpu_hnsw")
         }
         if (identical(policy$method, "exact")) {
@@ -353,7 +352,7 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' @details
 #' CPU uses faissR Flat exact search below 5,000 observations and
 #' faissR's compiled FAISS HNSW interface for Euclidean distance otherwise.
-#' Cosine and correlation retain native HNSW. HNSW targets recall 0.99; its
+#' Cosine and correlation use faissR HNSW. HNSW targets recall 0.99; its
 #' recall is not audited during each call. Metal uses native exact search below
 #' 4,096 rows and for inputs with at most 50,000 rows, 16,384 columns, and
 #' 125 billion row-pair feature operations; otherwise it uses recall-tuned
@@ -514,7 +513,7 @@ run_precompute_query_knn <- function(reference, query, k, metric,
 #' @details
 #' CPU uses faissR Flat search when the reference has fewer than
 #' 5,000 rows and faissR's compiled FAISS HNSW interface for Euclidean
-#' distance otherwise. Cosine and correlation retain native HNSW. HNSW
+#' distance otherwise. Cosine and correlation use faissR HNSW. HNSW
 #' targets recall 0.99 but does not claim a per-call recall audit. Metal
 #' routes between a native
 #' query-only exact kernel and recall-tuned IVF-Flat from the estimated
@@ -697,7 +696,7 @@ faissr_hnsw_input <- function(x) {
     x
 }
 
-run_faissr_hnsw <- function(data, query, k, output,
+run_faissr_hnsw <- function(data, query, k, metric, output,
                             target_recall, n_threads) {
     loadNamespace("faissR")
     n <- nrow(data)
@@ -708,11 +707,19 @@ run_faissr_hnsw <- function(data, query, k, output,
         data <- faissr_hnsw_input(data)
         query <- if (self) data else faissr_hnsw_input(query)
     }
-    out <- faissr_hnsw_search_cpp(
-        data, if (self) NULL else query,
-        as.integer(n), as.integer(ncol(data)), as.integer(k),
-        target_recall, normalize_nn_threads(n_threads), output
-    )
+    out <- if (identical(metric, "euclidean")) {
+        faissr_hnsw_search_cpp(
+            data, if (self) NULL else query,
+            as.integer(n), as.integer(ncol(data)), as.integer(k),
+            target_recall, normalize_nn_threads(n_threads), output)
+    } else {
+        args <- list(data = data, k = k, exclude_self = self,
+            backend = "cpu", method = "hnsw", metric = metric,
+            output = output, target_recall = target_recall,
+            n_threads = normalize_nn_threads(n_threads))
+        if (!self) args$points <- query
+        do.call(faissR::nn, args)
+    }
     expected_rows <- nrow(query)
     if (!identical(out$index_type, "IndexHNSWFlat") ||
         !identical(out$exact, FALSE) ||
@@ -790,25 +797,14 @@ run_native_cpu_knn <- function(data, k, method, metric, output,
     if (identical(method, "auto")) {
         method <- fastembedr_cpu_knn_method(nrow(data))
     }
-    if (identical(method, "hnsw") && identical(metric, "euclidean")) {
+    if (identical(method, "hnsw")) {
         return(run_faissr_hnsw(
-            data, NULL, k, output, target_recall, n_threads
+            data, NULL, k, metric, output, target_recall, n_threads
         ))
     }
     if (identical(method, "exact")) return(run_faissr_cpu_exact(
         data, NULL, k, metric, output, target_recall, n_threads))
-    native <- native_hnsw_knn_cpp
-    out <- native(
-        data,
-        k = k,
-        n_threads = normalize_nn_threads(n_threads),
-        metric = metric,
-        target_recall = target_recall
-    )
-    attr(out, "backend") <- "cpu"
-    attr(out, "method") <- out$method
-    attr(out, "exclude_self") <- TRUE
-    fastembedr_convert_knn_distances(out, output)
+    stop("Unsupported CPU KNN method.", call. = FALSE)
 }
 
 fastembedr_metal_knn_available <- function() {
@@ -906,23 +902,14 @@ run_native_cpu_query_knn <- function(data, query, k, method, metric,
     if (identical(method, "auto")) {
         method <- fastembedr_cpu_knn_method(nrow(data))
     }
-    if (identical(method, "hnsw") && identical(metric, "euclidean")) {
+    if (identical(method, "hnsw")) {
         return(run_faissr_hnsw(
-            data, query, k, output, target_recall, n_threads
+            data, query, k, metric, output, target_recall, n_threads
         ))
     }
     if (identical(method, "exact")) return(run_faissr_cpu_exact(
         data, query, k, metric, output, target_recall, n_threads))
-    native <- native_hnsw_query_cpp
-    out <- native(
-        data, query, k = k,
-        n_threads = normalize_nn_threads(n_threads),
-        metric = metric, target_recall = target_recall
-    )
-    attr(out, "backend") <- "cpu"
-    attr(out, "method") <- out$method
-    attr(out, "exclude_self") <- FALSE
-    fastembedr_convert_knn_distances(out, output)
+    stop("Unsupported CPU KNN method.", call. = FALSE)
 }
 
 fastembedr_native_query_knn <- function(data, query, k,

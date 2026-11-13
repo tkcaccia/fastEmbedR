@@ -49,7 +49,7 @@ Use `backend = "metal"` on Apple Silicon or `backend = "cuda"` on a CUDA build.
 Explicit GPU requests fail clearly if the backend is unavailable.
 For matrix input, CPU uses exhaustive exact search below 5,000 observations
 and compiled faissR HNSW for larger Euclidean searches. Other supported
-CPU metrics use native HNSW. Metal uses faissR's native exact or IVF-Flat KNN.
+CPU metrics use faissR HNSW. Metal uses faissR's native exact or IVF-Flat KNN.
 CUDA one-call embeddings use faissR's FAISS GPU Flat or IVF-Flat KNN and
 materialize its neighbor result in host memory. With multiple CUDA devices,
 the experimental FAISS replica route divides queries across those GPUs.

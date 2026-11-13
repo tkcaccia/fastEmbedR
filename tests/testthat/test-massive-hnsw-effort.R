@@ -1,44 +1,3 @@
-test_that("persistent HNSW reports explicit search effort", {
-    set.seed(211)
-    reference <- matrix(rnorm(180L * 6L), ncol = 6L)
-    query <- matrix(rnorm(24L * 6L), ncol = 6L)
-    index <- fastEmbedR:::native_hnsw_index_build_cpp(
-        reference, 5L, n_threads = 2L)
-    search <- fastEmbedR:::native_hnsw_index_search_cpp
-    default <- search(index$pointer, query, 5L, 2L)
-    tuned <- search(index$pointer, query, 5L, 2L, 120L)
-    expect_identical(tuned$backend, "cpu")
-    expect_identical(tuned$method, "native_hnsw_query_reused")
-    expect_true(index$spanning_links)
-    expect_true(tuned$spanning_links)
-    expect_identical(tuned$ef_search_used, 120L)
-    expect_true(default$ef_search_used >= 5L)
-    expect_identical(dim(tuned$indices), c(24L, 5L))
-    expect_error(search(index$pointer, query, 5L, 2L, -1L),
-        "Invalid persistent HNSW query")
-    expect_error(search(index$pointer, query, 5L, 2L, 181L),
-        "Invalid persistent HNSW query")
-})
-
-test_that("persistent HNSW reaches every reference at full effort", {
-    set.seed(212)
-    reference <- matrix(rnorm(300L * 20L), ncol = 20L)
-    query <- matrix(rnorm(24L * 20L), ncol = 20L)
-    index <- fastEmbedR:::native_hnsw_index_build_cpp(
-        reference, 8L, n_threads = 2L)
-    exact <- fastEmbedR:::faissr_flat_index_build_cpp(
-        float::fl(reference), 2L)
-    observed <- fastEmbedR:::native_hnsw_index_search_cpp(
-        index$pointer, query, 8L, n_threads = 2L,
-        ef_search = nrow(reference))
-    expected <- fastEmbedR:::faissr_flat_index_search_cpp(
-        exact, float::fl(query), 8L, n_threads = 2L)
-    expect_true(observed$spanning_links)
-    expect_identical(observed$indices, expected$indices)
-    expect_equal(observed$distances, expected$distances,
-        tolerance = 1e-5)
-})
-
 test_that("sharded HNSW uses a memory-bounded query batch", {
     source <- list(nrow = 1000000, ncol = 100L, format = "fbin")
     default <- fastEmbedR:::massive_hnsw_sharded_resources(
@@ -49,41 +8,6 @@ test_that("sharded HNSW uses a memory-bounded query batch", {
     expect_identical(small$chunk_rows, 256L)
     expect_lt(default$query_batches, small$query_batches)
     expect_lt(default$peak_ram_bytes, default$memory_limit_bytes)
-})
-
-test_that("persistent HNSW shares ordinary CPU tuning", {
-    set.seed(214)
-    reference <- matrix(rnorm(90L * 6L), ncol = 6L)
-    ordinary <- fastEmbedR:::native_hnsw_knn_cpp(
-        reference, 30L, 1L, "euclidean", 0.99)
-    persistent <- fastEmbedR:::native_hnsw_index_build_cpp(
-        reference, 30L, n_threads = 1L)
-    for (name in c("tuning_rule", "tuning_shape_group",
-            "tuning_k_bucket", "M", "efConstruction", "efSearch")) {
-        expect_identical(persistent[[name]], ordinary[[name]])
-    }
-    query <- fastEmbedR:::native_hnsw_index_search_cpp(
-        persistent$pointer, reference[1:2, , drop = FALSE], 30L, 1L)
-    expect_identical(query$ef_search_used, persistent$efSearch)
-})
-
-test_that("persistent HNSW batch size leaves neighbors unchanged", {
-    set.seed(217)
-    reference <- matrix(rnorm(120L * 12L), ncol = 12L)
-    index <- fastEmbedR:::native_hnsw_index_build_cpp(
-        reference, 10L, n_threads = 2L)
-    query <- reference[1:24, , drop = FALSE]
-    all <- fastEmbedR:::native_hnsw_index_search_cpp(
-        index$pointer, query, 11L, 2L, 60L)
-    pieces <- lapply(seq.int(1L, 24L, by = 3L), function(first) {
-        fastEmbedR:::native_hnsw_index_search_cpp(index$pointer,
-            query[first:(first + 2L), , drop = FALSE],
-            11L, 2L, 60L)
-    })
-    expect_identical(all$indices,
-        do.call(rbind, lapply(pieces, `[[`, "indices")))
-    expect_equal(all$distances,
-        do.call(rbind, lapply(pieces, `[[`, "distances")))
 })
 
 test_that("sharded HNSW tunes for output k, not the self candidate", {

@@ -72,7 +72,7 @@ source, reference, neighbor count, and backend must match.}
 
 \item{backend}{Execution backend: \code{"cpu"}, \code{"cuda"}, or \code{"metal"}. CPU KNN
 uses faissR Flat exact search below 5,000 rows, FAISS HNSW for larger
-Euclidean searches, and native HNSW for other supported metrics.
+Euclidean searches, and faissR HNSW for other supported metrics.
 Metal KNN uses faissR's native exact or IVF-Flat route. CUDA matrix KNN
 uses faissR FAISS GPU Flat below 100,000 rows or IVF-Flat above that
 threshold, then passes host neighbors to graph construction.

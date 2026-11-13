@@ -33,16 +33,11 @@
       "redistributed_source": false,
       "redistributed_binary": false,
       "linked": false,
-      "linkage": "CPU HNSW and Metal IVF organization are adapted into package source; no FAISS library is linked.",
+      "linkage": "Metal IVF organization is adapted into package source; no FAISS library is linked.",
       "package_files": [
-        "src/native_knn_hnsw.cpp",
         "src/native_knn_metal_impl.mm"
       ],
       "upstream_files": [
-        "faiss/impl/HNSW.h",
-        "faiss/impl/HNSW.cpp",
-        "faiss/IndexHNSW.h",
-        "faiss/IndexHNSW.cpp",
         "faiss/IndexIVF.h",
         "faiss/IndexIVF.cpp",
         "faiss/IndexIVFFlat.h",
@@ -87,27 +82,6 @@
         "src/nn_cuvs_impl.cpp",
         "src/nn_cuda_impl.cpp",
         "src/nn_cuda_kernels.cpp"
-      ],
-      "license_file": "inst/LICENSES/FAISSR-LICENSE",
-      "notice_file": "inst/NOTICE"
-    },
-    {
-      "id": "faissr-hnsw-tuning",
-      "name": "faissR CPU HNSW tuning policy",
-      "classification": "adapted_source",
-      "repository": "https://github.com/tkcaccia/faissR",
-      "revision": "09f4c88fe8af431053a35a945db809a1da22033e",
-      "version": "0.99.48",
-      "license_spdx": "MIT",
-      "copyright": "Stefano Cacciatore",
-      "redistributed_source": false,
-      "redistributed_binary": false,
-      "linked": false,
-      "linkage": "Only the deterministic CPU HNSW recall-0.99 shape, metric, and k parameter policy is adapted; faissR is not called or linked.",
-      "package_files": ["src/native_knn_hnsw_tuning.h"],
-      "upstream_files": [
-        "src/nn_auto_select.cpp",
-        "benchmark_scripts/"
       ],
       "license_file": "inst/LICENSES/FAISSR-LICENSE",
       "notice_file": "inst/NOTICE"

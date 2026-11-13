@@ -124,13 +124,10 @@ selects `M`,
 result records the actual FAISS HNSW engine and effort parameters; the recall
 target is not a per-call recall measurement or guarantee on unseen data.
 If faissR cannot run Euclidean HNSW, the matrix fit fails rather than switching
-to native HNSW. Cosine and correlation retain the native HNSW route and report
-that engine explicitly.
+to native HNSW. Cosine and correlation also use faissR HNSW and report the actual engine.
 
-File-backed, sharded CPU search retains a separate native HNSW index because
-that route builds and queries bounded partitions without loading the full
-matrix. Its native tuning and recall evidence must be evaluated separately
-from faissR-backed in-memory fits.
+File-backed, sharded CPU search builds bounded FAISS HNSW partitions through
+faissR. Its recall must be evaluated separately from in-memory fits.
 
 The Metal implementation has two routes. Exact search assigns one SIMD group
 to each candidate distance and merges per-group top-k lists on device. IVF-Flat

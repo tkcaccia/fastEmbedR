@@ -387,18 +387,14 @@ Ideas reviewed:
 - Faiss-mlx repository: <https://github.com/MLXPorts/Faiss-mlx>
 - Faiss-mlx source commit: `d092af559375144fc719cd88a10e414f92c625fa`
 - Faiss-mlx license: Apache-2.0
-- Current use in `fastEmbedR`: package-native exhaustive float32 CPU search
-  below 5,000 observations and HNSW otherwise, plus native Metal exact and
-  IVF-Flat search. The CPU exact route adapts faissR's metric preprocessing,
-  deterministic top-k, and zero-row behavior without linking FAISS or faissR.
-  The larger-data CPU route is distilled from FAISS's HNSW organization. The
-  Metal fused list-scan/top-k structure was adapted from FAISS and Faiss-mlx.
+- Current use in `fastEmbedR`: CPU Flat and HNSW search call the installed
+  faissR package. Metal exact and IVF-Flat still have native package code.
+  The Metal fused list-scan/top-k structure was adapted from FAISS and
+  Faiss-mlx.
   The package does not link FAISS or MLX.
 
 Implemented locations:
 
-- `src/native_knn_hnsw.cpp`: compact hierarchical graph construction,
-  diversity pruning, reciprocal links, and parallel query search.
 - `src/native_knn_metal_impl.mm`: 128-dimensional signed coarse projection,
   four-pass Metal centroid assignment/update, adaptive 288/384/512-candidate
   shortlist construction, exact full-dimensional reranking, four-stratum

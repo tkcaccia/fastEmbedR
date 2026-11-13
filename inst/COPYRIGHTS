@@ -1,13 +1,5 @@
 Source-file copyright and license map
 
-Files: src/native_knn_hnsw.cpp
-Copyright: Meta Platforms, Inc. and affiliates
-           Stefano Cacciatore
-License: MIT
-Upstream: FAISS 1.14.3 commit
-          0ca9df4792b173d573044ee14ca0704780176e82
-License file: LICENSES/FAISS-LICENSE
-
 Files: src/native_knn_metal_impl.mm
 Copyright: Meta Platforms, Inc. and affiliates
            Sydney Bach, The Solace Project
@@ -27,13 +19,6 @@ Upstream: adapted from faissR commit
 License file: LICENSES/FAISSR-LICENSE
 Comment: Calls installed cuVS libraries; those libraries are not redistributed
          in the package.
-
-Files: src/native_knn_hnsw_tuning.h
-Copyright: Stefano Cacciatore
-License: MIT
-Upstream: adapted from faissR 0.99.48 commit
-          09f4c88fe8af431053a35a945db809a1da22033e
-License file: LICENSES/FAISSR-LICENSE
 
 Files: src/dlpack/dlpack.h
 Copyright: DMLC contributors

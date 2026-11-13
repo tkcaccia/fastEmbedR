@@ -63,8 +63,8 @@ are separate implementations and must be tested outside UCT HPC.
 | Metric | CPU | Metal | CUDA | Notes |
 | --- | --- | --- | --- | --- |
 | `euclidean` | faissR Flat/HNSW | native exact/IVF-Flat | cuVS exact/IVF-Flat | Exact CPU search is selected below 5,000 rows. |
-| `cosine` | faissR Flat/native HNSW | native exact/IVF-Flat | native cuVS | Exact CPU search is selected below 5,000 rows. |
-| `correlation` | faissR Flat/native HNSW | native exact/IVF-Flat | native cuVS | Correlation uses centered, normalized vectors. |
+| `cosine` | faissR Flat/HNSW | native exact/IVF-Flat | native cuVS | Exact CPU search is selected below 5,000 rows. |
+| `correlation` | faissR Flat/HNSW | native exact/IVF-Flat | native cuVS | Correlation uses centered, normalized vectors. |
 
 ## Backend Labels
 

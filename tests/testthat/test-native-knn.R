@@ -43,104 +43,23 @@ metric_knn_reference <- function(x, k, metric) {
     exact_knn_reference(x, k)
 }
 
-test_that("native CPU HNSW reaches its recall tier", {
-    set.seed(4)
-    x <- matrix(rnorm(600 * 12), nrow = 600)
-    truth <- exact_knn_reference(x, 10L)
-    observed <- native_hnsw_knn_cpp(x, 10L, 2L, "euclidean", 0.99)
-
-    expect_identical(dim(observed$indices), c(600L, 10L))
-    expect_gte(knn_recall_test(observed, truth), 0.99)
-    expect_identical(attr(observed, "backend"), "cpu")
-    expect_identical(observed$method, "native_hnsw")
-    expect_false(observed$recall_audited)
-    expect_true(is.na(observed$target_met))
-    expect_identical(
-        observed$recall_status,
-        "calibration_informed_not_runtime_audited"
-    )
-    expect_equal(observed$target_recall, 0.99)
-    expect_identical(observed$tuning_shape_group, "small_n")
-    expect_identical(observed$tuning_k_bucket, 15L)
-    expect_identical(observed$M, 12L)
-    expect_identical(observed$efConstruction, 60L)
-    expect_identical(observed$efSearch, 45L)
-    expect_match(observed$tuning_source, "faissR_0.99.48")
-})
-
-test_that("native CPU HNSW applies metric-aware recall-0.99 tuning", {
+test_that("faissR HNSW preserves metric tuning and recall", {
     set.seed(45)
     x <- matrix(rnorm(450 * 14), nrow = 450)
     expected <- list(
         euclidean = c(12L, 60L, 45L),
         cosine = c(24L, 160L, 120L),
-        correlation = c(48L, 320L, 400L)
-    )
+        correlation = c(48L, 320L, 400L))
     for (metric in names(expected)) {
         truth <- metric_knn_reference(x, 10L, metric)
-        observed <- native_hnsw_knn_cpp(
-            x, 10L, 2L, metric, 0.99
-        )
+        observed <- run_faissr_hnsw(
+            x, NULL, 10L, metric, "double", 0.99, 2L)
         expect_gte(knn_recall_test(observed, truth), 0.99)
-        expect_identical(
-            c(observed$M, observed$efConstruction, observed$efSearch),
-            expected[[metric]]
-        )
-        expect_match(observed$tuning_rule, paste0("_", metric, "_"))
+        expect_identical(observed$backend_used, "faiss_hnsw")
+        expect_identical(observed$method, "faiss_hnsw")
+        expect_identical(c(observed$M, observed$efConstruction,
+            observed$efSearch), expected[[metric]])
     }
-})
-
-test_that("small Euclidean k30 HNSW uses validated search effort", {
-    set.seed(46)
-    x <- matrix(rnorm(600 * 12), nrow = 600)
-    truth <- exact_knn_reference(x, 30L)
-    observed <- native_hnsw_knn_cpp(x, 30L, 2L, "euclidean", 0.99)
-
-    expect_identical(observed$tuning_shape_group, "small_n")
-    expect_identical(observed$tuning_k_bucket, 30L)
-    expect_identical(observed$M, 12L)
-    expect_identical(observed$efConstruction, 80L)
-    expect_identical(observed$efSearch, 120L)
-    expect_match(observed$tuning_rule, "native_adjusted_faissr")
-    expect_gte(knn_recall_test(observed, truth), 0.99)
-
-    query <- native_hnsw_query_cpp(
-        x, x[1:12, , drop = FALSE], 30L, 2L, "euclidean", 0.99
-    )
-    expect_identical(query$efSearch, 120L)
-    expect_match(query$tuning_rule, "native_adjusted_faissr")
-})
-
-test_that("in-sample HNSW keeps neighbors of an early graph point", {
-    set.seed(192)
-    x <- matrix(rnorm(1500L * 128L), nrow = 1500L)
-    x[1401:1500, ] <- x[1401:1500, ] + 20
-    observed <- native_hnsw_knn_cpp(x, 30L, 2L, "euclidean", 0.99)
-    distance <- rowSums(sweep(x, 2L, x[18L, ], "-")^2)
-    distance[18L] <- Inf
-    expected <- head(order(distance, method = "radix"), 30L)
-
-    expect_setequal(observed$indices[18L, ], expected)
-    expect_identical(observed$method, "native_hnsw")
-    expect_false(observed$recall_audited)
-})
-
-test_that("native CPU HNSW rejects unsupported recall tiers", {
-    x <- matrix(rnorm(120), nrow = 30)
-    expect_error(
-        native_hnsw_knn_cpp(x, 5L, 1L, "euclidean", 0.95),
-        "supports target_recall = 0.99"
-    )
-})
-
-test_that("native CPU HNSW construction is invariant to thread count", {
-    set.seed(44)
-    x <- matrix(rnorm(800 * 12), nrow = 800)
-    serial <- native_hnsw_knn_cpp(x, 12L, 1L, "euclidean", 0.99)
-    parallel <- native_hnsw_knn_cpp(x, 12L, 4L, "euclidean", 0.99)
-
-    expect_identical(parallel$indices, serial$indices)
-    expect_identical(parallel$distances, serial$distances)
 })
 
 test_that("native CPU exact search matches exhaustive references", {
@@ -281,45 +200,6 @@ test_that("precompute_knn Metal output is native or fails explicitly", {
     }
 })
 
-test_that("native CPU HNSW supports query-to-reference search", {
-    set.seed(14)
-    reference <- matrix(rnorm(240 * 10), nrow = 240)
-    query <- matrix(rnorm(40 * 10), nrow = 40)
-    truth <- test_exact_knn(reference, query, k = 12L)
-    observed <- native_hnsw_query_cpp(
-        reference, query, 12L, 2L, "euclidean", 0.99
-    )
-
-    expect_identical(dim(observed$indices), c(40L, 12L))
-    expect_gte(knn_recall_test(observed, truth), 0.99)
-    expect_identical(attr(observed, "backend"), "cpu")
-    expect_identical(observed$method, "native_hnsw_query")
-    expect_equal(observed$target_recall, 0.99)
-    expect_false(observed$recall_audited)
-    expect_identical(observed$tuning_shape_group, "small_n")
-    expect_identical(observed$tuning_k_bucket, 15L)
-    expect_identical(c(
-        observed$M,
-        observed$efConstruction,
-        observed$efSearch
-    ), c(12L, 60L, 45L))
-
-    public <- precompute_query_knn(
-        reference,
-        query,
-        k = 12L,
-        backend = "cpu",
-        n.cores = 2L
-    )
-    expect_equal(public$target_recall, 0.99)
-    expect_true(public$recall_audited)
-    expect_true(public$target_met)
-    expect_identical(public$method, "faissr_flat_query")
-    expect_identical(public$engine, "faissr_cpu_flat")
-    expect_identical(public$tuning_policy, "exact_below_5000")
-    expect_equal(knn_recall_test(public, truth), 1)
-})
-
 test_that("native CPU exact query search matches an exhaustive reference", {
     set.seed(47)
     reference <- matrix(rnorm(120 * 8), nrow = 120)
@@ -359,8 +239,8 @@ test_that("large CPU matrix search uses faissR HNSW without fallback", {
     cosine <- precompute_knn(
         x, k = 8L, metric = "cosine", backend = "cpu", n.cores = 2L
     )
-    expect_identical(cosine$engine, "native_cpu_hnsw")
-    expect_identical(cosine$method, "native_hnsw")
+    expect_identical(cosine$engine, "faissr_cpu_hnsw")
+    expect_identical(cosine$method, "faiss_hnsw")
     if (requireNamespace("float", quietly = TRUE)) {
         float_knn <- precompute_knn(
             float::fl(x), k = 8L, backend = "cpu", n.cores = 2L
@@ -382,16 +262,6 @@ test_that("a failed FAISS HNSW call never switches to native HNSW", {
         ),
         "FAISS HNSW unavailable"
     )
-})
-
-test_that("native KNN consumes float32 input without a double input copy", {
-    skip_if_not_installed("float")
-    set.seed(4)
-    x <- float::fl(matrix(rnorm(500 * 8), nrow = 500))
-    observed <- native_hnsw_knn_cpp(x, 8L, 2L, "euclidean", 0.99)
-
-    expect_identical(dim(observed$indices), c(500L, 8L))
-    expect_true(all(is.finite(observed$distances)))
 })
 
 test_that("native Metal exact and IVF searches are recall checked", {

@@ -717,22 +717,6 @@ massive_posting_search_cpp <- function(query_spec, feature_path, ids_path, offse
     .Call(`_fastEmbedR_massive_posting_search_cpp`, query_spec, feature_path, ids_path, offsets_path, centers, first_row, count, k, nprobe, reference_chunk, workers, exclude_self, posting_rows, verbose)
 }
 
-native_hnsw_knn_cpp <- function(data, k, n_threads = 1L, metric = "euclidean", target_recall = 0.99) {
-    .Call(`_fastEmbedR_native_hnsw_knn_cpp`, data, k, n_threads, metric, target_recall)
-}
-
-native_hnsw_query_cpp <- function(data, query, k, n_threads = 1L, metric = "euclidean", target_recall = 0.99) {
-    .Call(`_fastEmbedR_native_hnsw_query_cpp`, data, query, k, n_threads, metric, target_recall)
-}
-
-native_hnsw_index_build_cpp <- function(data, k, n_threads = 1L, metric = "euclidean", target_recall = 0.99) {
-    .Call(`_fastEmbedR_native_hnsw_index_build_cpp`, data, k, n_threads, metric, target_recall)
-}
-
-native_hnsw_index_search_cpp <- function(pointer, query, k, n_threads = 1L, ef_search = 0L) {
-    .Call(`_fastEmbedR_native_hnsw_index_search_cpp`, pointer, query, k, n_threads, ef_search)
-}
-
 native_cuda_knn_available_cpp <- function() {
     .Call(`_fastEmbedR_native_cuda_knn_available_cpp`)
 }

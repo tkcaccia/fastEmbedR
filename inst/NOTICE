@@ -30,12 +30,10 @@ Adapted or vendored source
    Commit: 0ca9df4792b173d573044ee14ca0704780176e82
    License: MIT
    Copyright: Meta Platforms, Inc. and affiliates
-   Package files: src/native_knn_hnsw.cpp,
-                  src/native_knn_metal_impl.mm
-   Upstream files: faiss/impl/HNSW.{h,cpp}, faiss/IndexHNSW.{h,cpp},
-                   faiss/IndexIVF.{h,cpp}, faiss/IndexIVFFlat.{h,cpp}
-   Boundary: the CPU HNSW organization and Metal IVF organization are adapted
-             into native fastEmbedR source. FAISS source and binaries are not
+   Package file: src/native_knn_metal_impl.mm
+   Upstream files: faiss/IndexIVF.{h,cpp}, faiss/IndexIVFFlat.{h,cpp}
+   Boundary: Metal IVF organization is adapted into native fastEmbedR source.
+             FAISS source and binaries are not
              bundled or linked.
    License copy: LICENSES/FAISS-LICENSE
 
@@ -55,21 +53,17 @@ Adapted or vendored source
 3. faissR
 
    Repository: https://github.com/tkcaccia/faissR
-   Commits: f37ea97c5774200025b1480770b8ecbf1d2d7919;
-            09f4c88fe8af431053a35a945db809a1da22033e
-   Versions at commits: 0.99.15; 0.99.48
+   Commit: f37ea97c5774200025b1480770b8ecbf1d2d7919
+   Version at commit: 0.99.15
    License: MIT
    Copyright: Stefano Cacciatore
-   Package files: src/native_knn_cuda_impl.cpp,
-                  src/native_knn_hnsw_tuning.h
+   Package file: src/native_knn_cuda_impl.cpp
    Upstream files: src/nn_cuvs_impl.cpp, src/nn_cuda_impl.cpp,
                    src/nn_cuda_kernels.cpp, src/nn_auto_select.cpp,
                    src/nn_faiss_impl.cpp, src/nn_faiss_bridge.cpp,
                    benchmark_scripts/
-   Boundary: CUDA adapter, buffer-ownership, and tuning organization was
-             distilled into fastEmbedR. The CPU HNSW recall-0.99 selector
-             adapts only the metric/shape/k parameter policy. CPU Flat,
-             Euclidean HNSW, Metal, and multi-GPU FAISS KNN call the
+   Boundary: CUDA adapter and buffer-ownership organization was distilled
+             into fastEmbedR. CPU Flat, CPU HNSW, Metal, and multi-GPU FAISS KNN call the
              installed faissR package through its private compiled interface.
    License copy: LICENSES/FAISSR-LICENSE
 

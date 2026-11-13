@@ -2970,12 +2970,9 @@ test_that("persistent HNSW agrees across bounded query batches", {
         paste0(prefix, c(".indices.u32", ".distances.f32")))))
     source <- massive_matrix(source_path, nrow = 53, ncol = 5)
     landmarks <- massive_matrix(reference_path, nrow = 140, ncol = 5)
-    graph <- with_mocked_bindings(
-        massive_landmark_knn(source, landmarks, 7L, prefix,
-            method = "hnsw", chunk_rows = 9L, n.cores = 2L,
-            memory_limit = "256MB"),
-        native_hnsw_index_build_cpp = function(...) stop("native fallback"),
-        .package = "fastEmbedR")
+    graph <- massive_landmark_knn(source, landmarks, 7L, prefix,
+        method = "hnsw", chunk_rows = 9L, n.cores = 2L,
+        memory_limit = "256MB")
     observed <- read_massive_knn(graph)
     index <- fastEmbedR:::faissr_hnsw_index_build_cpp(
         float::fl(reference), 140L, 5L, 7L, 2L)
@@ -2995,8 +2992,6 @@ test_that("persistent HNSW agrees across bounded query batches", {
     expect_equal(observed$indices, expected$indices)
     expect_equal(observed$distances, expected$distances,
         tolerance = 1e-5)
-    expect_error(fastEmbedR:::native_hnsw_index_search_cpp(
-        new.env(), query, 7L), "live persistent")
 })
 
 test_that("file-backed HNSW uses faissR float32 storage", {
@@ -3021,10 +3016,6 @@ test_that("file-backed HNSW uses faissR float32 storage", {
     expect_equal(observed$indices, expected$indices)
     expect_equal(observed$distances, expected$distances,
         tolerance = 1e-5)
-    buffer <- fastEmbedR:::massive_reference_buffer_cpp(file)
-    fastEmbedR:::native_hnsw_index_build_cpp(buffer, 5L)
-    expect_error(fastEmbedR:::native_hnsw_index_build_cpp(
-        buffer, 5L), "already consumed")
 })
 
 test_that("CUDA projection engine reflects reference and batch costs", {

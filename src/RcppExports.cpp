@@ -3143,67 +3143,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// native_hnsw_knn_cpp
-Rcpp::List native_hnsw_knn_cpp(SEXP data, int k, int n_threads, std::string metric, double target_recall);
-RcppExport SEXP _fastEmbedR_native_hnsw_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP n_threadsSEXP, SEXP metricSEXP, SEXP target_recallSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
-    Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
-    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_hnsw_knn_cpp(data, k, n_threads, metric, target_recall));
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_hnsw_query_cpp
-Rcpp::List native_hnsw_query_cpp(SEXP data, SEXP query, int k, int n_threads, std::string metric, double target_recall);
-RcppExport SEXP _fastEmbedR_native_hnsw_query_cpp(SEXP dataSEXP, SEXP querySEXP, SEXP kSEXP, SEXP n_threadsSEXP, SEXP metricSEXP, SEXP target_recallSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type query(querySEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
-    Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
-    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_hnsw_query_cpp(data, query, k, n_threads, metric, target_recall));
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_hnsw_index_build_cpp
-Rcpp::List native_hnsw_index_build_cpp(SEXP data, int k, int n_threads, std::string metric, double target_recall);
-RcppExport SEXP _fastEmbedR_native_hnsw_index_build_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP n_threadsSEXP, SEXP metricSEXP, SEXP target_recallSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
-    Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
-    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_hnsw_index_build_cpp(data, k, n_threads, metric, target_recall));
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_hnsw_index_search_cpp
-Rcpp::List native_hnsw_index_search_cpp(SEXP pointer, SEXP query, int k, int n_threads, int ef_search);
-RcppExport SEXP _fastEmbedR_native_hnsw_index_search_cpp(SEXP pointerSEXP, SEXP querySEXP, SEXP kSEXP, SEXP n_threadsSEXP, SEXP ef_searchSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type pointer(pointerSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type query(querySEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
-    Rcpp::traits::input_parameter< int >::type ef_search(ef_searchSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_hnsw_index_search_cpp(pointer, query, k, n_threads, ef_search));
-    return rcpp_result_gen;
-END_RCPP
-}
 // native_cuda_knn_available_cpp
 bool native_cuda_knn_available_cpp();
 RcppExport SEXP _fastEmbedR_native_cuda_knn_available_cpp() {
@@ -3667,10 +3606,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_posting_distant_rows_cpp", (DL_FUNC) &_fastEmbedR_massive_posting_distant_rows_cpp, 6},
     {"_fastEmbedR_massive_coarse_postings_cpp", (DL_FUNC) &_fastEmbedR_massive_coarse_postings_cpp, 8},
     {"_fastEmbedR_massive_posting_search_cpp", (DL_FUNC) &_fastEmbedR_massive_posting_search_cpp, 14},
-    {"_fastEmbedR_native_hnsw_knn_cpp", (DL_FUNC) &_fastEmbedR_native_hnsw_knn_cpp, 5},
-    {"_fastEmbedR_native_hnsw_query_cpp", (DL_FUNC) &_fastEmbedR_native_hnsw_query_cpp, 6},
-    {"_fastEmbedR_native_hnsw_index_build_cpp", (DL_FUNC) &_fastEmbedR_native_hnsw_index_build_cpp, 5},
-    {"_fastEmbedR_native_hnsw_index_search_cpp", (DL_FUNC) &_fastEmbedR_native_hnsw_index_search_cpp, 5},
     {"_fastEmbedR_native_cuda_knn_available_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_available_cpp, 0},
     {"_fastEmbedR_native_cuda_memory_info_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_memory_info_cpp, 0},
     {"_fastEmbedR_native_cuda_knn_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_cpp, 7},

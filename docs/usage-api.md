@@ -112,8 +112,7 @@ and confidence for landmark clustering.
 The one-call functions and `precompute_knn()` intentionally hide the KNN
 algorithm choice. Their `backend` accepts only `"cpu"`, `"metal"`, or
 `"cuda"`. CPU KNN uses faissR Flat exact search below 5,000 observations and
-compiled faissR HNSW for larger Euclidean searches, and native HNSW for
-larger cosine or correlation searches. Metal uses native exact/IVF-Flat;
+compiled faissR HNSW for larger searches across supported metrics. Metal uses native exact/IVF-Flat;
 CUDA uses RAPIDS cuVS
 exact or IVF-Flat search and keeps its output resident on the device. A CUDA
 KNN object should therefore be reused with a CUDA embedding
@@ -502,8 +501,7 @@ To reconstruct the original training rows, pass the complementary rows as
 supplied row is treated as a genuinely new observation.
 
 CPU projection uses exhaustive exact search below 5,000 reference rows and
-compiled faissR HNSW for larger Euclidean searches, and native HNSW
-for larger cosine or correlation searches. The HNSW
+compiled faissR HNSW for larger searches across supported metrics. The HNSW
 route is calibrated for target recall 0.99 and reports that recall was not
 audited at runtime. Metal uses native exact search
 for small references and recall-tuned IVF-Flat for larger references, followed

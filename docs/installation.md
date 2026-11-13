@@ -26,9 +26,6 @@ FASTEMBEDR_USE_CUDA=0 \
 R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 ```
 
-The compiled native HNSW implementation remains for file-backed, sharded
-search. It is not substituted for faissR in ordinary in-memory CPU fits.
-
 CPU PCA uses the BLAS linked to R. On Linux, configuration tests whether
 that library is OpenBLAS and whether its single-precision SGEMM works.
 When both checks pass, PCA uses it for large matrix products; otherwise
