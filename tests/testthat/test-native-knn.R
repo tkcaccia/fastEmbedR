@@ -503,7 +503,8 @@ test_that("CUDA resident KNN never silently falls back", {
 })
 
 test_that("CUDA embedding KNN uses the faissR GPU provider", {
-    skip_if_not(isTRUE(faissR::faiss_gpu_available()))
+    skip_if_not(isTRUE(faissR::cuda_available()) &&
+        isTRUE(faissR::faiss_gpu_available()))
     set.seed(817)
     x <- matrix(rnorm(200L * 16L), nrow = 200L)
     truth <- exact_knn_reference(x, 8L)
@@ -533,10 +534,10 @@ test_that("CUDA embedding KNN uses the faissR GPU provider", {
 test_that("precompute_knn CUDA output stays resident or fails explicitly", {
     set.seed(26)
     x <- matrix(rnorm(128 * 8), nrow = 128)
-    if (!isTRUE(native_cuda_knn_available_cpp())) {
+    if (!isTRUE(faissR::cuda_available())) {
         expect_error(
             precompute_knn(x, k = 8L, backend = "cuda"),
-            "Native CUDA KNN"
+            "CUDA|device"
         )
     } else {
         observed <- precompute_knn(x, k = 8L, backend = "cuda")
@@ -625,69 +626,13 @@ test_that("native CUDA exact KNN preserves float32 matrix layout", {
     expect_false(isTRUE(device_knn$cpu_fallback))
 })
 
-test_that("native CUDA exact query KNN matches the CPU oracle", {
-    skip_if_not(
-        isTRUE(native_cuda_knn_available_cpp()),
-        "native CUDA KNN is unavailable"
-    )
-    set.seed(42)
-    reference <- matrix(rnorm(320 * 24), nrow = 320)
-    query <- matrix(rnorm(32 * 24), nrow = 32)
-    truth <- test_exact_knn(reference, query, k = 15L)
-
-    device_knn <- native_cuda_query_knn_cpp(
-        reference, query, 15L, "exact", "euclidean", 0.99,
-        keep_gpu = TRUE
-    )
-    observed <- native_cuda_knn_to_host_cpp(device_knn)
-
-    expect_identical(dim(observed$indices), c(32L, 15L))
-    expect_equal(knn_recall_test(observed, truth), 1, tolerance = 1e-8)
-    expect_true(all(is.finite(observed$distances)))
-    expect_false(isTRUE(device_knn$cpu_fallback))
-})
-
-test_that("native CUDA query KNN bounds temporary query memory", {
-    skip_if_not(
-        isTRUE(native_cuda_knn_available_cpp()),
-        "native CUDA KNN is unavailable"
-    )
-    set.seed(43)
-    reference <- matrix(rnorm(32 * 6), nrow = 32)
-    query <- matrix(rnorm(32769 * 6), nrow = 32769)
-    device_knn <- native_cuda_query_knn_cpp(
-        reference, query, 5L, "exact", "euclidean", 0.99,
-        keep_gpu = TRUE
-    )
-    observed <- native_cuda_knn_to_host_cpp(device_knn)
-    rows <- c(1L, 32768L, 32769L)
-    truth <- test_exact_knn(reference, query[rows, , drop = FALSE], 5L)
-
-    expect_identical(device_knn$search_batch_size, 32768L)
-    expect_equal(device_knn$peak_temporary_query_bytes, 32768 * 6 * 4)
-    expect_lt(device_knn$peak_temporary_query_bytes, nrow(query) * 6 * 4)
-    expect_identical(observed$indices[rows, , drop = FALSE], truth$indices)
-    expect_false(isTRUE(device_knn$cpu_fallback))
-})
-
-test_that("native CUDA IVF query KNN reuses its batch buffer", {
-    skip_if_not(
-        isTRUE(native_cuda_knn_available_cpp()),
-        "native CUDA KNN is unavailable"
-    )
-    set.seed(44)
-    reference <- matrix(rnorm(2000 * 6), nrow = 2000)
-    query <- matrix(rnorm(32769 * 6), nrow = 32769)
-    device_knn <- native_cuda_query_knn_cpp(
-        reference, query, 5L, "ivf", "euclidean", 0.99,
-        keep_gpu = TRUE
-    )
-    observed <- native_cuda_knn_to_host_cpp(device_knn)
-
-    expect_identical(dim(observed$indices), c(32769L, 5L))
-    expect_true(all(observed$indices >= 1L))
-    expect_true(all(observed$indices <= nrow(reference)))
-    expect_identical(device_knn$search_batch_size, 32768L)
-    expect_equal(device_knn$peak_temporary_query_bytes, 32768 * 6 * 4)
-    expect_false(isTRUE(device_knn$cpu_fallback))
+test_that("CUDA query KNN has no fastEmbedR native implementation", {
+    expect_false(exists(
+        "native_cuda_query_knn_cpp", asNamespace("fastEmbedR"),
+        inherits = FALSE
+    ))
+    expect_true(exists(
+        "run_faissr_cuda_query_knn", asNamespace("fastEmbedR"),
+        inherits = FALSE
+    ))
 })

@@ -3261,23 +3261,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// native_cuda_query_knn_cpp
-Rcpp::List native_cuda_query_knn_cpp(SEXP data, SEXP query, int k, std::string method, std::string metric, double target_recall, bool keep_gpu);
-RcppExport SEXP _fastEmbedR_native_cuda_query_knn_cpp(SEXP dataSEXP, SEXP querySEXP, SEXP kSEXP, SEXP methodSEXP, SEXP metricSEXP, SEXP target_recallSEXP, SEXP keep_gpuSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type query(querySEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
-    Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
-    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
-    Rcpp::traits::input_parameter< bool >::type keep_gpu(keep_gpuSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_cuda_query_knn_cpp(data, query, k, method, metric, target_recall, keep_gpu));
-    return rcpp_result_gen;
-END_RCPP
-}
 // native_cuda_knn_to_host_cpp
 Rcpp::List native_cuda_knn_to_host_cpp(SEXP knn);
 RcppExport SEXP _fastEmbedR_native_cuda_knn_to_host_cpp(SEXP knnSEXP) {
@@ -3696,7 +3679,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_native_cuda_knn_available_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_available_cpp, 0},
     {"_fastEmbedR_native_cuda_memory_info_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_memory_info_cpp, 0},
     {"_fastEmbedR_native_cuda_knn_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_cpp, 7},
-    {"_fastEmbedR_native_cuda_query_knn_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_query_knn_cpp, 7},
     {"_fastEmbedR_native_cuda_knn_to_host_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_to_host_cpp, 1},
     {"_fastEmbedR_native_cuda_index_build_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_index_build_cpp, 4},
     {"_fastEmbedR_native_cuda_index_search_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_index_search_cpp, 3},

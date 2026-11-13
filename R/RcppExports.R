@@ -753,10 +753,6 @@ native_cuda_knn_cpp <- function(data, k, method = "auto", metric = "euclidean", 
     .Call(`_fastEmbedR_native_cuda_knn_cpp`, data, k, method, metric, target_recall, keep_gpu, retain_data)
 }
 
-native_cuda_query_knn_cpp <- function(data, query, k, method = "auto", metric = "euclidean", target_recall = 0.99, keep_gpu = TRUE) {
-    .Call(`_fastEmbedR_native_cuda_query_knn_cpp`, data, query, k, method, metric, target_recall, keep_gpu)
-}
-
 native_cuda_knn_to_host_cpp <- function(knn) {
     .Call(`_fastEmbedR_native_cuda_knn_to_host_cpp`, knn)
 }
