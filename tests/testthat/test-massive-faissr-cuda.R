@@ -140,3 +140,37 @@ test_that("resident CUDA host KNN uses faissR without cuVS", {
         expect_equal(found$indices, expected)
     }
 })
+
+test_that("faissR resident CUDA KNN feeds both optimizers", {
+    skip_if_not(faissR::faiss_gpu_available())
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    skip_if(fastEmbedR:::native_cuda_knn_available_cpp())
+    set.seed(2217)
+    data <- matrix(rnorm(43L * 5L), ncol = 5L)
+    knn <- fastEmbedR:::fastembedr_nn_without_self(
+        data, 5L, "cuda", "exact", "euclidean", keep_gpu = TRUE
+    )
+    expect_s3_class(knn, "faissR_gpu_knn")
+    expect_identical(knn$result_residency, "cuda")
+    expect_identical(knn$gpu_provider, "faiss_gpu")
+    expect_identical(knn$device_to_host_result_copies, 0L)
+    host <- fastEmbedR:::fastembedr_gpu_knn_to_host(knn)
+    distance <- as.matrix(stats::dist(data))
+    diag(distance) <- Inf
+    expected <- t(vapply(seq_len(nrow(data)), function(index) {
+        order(distance[index, ])[seq_len(5L)]
+    }, integer(5L)))
+    expect_equal(host$indices, expected)
+    expect_identical(attr(host, "gpu_resident_source"), TRUE)
+    umap_fit <- fastEmbedR:::fast_knn_umap(
+        knn, backend = "cuda", n_components = 2L
+    )
+    expect_equal(dim(umap_fit), c(43L, 2L))
+    expect_true(all(is.finite(umap_fit)))
+    tsne_fit <- fastEmbedR:::tsne_knn(
+        knn, backend = "cuda", perplexity = 1.5,
+        n_neighbors = 5L, early_exaggeration_iter = 3L, n_iter = 3L
+    )
+    expect_equal(dim(tsne_fit), c(43L, 2L))
+    expect_true(all(is.finite(tsne_fit)))
+})

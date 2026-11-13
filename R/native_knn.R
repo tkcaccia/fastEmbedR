@@ -36,6 +36,14 @@ fastembedr_gpu_knn_to_host <- function(knn) {
     if (!fastembedr_is_gpu_knn(knn)) {
         return(knn)
     }
+    if (inherits(knn, "faissR_gpu_knn")) {
+        out <- faissR::gpu_knn_to_host(knn)
+        attr(out, "gpu_resident_source") <- TRUE
+        attr(out, "gpu_backend_used") <- knn$backend_used
+        attr(out, "backend") <- knn$backend_used
+        attr(out, "exclude_self") <- knn$exclude_self
+        return(out)
+    }
     native_provider <- inherits(knn, "fastEmbedR_gpu_knn") ||
         startsWith(as.character(knn$gpu_provider %||% ""), "fastEmbedR_native_")
     if (!native_provider) {
@@ -579,6 +587,25 @@ run_native_cuda_knn <- function(data, k, method, metric, output,
         stop("CUDA native KNN supports `auto`, `exact`, and `ivf`.",
             call. = FALSE
         )
+    }
+    exact <- method %in% c("exact", "flat", "bruteforce") ||
+        (method == "auto" && nrow(data) < 100000L)
+    if (exact && isTRUE(keep_gpu) && !isTRUE(retain_data)) {
+        if (!isTRUE(faissR::faiss_gpu_available())) stop(
+            "faissR CUDA KNN is unavailable; no fallback was used.",
+            call. = FALSE)
+        out <- faissr_cuda_resident_knn_cpp(
+            data, k, "exact", metric, target_recall
+        )
+        if (!inherits(out, "faissR_gpu_knn") ||
+            !identical(out$result_residency, "cuda") ||
+            !isTRUE(out$exclude_self) || !isTRUE(out$exact) ||
+            !identical(as.integer(out$k), as.integer(k)) ||
+            !identical(as.integer(out$n_query), as.integer(nrow(data))) ||
+            isTRUE(out$cpu_fallback)) stop(
+            "faissR did not return exact resident CUDA KNN.",
+            call. = FALSE)
+        return(out)
     }
     if (!isTRUE(native_cuda_knn_available_cpp())) {
         stop("Native CUDA KNN is unavailable; no fallback was used.",

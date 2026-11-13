@@ -301,6 +301,10 @@ faissr_gpu_multi_knn_cpp <- function(data, k, method, devices, nlist, nprobe, sh
     .Call(`_fastEmbedR_faissr_gpu_multi_knn_cpp`, data, k, method, devices, nlist, nprobe, shard, output)
 }
 
+faissr_cuda_resident_knn_cpp <- function(data, k, method, metric, target_recall) {
+    .Call(`_fastEmbedR_faissr_cuda_resident_knn_cpp`, data, k, method, metric, target_recall)
+}
+
 faissr_gpu_index_build_cpp <- function(data, k, method, devices, nlist, nprobe, shard) {
     .Call(`_fastEmbedR_faissr_gpu_index_build_cpp`, data, k, method, devices, nlist, nprobe, shard)
 }

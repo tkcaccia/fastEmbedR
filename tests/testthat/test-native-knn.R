@@ -484,9 +484,10 @@ test_that("one-call routing uses native CPU and Metal KNN", {
     )
 })
 
-test_that("native CUDA KNN never silently falls back", {
+test_that("CUDA resident KNN never silently falls back", {
     expect_type(native_cuda_knn_available_cpp(), "logical")
-    if (!isTRUE(native_cuda_knn_available_cpp())) {
+    if (!isTRUE(native_cuda_knn_available_cpp()) &&
+        !isTRUE(faissR::faiss_gpu_available())) {
         expect_error(
             fastembedr_nn_without_self(
                 matrix(rnorm(64), nrow = 16),
@@ -496,7 +497,7 @@ test_that("native CUDA KNN never silently falls back", {
                 metric = "euclidean",
                 keep_gpu = TRUE
             ),
-            "Native CUDA KNN"
+            "faissR CUDA KNN is unavailable"
         )
     }
 })
