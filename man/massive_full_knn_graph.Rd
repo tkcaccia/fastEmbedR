@@ -110,11 +110,12 @@ effective build thread count in \code{hnsw_settings}.
 CUDA \code{method = "exact"} builds and queries bounded faissR GPU Flat shards.
 It also scans the full query source per shard, so this exact route is a
 correctness baseline rather than a billion-row ANN solution. A CUDA
-\code{method = "ivf_sharded"} uses the existing native cuVS IVF-Flat index
-within each shard. It remains approximate across shards; request
-\code{audit_rows} to measure sampled full-graph ID recall. Each per-shard
-pilot gates both distance recall and minimum row ID recall; it does
-not guarantee untouched rows. CUDA requests never fall back to CPU.
+\code{method = "ivf_sharded"} uses a persistent faissR GPU IVF-Flat index
+within each shard on one device. It remains approximate across
+shards; request \code{audit_rows} to measure sampled full-graph ID recall.
+Each shard pilot compares up to 256 fixed query rows with a faissR
+CPU Flat reference and gates distance and minimum row ID recall.
+It does not guarantee untouched rows. CUDA search never falls back.
 Metal exact search reads bounded float32 reference and query batches,
 executes the existing native Metal query kernel, and merges global IDs
 into the same file-backed graph. It re-uploads each reference shard for

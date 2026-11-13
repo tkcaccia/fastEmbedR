@@ -99,6 +99,18 @@ Rcpp::List faissr_gpu_index_search_cpp(SEXP index, SEXP query, int k) {
 }
 
 // [[Rcpp::export]]
+int faissr_gpu_index_set_nprobe_cpp(SEXP index, int nprobe) {
+  Rcpp::Function load_namespace =
+      Rcpp::Environment::base_env()["loadNamespace"];
+  load_namespace("faissR");
+  if (faissR_c_api_version() != 1) {
+    Rcpp::stop("Unsupported faissR C API version");
+  }
+  return Rcpp::as<int>(faissR_get_gpu_index_set_nprobe_v1()(
+      index, Rcpp::wrap(nprobe)));
+}
+
+// [[Rcpp::export]]
 SEXP faissr_metal_knn_cpp(SEXP data, int k,
                           std::string method,
                           std::string metric,

@@ -1040,7 +1040,8 @@ test_that("sharded CUDA exact KNN matches the streamed CPU graph", {
 })
 
 test_that("sharded CUDA IVF reports approximate full-graph recall", {
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+    skip_if_not(faissR::faiss_gpu_available())
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
     set.seed(1604)
     x <- matrix(stats::rnorm(120L * 6L), ncol = 6L)
     source_path <- write_massive_matrix_fixture(x)
@@ -1060,7 +1061,11 @@ test_that("sharded CUDA IVF reports approximate full-graph recall", {
         chunk_rows = 10L, reference_chunk_rows = 70L,
         memory_limit = "512MB", audit_rows = 12L)
     expect_identical(graph$backend, "cuda")
-    expect_identical(graph$method, "native_cuda_cuvs_ivf_sharded")
+    expect_identical(graph$method, "faiss_gpu_ivf_sharded")
+    expect_identical(graph$knn_provider, "faissR")
+    expect_length(graph$ivf_settings, graph$resources$n_shards)
+    expect_true(all(vapply(graph$ivf_settings, function(setting)
+        setting$pilot_min_row_recall >= 0.99, logical(1L))))
     expect_false(graph$exact)
     expect_true(graph$recall_audited)
     expect_identical(graph$audit_rows, 12L)

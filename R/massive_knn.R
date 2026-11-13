@@ -176,7 +176,8 @@ massive_faissr_cuda_reference <- function(data, k, method,
         !isTRUE(index$index_reused)) stop(
             "faissR did not build the requested persistent CUDA index.",
             call. = FALSE)
-    list(matrix = NULL, index = index, provider = "faissR",
+    list(matrix = if (method == "ivf") data else NULL,
+        index = index, provider = "faissR",
         build_seconds = unname(proc.time()[[3L]] - started),
         reference_storage = storage,
         tuning_source = params$tuning_benchmark_source)
@@ -231,6 +232,8 @@ massive_knn_query <- function(state, query, k, method,
                     call. = FALSE)
             out$backend <- out$backend_used
             out$method <- method
+            if (!is.null(state$pilot))
+                out[names(state$pilot)] <- state$pilot
             return(out)
         }
         return(native_cuda_index_search_cpp(state$index, query, k))
@@ -651,9 +654,10 @@ massive_knn_query_storage <- function(x, setup, state) {
 #' or IVF-Flat search retain references across query batches. Metal exact
 #' search retains a host float32 reference but reuploads it each batch.
 #' CUDA needs faissR FAISS GPU support for the single-device landmark route.
-#' Sharded landmark CUDA search also uses faissR. Full-graph CUDA IVF still
-#' needs native cuVS. faissR IVF uses a heuristic
-#' setting until a separate exact-reference recall audit is run;
+#' Sharded landmark CUDA search also uses faissR. Single-device
+#' full-graph CUDA IVF uses persistent faissR shard indices; explicit
+#' multi-device full-graph IVF still uses native cuVS. Landmark faissR
+#' IVF uses a heuristic until a separate exact-reference audit is run;
 #' native IVF-Flat calibrates on the first query batch;
 #' pilot recall is not guaranteed for later rows. For CUDA IVF,
 #' `pilot_recall` counts distance-equivalent ties at the exact kth distance;
@@ -1357,7 +1361,7 @@ massive_cuda_sharded_resources <- function(x, k, chunk_rows,
         exclude_self = TRUE, method = "exact") {
     if (x$format == "memory") stop(
         "Sharded CUDA search needs a file source.", call. = FALSE)
-    info <- massive_cuda_shard_info(exclude_self, method)
+    info <- massive_cuda_shard_info()
     if (exclude_self && k > 255L) stop("CUDA k exceeds 255.", call. = FALSE)
     limit <- massive_memory_bytes(memory_limit)
     requested <- reference_chunk_rows %||% min(x$nrow, 250000L)
@@ -1400,16 +1404,10 @@ massive_cuda_sharded_resources <- function(x, k, chunk_rows,
         output_bytes = query_rows * k * 8, memory_limit_bytes = limit)
 }
 
-massive_cuda_shard_info <- function(exclude_self, method) {
-    if (!exclude_self || method == "exact") {
-        if (!isTRUE(faissR::faiss_gpu_available())) stop(
-            "Sharded CUDA KNN requires faissR GPU.", call. = FALSE)
-        return(massive_cuda_memory_cpp())
-    }
-    if (!native_cuda_knn_available_cpp()) stop(
-        "Full CUDA KNN requires native cuVS; no CPU fallback was used.",
-        call. = FALSE)
-    native_cuda_memory_info_cpp()
+massive_cuda_shard_info <- function() {
+    if (!isTRUE(faissR::faiss_gpu_available())) stop(
+        "Sharded CUDA KNN requires faissR GPU.", call. = FALSE)
+    massive_cuda_memory_cpp()
 }
 
 massive_metal_sharded_resources <- function(x, k, chunk_rows,
@@ -1531,7 +1529,8 @@ massive_sharded_probe <- function(x, state, setup, saved, method,
         backend, count) {
     if (is.null(saved) || saved$state$completed_rows == 0) return()
     rows <- as.integer(min(setup$resources$chunk_rows, x$nrow))
-    query <- massive_sharded_query(x, 1L, rows, method, backend)
+    query <- massive_sharded_query(x, 1L, rows, method, backend,
+        setup$cuda_provider %||% "native")
     found <- massive_knn_query(state, query,
         as.integer(min(setup$k + 1, count)),
         method, setup$workers, backend, setup$ef_search %||% 0L)
@@ -1542,11 +1541,11 @@ massive_sharded_probe <- function(x, state, setup, saved, method,
 }
 
 massive_sharded_query <- function(x, first, rows, method,
-        backend = "cpu") {
+        backend = "cpu", cuda_provider = "native") {
     view <- massive_matrix_rows(x, first, rows)
     if (method %in% c("faiss_hnsw", "exact") && backend == "cpu" ||
         backend == "metal" ||
-        (backend == "cuda" && method == "exact")) return(
+        (backend == "cuda" && cuda_provider == "faissR")) return(
         massive_read_rows_cpp(
         view, 1L, rows, 4 * rows * x$ncol, TRUE))
     massive_reference_buffer_cpp(view)
@@ -1557,17 +1556,20 @@ massive_saved_ivf_setting <- function(saved, shard) {
     saved$state$ivf_settings[[shard + 1L]]
 }
 
-massive_sharded_result_valid <- function(found, method, backend) {
+massive_sharded_result_valid <- function(found, method, backend,
+        cuda_provider) {
     if (backend == "metal") {
         identical(found$backend, "metal") &&
             identical(found$method, "native_metal_exact_query") &&
             isTRUE(found$exact)
     } else if (backend == "cuda") {
-        if (method == "exact") {
+        if (cuda_provider == "faissR") {
             identical(found$backend_used,
                 "faiss_gpu_persistent_query") &&
                 identical(found$method, method) &&
-                isTRUE(found$index_reused)
+                isTRUE(found$index_reused) &&
+                (method != "ivf" || isTRUE(
+                    found$pilot_min_row_recall >= 0.99))
         } else identical(found$backend,
             "native_cuda_cuvs_ivf_flat") &&
             identical(found$method, method)
@@ -1582,11 +1584,13 @@ massive_sharded_batch <- function(x, setup, parts, state, shard,
         first, count, query_first, method, backend, saved) {
     rows <- as.integer(min(setup$resources$chunk_rows,
         x$nrow - query_first + 1))
-    query <- massive_sharded_query(x, query_first, rows, method, backend)
+    query <- massive_sharded_query(x, query_first, rows, method,
+        backend, setup$cuda_provider %||% "native")
     local_k <- as.integer(min(setup$k + 1, count))
     found <- massive_knn_query(state, query, local_k,
         method, setup$workers, backend, setup$ef_search %||% 0L)
-    valid <- massive_sharded_result_valid(found, method, backend)
+    valid <- massive_sharded_result_valid(found, method, backend,
+        setup$cuda_provider %||% "native")
     if (!valid) stop("Sharded KNN changed algorithm or backend.", call. = FALSE)
     ivf_setting <- if (method == "ivf") {
         massive_sharded_ivf_setting(found, shard, first, count)
@@ -1638,6 +1642,51 @@ massive_sharded_ivf_setting <- function(found, shard, first, count) {
             pilot_recall_metric = found$pilot_recall_metric))
 }
 
+massive_faissr_ivf_pilot <- function(x, state, setup, count) {
+    rows <- as.integer(min(256L, x$nrow))
+    query <- massive_sharded_query(x, 1L, rows, "ivf", "cuda",
+        "faissR")
+    k <- as.integer(min(setup$k + 1L, count))
+    exact <- utils::getFromNamespace(
+        "nn_faiss_flat_float32_cpp", "faissR")(
+            state$matrix, query, k, FALSE,
+            setup$workers, "euclidean", "double")
+    if (!isTRUE(exact$exact) ||
+        !identical(dim(exact$indices), c(rows, k))) stop(
+        "faissR IVF pilot did not obtain an exact reference.",
+        call. = FALSE)
+    probe <- as.integer(state$index$nprobe)
+    attempts <- 0L
+    repeat {
+        attempts <- attempts + 1L
+        found <- massive_knn_query(state, query, k,
+            "ivf", setup$workers, "cuda")
+        if (!identical(found$nprobe, probe)) stop(
+            "faissR IVF index changed nprobe unexpectedly.",
+            call. = FALSE)
+        id <- vapply(seq_len(rows), function(i)
+            mean(found$indices[i, ] %in% exact$indices[i, ]), 0.0)
+        distance <- vapply(seq_len(rows), function(i)
+            massive_recall_distance_row(exact$distances[i, ],
+                found$distances[i, ]), 0.0)
+        if ((mean(distance) >= 0.995 && min(id) >= 0.99) ||
+            probe == state$index$nlist) break
+        probe <- as.integer(min(state$index$nlist,
+            max(probe + 1L, probe * 2L)))
+        faissr_gpu_index_set_nprobe_cpp(state$index$pointer, probe)
+        state$index$nprobe <- probe
+    }
+    if (mean(distance) < 0.99 || min(id) < 0.99) stop(
+        "faissR IVF pilot did not meet 0.99 recall.", call. = FALSE)
+    state$pilot <- list(pilot_rows = rows,
+        tuning_attempts = attempts, pilot_recall = mean(distance),
+        pilot_id_recall = mean(id),
+        pilot_min_row_recall = min(id),
+        pilot_recall_metric = "distance_at_k")
+    state$matrix <- NULL
+    state
+}
+
 massive_hnsw_add_setting <- function(settings, observed) {
     if (is.null(observed)) return(settings)
     c(settings, list(observed))
@@ -1663,22 +1712,23 @@ massive_index_shard <- function(x, setup, parts, shard,
     count <- base + as.integer(shard < extra)
     reference <- massive_matrix_rows(x, first, count)
     tuning_k <- as.integer(min(setup$k + (backend != "cpu"), count))
-    method <- if (setup$method == "ivf_sharded") "ivf" else
-        if (backend == "cpu") "faiss_hnsw" else "exact"
+    method <- if (setup$method == "ivf_sharded") "ivf" else if
+        (backend == "cpu") "faiss_hnsw" else "exact"
     provider <- setup$cuda_provider %||% "native"
     state <- massive_knn_reference(reference, tuning_k,
         method, setup$build_workers %||% setup$workers, backend,
         hnsw_build = setup$hnsw_build, cuda_provider = provider)
-    if (backend == "cpu" && !identical(state$index$method,
-        "faissr_hnsw_persistent")) stop(
+    if (backend == "cuda" && method == "ivf" && provider == "faissR")
+        state <- massive_faissr_ivf_pilot(x, state, setup, count)
+    if (backend == "cpu" &&
+        state$index$method != "faissr_hnsw_persistent") stop(
             "Expected CPU HNSW index was not built.", call. = FALSE)
     hnsw_settings <- massive_sharded_hnsw_setting(state, setup,
         shard, first, count, backend)
     ivf_setting <- massive_saved_ivf_setting(saved, shard)
     massive_sharded_probe(x, state, setup, saved, method, backend, count)
-    if (shard == 0L && !is.null(saved))
-        massive_sharded_restore_first(parts,
-            saved$state$completed_rows, setup$k)
+    if (shard == 0L && !is.null(saved)) massive_sharded_restore_first(
+        parts, saved$state$completed_rows, setup$k)
     query_first <- (saved$state$completed_rows %||% 0) + 1
     while (query_first <= x$nrow) {
         if (!identical(source_identity,
@@ -1691,8 +1741,7 @@ massive_index_shard <- function(x, setup, parts, shard,
         if (is.null(ivf_setting)) ivf_setting <- batch$ivf_setting
         query_first <- query_first + batch$rows
     }
-    if (method == "ivf" && is.null(ivf_setting)) stop(
-        "Sharded IVF result has no effective settings.", call. = FALSE)
+    if (method == "ivf" && is.null(ivf_setting)) stop("Missing IVF settings.")
     if (!is.null(saved)) {
         saved$state$hnsw_settings <- massive_hnsw_add_setting(
             saved$state$hnsw_settings %||% list(), hnsw_settings)
@@ -1713,7 +1762,9 @@ massive_sharded_result <- function(x, paths, setup, backend,
         paths[["indices"]]), x$nrow, setup$k)
     graph$backend <- backend
     graph$method <- if (setup$method == "ivf_sharded") {
-        "native_cuda_cuvs_ivf_sharded"
+        if (identical(setup$cuda_provider, "faissR"))
+            "faiss_gpu_ivf_sharded" else
+            "native_cuda_cuvs_ivf_sharded"
     } else if (backend == "cuda") {
         "faiss_gpu_flat_sharded"
     } else if (backend == "metal") {
@@ -1779,7 +1830,8 @@ massive_sharded_graph <- function(x, k, output, n.cores,
     setup <- list(k = k, workers = normalize_nn_threads(n.cores),
         resources = resources, method = method, ef_search = ef_search,
         hnsw_build = hnsw_build, checkpoint_every = checkpoint_every,
-        cuda_provider = if (backend == "cuda" && method == "exact")
+        cuda_provider = if (backend == "cuda" &&
+            method %in% c("exact", "ivf_sharded"))
             "faissR" else NULL,
         build_workers = if (checkpoint && backend == "cpu") 1L else
             normalize_nn_threads(n.cores))
@@ -1987,11 +2039,12 @@ massive_full_knn_controls <- function(x, k, backend, method,
 #' CUDA `method = "exact"` builds and queries bounded faissR GPU Flat shards.
 #' It also scans the full query source per shard, so this exact route is a
 #' correctness baseline rather than a billion-row ANN solution. A CUDA
-#' `method = "ivf_sharded"` uses the existing native cuVS IVF-Flat index
-#' within each shard. It remains approximate across shards; request
-#' `audit_rows` to measure sampled full-graph ID recall. Each per-shard
-#' pilot gates both distance recall and minimum row ID recall; it does
-#' not guarantee untouched rows. CUDA requests never fall back to CPU.
+#' `method = "ivf_sharded"` uses a persistent faissR GPU IVF-Flat index
+#' within each shard on one device. It remains approximate across
+#' shards; request `audit_rows` to measure sampled full-graph ID recall.
+#' Each shard pilot compares up to 256 fixed query rows with a faissR
+#' CPU Flat reference and gates distance and minimum row ID recall.
+#' It does not guarantee untouched rows. CUDA search never falls back.
 #' Metal exact search reads bounded float32 reference and query batches,
 #' executes the existing native Metal query kernel, and merges global IDs
 #' into the same file-backed graph. It re-uploads each reference shard for

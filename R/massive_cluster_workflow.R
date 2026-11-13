@@ -444,8 +444,9 @@ massive_cluster_landmark_request <- function(x, method, massive,
     checkpoint_every <- massive_cluster_checkpoint_controls(
         checkpoint, resume, checkpoint_every)
     backend <- massive_cluster_backend(method, backend)
-    if (backend == "cuda" && !native_cuda_knn_available_cpp())
-        stop("CUDA KNN unavailable; no CPU fallback.", call. = FALSE)
+    if (backend == "cuda" && !isTRUE(faissR::faiss_gpu_available()))
+        stop("faissR CUDA KNN unavailable; no CPU fallback.",
+            call. = FALSE)
     workers <- normalize_nn_threads(n.cores)
     if (parallel.mode == "fit" && workers > 32L) stop(
         "CPU fit mode supports at most 32 workers.", call. = FALSE)

@@ -1,5 +1,6 @@
 test_that("sharded IVF records effective settings", {
-    found <- list(backend = "native_cuda_cuvs_ivf_flat",
+    found <- list(backend_used = "faiss_gpu_persistent_query",
+        backend = "faiss_gpu_persistent_query", index_reused = TRUE,
         method = "ivf", nlist = 64L, nprobe = 16L,
         pilot_rows = 32L, tuning_attempts = 2L,
         pilot_recall = 1, pilot_id_recall = 1,
@@ -33,7 +34,8 @@ test_that("sharded IVF rejects changed settings on resume", {
     root <- tempfile("ivf_settings_")
     dir.create(root)
     on.exit(unlink(root, recursive = TRUE))
-    found <- list(backend = "native_cuda_cuvs_ivf_flat",
+    found <- list(backend_used = "faiss_gpu_persistent_query",
+        backend = "faiss_gpu_persistent_query", index_reused = TRUE,
         method = "ivf", nlist = 64L, nprobe = 16L,
         pilot_rows = 32L, tuning_attempts = 2L,
         pilot_recall = 1, pilot_id_recall = 1,
@@ -41,7 +43,7 @@ test_that("sharded IVF rejects changed settings on resume", {
         pilot_recall_metric = "distance_at_k")
     setup <- list(k = 2L, workers = 1L,
         resources = list(chunk_rows = 2L),
-        checkpoint_every = 1L)
+        checkpoint_every = 1L, cuda_provider = "faissR")
     saved <- list(state = list(completed_rows = 0L,
         pilot_signature = "already-recorded"),
         path = file.path(root, "checkpoint.rds"))
@@ -70,7 +72,7 @@ test_that("single-GPU IVF graph exposes per-shard settings", {
     setting <- list(shard = 1L, nlist = 64L, nprobe = 16L)
     setup <- list(k = 2L, method = "ivf_sharded", ef_search = 0L,
         hnsw_build = NULL, resources = list(),
-        checkpoint_every = 100L)
+        checkpoint_every = 100L, cuda_provider = "faissR")
     paths <- c(indices = "graph.indices.u32",
         distances = "graph.distances.f32")
     with_mocked_bindings(
@@ -84,12 +86,13 @@ test_that("single-GPU IVF graph exposes per-shard settings", {
                 list(), list(setting))
             expect_identical(graph$ivf_settings, list(setting))
             expect_identical(graph$method,
-                "native_cuda_cuvs_ivf_sharded")
+                "faiss_gpu_ivf_sharded")
         }, .package = "fastEmbedR")
 })
 
 test_that("single-GPU IVF resumes a completed reference shard", {
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+    skip_if_not(faissR::faiss_gpu_available())
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
     root <- tempfile("ivf_shard_resume_")
     dir.create(root)
     on.exit(unlink(root, recursive = TRUE))
@@ -110,7 +113,8 @@ test_that("single-GPU IVF resumes a completed reference shard", {
     parts <- stats::setNames(paste0(paths, ".part"), names(paths))
     setup <- list(k = 3L, workers = 1L, build_workers = 1L,
         resources = resources, method = "ivf_sharded",
-        ef_search = 0L, hnsw_build = NULL, checkpoint_every = 2L)
+        ef_search = 0L, hnsw_build = NULL, checkpoint_every = 2L,
+        cuda_provider = "faissR")
     saved <- fastEmbedR:::massive_sharded_checkpoint(source,
         setup, paths, "cuda", FALSE)
     fastEmbedR:::massive_index_shard(source, setup, parts, 0L,

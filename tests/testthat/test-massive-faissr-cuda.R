@@ -174,6 +174,27 @@ test_that("full-graph exact CUDA KNN uses faissR and excludes self", {
     }
 })
 
+test_that("private faissR IVF index updates nprobe in place", {
+    skip_if_not_installed("float")
+    skip_if_not(faissR::faiss_gpu_available())
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    set.seed(1152)
+    data <- float::fl(matrix(rnorm(400L * 8L), ncol = 8L))
+    index <- fastEmbedR:::faissr_gpu_index_build_cpp(
+        data, 4L, "ivf", 0L, 8L, 2L, FALSE)
+    query <- float::fl(as.matrix(data[1:5, ]))
+    expect_identical(fastEmbedR:::faissr_gpu_index_set_nprobe_cpp(
+        index$pointer, 8L), 8L)
+    found <- fastEmbedR:::faissr_gpu_index_search_cpp(
+        index$pointer, query, 4L)
+    exact <- faissR::nn(as.matrix(data), as.matrix(query),
+        k = 4L, backend = "cpu", method = "flat", n_threads = 1L)
+    expect_identical(found$nprobe, 8L)
+    expect_equal(found$indices, exact$indices)
+    expect_error(fastEmbedR:::faissr_gpu_index_set_nprobe_cpp(
+        index$pointer, 9L), "nprobe")
+})
+
 test_that("CUDA landmark embeddings run with faissR and no cuVS", {
     skip_if_not_installed("float")
     skip_if_not(faissR::faiss_gpu_available())
