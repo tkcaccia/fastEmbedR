@@ -598,6 +598,8 @@ massive_knn_device_result_check <- function(result, task, view,
         reference, k, method, paths) {
     if (!is.list(result) ||
         !identical(result$backend, "cuda") ||
+        !identical(result$knn_provider, "faissR") ||
+        !identical(result$query_storage, "R_float32") ||
         !identical(result$method, method) ||
         !identical(result$nrow, view$nrow) ||
         !identical(result$ncol, k) ||
@@ -1021,13 +1023,19 @@ massive_full_knn_payload_bytes <- function(graph, candidates,
 
 massive_full_knn_devices_result <- function(graph, candidates,
         method, devices, output_bytes, disk_bytes, started) {
+    if (!identical(candidates$knn_provider, "faissR") ||
+        !identical(candidates$query_storage, "R_float32")) stop(
+        "Multi-GPU KNN candidates did not use faissR.",
+        call. = FALSE)
     graph$backend <- "cuda"
     graph$exact <- method == "exact"
-    graph$method <- paste0("native_cuda_cuvs_",
-        if (graph$exact) "exact" else "ivf", "_multigpu_sharded")
+    graph$method <- paste0("faiss_gpu_",
+        if (graph$exact) "flat" else "ivf", "_multigpu_sharded")
     graph$spanning_links <- graph$recall_audited <- FALSE
     graph$target_recall <- if (graph$exact) NA_real_ else 0.99
-    graph$query_storage <- "native_float32"
+    graph$query_storage <- "R_float32"
+    graph$knn_provider <- "faissR"
+    graph$faissr_identity <- candidates$faissr_identity
     graph$gpu_devices <- devices
     graph$gpu_identity <- candidates$gpu_identity
     graph$per_device <- candidates$per_device

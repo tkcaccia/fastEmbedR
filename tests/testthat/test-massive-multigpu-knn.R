@@ -25,6 +25,31 @@ test_that("multi-GPU KNN worker detects input replacement", {
         .package = "fastEmbedR")
 })
 
+test_that("multi-GPU graph reports the verified faissR provider", {
+    result <- fastEmbedR:::massive_full_knn_devices_result
+    graph <- list(indices_path = "indices", distances_path = "distances")
+    candidates <- list(knn_provider = "faissR",
+        query_storage = "R_float32", faissr_identity = "source-locked",
+        gpu_identity = c("GPU-A", "GPU-B"), per_device = list(),
+        source_identity = "input", resources = list(output_bytes = 64),
+        build_seconds = 1, query_seconds = 2)
+    with_mocked_bindings(
+        massive_full_knn_payload_bytes = function(...) 64,
+        {
+            found <- result(graph, candidates, "ivf_sharded",
+                c(0L, 1L), 32, 64, proc.time()[[3L]])
+            expect_identical(found$method,
+                "faiss_gpu_ivf_multigpu_sharded")
+            expect_identical(found$knn_provider, "faissR")
+            expect_identical(found$query_storage, "R_float32")
+            expect_identical(found$faissr_identity, "source-locked")
+            candidates$knn_provider <- "fastEmbedR_native"
+            expect_error(result(graph, candidates, "ivf_sharded",
+                c(0L, 1L), 32, 64, proc.time()[[3L]]),
+                "did not use faissR")
+        }, .package = "fastEmbedR")
+})
+
 test_that("interrupted multi-GPU IVF shards restart from row one", {
     root <- tempfile("ivf_restart_")
     dir.create(root)
@@ -110,6 +135,7 @@ test_that("multi-GPU IVF resume keeps only verified complete shards", {
                 complete$row_range[[1L]],
                 diff(complete$row_range) + 1)
             result <- list(backend = "cuda", method = "sharded_ivf",
+                knn_provider = "faissR", query_storage = "R_float32",
                 nrow = view$nrow, ncol = 2L, n_reference = source$nrow,
                 indices_path = finished[[1L]],
                 distances_path = finished[[2L]],

@@ -542,7 +542,7 @@ test_that("two CUDA devices produce one exact full KNN graph", {
         memory_limit = "512MB", audit_rows = 10L)
     expect_identical(gpu$gpu_devices, c(0L, 1L))
     expect_identical(gpu$method,
-        "native_cuda_cuvs_exact_multigpu_sharded")
+        "faiss_gpu_flat_multigpu_sharded")
     expect_true(gpu$exact)
     expect_length(gpu$per_device, 2L)
     expect_identical(vapply(gpu$per_device, function(item)
@@ -609,7 +609,9 @@ test_that("two CUDA devices run IVF shards with audited recall", {
         reference_chunk_rows = 70L, memory_limit = "512MB",
         audit_rows = 12L)
     expect_identical(graph$method,
-        "native_cuda_cuvs_ivf_multigpu_sharded")
+        "faiss_gpu_ivf_multigpu_sharded")
+    expect_identical(graph$knn_provider, "faissR")
+    expect_identical(graph$query_storage, "R_float32")
     expect_false(graph$exact)
     expect_true(graph$recall_audited)
     expect_identical(graph$audit_scope, "untouched_query_rows")
