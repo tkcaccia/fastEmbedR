@@ -600,6 +600,8 @@ massive_knn_device_result_check <- function(result, task, view,
         !identical(result$backend, "cuda") ||
         !identical(result$knn_provider, "faissR") ||
         !identical(result$query_storage, "R_float32") ||
+        !identical(result$faissr_identity,
+            massive_faissr_identity()) ||
         !identical(result$method, method) ||
         !identical(result$nrow, view$nrow) ||
         !identical(result$ncol, k) ||

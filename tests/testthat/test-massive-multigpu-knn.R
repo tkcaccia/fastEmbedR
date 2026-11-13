@@ -152,6 +152,7 @@ test_that("multi-GPU IVF resume keeps only verified complete shards", {
                 diff(complete$row_range) + 1)
             result <- list(backend = "cuda", method = "sharded_ivf",
                 knn_provider = "faissR", query_storage = "R_float32",
+                faissr_identity = fastEmbedR:::massive_faissr_identity(),
                 nrow = view$nrow, ncol = 2L, n_reference = source$nrow,
                 indices_path = finished[[1L]],
                 distances_path = finished[[2L]],
