@@ -32,6 +32,35 @@ test_that("coordinated CUDA graph fit uses selected GPUs", {
     }, .package = "fastEmbedR")
 })
 
+test_that("one CUDA device uses the coordinated graph algorithm", {
+    graph <- list(from = c(1L, 2L, 3L),
+        to = c(2L, 3L, 4L), weight = rep(1, 3L),
+        n_vertices = 4L)
+    with_mocked_bindings({
+        fit <- graph_cluster(graph, method = "louvain",
+            backend = "cuda", devices = 0L)
+        expect_identical(fit$gpu_devices, 0L)
+        expect_identical(fit$gpu_identity, "gpu0")
+        expect_identical(fit$implementation,
+            "resident_cuda_coordinated_host_sync")
+    },
+    massive_validate_devices = function(devices, backend, nrow)
+        as.integer(devices),
+    massive_cuda_device_uuids = function(devices) "gpu0",
+    massive_auto_cuda_free = function(...) 8 * 1024^3,
+    graph_clustering_cuda_available_cpp = function() TRUE,
+    fastembedr_graph_cluster_cuda_devices_cpp = function(..., devices) {
+        expect_identical(devices, 0L)
+        list(membership = c(1L, 1L, 2L, 2L),
+            modularity = 0.2, n_communities = 2L,
+            gpu_devices = devices,
+            implementation = "resident_cuda_coordinated_host_sync")
+    },
+    fastembedr_graph_cluster_cuda_cpp = function(...) {
+        stop("uncoordinated CUDA fallback")
+    }, .package = "fastEmbedR")
+})
+
 test_that("landmark clustering sends both GPUs to one shared fit", {
     graph <- list(from = c(1L, 2L, 3L),
         to = c(2L, 3L, 4L), weight = rep(1, 3L),
@@ -81,7 +110,7 @@ test_that("resident CUDA graph devices reject unsupported controls", {
     graph <- list(from = 1L, to = 2L, weight = 1,
         n_vertices = 2L)
     expect_error(graph_cluster(graph, backend = "cuda",
-        devices = 0L), "at least two")
+        devices = integer()), "at least one")
     with_mocked_bindings({
         expect_error(graph_cluster(graph, backend = "cuda",
             n.cores = 2L,

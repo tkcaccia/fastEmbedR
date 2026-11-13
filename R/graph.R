@@ -246,9 +246,9 @@ graph_cluster_call_args <- function(graph, settings) {
     )
 }
 
-run_graph_cluster_multigpu <- function(graph, settings, options) {
+run_graph_cluster_devices <- function(graph, settings, options) {
     if (settings$n.cores != 1L)
-        stop("Resident multi-GPU clustering cannot use CPU workers.",
+        stop("Resident CUDA device clustering cannot use CPU workers.",
             call. = FALSE)
     graph_cluster_require_gpu("cuda")
     identity <- massive_cuda_device_uuids(settings$devices)
@@ -267,7 +267,7 @@ run_graph_cluster_multigpu <- function(graph, settings, options) {
 run_graph_cluster_backend <- function(graph, settings) {
     options <- any(!vapply(settings$options, is.null, FALSE))
     if (!is.null(settings$devices)) return(
-        run_graph_cluster_multigpu(graph, settings, options))
+        run_graph_cluster_devices(graph, settings, options))
     if (settings$n.cores > 1L && (settings$backend != "cpu" ||
         settings$consensus ||
         (!settings$parallel.fit &&
@@ -583,8 +583,9 @@ graph_cluster_input_controls <- function(graph, landmarks, k,
 #'   community updates can yield different partitions for the same seed.
 #'   Matrix input with explicit `landmarks` returns a
 #'   `fastEmbedR_landmark_clusters` result with all-row labels.
-#' @param devices Optional vector of at least two distinct CUDA device IDs
-#'   for a coordinated resident fit. Requires `backend = "cuda"`.
+#' @param devices Optional vector of one or more distinct CUDA device IDs
+#'   for a coordinated resident fit. One device uses the same algorithm as
+#'   multiple devices. Requires `backend = "cuda"`.
 #' @references
 #' Blondel VD, Guillaume JL, Lambiotte R, Lefebvre E. Fast unfolding of
 #' communities in large networks. J Stat Mech. 2008;2008:P10008.
@@ -730,8 +731,8 @@ graph_cluster_resident <- function(graph, method, backend,
     if (settings$parallel.fit && settings$n.cores > 32L) stop(
         "CPU fit mode supports at most 32 workers.", call. = FALSE)
     if (!is.null(devices)) {
-        if (length(devices) < 2L) stop(
-            "Resident multi-GPU clustering needs at least two devices.",
+        if (length(devices) < 1L) stop(
+            "Resident CUDA clustering needs at least one device.",
             call. = FALSE)
         settings$devices <- massive_validate_devices(devices,
             settings$backend, graph$n_vertices)

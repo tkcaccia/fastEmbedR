@@ -88,8 +88,9 @@ communities. No original feature matrix is used by these options.}
 propose moves for one shared partition; coarsening and Leiden
 refinement remain serial.}
 
-\item{devices}{Optional vector of at least two distinct CUDA device IDs
-for a coordinated resident fit. Requires \code{backend = "cuda"}.}
+\item{devices}{Optional vector of one or more distinct CUDA device IDs
+for a coordinated resident fit. One device uses the same algorithm as
+multiple devices. Requires \code{backend = "cuda"}.}
 
 \item{parallel.mode}{\code{"restarts"} preserves parallel independent
 runs; \code{"fit"} parallelizes local moves within one CPU fit.}

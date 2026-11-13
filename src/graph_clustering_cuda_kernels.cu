@@ -1085,7 +1085,7 @@ fastembedr_graph_accel::MoveResult graph_local_move_cuda_devices_impl(
     bool refinement,
     const std::vector<int>& devices) {
   using fastembedr_graph_accel::MoveResult;
-  if (devices.size() < 2 ||
+  if (devices.size() < 1 ||
       devices.size() > static_cast<std::size_t>(graph.n) ||
       initial.size() != static_cast<std::size_t>(graph.n) ||
       (refinement &&

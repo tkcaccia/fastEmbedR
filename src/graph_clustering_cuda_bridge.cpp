@@ -64,15 +64,15 @@ Rcpp::List fastembedr_graph_cluster_cuda_devices_cpp(
 #ifdef FASTEMBEDR_HAS_CUDA
   namespace accel = fastembedr_graph_accel;
   int count = 0;
-  if (cudaGetDeviceCount(&count) != cudaSuccess || count < 2 ||
-      devices.size() < 2 || devices.size() > static_cast<std::size_t>(count) ||
+  if (cudaGetDeviceCount(&count) != cudaSuccess || count < 1 ||
+      devices.size() < 1 || devices.size() > static_cast<std::size_t>(count) ||
       n_vertices < devices.size() ||
       n_runs < 1 || n_iterations < 1 ||
       (method != "louvain" && method != "leiden") ||
       !std::isfinite(resolution) || resolution <= 0.0 ||
       !std::isfinite(seed) || seed != std::floor(seed) ||
       std::abs(seed) > INT_MAX) {
-    Rcpp::stop("Invalid resident multi-GPU clustering controls.");
+    Rcpp::stop("Invalid resident CUDA device clustering controls.");
   }
   std::vector<int> selected(devices.begin(), devices.end());
   std::vector<bool> seen(static_cast<std::size_t>(count), false);
@@ -138,6 +138,6 @@ Rcpp::List fastembedr_graph_cluster_cuda_devices_cpp(
   result["estimated_host_sync_bytes"] = sync_bytes;
   return result;
 #else
-  Rcpp::stop("Resident multi-GPU clustering requires CUDA.");
+  Rcpp::stop("Resident CUDA device clustering requires CUDA.");
 #endif
 }
