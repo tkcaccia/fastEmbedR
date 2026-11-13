@@ -1642,6 +1642,15 @@ massive_sharded_ivf_setting <- function(found, shard, first, count) {
             pilot_recall_metric = found$pilot_recall_metric))
 }
 
+massive_faissr_ivf_search <- function(state, query, k, workers) {
+    tryCatch(massive_knn_query(state, query, k, "ivf",
+        workers, "cuda"), error = function(error) {
+        if (!grepl("FAISS returned fewer neighbors than requested",
+            conditionMessage(error), fixed = TRUE)) stop(error)
+        NULL
+    })
+}
+
 massive_faissr_ivf_pilot <- function(x, state, setup, count) {
     rows <- as.integer(min(256L, x$nrow))
     query <- massive_sharded_query(x, 1L, rows, "ivf", "cuda",
@@ -1659,16 +1668,19 @@ massive_faissr_ivf_pilot <- function(x, state, setup, count) {
     attempts <- 0L
     repeat {
         attempts <- attempts + 1L
-        found <- massive_knn_query(state, query, k,
-            "ivf", setup$workers, "cuda")
-        if (!identical(found$nprobe, probe)) stop(
+        found <- massive_faissr_ivf_search(state, query, k,
+            setup$workers)
+        if (!is.null(found) && !identical(found$nprobe, probe)) stop(
             "faissR IVF index changed nprobe unexpectedly.",
             call. = FALSE)
-        id <- vapply(seq_len(rows), function(i)
-            mean(found$indices[i, ] %in% exact$indices[i, ]), 0.0)
-        distance <- vapply(seq_len(rows), function(i)
-            massive_recall_distance_row(exact$distances[i, ],
-                found$distances[i, ]), 0.0)
+        id <- distance <- 0
+        if (!is.null(found)) {
+            id <- vapply(seq_len(rows), function(i)
+                mean(found$indices[i, ] %in% exact$indices[i, ]), 0.0)
+            distance <- vapply(seq_len(rows), function(i)
+                massive_recall_distance_row(exact$distances[i, ],
+                    found$distances[i, ]), 0.0)
+        }
         if ((mean(distance) >= 0.995 && min(id) >= 0.99) ||
             probe == state$index$nlist) break
         probe <- as.integer(min(state$index$nlist,

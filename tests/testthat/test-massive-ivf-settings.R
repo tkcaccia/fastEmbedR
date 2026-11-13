@@ -30,6 +30,20 @@ test_that("sharded IVF records effective settings", {
         found, 1L, 101L, 500L), "effective tuning settings")
 })
 
+test_that("IVF pilot retries sparse FAISS results but stops other errors", {
+    with_mocked_bindings(
+        massive_knn_query = function(...) stop(
+            "FAISS returned fewer neighbors than requested"),
+        expect_null(fastEmbedR:::massive_faissr_ivf_search(
+            NULL, NULL, 5L, 1L)),
+        .package = "fastEmbedR")
+    with_mocked_bindings(
+        massive_knn_query = function(...) stop("CUDA device error"),
+        expect_error(fastEmbedR:::massive_faissr_ivf_search(
+            NULL, NULL, 5L, 1L), "CUDA device error"),
+        .package = "fastEmbedR")
+})
+
 test_that("sharded IVF rejects changed settings on resume", {
     root <- tempfile("ivf_settings_")
     dir.create(root)
@@ -127,6 +141,7 @@ test_that("single-GPU IVF resumes a completed reference shard", {
         memory_limit = "512MB", checkpoint = TRUE,
         resume = TRUE, checkpoint_every = 2L)
     expect_true(observed$resumed)
-    expect_equal(massive_read_graph_edges(observed, 1L, 40L),
-        massive_read_graph_edges(expected, 1L, 40L))
+    expect_equal(fastEmbedR:::massive_read_graph_edges(
+        observed, 1L, 40L),
+        fastEmbedR:::massive_read_graph_edges(expected, 1L, 40L))
 })
