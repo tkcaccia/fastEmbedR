@@ -199,3 +199,29 @@ test_that("CUDA reference queries use faissR host and device results", {
     observed <- fastEmbedR:::fastembedr_gpu_knn_to_host(device)
     expect_identical(observed$indices, expected)
 })
+
+test_that("resident faissR IVF is checked against exact pilot rows", {
+    skip_if_not(faissR::faiss_gpu_available())
+    set.seed(2271)
+    data <- matrix(rnorm(10000L * 5L), ncol = 5L)
+    result <- fastEmbedR:::fastembedr_nn_without_self(
+        data, 5L, backend = "cuda", method = "ivf",
+        metric = "euclidean", target_recall = 0.99,
+        keep_gpu = TRUE
+    )
+    expect_s3_class(result, "faissR_gpu_knn")
+    expect_identical(result$result_residency, "cuda")
+    expect_true(isTRUE(result$target_met))
+    expect_true(isTRUE(result$recall_audited))
+    expect_gte(result$pilot_recall, 0.99)
+    expect_length(result$pilot_rows, 256L)
+    weak <- fastEmbedR:::faissr_gpu_multi_knn_cpp(
+        data, 5L, "ivf", 0L, 240L, 1L, FALSE, "gpu"
+    )
+    expect_error(
+        fastEmbedR:::fastembedr_audit_resident_ivf(
+            data, weak, 5L, 0.99
+        ),
+        "below target|invalid pilot IDs"
+    )
+})

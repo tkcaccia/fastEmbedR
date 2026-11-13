@@ -590,22 +590,13 @@ run_native_cuda_knn <- function(data, k, method, metric, output,
     }
     exact <- method %in% c("exact", "flat", "bruteforce") ||
         (method == "auto" && nrow(data) < 100000L)
-    if (exact && isTRUE(keep_gpu) && !isTRUE(retain_data)) {
-        if (!isTRUE(faissR::faiss_gpu_available())) stop(
-            "faissR CUDA KNN is unavailable; no fallback was used.",
-            call. = FALSE)
-        out <- faissr_cuda_resident_knn_cpp(
-            data, k, "exact", metric, target_recall
-        )
-        if (!inherits(out, "faissR_gpu_knn") ||
-            !identical(out$result_residency, "cuda") ||
-            !isTRUE(out$exclude_self) || !isTRUE(out$exact) ||
-            !identical(as.integer(out$k), as.integer(k)) ||
-            !identical(as.integer(out$n_query), as.integer(nrow(data))) ||
-            isTRUE(out$cpu_fallback)) stop(
-            "faissR did not return exact resident CUDA KNN.",
-            call. = FALSE)
-        return(out)
+    if (isTRUE(keep_gpu) && !isTRUE(retain_data)) {
+        if (exact) return(run_faissr_cuda_resident_exact(
+            data, k, metric, target_recall))
+        if (identical(metric, "euclidean")) {
+            return(run_faissr_cuda_resident_ivf(
+                data, k, target_recall))
+        }
     }
     if (!isTRUE(native_cuda_knn_available_cpp())) {
         stop("Native CUDA KNN is unavailable; no fallback was used.",
@@ -622,6 +613,98 @@ run_native_cuda_knn <- function(data, k, method, metric, output,
         retain_data = isTRUE(retain_data)
     )
     if (keep_gpu) out else fastembedr_convert_knn_distances(out, output)
+}
+
+run_faissr_cuda_resident_exact <- function(data, k, metric,
+                                            target_recall) {
+    if (!isTRUE(faissR::faiss_gpu_available())) stop(
+        "faissR CUDA KNN is unavailable; no fallback was used.",
+        call. = FALSE)
+    out <- faissr_cuda_resident_knn_cpp(
+        data, k, "exact", metric, target_recall
+    )
+    if (!inherits(out, "faissR_gpu_knn") ||
+        !identical(out$result_residency, "cuda") ||
+        !isTRUE(out$exclude_self) || !isTRUE(out$exact) ||
+        !identical(as.integer(out$k), as.integer(k)) ||
+        !identical(as.integer(out$n_query), as.integer(nrow(data))) ||
+        isTRUE(out$cpu_fallback)) stop(
+        "faissR did not return exact resident CUDA KNN.",
+        call. = FALSE)
+    out
+}
+
+fastembedr_audit_resident_ivf <- function(data, knn, k, target_recall) {
+    rows <- unique(as.integer(round(seq(
+        1, nrow(data), length.out = min(256L, nrow(data))
+    ))))
+    sampled <- faissr_gpu_knn_sample_cpp(knn, rows)
+    found <- sampled$indices
+    if (!identical(dim(found), c(length(rows), as.integer(k))) ||
+        anyNA(found) || any(found < 1L | found > nrow(data))) {
+        stop("faissR resident IVF returned invalid pilot IDs.",
+            call. = FALSE)
+    }
+    reference <- faissR::nn(
+        data, points = data[rows, , drop = FALSE],
+        k = k + 1L, exclude_self = FALSE, backend = "cpu",
+        method = "flat", metric = "euclidean", output = "double"
+    )
+    if (!isTRUE(reference$exact) ||
+        !startsWith(reference$backend_used %||% "", "faiss_flat_")) {
+        stop("faissR did not return an exact CPU pilot reference.",
+            call. = FALSE)
+    }
+    row_recall <- vapply(seq_along(rows), function(i) {
+        ids <- found[i, ]
+        if (anyDuplicated(ids) || rows[i] %in% ids) return(0)
+        truth <- reference$indices[i, ]
+        truth <- truth[truth != rows[i]][seq_len(k)]
+        sum(ids %in% truth) / k
+    }, numeric(1L))
+    mean_recall <- mean(row_recall)
+    if (mean_recall < target_recall) stop(
+        "faissR resident IVF pilot recall ",
+        format(mean_recall, digits = 5L), " is below target ",
+        target_recall, ".", call. = FALSE)
+    list(
+        rows = rows, mean = mean_recall, minimum = min(row_recall),
+        reference_backend = reference$backend_used
+    )
+}
+
+run_faissr_cuda_resident_ivf <- function(data, k, target_recall) {
+    if (!isTRUE(faissR::faiss_gpu_available())) stop(
+        "faissR CUDA KNN is unavailable; no fallback was used.",
+        call. = FALSE)
+    params <- utils::getFromNamespace("cuda_ivf_params", "faissR")(
+        nrow(data), ncol(data), k, "euclidean", target_recall
+    )
+    out <- faissr_gpu_multi_knn_cpp(
+        data, as.integer(k), "ivf", 0L,
+        as.integer(params$nlist), as.integer(params$nprobe),
+        FALSE, "gpu"
+    )
+    if (!inherits(out, "faissR_gpu_knn") ||
+        !identical(out$result_residency, "cuda") ||
+        !isTRUE(out$exclude_self) || isTRUE(out$exact) ||
+        !identical(as.integer(out$k), as.integer(k)) ||
+        !identical(as.integer(out$n_query), as.integer(nrow(data))) ||
+        isTRUE(out$cpu_fallback)) stop(
+        "faissR did not return resident CUDA IVF KNN.",
+        call. = FALSE)
+    pilot <- fastembedr_audit_resident_ivf(data, out, k, target_recall)
+    out$nlist <- as.integer(params$nlist)
+    out$nprobe <- as.integer(params$nprobe)
+    out$target_recall <- target_recall
+    out$pilot_recall <- pilot$mean
+    out$pilot_min_row_recall <- pilot$minimum
+    out$pilot_rows <- pilot$rows
+    out$pilot_reference_backend <- pilot$reference_backend
+    out$recall_audited <- TRUE
+    out$recall_status <- "fixed_rows_exact_reference"
+    out$target_met <- TRUE
+    out
 }
 
 run_faissr_cuda_embedding_knn <- function(data, k, method, metric,

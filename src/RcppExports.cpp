@@ -1297,6 +1297,18 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// faissr_gpu_knn_sample_cpp
+SEXP faissr_gpu_knn_sample_cpp(SEXP result, Rcpp::IntegerVector rows);
+RcppExport SEXP _fastEmbedR_faissr_gpu_knn_sample_cpp(SEXP resultSEXP, SEXP rowsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type result(resultSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type rows(rowsSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_gpu_knn_sample_cpp(result, rows));
+    return rcpp_result_gen;
+END_RCPP
+}
 // faissr_cuda_resident_knn_cpp
 SEXP faissr_cuda_resident_knn_cpp(SEXP data, int k, std::string method, std::string metric, double target_recall);
 RcppExport SEXP _fastEmbedR_faissr_cuda_resident_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP metricSEXP, SEXP target_recallSEXP) {
@@ -3547,6 +3559,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_project_embedding_affine_parallel_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_parallel_cpp, 9},
     {"_fastEmbedR_faissr_hnsw_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_search_cpp, 8},
     {"_fastEmbedR_faissr_gpu_multi_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_multi_knn_cpp, 8},
+    {"_fastEmbedR_faissr_gpu_knn_sample_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_knn_sample_cpp, 2},
     {"_fastEmbedR_faissr_cuda_resident_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_cuda_resident_knn_cpp, 5},
     {"_fastEmbedR_faissr_gpu_index_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_index_build_cpp, 7},
     {"_fastEmbedR_faissr_gpu_index_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_index_search_cpp, 3},
