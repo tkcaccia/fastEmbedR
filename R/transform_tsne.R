@@ -171,8 +171,14 @@ prepare_tsne_transform_projection <- function(request, reference_layout) {
         nrow(data$query), ncol(data$reference)
     )
     raw <- fastembedr_native_query_knn(
-        data$reference, data$query, k, "euclidean", request$n_threads,
-        policy$target_recall, policy$backend, policy$method, FALSE
+        data$reference, data$query, k = k, metric = "euclidean",
+        n_threads = request$n_threads,
+        target_recall = policy$target_recall,
+        output = fastembedr_knn_output_type(
+            data$reference, policy$backend
+        ),
+        backend = policy$backend, method = policy$method,
+        keep_gpu = FALSE
     )
     list(
         projection = transform_projection_knn(
