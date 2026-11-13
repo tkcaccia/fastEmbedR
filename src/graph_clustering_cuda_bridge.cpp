@@ -1,5 +1,6 @@
 #include <Rcpp.h>
 
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <exception>
@@ -85,6 +86,12 @@ Rcpp::List fastembedr_graph_cluster_cuda_devices_cpp(
   std::vector<double> first_level_edges;
   double sync_bytes = 0.0;
   int color_phases = 0;
+  using Clock = std::chrono::steady_clock;
+  const auto started = Clock::now();
+  auto source_graph = accel::graph_from_r(from, to, weight,
+    n_vertices, force_wide);
+  const auto graph_ready = Clock::now();
+  double move_seconds = 0.0;
   const auto move = [&](const accel::Graph& graph,
       const std::vector<int>& initial,
       const std::vector<int>* parent, int passes, float gamma,
@@ -100,17 +107,28 @@ Rcpp::List fastembedr_graph_cluster_cuda_devices_cpp(
           graph.offset(end) - graph.offset(begin)));
       }
     }
+    const auto move_started = Clock::now();
     auto moved = graph_local_move_cuda_devices_impl(graph, initial, parent,
       passes, gamma, run_seed, refinement, selected);
+    move_seconds += std::chrono::duration<double>(
+      Clock::now() - move_started).count();
     const int phases = moved.passes * 8;
     color_phases += phases;
     sync_bytes += static_cast<double>(phases) *
       (12.0 * graph.n * selected.size() + 4.0 * graph.n);
     return moved;
   };
-  Rcpp::List result = accel::cluster(from, to, weight, n_vertices,
-    method, resolution, n_iterations, n_runs, seed, "cuda", move,
-    force_wide);
+  Rcpp::List result = accel::cluster_graph(source_graph, method,
+    resolution, n_iterations, n_runs, seed, "cuda", move);
+  const auto fit_ready = Clock::now();
+  const double build_seconds = std::chrono::duration<double>(
+    graph_ready - started).count();
+  const double fit_seconds = std::chrono::duration<double>(
+    fit_ready - graph_ready).count();
+  result["native_graph_build_seconds"] = build_seconds;
+  result["native_coordinated_move_seconds"] = move_seconds;
+  result["native_host_hierarchy_seconds"] = fit_seconds - move_seconds;
+  result["native_total_seconds"] = build_seconds + fit_seconds;
   result["implementation"] = "resident_cuda_coordinated_host_sync";
   const std::string dtype = Rcpp::as<std::string>(
     result["csr_offset_dtype"]);

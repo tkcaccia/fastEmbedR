@@ -138,6 +138,8 @@ Enhanced workflows record \code{final_resolution}, \code{final_seed} and
 \code{processing_order}; consensus metadata records the exact ensemble size.
 CUDA returns \code{repeatability = "not_bitwise_deterministic"}: parallel
 community updates can yield different partitions for the same seed.
+Coordinated CUDA fits report native graph-build, move, and host-hierarchy
+times separately. Move time includes GPU work and host synchronization.
 Matrix input with explicit \code{landmarks} returns a
 \code{fastEmbedR_landmark_clusters} result with all-row labels.
 }
