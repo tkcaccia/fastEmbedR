@@ -1188,13 +1188,14 @@ massive_full_knn_checkpoint <- function(x, setup, resume) {
     path <- paste0(setup$output, ".checkpoint.rds")
     identity <- list(version = 2L,
         implementation = massive_checkpoint_implementation_identity(),
-        faissr = if (setup$backend_used == "faiss_cpu_stream_exact")
+        faissr = if (setup$method == "exact")
             massive_faissr_identity() else NULL,
         source = massive_checkpoint_source_identity(x),
         output = setup$output, k = setup$k,
         query_rows = setup$resources$chunk_rows,
         reference_rows = setup$resources$reference_chunk_rows,
-        workers = setup$workers, backend = "cpu",
+        workers = setup$workers,
+        backend = setup[["backend"]] %||% "cpu",
         method = setup$method,
         provider_method = setup$backend_used,
         target_recall = setup$target_recall,
@@ -1552,7 +1553,6 @@ massive_sharded_query <- function(x, first, rows, method,
         backend = "cpu", cuda_provider = "faissR") {
     view <- massive_matrix_rows(x, first, rows)
     if (method %in% c("faiss_hnsw", "exact") && backend == "cpu" ||
-        backend == "metal" ||
         (backend == "cuda" && cuda_provider == "faissR")) return(
         massive_read_rows_cpp(
         view, 1L, rows, 4 * rows * x$ncol, TRUE))
@@ -1566,11 +1566,7 @@ massive_saved_ivf_setting <- function(saved, shard) {
 
 massive_sharded_result_valid <- function(found, method, backend,
         cuda_provider) {
-    if (backend == "metal") {
-        identical(found$backend, "metal") &&
-            identical(found$method, "native_metal_exact_query") &&
-            isTRUE(found$exact)
-    } else if (backend == "cuda") {
+    if (backend == "cuda") {
         identical(cuda_provider, "faissR") &&
             identical(found$backend_used,
                 "faiss_gpu_persistent_query") &&
@@ -1785,8 +1781,6 @@ massive_sharded_result <- function(x, paths, setup, backend,
         "faiss_gpu_ivf_sharded"
     } else if (backend == "cuda") {
         "faiss_gpu_flat_sharded"
-    } else if (backend == "metal") {
-        "native_metal_exact_sharded"
     } else "faissr_cpu_hnsw_sharded"
     graph$exact <- backend != "cpu" && setup$method == "exact"
     graph$spanning_links <- FALSE
@@ -1806,8 +1800,7 @@ massive_sharded_result <- function(x, paths, setup, backend,
     graph$faissr_identity <- if (backend == "cpu" ||
         identical(setup$cuda_provider, "faissR"))
         massive_faissr_identity() else NULL
-    graph$knn_provider <- if (backend %in% c("cpu", "cuda"))
-        "faissR" else NULL
+    graph$knn_provider <- "faissR"
     graph$residency <- massive_knn_residency(x, x)
     graph$resources <- setup$resources
     graph$build_seconds <- build_seconds
@@ -1825,9 +1818,6 @@ massive_full_shard_resources <- function(x, k, chunk_rows,
     if (backend == "cuda") {
         massive_cuda_sharded_resources(x, k, chunk_rows,
             reference_chunk_rows, memory_limit, method = method)
-    } else if (backend == "metal") {
-        massive_metal_sharded_resources(x, k, chunk_rows,
-            reference_chunk_rows, memory_limit)
     } else massive_hnsw_sharded_resources(x, k,
         chunk_rows, reference_chunk_rows, memory_limit)
 }
@@ -1837,8 +1827,6 @@ massive_sharded_graph <- function(x, k, output, n.cores,
         audit_rows, backend, method, checkpoint, resume,
         checkpoint_every, ef_search, hnsw_build,
         target_recall = 0.99) {
-    if (backend == "metal" && normalize_nn_threads(n.cores) != 1L)
-        stop("Metal full KNN requires `n.cores = 1`.", call. = FALSE)
     resources <- massive_full_shard_resources(x, k, chunk_rows,
         reference_chunk_rows, memory_limit, backend, method)
     if (ef_search > x$nrow / resources$n_shards)
@@ -1944,37 +1932,49 @@ massive_full_knn_audit <- function(graph, x, audit_rows, setup, rows = NULL) {
     graph
 }
 
+massive_full_exact_resources <- function(x, k, chunk_rows,
+        reference_chunk_rows, memory_limit, backend) {
+    if (backend == "metal") return(massive_metal_sharded_resources(
+        x, k, chunk_rows, reference_chunk_rows, memory_limit))
+    massive_full_knn_resources(x, k, chunk_rows,
+        reference_chunk_rows, memory_limit)
+}
+
 massive_full_knn_exact <- function(x, k, output, n.cores,
         chunk_rows, reference_chunk_rows, memory_limit,
         checkpoint, resume, audit_rows, checkpoint_every,
-        target_recall) {
+        target_recall, backend = "cpu") {
     workers <- normalize_nn_threads(n.cores)
-    resources <- massive_full_knn_resources(x, k, chunk_rows,
-        reference_chunk_rows, memory_limit)
+    if (backend == "metal" && workers != 1L) stop(
+        "Metal full KNN requires `n.cores = 1`.", call. = FALSE)
+    resources <- massive_full_exact_resources(x, k, chunk_rows,
+        reference_chunk_rows, memory_limit, backend)
     paths <- massive_knn_paths(output, resources$output_bytes, resume)
     setup <- list(output = sub("\\.indices\\.u32$", "", paths[["indices"]]),
         paths = paths, k = k, workers = workers, resources = resources,
         checkpoint_every = checkpoint_every, method = "exact",
-        backend_used = "faiss_cpu_stream_exact", exact = TRUE,
+        backend = backend,
+        backend_used = if (backend == "metal")
+            "faissr_native_metal_exact_file_batch" else
+            "faiss_cpu_stream_exact", exact = TRUE,
         target_recall = target_recall)
     setup$search_batch <- function(first, rows) {
         faissr_matrix_knn_batch_cpp(x, x,
             as.double(seq.int(first, length.out = rows)), k,
-            "cpu", "stream_exact", resources$reference_chunk_rows,
+            backend, "stream_exact", resources$reference_chunk_rows,
             resources$memory_limit_bytes, workers, TRUE)
     }
     saved <- if (checkpoint) massive_full_knn_checkpoint(
         x, setup, resume) else NULL
-    message("EXPERIMENTAL full exact KNN: ", x$nrow, " rows; k=", k,
-        "; CPU workers=", workers, "; query rows=", resources$chunk_rows,
-        "; reference rows=", resources$reference_chunk_rows)
     measurement <- massive_full_knn_stream(x, setup, saved)
     graph <- massive_knn_graph(setup$output, x$nrow, k)
-    graph$backend <- "cpu"
+    graph$backend <- backend
     graph$method <- setup$backend_used
     graph$knn_provider <- "faissR"
     graph$residency <- massive_knn_residency(x, x)
-    graph$device_ids <- integer()
+    graph$device_ids <- if (backend == "metal") 0L else integer()
+    graph$query_storage <- if (backend == "metal")
+        "R_float32" else "file_backed_float32"
     graph$build_seconds <- 0
     graph$exact <- TRUE
     graph$target_recall <- target_recall
@@ -2056,8 +2056,10 @@ massive_full_knn_controls <- function(x, k, backend, method,
 
 massive_full_knn_target_recall <- function(value, backend, method) {
     value <- fastembedr_target_recall(value)
-    if (value != 0.99 && !(backend == "cpu" &&
-            method %in% c("exact", "hnsw_sharded")))
+    supported <- (backend == "cpu" &&
+        method %in% c("exact", "hnsw_sharded")) ||
+        (backend == "metal" && method == "exact")
+    if (value != 0.99 && !supported)
         stop("This full KNN route does not yet tune recall tiers ",
             "below 0.99.", call. = FALSE)
     value
@@ -2135,8 +2137,8 @@ massive_full_knn_target_recall <- function(value, backend, method) {
 #'   exact or IVF sharded search and a file-backed source. CPU and Metal
 #'   requests fail explicitly; the graph is never moved to another route.
 #' @param target_recall Requested recall tier (`0.9`, `0.95`, or `0.99`).
-#'   Exact CPU search is unchanged by the tier and remains exact by
-#'   construction. Other file-backed routes currently require `0.99`.
+#'   Exact CPU and Metal search are unchanged by the tier and remain exact
+#'   by construction. Other file-backed routes currently require `0.99`.
 #' @return A validated `fastEmbedR_massive_graph` descriptor.
 #' @export
 #' @keywords internal
@@ -2180,7 +2182,7 @@ massive_full_knn_graph <- function(x, k, output, backend = "cpu",
         reference_chunk_rows, memory_limit, checkpoint, resume,
         audit_rows, checkpoint_every, devices, method))
     if (method %in% c("hnsw_sharded", "ivf_sharded") ||
-        backend %in% c("cuda", "metal")) {
+        backend == "cuda") {
         return(massive_sharded_graph(x, k, output, n.cores,
             chunk_rows, reference_chunk_rows, memory_limit, audit_rows,
             backend, method, checkpoint, resume, checkpoint_every,
@@ -2188,5 +2190,5 @@ massive_full_knn_graph <- function(x, k, output, backend = "cpu",
     }
     massive_full_knn_exact(x, k, output, n.cores, chunk_rows,
         reference_chunk_rows, memory_limit, checkpoint, resume,
-        audit_rows, checkpoint_every, target_recall)
+        audit_rows, checkpoint_every, target_recall, backend)
 }

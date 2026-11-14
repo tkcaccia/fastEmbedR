@@ -31,7 +31,11 @@ test_that("file-backed Metal exact KNN matches streamed CPU search", {
     observed <- massive_read_graph_edges(metal, 1L, nrow(values))
     expected <- massive_read_graph_edges(cpu, 1L, nrow(values))
     expect_identical(metal$backend, "metal")
-    expect_identical(metal$method, "native_metal_exact_sharded")
+    expect_identical(metal$method,
+        "faissr_native_metal_exact_file_batch")
+    expect_identical(metal$knn_provider, "faissR")
+    expect_identical(metal$residency, "file-backed")
+    expect_identical(metal$device_ids, 0L)
     expect_identical(metal$query_storage, "R_float32")
     expect_identical(metal$resources$metal_memory_model,
         "unified_shared")

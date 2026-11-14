@@ -486,9 +486,10 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
         if (data$nrow < 100000L && bounded_exact)
             "exact" else "ivf_sharded"
     } else "exact"
-    if (target_recall != 0.99 &&
-        !(backend == "cpu" &&
-            method %in% c("exact", "hnsw_sharded"))) stop(
+    supports_tier <- (backend == "cpu" &&
+        method %in% c("exact", "hnsw_sharded")) ||
+        (backend == "metal" && method == "exact")
+    if (target_recall != 0.99 && !supports_tier) stop(
         "This file-backed KNN route does not yet tune recall tiers ",
         "below 0.99.", call. = FALSE)
     massive_full_knn_graph(data, k = k, output = output,

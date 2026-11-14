@@ -96,8 +96,8 @@ exact or IVF sharded search and a file-backed source. CPU and Metal
 requests fail explicitly; the graph is never moved to another route.}
 
 \item{target_recall}{Requested recall tier (\code{0.9}, \code{0.95}, or \code{0.99}).
-Exact CPU search is unchanged by the tier and remains exact by
-construction. Other file-backed routes currently require \code{0.99}.}
+Exact CPU and Metal search are unchanged by the tier and remain exact
+by construction. Other file-backed routes currently require \code{0.99}.}
 }
 \value{
 A validated \code{fastEmbedR_massive_graph} descriptor.

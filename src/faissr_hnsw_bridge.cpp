@@ -17,9 +17,11 @@ Rcpp::List faissr_matrix_knn_batch_cpp(SEXP query, SEXP reference,
     Rcpp::wrap(method), Rcpp::wrap(reference_chunk),
     Rcpp::wrap(memory_limit), Rcpp::wrap(n_threads),
     Rcpp::wrap(exclude_self));
+  const std::string expected = backend == "cpu" ?
+    "faiss_cpu_stream_exact" : backend == "metal" ?
+    "faissr_native_metal_exact_file_batch" : "unavailable";
   if (Rcpp::as<std::string>(result["provider"]) != "faissR" ||
-      Rcpp::as<std::string>(result["backend_used"]) !=
-        "faiss_cpu_stream_exact" ||
+      Rcpp::as<std::string>(result["backend_used"]) != expected ||
       Rcpp::as<std::string>(result["method"]) != "stream_exact" ||
       !Rcpp::as<bool>(result["exact"])) {
     Rcpp::stop("faissR file-backed KNN changed provider or method");
