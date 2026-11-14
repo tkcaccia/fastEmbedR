@@ -1718,6 +1718,9 @@ massive_sharded_hnsw_setting <- function(state, setup, shard,
         ef_search = if ((setup$ef_search %||% 0L) > 0L)
             setup$ef_search else state$index$efSearch,
         tuning_rule = state$index$tuning_rule,
+        tuning_benchmark_source =
+            state$index$tuning_benchmark_source,
+        target_recall = state$index$target_recall,
         build_threads = state$build_threads)
 }
 
@@ -1803,7 +1806,9 @@ massive_sharded_result <- function(x, paths, setup, backend,
     graph$faissr_identity <- if (backend == "cpu" ||
         identical(setup$cuda_provider, "faissR"))
         massive_faissr_identity() else NULL
-    graph$knn_provider <- if (backend == "cuda") "faissR" else NULL
+    graph$knn_provider <- if (backend %in% c("cpu", "cuda"))
+        "faissR" else NULL
+    graph$residency <- massive_knn_residency(x, x)
     graph$resources <- setup$resources
     graph$build_seconds <- build_seconds
     graph$total_seconds <- unname(proc.time()[[3L]] - started)

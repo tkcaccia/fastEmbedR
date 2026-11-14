@@ -57,6 +57,12 @@ test_that("file-backed CPU HNSW passes requested recall to faissR", {
         reference_chunk_rows = 90L, memory_limit = "256MB",
         audit_rows = 8L)
     expect_identical(graph$target_recall, 0.90)
+    expect_identical(graph$knn_provider, "faissR")
+    expect_identical(graph$residency, "file-backed")
+    expect_identical(graph$hnsw_settings[[1L]]$target_recall, 0.90)
+    expect_identical(
+        graph$hnsw_settings[[1L]]$tuning_benchmark_source,
+        expected$tuning_benchmark_source)
     expect_true(graph$recall_audited)
     expect_equal(graph$observed_recall, mean(graph$audit_row_recall))
 })
