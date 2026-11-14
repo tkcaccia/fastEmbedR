@@ -1937,7 +1937,7 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
       "symmetric_sparse_knn_cuda_shards" :
       "symmetric_sparse_knn_host_linear",
     Rcpp::Named("affinity_upload_mode") = n_components == 2 ?
-      "pinned_pipeline_cuda_shards" : "host_sparse_stream",
+      "concurrent_cuda_shards" : "host_sparse_stream",
     Rcpp::Named("n_threads") = threads,
     Rcpp::Named("learning_rate_early") = learning_rate_auto ?
       n / early_exag : learning_rate,

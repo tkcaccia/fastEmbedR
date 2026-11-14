@@ -7778,7 +7778,6 @@ struct MassiveTsneKnnShard {
   void* distances = nullptr;
   float* probabilities = nullptr;
   int* invalid = nullptr;
-  MassiveTsneStageSlot upload[2];
   int rows = 0;
   int first = 0;
   int k = 0;
@@ -7822,10 +7821,6 @@ extern "C" void fastembedr_massive_tsne_multigpu_destroy(void* raw) {
       cudaFree(ctx->cached_edges[rank]);
     if (rank < ctx->knn_shards.size()) {
       auto& shard = ctx->knn_shards[rank];
-      for (auto& slot : shard.upload) {
-        if (slot.done != nullptr) cudaEventDestroy(slot.done);
-        if (slot.host != nullptr) cudaFreeHost(slot.host);
-      }
       if (shard.indices != nullptr) cudaFree(shard.indices);
       if (shard.distances != nullptr) cudaFree(shard.distances);
       if (shard.probabilities != nullptr)
@@ -7996,52 +7991,21 @@ extern "C" int fastembedr_massive_tsne_multigpu_knn_upload(
   shard.first = first;
   shard.k = k;
   shard.offset = offset;
-  constexpr int stage_rows_limit = 1000000;
-  const int stage_rows = std::min(rows, stage_rows_limit);
-  const std::size_t stage_index_bytes =
-    static_cast<std::size_t>(stage_rows) * sizeof(int);
-  const std::size_t stage_bytes = stage_index_bytes +
-    static_cast<std::size_t>(stage_rows) * distance_bytes;
-  for (auto& slot : shard.upload) {
-    if (check_cuda(cudaHostAlloc(&slot.host, stage_bytes,
-          cudaHostAllocDefault), "cudaHostAlloc(t-SNE KNN stage)") ||
-        check_cuda(cudaEventCreateWithFlags(&slot.done,
-          cudaEventDisableTiming), "cudaEventCreate(t-SNE KNN stage)"))
-      return 1;
-  }
-  std::size_t transfer = 0;
   for (int col = 0; col < k; ++col) {
-    for (int row = 0; row < rows; row += stage_rows) {
-      const int count = std::min(stage_rows, rows - row);
-      auto& slot = shard.upload[transfer++ % 2];
-      if (slot.submitted &&
-          check_cuda(cudaEventSynchronize(slot.done),
-            "cudaEventSynchronize(t-SNE KNN stage)")) return 1;
-      const auto source = static_cast<std::size_t>(col) *
-        ctx->n + first + row;
-      const auto target = static_cast<std::size_t>(col) * rows + row;
-      const std::size_t index_count =
-        static_cast<std::size_t>(count) * sizeof(int);
-      const std::size_t distance_count =
-        static_cast<std::size_t>(count) * distance_bytes;
-      auto* host = static_cast<char*>(slot.host);
-      std::memcpy(host, indices + source, index_count);
-      std::memcpy(host + stage_index_bytes,
-        static_cast<const char*>(distances) +
-          source * distance_bytes, distance_count);
-      if (check_cuda(cudaMemcpyAsync(shard.indices + target,
-            host, index_count, cudaMemcpyHostToDevice,
-            worker->stream), "cudaMemcpyAsync(t-SNE KNN indices)") ||
-          check_cuda(cudaMemcpyAsync(
-            static_cast<char*>(shard.distances) +
-              target * distance_bytes,
-            host + stage_index_bytes, distance_count,
-            cudaMemcpyHostToDevice, worker->stream),
-            "cudaMemcpyAsync(t-SNE KNN distances)") ||
-          check_cuda(cudaEventRecord(slot.done, worker->stream),
-            "cudaEventRecord(t-SNE KNN stage)")) return 1;
-      slot.submitted = true;
-    }
+    const auto source = static_cast<std::size_t>(col) * ctx->n + first;
+    const auto target = static_cast<std::size_t>(col) * rows;
+    if (check_cuda(cudaMemcpyAsync(shard.indices + target,
+          indices + source, static_cast<std::size_t>(rows) *
+            sizeof(int), cudaMemcpyHostToDevice, worker->stream),
+          "cudaMemcpyAsync(t-SNE KNN indices)")) return 1;
+    auto* destination = static_cast<char*>(shard.distances) +
+      target * distance_bytes;
+    const auto* origin = static_cast<const char*>(distances) +
+      source * distance_bytes;
+    if (check_cuda(cudaMemcpyAsync(destination, origin,
+          static_cast<std::size_t>(rows) * distance_bytes,
+          cudaMemcpyHostToDevice, worker->stream),
+          "cudaMemcpyAsync(t-SNE KNN distances)")) return 1;
   }
   if (check_cuda(cudaMemsetAsync(shard.invalid, 0, sizeof(int),
         worker->stream), "cudaMemsetAsync(t-SNE KNN validation)")) return 1;

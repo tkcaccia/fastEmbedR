@@ -16,7 +16,7 @@ test_that("resident t-SNE selects the coordinated CUDA optimizer", {
         expect_identical(cfg$gpu_devices, c(0L, 1L))
         expect_identical(cfg$gpu_identity, c("GPU-A", "GPU-B"))
         expect_identical(cfg$affinity_upload_mode,
-            "pinned_pipeline_cuda_shards")
+            "concurrent_cuda_shards")
         expect_identical(cfg$cuda_stage_seconds$knn_shard_upload, 0.2)
         expect_true(all(cfg$per_device_attraction_edges > 0L))
         expect_identical(cfg$graph_cache$graph_cache_mode,
@@ -46,7 +46,7 @@ test_that("resident t-SNE selects the coordinated CUDA optimizer", {
             repulsion = "fft_grid", precision = "float32",
             n_threads = 1L, gpu_devices = args[[17L]],
             per_device_attraction_edges = c(8L, 8L),
-            affinity_upload_mode = "pinned_pipeline_cuda_shards",
+            affinity_upload_mode = "concurrent_cuda_shards",
             cuda_stage_seconds = list(knn_shard_upload = 0.2),
             graph_cache_mode = "resident_device_shards",
             graph_cache_bytes = 192)
