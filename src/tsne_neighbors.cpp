@@ -1755,9 +1755,9 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
   }
   const int threads = resolve_threads(n_threads, n);
   const auto started = std::chrono::steady_clock::now();
-  auto values = copy_distances_float_sexp(distances, threads);
   SparseProbabilitiesF graph;
   if (n_components == 3) {
+    auto values = copy_distances_float_sexp(distances, threads);
     graph = build_tsne_directed_probabilities_float(
       indices, values, perplexity, threads);
   }
@@ -1771,16 +1771,26 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
     context(raw, fastembedr_massive_tsne_multigpu_destroy);
   if (n_components == 2) {
     const int offset = resolve_index_offset(indices);
+    const bool float_input = is_float32_s4(distances);
+    IntegerMatrix payload;
+    const void* distance_data = nullptr;
+    if (float_input) {
+      payload = float32_data_slot(distances);
+      distance_data = payload.begin();
+    } else {
+      NumericMatrix matrix(distances);
+      distance_data = matrix.begin();
+    }
     for (int rank = 0; rank < devices.size(); ++rank) {
       resident_tsne_cuda_check(
         fastembedr_massive_tsne_multigpu_knn_upload(
           context.get(), rank, k, offset, indices.begin(),
-          values.data(), static_cast<float>(perplexity)));
+          distance_data, float_input ? 4 : 8,
+          static_cast<float>(perplexity)));
     }
     resident_tsne_cuda_check(
       fastembedr_massive_tsne_multigpu_knn_ready(context.get()));
   }
-  std::vector<float>().swap(values);
   const auto affinity_end = std::chrono::steady_clock::now();
   auto layout = copy_distances_float_sexp(y_init, threads);
   if (std::any_of(layout.begin(), layout.end(),
@@ -1901,7 +1911,8 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
       "resident_knn_shards" : cached ?
       "resident_device_shards" : "staged_batches",
     Rcpp::Named("graph_cache_bytes") = n_components == 2 ?
-      static_cast<double>(n) * k * 12.0 : cached ?
+      static_cast<double>(n) * k *
+        (is_float32_s4(distances) ? 12.0 : 16.0) : cached ?
       static_cast<double>(graph.col.size()) * 12.0 : 0.0,
     Rcpp::Named("gpu_devices") = devices,
     Rcpp::Named("per_device_attraction_edges") = attraction_edges);

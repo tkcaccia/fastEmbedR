@@ -587,15 +587,17 @@ test_that("two CUDA devices compute resident affinity shards", {
     indices <- vapply(seq_len(k), function(offset)
         as.integer((rows + offset - 1L) %% n + 1L), integer(n))
     distances <- matrix(rep(seq_len(k), each = n), n, k)
-    layout <- tsne_knn(indices, distances, n_neighbors = k,
-        perplexity = 2, backend = "cuda", devices = c(0L, 1L),
-        seed = 17L, early_exaggeration_iter = 1L, n_iter = 2L,
-        auto_config = FALSE)
-    cfg <- attr(layout, "fastEmbedR_config")
-    expect_true(all(is.finite(layout)))
-    expect_identical(cfg$optimizer, "cuda_resident_coordinated_nccl")
-    expect_identical(cfg$probabilities,
-        "symmetric_sparse_knn_cuda_shards")
-    expect_gt(cfg$affinity_elapsed_sec, 0)
-    expect_gt(cfg$optimization_elapsed_sec, 0)
+    for (input in list(distances, float::fl(distances))) {
+        layout <- tsne_knn(indices, input, n_neighbors = k,
+            perplexity = 2, backend = "cuda", devices = c(0L, 1L),
+            seed = 17L, early_exaggeration_iter = 1L, n_iter = 2L,
+            auto_config = FALSE)
+        cfg <- attr(layout, "fastEmbedR_config")
+        expect_true(all(is.finite(layout)))
+        expect_identical(cfg$optimizer, "cuda_resident_coordinated_nccl")
+        expect_identical(cfg$probabilities,
+            "symmetric_sparse_knn_cuda_shards")
+        expect_gt(cfg$affinity_elapsed_sec, 0)
+        expect_gt(cfg$optimization_elapsed_sec, 0)
+    }
 })

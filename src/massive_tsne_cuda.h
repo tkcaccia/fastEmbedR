@@ -31,7 +31,8 @@ extern "C" int fastembedr_massive_tsne_multigpu_upload(
     const float* values);
 extern "C" int fastembedr_massive_tsne_multigpu_knn_upload(
     void* context, int rank, int k, int offset,
-    const int* indices, const float* distances, float perplexity);
+    const int* indices, const void* distances,
+    int distance_bytes, float perplexity);
 extern "C" int fastembedr_massive_tsne_multigpu_knn_ready(
     void* context);
 extern "C" int fastembedr_massive_tsne_multigpu_knn_attract(

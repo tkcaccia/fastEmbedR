@@ -2269,7 +2269,7 @@ __global__ void tsne_center_kernel(float* current,
   current[base + 1u] -= static_cast<float>(stats[1]);
 }
 
-template <typename DistanceT, bool RowMajor>
+template <typename DistanceT>
 __global__ void opentsne_affinity_sparse_kernel(const int* indices,
                                                 const DistanceT* distances,
                                                 float* probabilities,
@@ -2290,8 +2290,7 @@ __global__ void opentsne_affinity_sparse_kernel(const int* indices,
   int valid = 0;
   for (int j = 0; j < k; ++j) {
     const int nb = indices[static_cast<std::size_t>(j) * n + row] - offset;
-    const auto pos = RowMajor ? row_base + j :
-      static_cast<std::size_t>(j) * n + row;
+    const auto pos = static_cast<std::size_t>(j) * n + row;
     const double d = distances[pos];
     if (nb < 0 || nb >= global_n || !isfinite(d) || d < 0.0) {
       if (invalid != nullptr) atomicExch(invalid, 1);
@@ -2304,8 +2303,7 @@ __global__ void opentsne_affinity_sparse_kernel(const int* indices,
   if (valid == 1) {
     for (int j = 0; j < k; ++j) {
       const int nb = indices[static_cast<std::size_t>(j) * n + row] - offset;
-      const auto pos = RowMajor ? row_base + j :
-        static_cast<std::size_t>(j) * n + row;
+      const auto pos = static_cast<std::size_t>(j) * n + row;
       const double d = distances[pos];
       if (nb < 0 || nb >= global_n || nb == global_row ||
           !isfinite(d) || d < 0.0) continue;
@@ -2329,8 +2327,7 @@ __global__ void opentsne_affinity_sparse_kernel(const int* indices,
     double weighted = 0.0;
     for (int j = 0; j < k; ++j) {
       const int nb = indices[static_cast<std::size_t>(j) * n + row] - offset;
-      const auto pos = RowMajor ? row_base + j :
-        static_cast<std::size_t>(j) * n + row;
+      const auto pos = static_cast<std::size_t>(j) * n + row;
       const double d = distances[pos];
       if (nb < 0 || nb >= global_n || nb == global_row ||
           !isfinite(d) || d < 0.0) continue;
@@ -2357,8 +2354,7 @@ __global__ void opentsne_affinity_sparse_kernel(const int* indices,
   double sum_p = kCudaDoubleMin;
   for (int j = 0; j < k; ++j) {
     const int nb = indices[static_cast<std::size_t>(j) * n + row] - offset;
-    const auto pos = RowMajor ? row_base + j :
-      static_cast<std::size_t>(j) * n + row;
+    const auto pos = static_cast<std::size_t>(j) * n + row;
     const double d = distances[pos];
     if (nb < 0 || nb >= global_n || nb == global_row ||
         !isfinite(d) || d < 0.0) continue;
@@ -2368,8 +2364,7 @@ __global__ void opentsne_affinity_sparse_kernel(const int* indices,
     (static_cast<double>(global_n) * sum_p);
   for (int j = 0; j < k; ++j) {
     const int nb = indices[static_cast<std::size_t>(j) * n + row] - offset;
-    const auto pos = RowMajor ? row_base + j :
-      static_cast<std::size_t>(j) * n + row;
+    const auto pos = static_cast<std::size_t>(j) * n + row;
     const double d = distances[pos];
     if (nb < 0 || nb >= global_n || nb == global_row ||
         !isfinite(d) || d < 0.0) continue;
@@ -7780,7 +7775,7 @@ struct MassiveTsneCachedBatch {
 
 struct MassiveTsneKnnShard {
   int* indices = nullptr;
-  float* distances = nullptr;
+  void* distances = nullptr;
   float* probabilities = nullptr;
   int* invalid = nullptr;
   int rows = 0;
@@ -7955,13 +7950,14 @@ extern "C" int fastembedr_massive_tsne_multigpu_upload(
 
 extern "C" int fastembedr_massive_tsne_multigpu_knn_upload(
     void* raw, int rank, int k, int offset,
-    const int* indices, const float* distances,
-    float perplexity) {
+    const int* indices, const void* distances,
+    int distance_bytes, float perplexity) {
   auto* ctx = static_cast<MassiveTsneMultiCudaContext*>(raw);
   if (ctx == nullptr || ctx->dimensions != 2 || rank < 0 ||
       rank >= static_cast<int>(ctx->devices.size()) ||
       k < 1 || k > 256 || (offset != 0 && offset != 1) ||
       indices == nullptr || distances == nullptr ||
+      (distance_bytes != 4 && distance_bytes != 8) ||
       !std::isfinite(perplexity) || perplexity <= 0.0f) {
     set_embedding_error("invalid multi-GPU t-SNE KNN upload");
     return 1;
@@ -7974,18 +7970,19 @@ extern "C" int fastembedr_massive_tsne_multigpu_knn_upload(
   const int first = rank * ctx->block_rows;
   const int rows = std::min(ctx->block_rows, ctx->n - first);
   const std::size_t items = static_cast<std::size_t>(rows) * k;
-  const auto bytes = items * sizeof(float);
+  const auto index_bytes = items * sizeof(int);
+  const auto distance_size = items * distance_bytes;
   auto* worker = ctx->workers[rank];
   if (check_cuda(cudaSetDevice(ctx->devices[rank]),
         "cudaSetDevice(t-SNE KNN upload)")) return 1;
   if (check_cuda(cudaMalloc(
-        reinterpret_cast<void**>(&shard.indices), bytes),
+        reinterpret_cast<void**>(&shard.indices), index_bytes),
         "cudaMalloc(t-SNE KNN indices)") ||
-      check_cuda(cudaMalloc(
-        reinterpret_cast<void**>(&shard.distances), bytes),
+      check_cuda(cudaMalloc(&shard.distances, distance_size),
         "cudaMalloc(t-SNE KNN distances)") ||
       check_cuda(cudaMalloc(
-        reinterpret_cast<void**>(&shard.probabilities), bytes),
+        reinterpret_cast<void**>(&shard.probabilities),
+        items * sizeof(float)),
         "cudaMalloc(t-SNE KNN probabilities)") ||
       check_cuda(cudaMalloc(
         reinterpret_cast<void**>(&shard.invalid), sizeof(int)),
@@ -8001,19 +7998,31 @@ extern "C" int fastembedr_massive_tsne_multigpu_knn_upload(
           indices + source, static_cast<std::size_t>(rows) *
             sizeof(int), cudaMemcpyHostToDevice, worker->stream),
           "cudaMemcpyAsync(t-SNE KNN indices)")) return 1;
+    auto* destination = static_cast<char*>(shard.distances) +
+      target * distance_bytes;
+    const auto* origin = static_cast<const char*>(distances) +
+      source * distance_bytes;
+    if (check_cuda(cudaMemcpyAsync(destination, origin,
+          static_cast<std::size_t>(rows) * distance_bytes,
+          cudaMemcpyHostToDevice, worker->stream),
+          "cudaMemcpyAsync(t-SNE KNN distances)")) return 1;
   }
-  if (check_cuda(cudaMemcpyAsync(shard.distances,
-        distances + static_cast<std::size_t>(first) * k,
-        bytes, cudaMemcpyHostToDevice, worker->stream),
-        "cudaMemcpyAsync(t-SNE KNN distances)") ||
-      check_cuda(cudaMemsetAsync(shard.invalid, 0, sizeof(int),
+  if (check_cuda(cudaMemsetAsync(shard.invalid, 0, sizeof(int),
         worker->stream), "cudaMemsetAsync(t-SNE KNN validation)")) return 1;
   const int blocks = (rows - 1) / 256 + 1;
-  opentsne_affinity_sparse_kernel<float, true>
-      <<<blocks, 256, 0, worker->stream>>>(
-        shard.indices, shard.distances, shard.probabilities,
-        rows, k, offset, perplexity, ctx->n, first,
-        shard.invalid);
+  if (distance_bytes == 8) {
+    opentsne_affinity_sparse_kernel<double>
+        <<<blocks, 256, 0, worker->stream>>>(
+          shard.indices, static_cast<const double*>(shard.distances),
+          shard.probabilities, rows, k, offset, perplexity,
+          ctx->n, first, shard.invalid);
+  } else {
+    opentsne_affinity_sparse_kernel<float>
+        <<<blocks, 256, 0, worker->stream>>>(
+          shard.indices, static_cast<const float*>(shard.distances),
+          shard.probabilities, rows, k, offset, perplexity,
+          ctx->n, first, shard.invalid);
+  }
   if (check_cuda(cudaGetLastError(),
         "opentsne_affinity_sparse_kernel(t-SNE shard)")) return 1;
   return check_cuda(cudaSetDevice(ctx->previous_device),
@@ -8743,7 +8752,7 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
     return 1;
   }
 
-  opentsne_affinity_sparse_kernel<DistanceT, false>
+  opentsne_affinity_sparse_kernel<DistanceT>
       <<<point_blocks, threads>>>(
     d_indices, d_distances, d_probabilities, n, k, index_offset,
     perplexity, n, 0, nullptr
