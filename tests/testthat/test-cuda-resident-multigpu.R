@@ -15,6 +15,8 @@ test_that("resident t-SNE selects the coordinated CUDA optimizer", {
             "cuda_resident_coordinated_nccl")
         expect_identical(cfg$gpu_devices, c(0L, 1L))
         expect_identical(cfg$gpu_identity, c("GPU-A", "GPU-B"))
+        expect_identical(cfg$affinity_upload_mode,
+            "concurrent_cuda_shards")
         expect_true(all(cfg$per_device_attraction_edges > 0L))
         expect_identical(cfg$graph_cache$graph_cache_mode,
             "resident_device_shards")
@@ -43,6 +45,7 @@ test_that("resident t-SNE selects the coordinated CUDA optimizer", {
             repulsion = "fft_grid", precision = "float32",
             n_threads = 1L, gpu_devices = args[[17L]],
             per_device_attraction_edges = c(8L, 8L),
+            affinity_upload_mode = "concurrent_cuda_shards",
             graph_cache_mode = "resident_device_shards",
             graph_cache_bytes = 192)
     }, .package = "fastEmbedR")

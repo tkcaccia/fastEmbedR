@@ -397,6 +397,7 @@ opentsne_result_cuda_coordination <- function(out) {
     list(gpu_devices = out$gpu_devices,
         gpu_identity = out$gpu_identity,
         per_device_attraction_edges = out$per_device_attraction_edges,
+        affinity_upload_mode = out$affinity_upload_mode %||% NA_character_,
         graph_cache = if (!is.null(out$graph_cache_mode))
             out[c("graph_cache_mode", "graph_cache_bytes")] else NULL,
         input_storage = "resident_knn",

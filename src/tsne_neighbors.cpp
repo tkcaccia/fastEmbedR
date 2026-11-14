@@ -1781,12 +1781,34 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
       NumericMatrix matrix(distances);
       distance_data = matrix.begin();
     }
+    const int* index_data = indices.begin();
+    std::vector<std::future<std::string>> uploads;
+    uploads.reserve(devices.size());
     for (int rank = 0; rank < devices.size(); ++rank) {
-      resident_tsne_cuda_check(
-        fastembedr_massive_tsne_multigpu_knn_upload(
-          context.get(), rank, k, offset, indices.begin(),
-          distance_data, float_input ? 4 : 8,
-          static_cast<float>(perplexity)));
+      uploads.emplace_back(std::async(std::launch::async,
+        [&, rank]() -> std::string {
+          const int status = fastembedr_massive_tsne_multigpu_knn_upload(
+            context.get(), rank, k, offset, index_data,
+            distance_data, float_input ? 4 : 8,
+            static_cast<float>(perplexity));
+          if (status == 0) return {};
+          const char* error = fastembedr_cuda_embedding_last_error();
+          return error != nullptr && error[0] != '\0' ?
+            std::string(error) : "CUDA KNN shard upload failed";
+        }));
+    }
+    std::string upload_error;
+    for (auto& upload : uploads) {
+      try {
+        const std::string error = upload.get();
+        if (upload_error.empty()) upload_error = error;
+      } catch (const std::exception& error) {
+        if (upload_error.empty()) upload_error = error.what();
+      }
+    }
+    if (!upload_error.empty()) {
+      Rcpp::stop("Resident CUDA KNN upload failed: %s",
+                 upload_error.c_str());
     }
     resident_tsne_cuda_check(
       fastembedr_massive_tsne_multigpu_knn_ready(context.get()));
@@ -1897,6 +1919,8 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
     Rcpp::Named("probabilities") = n_components == 2 ?
       "symmetric_sparse_knn_cuda_shards" :
       "symmetric_sparse_knn_host_linear",
+    Rcpp::Named("affinity_upload_mode") = n_components == 2 ?
+      "concurrent_cuda_shards" : "host_sparse_stream",
     Rcpp::Named("n_threads") = threads,
     Rcpp::Named("learning_rate_early") = learning_rate_auto ?
       n / early_exag : learning_rate,
