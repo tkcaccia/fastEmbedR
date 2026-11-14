@@ -757,14 +757,6 @@ native_cuda_knn_to_host_cpp <- function(knn) {
     .Call(`_fastEmbedR_native_cuda_knn_to_host_cpp`, knn)
 }
 
-native_cuda_index_build_cpp <- function(data, k, method, target_recall = 0.99) {
-    .Call(`_fastEmbedR_native_cuda_index_build_cpp`, data, k, method, target_recall)
-}
-
-native_cuda_index_search_cpp <- function(pointer, query, k) {
-    .Call(`_fastEmbedR_native_cuda_index_search_cpp`, pointer, query, k)
-}
-
 knn_tsne_opentsne_cuda_multigpu_cpp <- function(indices, distances, y_init, n_components, perplexity, early_iter, normal_iter, early_exag, exag, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, n_threads, devices) {
     .Call(`_fastEmbedR_knn_tsne_opentsne_cuda_multigpu_cpp`, indices, distances, y_init, n_components, perplexity, early_iter, normal_iter, early_exag, exag, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, n_threads, devices)
 }

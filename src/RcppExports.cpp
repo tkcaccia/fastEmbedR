@@ -3272,33 +3272,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// native_cuda_index_build_cpp
-SEXP native_cuda_index_build_cpp(SEXP data, int k, std::string method, double target_recall);
-RcppExport SEXP _fastEmbedR_native_cuda_index_build_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP target_recallSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
-    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_cuda_index_build_cpp(data, k, method, target_recall));
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_cuda_index_search_cpp
-Rcpp::List native_cuda_index_search_cpp(SEXP pointer, SEXP query, int k);
-RcppExport SEXP _fastEmbedR_native_cuda_index_search_cpp(SEXP pointerSEXP, SEXP querySEXP, SEXP kSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type pointer(pointerSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type query(querySEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_cuda_index_search_cpp(pointer, query, k));
-    return rcpp_result_gen;
-END_RCPP
-}
 // knn_tsne_opentsne_cuda_multigpu_cpp
 List knn_tsne_opentsne_cuda_multigpu_cpp(IntegerMatrix indices, SEXP distances, SEXP y_init, int n_components, double perplexity, int early_iter, int normal_iter, double early_exag, double exag, double learning_rate, bool learning_rate_auto, double initial_momentum, double final_momentum, double min_gain, double max_step_norm, int n_threads, IntegerVector devices);
 RcppExport SEXP _fastEmbedR_knn_tsne_opentsne_cuda_multigpu_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP n_componentsSEXP, SEXP perplexitySEXP, SEXP early_iterSEXP, SEXP normal_iterSEXP, SEXP early_exagSEXP, SEXP exagSEXP, SEXP learning_rateSEXP, SEXP learning_rate_autoSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP min_gainSEXP, SEXP max_step_normSEXP, SEXP n_threadsSEXP, SEXP devicesSEXP) {
@@ -3680,8 +3653,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_native_cuda_memory_info_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_memory_info_cpp, 0},
     {"_fastEmbedR_native_cuda_knn_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_cpp, 7},
     {"_fastEmbedR_native_cuda_knn_to_host_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_to_host_cpp, 1},
-    {"_fastEmbedR_native_cuda_index_build_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_index_build_cpp, 4},
-    {"_fastEmbedR_native_cuda_index_search_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_index_search_cpp, 3},
     {"_fastEmbedR_knn_tsne_opentsne_cuda_multigpu_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cuda_multigpu_cpp, 17},
     {"_fastEmbedR_opentsne_kl_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_opentsne_kl_diagnostic_cpp, 5},
     {"_fastEmbedR_opentsne_force_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_opentsne_force_diagnostic_cpp, 7},

@@ -84,11 +84,9 @@ landmark counts. CPU exact and persistent faissR HNSW, and CUDA exact
 or IVF-Flat search retain references across query batches. Metal exact
 search retains a host float32 reference but reuploads it each batch.
 CUDA needs faissR FAISS GPU support for the single-device landmark route.
-Sharded landmark CUDA search also uses faissR. Single-device
-full-graph CUDA IVF uses persistent faissR shard indices; explicit
-multi-device full-graph IVF still uses native cuVS. Landmark faissR
-IVF uses a heuristic until a separate exact-reference audit is run;
-native IVF-Flat calibrates on the first query batch;
+Sharded landmark and full-graph CUDA search also use faissR.
+Landmark faissR IVF uses a heuristic until a separate exact-reference
+audit is run. Sharded IVF-Flat calibrates on the first query batch;
 pilot recall is not guaranteed for later rows. For CUDA IVF,
 \code{pilot_recall} counts distance-equivalent ties at the exact kth distance;
 \code{pilot_id_recall} reports mean neighbor-ID overlap. Persistent sharded

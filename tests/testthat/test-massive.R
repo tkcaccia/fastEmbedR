@@ -2599,6 +2599,7 @@ test_that("streamed exact landmark KNN retains every query row", {
         reference, query, 5L, 1L, "euclidean", 0.99)
     expect_identical(graph$method, "exact")
     expect_true(graph$index_reused)
+    expect_identical(graph$knn_provider, "faissR")
     expect_equal(observed$indices, expected$indices)
     expect_equal(observed$distances, expected$distances,
         tolerance = 1e-5)
@@ -2767,7 +2768,9 @@ test_that("streamed-reference KNN accepts 64-bit query row offsets", {
 })
 
 test_that("persistent CUDA landmark search preserves exact neighbors", {
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    skip_if_not(isTRUE(faissR::cuda_available()))
+    skip_if_not(isTRUE(faissR::faiss_gpu_available()))
     set.seed(271)
     reference <- matrix(rnorm(47L * 5L), ncol = 5L)
     query <- matrix(rnorm(31L * 5L), ncol = 5L)
@@ -2785,9 +2788,10 @@ test_that("persistent CUDA landmark search preserves exact neighbors", {
         reference, query, 6L, 1L, "euclidean", 0.99)
     expect_identical(graph$backend, "cuda")
     expect_identical(graph$method, "exact")
-    expect_identical(graph$reference_storage, "native_float32")
-    expect_identical(graph$query_storage, "native_float32")
+    expect_identical(graph$reference_storage, "R_float32")
+    expect_identical(graph$query_storage, "R_float32")
     expect_true(graph$index_reused)
+    expect_identical(graph$knn_provider, "faissR")
     expect_equal(observed$indices, expected$indices)
     expect_equal(observed$distances, expected$distances,
         tolerance = 1e-4)
@@ -2795,30 +2799,6 @@ test_that("persistent CUDA landmark search preserves exact neighbors", {
         massive_matrix(query), massive_matrix(reference), 6L,
         tempfile(), backend = "cuda", method = "hnsw"),
         "no algorithm fallback")
-})
-
-test_that("persistent CUDA search reuses bounded query buffers", {
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
-    set.seed(219)
-    reference <- matrix(rnorm(80L * 6L), ncol = 6L)
-    query <- matrix(rnorm(24L * 6L), ncol = 6L)
-    index <- fastEmbedR:::native_cuda_index_build_cpp(
-        reference, 5L, "exact", 0.99)
-    batches <- list(1:10, 11:14, 1:16, 1:4)
-    reused <- c(FALSE, TRUE, FALSE, TRUE)
-    for (i in seq_along(batches)) {
-        rows <- batches[[i]]
-        found <- fastEmbedR:::native_cuda_index_search_cpp(
-            index, query[rows, , drop = FALSE], 5L)
-        expected <- test_exact_knn(
-            reference, query[rows, , drop = FALSE],
-            5L, 1L, "euclidean", 0.99)
-        expect_identical(found$backend, "native_cuda_cuvs_exact")
-        expect_identical(found$query_buffers_reused, reused[[i]])
-        expect_equal(found$indices, expected$indices)
-        expect_equal(found$distances, expected$distances,
-            tolerance = 1e-4)
-    }
 })
 
 test_that("CUDA landmark KNN resumes on CUDA without fallback", {
@@ -2914,23 +2894,6 @@ test_that("persistent CUDA IVF reports calibrated pilot recall", {
     expect_equal(audited$observed_recall, exact_sample)
     expect_identical(audited$audit_reference_backend,
         "cpu_exact_stream")
-})
-
-test_that("persistent CUDA pilot accepts distance-equivalent ties", {
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
-    set.seed(274)
-    base <- matrix(rnorm(100L * 16L), ncol = 16L)
-    reference <- base[rep(seq_len(100L), each = 50L), ]
-    query <- base[seq_len(32L), ]
-    index <- fastEmbedR:::native_cuda_index_build_cpp(
-        reference, 10L, "ivf", 0.99)
-    result <- fastEmbedR:::native_cuda_index_search_cpp(
-        index, query, 10L)
-    expect_identical(result$backend, "native_cuda_cuvs_ivf_flat")
-    expect_identical(result$pilot_recall_metric, "distance_at_k")
-    expect_gte(result$pilot_recall, 0.99)
-    expect_lte(result$pilot_id_recall, result$pilot_recall)
-    expect_true(all(result$distances < 1e-4))
 })
 
 test_that("persistent CPU exact search reuses a float32 reference", {
