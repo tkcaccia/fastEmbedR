@@ -7991,58 +7991,21 @@ extern "C" int fastembedr_massive_tsne_multigpu_knn_upload(
   shard.first = first;
   shard.k = k;
   shard.offset = offset;
-  {
-    struct PinnedStage {
-      void* ptr = nullptr;
-      cudaStream_t stream = nullptr;
-      ~PinnedStage() {
-        if (ptr != nullptr) {
-          cudaStreamSynchronize(stream);
-          cudaFreeHost(ptr);
-        }
-      }
-    } stage;
-    stage.stream = worker->stream;
-    constexpr int chunk_rows = 131072;
-    const std::size_t index_capacity =
-      static_cast<std::size_t>(chunk_rows) * k * sizeof(int);
-    const std::size_t distance_capacity =
-      static_cast<std::size_t>(chunk_rows) * k * distance_bytes;
-    if (check_cuda(cudaHostAlloc(&stage.ptr,
-          index_capacity + distance_capacity, cudaHostAllocDefault),
-          "cudaHostAlloc(t-SNE KNN stage)")) return 1;
-    auto* stage_indices = static_cast<char*>(stage.ptr);
-    auto* stage_distances = stage_indices + index_capacity;
-    for (int begin = 0; begin < rows; begin += chunk_rows) {
-      const int current = std::min(chunk_rows, rows - begin);
-      const std::size_t index_width =
-        static_cast<std::size_t>(current) * sizeof(int);
-      const std::size_t distance_width =
-        static_cast<std::size_t>(current) * distance_bytes;
-      for (int col = 0; col < k; ++col) {
-        const std::size_t source =
-          static_cast<std::size_t>(col) * ctx->n + first + begin;
-        std::memcpy(stage_indices + col * index_width,
-          indices + source, index_width);
-        std::memcpy(stage_distances + col * distance_width,
-          static_cast<const char*>(distances) +
-            source * distance_bytes, distance_width);
-      }
-      if (check_cuda(cudaMemcpy2DAsync(shard.indices + begin,
-            static_cast<std::size_t>(rows) * sizeof(int),
-            stage_indices, index_width, index_width, k,
-            cudaMemcpyHostToDevice, worker->stream),
-            "cudaMemcpy2DAsync(t-SNE KNN indices)") ||
-          check_cuda(cudaMemcpy2DAsync(
-            static_cast<char*>(shard.distances) +
-              static_cast<std::size_t>(begin) * distance_bytes,
-            static_cast<std::size_t>(rows) * distance_bytes,
-            stage_distances, distance_width, distance_width, k,
-            cudaMemcpyHostToDevice, worker->stream),
-            "cudaMemcpy2DAsync(t-SNE KNN distances)") ||
-          check_cuda(cudaStreamSynchronize(worker->stream),
-            "cudaStreamSynchronize(t-SNE KNN stage)")) return 1;
-    }
+  for (int col = 0; col < k; ++col) {
+    const auto source = static_cast<std::size_t>(col) * ctx->n + first;
+    const auto target = static_cast<std::size_t>(col) * rows;
+    if (check_cuda(cudaMemcpyAsync(shard.indices + target,
+          indices + source, static_cast<std::size_t>(rows) *
+            sizeof(int), cudaMemcpyHostToDevice, worker->stream),
+          "cudaMemcpyAsync(t-SNE KNN indices)")) return 1;
+    auto* destination = static_cast<char*>(shard.distances) +
+      target * distance_bytes;
+    const auto* origin = static_cast<const char*>(distances) +
+      source * distance_bytes;
+    if (check_cuda(cudaMemcpyAsync(destination, origin,
+          static_cast<std::size_t>(rows) * distance_bytes,
+          cudaMemcpyHostToDevice, worker->stream),
+          "cudaMemcpyAsync(t-SNE KNN distances)")) return 1;
   }
   if (check_cuda(cudaMemsetAsync(shard.invalid, 0, sizeof(int),
         worker->stream), "cudaMemsetAsync(t-SNE KNN validation)")) return 1;
