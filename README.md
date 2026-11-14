@@ -25,7 +25,8 @@ primary contributions are:
 - explicit backend reporting, with no silent CPU fallback labelled as GPU;
 - faissR CPU Flat and HNSW KNN; faissR supplies Apple Metal
   exact/IVF-Flat KNN for one-call embeddings;
-- optional GPU-resident exact/IVF-Flat CUDA KNN through RAPIDS cuVS.
+- GPU-resident CUDA exact KNN and Euclidean IVF-Flat through faissR;
+  non-Euclidean resident IVF still uses the native cuVS route.
 
 Resident 2D Metal UMAP currently uses one CPU thread for the first half of
 its optimizer epochs, followed by the native Metal optimizer. The fit records

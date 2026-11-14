@@ -38,6 +38,31 @@ test_that("single-device landmark CUDA KNN uses persistent faissR", {
     expect_true(found$recall_audited)
 })
 
+test_that("faissR retains non-Euclidean exact CUDA KNN data", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    skip_if_not(isTRUE(faissR::cuda_available()))
+    skip_if_not(faissR::faiss_gpu_available())
+    set.seed(1819)
+    data <- matrix(rnorm(50L * 6L), ncol = 6L)
+    for (metric in c("cosine", "correlation")) {
+        found <- fastEmbedR:::fastembedr_nn_without_self(
+            data, 5L, backend = "cuda", method = "exact",
+            metric = metric, keep_gpu = TRUE, retain_data = TRUE
+        )
+        expect_s3_class(found, "faissR_gpu_knn")
+        expect_identical(found$result_residency, "cuda")
+        expect_identical(found$data_residency, "cuda_device")
+        expect_identical(found$n_features, 6L)
+        expect_false(isTRUE(found$cpu_fallback))
+        observed <- faissR::gpu_knn_to_host(found)
+        expected <- faissR::nn(data, k = 5L, backend = "cpu",
+            method = "flat", metric = metric, exclude_self = TRUE)
+        expect_equal(observed$indices, expected$indices)
+        expect_equal(observed$distances, expected$distances,
+            tolerance = 1e-4)
+    }
+})
+
 test_that("single-device IVF returns distances for its selected IDs", {
     skip_if_not_installed("float")
     skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())

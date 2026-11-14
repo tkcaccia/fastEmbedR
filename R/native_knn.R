@@ -591,8 +591,7 @@ run_native_cuda_knn <- function(data, k, method, metric, output,
     exact <- method %in% c("exact", "flat", "bruteforce") ||
         (method == "auto" && nrow(data) < 100000L)
     if (isTRUE(keep_gpu)) {
-        if (exact && (!isTRUE(retain_data) ||
-            identical(metric, "euclidean"))) {
+        if (exact) {
             return(run_faissr_cuda_resident_exact(
                 data, k, metric, target_recall, retain_data))
         }
