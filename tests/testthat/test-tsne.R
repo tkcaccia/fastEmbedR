@@ -598,7 +598,7 @@ test_that("two CUDA devices compute resident affinity shards", {
         expect_identical(cfg$probabilities,
             "symmetric_sparse_knn_cuda_shards")
         expect_identical(cfg$affinity_upload_mode,
-            "concurrent_cuda_shards")
+            "pinned_pipeline_cuda_shards")
         expect_true(all(unlist(cfg$cuda_stage_seconds) >= 0))
         expect_lt(cfg$cuda_stage_seconds$knn_shard_upload,
             cfg$affinity_elapsed_sec)
