@@ -1261,6 +1261,26 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// faissr_matrix_knn_batch_cpp
+Rcpp::List faissr_matrix_knn_batch_cpp(SEXP query, SEXP reference, Rcpp::NumericVector row_ids, int k, std::string backend, std::string method, int reference_chunk, double memory_limit, int n_threads, bool exclude_self);
+RcppExport SEXP _fastEmbedR_faissr_matrix_knn_batch_cpp(SEXP querySEXP, SEXP referenceSEXP, SEXP row_idsSEXP, SEXP kSEXP, SEXP backendSEXP, SEXP methodSEXP, SEXP reference_chunkSEXP, SEXP memory_limitSEXP, SEXP n_threadsSEXP, SEXP exclude_selfSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type query(querySEXP);
+    Rcpp::traits::input_parameter< SEXP >::type reference(referenceSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type row_ids(row_idsSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< std::string >::type backend(backendSEXP);
+    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
+    Rcpp::traits::input_parameter< int >::type reference_chunk(reference_chunkSEXP);
+    Rcpp::traits::input_parameter< double >::type memory_limit(memory_limitSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< bool >::type exclude_self(exclude_selfSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_matrix_knn_batch_cpp(query, reference, row_ids, k, backend, method, reference_chunk, memory_limit, n_threads, exclude_self));
+    return rcpp_result_gen;
+END_RCPP
+}
 // faissr_hnsw_search_cpp
 SEXP faissr_hnsw_search_cpp(SEXP data, SEXP query, SEXP n, SEXP p, SEXP k, SEXP target_recall, SEXP n_threads, SEXP distance_storage);
 RcppExport SEXP _fastEmbedR_faissr_hnsw_search_cpp(SEXP dataSEXP, SEXP querySEXP, SEXP nSEXP, SEXP pSEXP, SEXP kSEXP, SEXP target_recallSEXP, SEXP n_threadsSEXP, SEXP distance_storageSEXP) {
@@ -2892,56 +2912,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// massive_exact_graph_batch_cpp
-List massive_exact_graph_batch_cpp(List spec, double first_row, int count, int k, int reference_chunk, int n_threads);
-RcppExport SEXP _fastEmbedR_massive_exact_graph_batch_cpp(SEXP specSEXP, SEXP first_rowSEXP, SEXP countSEXP, SEXP kSEXP, SEXP reference_chunkSEXP, SEXP n_threadsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< List >::type spec(specSEXP);
-    Rcpp::traits::input_parameter< double >::type first_row(first_rowSEXP);
-    Rcpp::traits::input_parameter< int >::type count(countSEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< int >::type reference_chunk(reference_chunkSEXP);
-    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
-    rcpp_result_gen = Rcpp::wrap(massive_exact_graph_batch_cpp(spec, first_row, count, k, reference_chunk, n_threads));
-    return rcpp_result_gen;
-END_RCPP
-}
-// massive_exact_reference_batch_cpp
-List massive_exact_reference_batch_cpp(List query_spec, List reference_spec, double first_row, int count, int k, int reference_chunk, int n_threads);
-RcppExport SEXP _fastEmbedR_massive_exact_reference_batch_cpp(SEXP query_specSEXP, SEXP reference_specSEXP, SEXP first_rowSEXP, SEXP countSEXP, SEXP kSEXP, SEXP reference_chunkSEXP, SEXP n_threadsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< List >::type query_spec(query_specSEXP);
-    Rcpp::traits::input_parameter< List >::type reference_spec(reference_specSEXP);
-    Rcpp::traits::input_parameter< double >::type first_row(first_rowSEXP);
-    Rcpp::traits::input_parameter< int >::type count(countSEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< int >::type reference_chunk(reference_chunkSEXP);
-    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
-    rcpp_result_gen = Rcpp::wrap(massive_exact_reference_batch_cpp(query_spec, reference_spec, first_row, count, k, reference_chunk, n_threads));
-    return rcpp_result_gen;
-END_RCPP
-}
-// massive_exact_sample_batch_cpp
-List massive_exact_sample_batch_cpp(List query_spec, List reference_spec, Rcpp::NumericVector row_ids, int k, int reference_chunk, int n_threads, bool exclude_self);
-RcppExport SEXP _fastEmbedR_massive_exact_sample_batch_cpp(SEXP query_specSEXP, SEXP reference_specSEXP, SEXP row_idsSEXP, SEXP kSEXP, SEXP reference_chunkSEXP, SEXP n_threadsSEXP, SEXP exclude_selfSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< List >::type query_spec(query_specSEXP);
-    Rcpp::traits::input_parameter< List >::type reference_spec(reference_specSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type row_ids(row_idsSEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< int >::type reference_chunk(reference_chunkSEXP);
-    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
-    Rcpp::traits::input_parameter< bool >::type exclude_self(exclude_selfSEXP);
-    rcpp_result_gen = Rcpp::wrap(massive_exact_sample_batch_cpp(query_spec, reference_spec, row_ids, k, reference_chunk, n_threads, exclude_self));
-    return rcpp_result_gen;
-END_RCPP
-}
 // massive_vote_landmarks_cpp
 List massive_vote_landmarks_cpp(Rcpp::IntegerMatrix indices, NumericMatrix distances, Rcpp::IntegerVector landmark_labels, int n_threads);
 RcppExport SEXP _fastEmbedR_massive_vote_landmarks_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP landmark_labelsSEXP, SEXP n_threadsSEXP) {
@@ -3505,6 +3475,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_project_embedding_knn_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_knn_cpp, 3},
     {"_fastEmbedR_project_embedding_affine_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_cpp, 8},
     {"_fastEmbedR_project_embedding_affine_parallel_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_parallel_cpp, 9},
+    {"_fastEmbedR_faissr_matrix_knn_batch_cpp", (DL_FUNC) &_fastEmbedR_faissr_matrix_knn_batch_cpp, 10},
     {"_fastEmbedR_faissr_hnsw_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_search_cpp, 8},
     {"_fastEmbedR_faissr_gpu_multi_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_multi_knn_cpp, 8},
     {"_fastEmbedR_faissr_gpu_metric_ivf_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_metric_ivf_knn_cpp, 6},
@@ -3596,9 +3567,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_spectral_init_stream_cpp", (DL_FUNC) &_fastEmbedR_massive_spectral_init_stream_cpp, 10},
     {"_fastEmbedR_massive_validate_csr_graph_cpp", (DL_FUNC) &_fastEmbedR_massive_validate_csr_graph_cpp, 4},
     {"_fastEmbedR_massive_read_csr_graph_edges_cpp", (DL_FUNC) &_fastEmbedR_massive_read_csr_graph_edges_cpp, 8},
-    {"_fastEmbedR_massive_exact_graph_batch_cpp", (DL_FUNC) &_fastEmbedR_massive_exact_graph_batch_cpp, 6},
-    {"_fastEmbedR_massive_exact_reference_batch_cpp", (DL_FUNC) &_fastEmbedR_massive_exact_reference_batch_cpp, 7},
-    {"_fastEmbedR_massive_exact_sample_batch_cpp", (DL_FUNC) &_fastEmbedR_massive_exact_sample_batch_cpp, 7},
     {"_fastEmbedR_massive_vote_landmarks_cpp", (DL_FUNC) &_fastEmbedR_massive_vote_landmarks_cpp, 4},
     {"_fastEmbedR_massive_read_cluster_rows_cpp", (DL_FUNC) &_fastEmbedR_massive_read_cluster_rows_cpp, 6},
     {"_fastEmbedR_massive_pca_means_cpp", (DL_FUNC) &_fastEmbedR_massive_pca_means_cpp, 4},

@@ -165,7 +165,8 @@ test_that("KNN audits report distance-equivalent ties separately", {
     write_massive_graph_fixture(prefix, ids, matrix(0, 5L, 2L))
     graph <- massive_knn_graph(prefix, 5L, 2L)
     setup <- list(resources = list(chunk_rows = 5L,
-        reference_chunk_rows = 5L), workers = 1L)
+        reference_chunk_rows = 5L,
+        memory_limit_bytes = 256 * 1024^2), workers = 1L)
     audited <- fastEmbedR:::massive_full_knn_audit(
         graph, source, 5L, setup)
     expect_identical(audited$audit_reference_chunk_rows, 5L)
@@ -200,7 +201,8 @@ test_that("full KNN audit bounds its exact read chunk independently", {
     write_massive_graph_fixture(prefix, ids, matrix(0, 5L, 2L))
     graph <- massive_knn_graph(prefix, 5L, 2L)
     setup <- list(resources = list(chunk_rows = 5L,
-        reference_chunk_rows = 1000000L), workers = 1L)
+        reference_chunk_rows = 1000000L,
+        memory_limit_bytes = 256 * 1024^2), workers = 1L)
     large <- fastEmbedR:::massive_synthetic_matrix(1000000L, 96L)
     expect_identical(fastEmbedR:::massive_full_knn_audit_reference_rows(
         large, setup), 500000L)
@@ -641,8 +643,12 @@ test_that("streamed full exact KNN matches an independent distance matrix", {
         n.cores = 2L, chunk_rows = 4L, reference_chunk_rows = 5L,
         memory_limit = "256MB")
     expect_s3_class(graph, "fastEmbedR_massive_graph")
-    expect_identical(graph$method, "native_cpu_exact_stream")
+    expect_identical(graph$method, "faiss_cpu_stream_exact")
     expect_identical(graph$backend, "cpu")
+    expect_identical(graph$knn_provider, "faissR")
+    expect_identical(graph$residency, "file-backed")
+    expect_identical(graph$device_ids, integer())
+    expect_identical(graph$build_seconds, 0)
     expect_true(graph$exact)
     expect_true(graph$validated)
     observed <- massive_read_graph_edges(graph, 1, nrow(x))
@@ -802,17 +808,17 @@ test_that("sampled exact KNN shares one reference scan", {
     on.exit(unlink(path))
     source <- massive_matrix(path, 37L, 5L)
     ids <- c(2, 11, 29, 36)
-    sampled <- fastEmbedR:::massive_exact_sample_batch_cpp(
+    sampled <- faissr_exact_sample_batch(
         source, source, ids, 4L, 7L, 2L, TRUE)
     for (i in seq_along(ids)) {
-        single <- fastEmbedR:::massive_exact_graph_batch_cpp(
+        single <- faissr_exact_graph_batch(
             source, ids[[i]], 1L, 4L, 7L, 2L)
         expect_identical(sampled$indices[i, ],
             single$indices[1L, ])
         expect_equal(sampled$distances[i, ],
             single$distances[1L, ])
     }
-    expect_error(fastEmbedR:::massive_exact_sample_batch_cpp(
+    expect_error(faissr_exact_sample_batch(
         source, source, c(0, 2), 4L, 7L, 1L, TRUE),
         "one-based")
 })
@@ -1118,11 +1124,14 @@ test_that("full exact KNN resumes a committed file-backed query block", {
         paths = c(indices = paths[[1L]], distances = paths[[2L]]),
         k = 2L, workers = 1L, resources = resources,
         checkpoint_every = 100L, method = "exact",
-        backend_used = "native_cpu_exact_stream", exact = TRUE)
+        backend_used = "faiss_cpu_stream_exact", exact = TRUE,
+        target_recall = 0.99)
     saved <- fastEmbedR:::massive_full_knn_checkpoint(source,
         setup, FALSE)
-    first <- fastEmbedR:::massive_exact_graph_batch_cpp(
-        source, 1, 4L, 2L, 5L, 1L)
+    first <- fastEmbedR:::faissr_matrix_knn_batch_cpp(
+        source, source, as.double(seq_len(4L)), 2L,
+        "cpu", "stream_exact", 5L,
+        resources$memory_limit_bytes, 1L, TRUE)
     streams <- fastEmbedR:::massive_knn_open_parts(
         c(indices = parts[[1L]], distances = parts[[2L]]), 0, 2L)
     fastEmbedR:::massive_full_knn_commit(first, streams, 4,
@@ -1162,17 +1171,22 @@ test_that("exact checkpoint interval replays uncommitted query blocks", {
     setup <- list(output = output, paths = paths, k = 2L,
         workers = 1L, resources = resources,
         checkpoint_every = 2L, method = "exact",
-        backend_used = "native_cpu_exact_stream", exact = TRUE)
+        backend_used = "faiss_cpu_stream_exact", exact = TRUE,
+        target_recall = 0.99)
     saved <- fastEmbedR:::massive_full_knn_checkpoint(source,
         setup, FALSE)
     streams <- fastEmbedR:::massive_knn_open_parts(parts, 0, 2L)
-    first <- fastEmbedR:::massive_exact_graph_batch_cpp(
-        source, 1L, 4L, 2L, 5L, 1L)
+    first <- fastEmbedR:::faissr_matrix_knn_batch_cpp(
+        source, source, as.double(seq_len(4L)), 2L,
+        "cpu", "stream_exact", 5L,
+        resources$memory_limit_bytes, 1L, TRUE)
     fastEmbedR:::massive_full_knn_commit(first, streams, 4,
         saved, setup, save_now = FALSE)
     expect_equal(readRDS(saved$path)$completed_rows, 0)
-    second <- fastEmbedR:::massive_exact_graph_batch_cpp(
-        source, 5L, 4L, 2L, 5L, 1L)
+    second <- fastEmbedR:::faissr_matrix_knn_batch_cpp(
+        source, source, as.double(5:8), 2L,
+        "cpu", "stream_exact", 5L,
+        resources$memory_limit_bytes, 1L, TRUE)
     fastEmbedR:::massive_full_knn_commit(second, streams, 8,
         saved, setup, save_now = TRUE)
     expect_equal(readRDS(saved$path)$completed_rows, 8)

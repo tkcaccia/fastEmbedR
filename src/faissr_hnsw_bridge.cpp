@@ -2,6 +2,32 @@
 #include <faissR_api_v1.h>
 
 // [[Rcpp::export]]
+Rcpp::List faissr_matrix_knn_batch_cpp(SEXP query, SEXP reference,
+    Rcpp::NumericVector row_ids, int k, std::string backend,
+    std::string method, int reference_chunk, double memory_limit,
+    int n_threads, bool exclude_self) {
+  Rcpp::Function load_namespace =
+    Rcpp::Environment::base_env()["loadNamespace"];
+  load_namespace("faissR");
+  if (faissR_c_api_version() != 1) {
+    Rcpp::stop("Unsupported faissR C API version");
+  }
+  Rcpp::List result = faissR_get_matrix_knn_batch_v1()(
+    query, reference, row_ids, Rcpp::wrap(k), Rcpp::wrap(backend),
+    Rcpp::wrap(method), Rcpp::wrap(reference_chunk),
+    Rcpp::wrap(memory_limit), Rcpp::wrap(n_threads),
+    Rcpp::wrap(exclude_self));
+  if (Rcpp::as<std::string>(result["provider"]) != "faissR" ||
+      Rcpp::as<std::string>(result["backend_used"]) !=
+        "faiss_cpu_stream_exact" ||
+      Rcpp::as<std::string>(result["method"]) != "stream_exact" ||
+      !Rcpp::as<bool>(result["exact"])) {
+    Rcpp::stop("faissR file-backed KNN changed provider or method");
+  }
+  return result;
+}
+
+// [[Rcpp::export]]
 SEXP faissr_hnsw_search_cpp(SEXP data, SEXP query, SEXP n, SEXP p,
                             SEXP k, SEXP target_recall, SEXP n_threads,
                             SEXP distance_storage) {

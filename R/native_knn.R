@@ -468,9 +468,6 @@ precompute_knn <- function(data, k = 30L,
 precompute_knn_backed <- function(data, k, metric, backend, n.cores,
         output, memory_limit, devices, checkpoint, resume,
         checkpoint_every, target_recall) {
-    if (target_recall != 0.99) stop(
-        "File-backed KNN recall tiers below 0.99 are not yet supported.",
-        call. = FALSE)
     if (!identical(metric, "euclidean")) stop(
         "File-backed KNN currently supports Euclidean distance only.",
         call. = FALSE)
@@ -489,11 +486,16 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
         if (data$nrow < 100000L && bounded_exact)
             "exact" else "ivf_sharded"
     } else "exact"
+    if (target_recall != 0.99 &&
+        !(backend == "cpu" && method == "exact")) stop(
+        "This file-backed KNN route does not yet tune recall tiers ",
+        "below 0.99.", call. = FALSE)
     massive_full_knn_graph(data, k = k, output = output,
         backend = backend, n.cores = resolve_n_cores(n.cores),
         memory_limit = limit, method = method, devices = devices,
         checkpoint = checkpoint, resume = resume,
-        checkpoint_every = checkpoint_every)
+        checkpoint_every = checkpoint_every,
+        target_recall = target_recall)
 }
 
 prepare_query_knn_inputs <- function(reference, query, backend) {

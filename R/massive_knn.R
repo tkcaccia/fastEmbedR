@@ -99,8 +99,10 @@ massive_knn_reference <- function(reference, k, method,
         "Persistent faissR Flat KNN requires `float`.", call. = FALSE)
     if (method == "stream_exact") return(list(reference = reference,
         reference_chunk_rows = resources$reference_chunk_rows,
+        memory_limit_bytes = resources$memory_limit_bytes,
         build_seconds = 0,
-        reference_storage = "file_backed_float32"))
+        reference_storage = "file_backed_float32",
+        provider = "faissR"))
     if (method %in% c("faiss_hnsw", "hnsw")) return(
         massive_faiss_hnsw_reference(reference, k, n.cores,
             hnsw_build, ef_search))
@@ -277,7 +279,7 @@ massive_knn_checkpoint <- function(x, setup, resume) {
     settings <- list(
         version = 1L,
         implementation = massive_checkpoint_implementation_identity(),
-        faissr = if (setup$method %in% c("hnsw", "exact") ||
+        faissr = if (setup$method %in% c("hnsw", "exact", "stream_exact") ||
             identical(setup$cuda_provider, "faissR"))
             massive_faissr_identity() else NULL,
         query = massive_checkpoint_source_identity(x),
@@ -325,9 +327,10 @@ massive_knn_checkpoint <- function(x, setup, resume) {
 massive_knn_batch <- function(x, state, first, rows, k, method,
                                 n.cores, backend) {
     if (method == "stream_exact") {
-        return(massive_exact_reference_batch_cpp(x,
-            state$reference, first, rows, k,
-            state$reference_chunk_rows, n.cores))
+        return(faissr_matrix_knn_batch_cpp(x, state$reference,
+            as.double(seq.int(first, length.out = rows)), k,
+            "cpu", "stream_exact", state$reference_chunk_rows,
+            state$memory_limit_bytes, n.cores, FALSE))
     }
     query <- if (identical(method, "hnsw") ||
         (identical(method, "exact") && backend == "cpu") ||
@@ -349,6 +352,14 @@ massive_knn_batch <- function(x, state, first, rows, k, method,
         "Metal landmark KNN changed backend or algorithm.",
         call. = FALSE)
     found
+}
+
+massive_exact_audit_batch <- function(query, reference, rows, k,
+        reference_chunk_rows, workers, exclude_self,
+        memory_limit_bytes) {
+    faissr_matrix_knn_batch_cpp(query, reference, as.double(rows), k,
+        "cpu", "stream_exact", reference_chunk_rows,
+        memory_limit_bytes, workers, exclude_self)
 }
 
 massive_knn_probe_signature <- function(neighbors) {
@@ -569,6 +580,14 @@ massive_knn_setup <- function(x, reference, k, output, backend,
         cuda_provider = if (backend == "cuda") cuda_provider else NULL)
 }
 
+massive_knn_residency <- function(query, reference) {
+    if (query$format == "memory" && reference$format == "memory")
+        return("resident")
+    if (query$format == "memory" || reference$format == "memory")
+        return("mixed")
+    "file-backed"
+}
+
 massive_knn_result <- function(x, setup, state, elapsed,
                                 checkpoint, devices) {
     paths <- setup$paths
@@ -584,11 +603,11 @@ massive_knn_result <- function(x, setup, state, elapsed,
         output_identity = massive_checkpoint_file_identity(unname(paths)),
         implementation_identity =
             massive_checkpoint_implementation_identity(),
-        faissr_identity = if ((setup$backend == "cpu" &&
-            setup$method != "stream_exact") ||
+        faissr_identity = if (setup$backend == "cpu" ||
             identical(state$provider, "faissR"))
             massive_faissr_identity() else NULL,
         knn_provider = state$provider,
+        residency = massive_knn_residency(x, setup$reference),
         ivf_tuning_source = state$tuning_source %||% NULL,
         metric = "euclidean", backend = setup$backend,
         method = setup$method, exact = setup$method %in% c(
@@ -619,7 +638,8 @@ massive_knn_result <- function(x, setup, state, elapsed,
 }
 
 massive_knn_query_storage <- function(x, setup, state) {
-    if (setup$method == "stream_exact") return("file_backed_float32")
+    if (setup$method == "stream_exact") return(
+        if (x$format == "memory") "R_double" else "file_backed_float32")
     if (setup$backend %in% c("cpu", "metal") ||
         identical(state$provider, "faissR"))
         return("R_float32")
@@ -1059,19 +1079,19 @@ massive_audit_landmark_knn <- function(knn, query, reference,
     resources <- massive_full_knn_resources(query, knn$ncol, count,
         NULL, memory_limit, reference)
     rows <- floor((seq_len(count) - 0.5) * knn$nrow / count) + 1
-    recall <- numeric(count)
-    distance_recall <- numeric(count)
+    recall <- distance_recall <- numeric(count)
     started <- proc.time()[[3L]]
     groups <- split(seq_along(rows), ceiling(seq_along(rows) /
         resources$chunk_rows))
     message("EXPERIMENTAL landmark KNN recall audit: ", count,
         " rows in ", length(groups), " reference pass(es)")
     for (group in groups) {
-        exact <- massive_exact_sample_batch_cpp(query, reference,
-            rows[group], knn$ncol,
-            resources$reference_chunk_rows, 1L, FALSE)
+        exact <- massive_exact_audit_batch(query, reference,
+            rows[group], knn$ncol, resources$reference_chunk_rows,
+            1L, FALSE, resources$memory_limit_bytes)
         if (!identical(exact$backend_used,
-            "native_cpu_exact_stream") || !isTRUE(exact$exact)) stop(
+            "faiss_cpu_stream_exact") ||
+            !isTRUE(exact$exact)) stop(
             "Recall reference changed algorithm.", call. = FALSE)
         for (i in seq_along(group)) {
             observed <- massive_read_knn_rows(knn,
@@ -1167,12 +1187,16 @@ massive_full_knn_checkpoint <- function(x, setup, resume) {
     path <- paste0(setup$output, ".checkpoint.rds")
     identity <- list(version = 2L,
         implementation = massive_checkpoint_implementation_identity(),
+        faissr = if (setup$backend_used == "faiss_cpu_stream_exact")
+            massive_faissr_identity() else NULL,
         source = massive_checkpoint_source_identity(x),
         output = setup$output, k = setup$k,
         query_rows = setup$resources$chunk_rows,
         reference_rows = setup$resources$reference_chunk_rows,
         workers = setup$workers, backend = "cpu",
         method = setup$method,
+        provider_method = setup$backend_used,
+        target_recall = setup$target_recall,
         checkpoint_every = setup$checkpoint_every)
     if (!is.null(setup$posting_identity)) {
         identity$posting <- setup$posting_identity
@@ -1860,8 +1884,7 @@ massive_full_knn_audit_reference_rows <- function(x, setup) {
     as.integer(min(setup$resources$reference_chunk_rows, rows))
 }
 
-massive_full_knn_audit <- function(graph, x, audit_rows, setup,
-        rows = NULL) {
+massive_full_knn_audit <- function(graph, x, audit_rows, setup, rows = NULL) {
     if (audit_rows == 0L) return(graph)
     if (is.null(rows)) rows <- as.integer(floor(
         (seq_len(audit_rows) - 0.5) * x$nrow / audit_rows) + 1)
@@ -1878,11 +1901,12 @@ massive_full_knn_audit <- function(graph, x, audit_rows, setup,
     message("Full KNN audit: ", audit_rows, " rows; ",
         length(groups), " reference passes")
     for (group in groups) {
-        exact <- massive_exact_sample_batch_cpp(x, x, rows[group],
-            graph$k, audit_reference_rows,
-            setup$workers, TRUE)
+        exact <- massive_exact_audit_batch(x, x, rows[group],
+            graph$k, audit_reference_rows, setup$workers, TRUE,
+            setup$resources$memory_limit_bytes)
         if (!identical(exact$backend_used,
-            "native_cpu_exact_stream") || !isTRUE(exact$exact)) stop(
+            "faiss_cpu_stream_exact") ||
+            !isTRUE(exact$exact)) stop(
             "Exact recall reference changed algorithm.", call. = FALSE)
         for (i in seq_along(group)) {
             observed <- massive_read_graph_edges(graph,
@@ -1905,7 +1929,7 @@ massive_full_knn_audit <- function(graph, x, audit_rows, setup,
     graph$distance_equivalent_row_recall <- distance_recall
     graph$audit_reference_passes <- length(groups)
     graph$audit_reference_chunk_rows <- audit_reference_rows
-    stats <- massive_recall_summary(recall, 0.99)
+    stats <- massive_recall_summary(recall, graph$target_recall %||% 0.99)
     graph[names(stats)] <- stats
     graph$audit_seconds <- unname(proc.time()[[3L]] - started)
     graph
@@ -1913,7 +1937,8 @@ massive_full_knn_audit <- function(graph, x, audit_rows, setup,
 
 massive_full_knn_exact <- function(x, k, output, n.cores,
         chunk_rows, reference_chunk_rows, memory_limit,
-        checkpoint, resume, audit_rows, checkpoint_every) {
+        checkpoint, resume, audit_rows, checkpoint_every,
+        target_recall) {
     workers <- normalize_nn_threads(n.cores)
     resources <- massive_full_knn_resources(x, k, chunk_rows,
         reference_chunk_rows, memory_limit)
@@ -1921,10 +1946,13 @@ massive_full_knn_exact <- function(x, k, output, n.cores,
     setup <- list(output = sub("\\.indices\\.u32$", "", paths[["indices"]]),
         paths = paths, k = k, workers = workers, resources = resources,
         checkpoint_every = checkpoint_every, method = "exact",
-        backend_used = "native_cpu_exact_stream", exact = TRUE)
+        backend_used = "faiss_cpu_stream_exact", exact = TRUE,
+        target_recall = target_recall)
     setup$search_batch <- function(first, rows) {
-        massive_exact_graph_batch_cpp(x, first, rows, k,
-            resources$reference_chunk_rows, workers)
+        faissr_matrix_knn_batch_cpp(x, x,
+            as.double(seq.int(first, length.out = rows)), k,
+            "cpu", "stream_exact", resources$reference_chunk_rows,
+            resources$memory_limit_bytes, workers, TRUE)
     }
     saved <- if (checkpoint) massive_full_knn_checkpoint(
         x, setup, resume) else NULL
@@ -1934,11 +1962,17 @@ massive_full_knn_exact <- function(x, k, output, n.cores,
     measurement <- massive_full_knn_stream(x, setup, saved)
     graph <- massive_knn_graph(setup$output, x$nrow, k)
     graph$backend <- "cpu"
-    graph$method <- "native_cpu_exact_stream"
+    graph$method <- setup$backend_used
+    graph$knn_provider <- "faissR"
+    graph$residency <- massive_knn_residency(x, x)
+    graph$device_ids <- integer()
+    graph$build_seconds <- 0
     graph$exact <- TRUE
+    graph$target_recall <- target_recall
     graph$source_identity <- massive_checkpoint_source_identity(x)
     graph$implementation_identity <-
         massive_checkpoint_implementation_identity()
+    graph$faissr_identity <- massive_faissr_identity()
     graph$resources <- resources
     graph$search_seconds <- measurement$seconds
     graph$checkpoint <- checkpoint
@@ -2009,6 +2043,14 @@ massive_full_knn_controls <- function(x, k, backend, method,
         hnsw_build = hnsw_build,
         checkpoint_every = checkpoint_every,
         query_order = query_order)
+}
+
+massive_full_knn_target_recall <- function(value, backend, method) {
+    value <- fastembedr_target_recall(value)
+    if (value != 0.99 && !(backend == "cpu" && method == "exact"))
+        stop("This full KNN route does not yet tune recall tiers ",
+            "below 0.99.", call. = FALSE)
+    value
 }
 
 #' Build an experimental file-backed full KNN graph
@@ -2082,24 +2124,28 @@ massive_full_knn_controls <- function(x, k, backend, method,
 #' @param devices Optional CUDA device indices. Two or more devices require
 #'   exact or IVF sharded search and a file-backed source. CPU and Metal
 #'   requests fail explicitly; the graph is never moved to another route.
+#' @param target_recall Requested recall tier (`0.9`, `0.95`, or `0.99`).
+#'   Exact CPU search is unchanged by the tier and remains exact by
+#'   construction. Other file-backed routes currently require `0.99`.
 #' @return A validated `fastEmbedR_massive_graph` descriptor.
 #' @export
 #' @keywords internal
 massive_full_knn_graph <- function(x, k, output, backend = "cpu",
         n.cores = 1L, chunk_rows = NULL, reference_chunk_rows = NULL,
         memory_limit = "8GB", checkpoint = FALSE, resume = FALSE,
-        method = c("exact", "hnsw_sharded", "ivf_sharded",
-            "coarse_postings"),
+        method = c("exact", "hnsw_sharded", "ivf_sharded", "coarse_postings"),
         audit_rows = 0L, checkpoint_every = 100L,
         postings = NULL, centers = NULL, nprobe = NULL,
         query_order = c("original", "posting"), ef_search = 0L,
-        hnsw_build = NULL, devices = NULL) {
+        hnsw_build = NULL, devices = NULL, target_recall = NULL) {
     controls <- massive_full_knn_controls(x, k, backend, method,
         audit_rows, checkpoint_every, checkpoint, resume,
         query_order, ef_search, hnsw_build)
     k <- controls$k
     backend <- controls$backend
     method <- controls$method
+    target_recall <- massive_full_knn_target_recall(
+        target_recall, backend, method)
     audit_rows <- controls$audit_rows
     ef_search <- controls$ef_search
     hnsw_build <- controls$hnsw_build
@@ -2110,8 +2156,7 @@ massive_full_knn_graph <- function(x, k, output, backend = "cpu",
         "Full KNN devices require exact or IVF search; no fallback.",
         call. = FALSE)
     if (method == "coarse_postings") {
-        if (backend != "cpu")
-            stop("Posting KNN is CPU-only; no CUDA fallback.")
+        if (backend != "cpu") stop("Posting KNN is CPU-only; no CUDA fallback.")
         return(massive_full_knn_postings(x, k, output, n.cores,
             chunk_rows, reference_chunk_rows, memory_limit, checkpoint,
             resume, audit_rows, checkpoint_every, postings, centers,
@@ -2133,5 +2178,5 @@ massive_full_knn_graph <- function(x, k, output, backend = "cpu",
     }
     massive_full_knn_exact(x, k, output, n.cores, chunk_rows,
         reference_chunk_rows, memory_limit, checkpoint, resume,
-        audit_rows, checkpoint_every)
+        audit_rows, checkpoint_every, target_recall)
 }

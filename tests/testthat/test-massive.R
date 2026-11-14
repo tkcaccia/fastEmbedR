@@ -2768,7 +2768,7 @@ test_that("streamed-reference KNN accepts 64-bit query row offsets", {
     query <- fastEmbedR:::massive_synthetic_matrix(1e12, 3L)
     landmarks <- massive_matrix(reference_path, 11L, 3L)
     first <- 2^31 + 17
-    observed <- fastEmbedR:::massive_exact_reference_batch_cpp(
+    observed <- faissr_exact_reference_batch(
         query, landmarks, first, 3L, 3L, 4L, 2L)
     query_rows <- massive_read_rows(query, first, 3L)
     stored_reference <- massive_read_rows(landmarks, 1, 11L)

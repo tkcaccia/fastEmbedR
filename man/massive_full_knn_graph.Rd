@@ -24,7 +24,8 @@ massive_full_knn_graph(
   query_order = c("original", "posting"),
   ef_search = 0L,
   hnsw_build = NULL,
-  devices = NULL
+  devices = NULL,
+  target_recall = NULL
 )
 }
 \arguments{
@@ -93,6 +94,10 @@ shape-based policy. Other methods and backends reject this setting.}
 \item{devices}{Optional CUDA device indices. Two or more devices require
 exact or IVF sharded search and a file-backed source. CPU and Metal
 requests fail explicitly; the graph is never moved to another route.}
+
+\item{target_recall}{Requested recall tier (\code{0.9}, \code{0.95}, or \code{0.99}).
+Exact CPU search is unchanged by the tier and remains exact by
+construction. Other file-backed routes currently require \code{0.99}.}
 }
 \value{
 A validated \code{fastEmbedR_massive_graph} descriptor.

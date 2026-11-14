@@ -38,6 +38,59 @@ test_that("file-backed KNN uses the public route and session budget", {
     }
 })
 
+test_that("exact file-backed KNN records recall tier without retuning", {
+    x <- matrix(seq_len(24) / 7, ncol = 3L)
+    directory <- tempfile("knn-tiers-")
+    dir.create(directory)
+    on.exit(unlink(directory, recursive = TRUE), add = TRUE)
+    path <- file.path(directory, "input.f32")
+    writeBin(as.numeric(t(x)), path, size = 4L, endian = "little")
+    source <- massive_matrix(path, nrow(x), ncol(x))
+    withr::local_options(fastEmbedR.target_recall = 0.90)
+    option <- precompute_knn(source, 2L, backend = "cpu",
+        output = file.path(directory, "option"))
+    explicit <- precompute_knn(source, 2L, backend = "cpu",
+        target_recall = 0.95, output = file.path(directory, "explicit"))
+    default <- precompute_knn(source, 2L, backend = "cpu",
+        target_recall = 0.99, output = file.path(directory, "default"))
+    expect_identical(option$target_recall, 0.90)
+    expect_identical(explicit$target_recall, 0.95)
+    expect_identical(default$target_recall, 0.99)
+    expect_true(all(vapply(list(option, explicit, default),
+        function(graph) isTRUE(graph$exact), logical(1L))))
+    expect_equal(massive_read_graph_edges(option, 1L, nrow(x)),
+        massive_read_graph_edges(explicit, 1L, nrow(x)))
+    expect_equal(massive_read_graph_edges(option, 1L, nrow(x)),
+        massive_read_graph_edges(default, 1L, nrow(x)))
+    expect_error(precompute_knn(source, 2L, backend = "cpu",
+        target_recall = 0.97,
+        output = file.path(directory, "invalid")), "target_recall")
+    expect_false(file.exists(file.path(directory, "invalid.indices.u32")))
+})
+
+test_that("file-backed exact checkpoint locks the requested tier", {
+    x <- matrix(seq_len(18) / 5, ncol = 3L)
+    directory <- tempfile("knn-tier-checkpoint-")
+    dir.create(directory)
+    on.exit(unlink(directory, recursive = TRUE), add = TRUE)
+    path <- file.path(directory, "input.f32")
+    writeBin(as.numeric(t(x)), path, size = 4L, endian = "little")
+    source <- massive_matrix(path, nrow(x), ncol(x))
+    resources <- fastEmbedR:::massive_full_knn_resources(
+        source, 2L, 2L, 3L, "256MB")
+    output <- file.path(directory, "graph")
+    paths <- fastEmbedR:::massive_knn_paths(output,
+        resources$output_bytes)
+    setup <- list(output = output, paths = paths, k = 2L,
+        workers = 1L, resources = resources, checkpoint_every = 1L,
+        method = "exact", backend_used = "faiss_cpu_stream_exact",
+        exact = TRUE, target_recall = 0.90)
+    fastEmbedR:::massive_full_knn_checkpoint(source, setup, FALSE)
+    setup$target_recall <- 0.95
+    expect_error(fastEmbedR:::massive_full_knn_checkpoint(
+        source, setup, TRUE), "checkpoint")
+})
+
 test_that("public file-backed KNN resumes after a committed block", {
     skip_on_os("windows")
     set.seed(481L)
@@ -50,13 +103,13 @@ test_that("public file-backed KNN resumes after a committed block", {
         endian = "little")
     source <- massive_matrix(path, nrow(x), ncol(x))
     output <- file.path(work, "graph")
-    native <- fastEmbedR:::massive_exact_graph_batch_cpp
+    native <- fastEmbedR:::faissr_matrix_knn_batch_cpp
     calls <- 0L
     expect_error(testthat::with_mocked_bindings(
         precompute_knn(source, k = 3L, backend = "cpu",
             output = output, memory_limit = "256MB",
             checkpoint = TRUE, checkpoint_every = 1L),
-        massive_exact_graph_batch_cpp = function(...) {
+        faissr_matrix_knn_batch_cpp = function(...) {
             calls <<- calls + 1L
             if (calls == 2L) stop("injected interruption")
             native(...)

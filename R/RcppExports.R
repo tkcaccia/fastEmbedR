@@ -293,6 +293,10 @@ project_embedding_affine_parallel_cpp <- function(reference_data_sexp, query_dat
     .Call(`_fastEmbedR_project_embedding_affine_parallel_cpp`, reference_data_sexp, query_data_sexp, reference_layout_sexp, projection_indices, projection_distances_sexp, max_neighbors, ridge, max_extrapolation, n_threads)
 }
 
+faissr_matrix_knn_batch_cpp <- function(query, reference, row_ids, k, backend, method, reference_chunk, memory_limit, n_threads, exclude_self) {
+    .Call(`_fastEmbedR_faissr_matrix_knn_batch_cpp`, query, reference, row_ids, k, backend, method, reference_chunk, memory_limit, n_threads, exclude_self)
+}
+
 faissr_hnsw_search_cpp <- function(data, query, n, p, k, target_recall, n_threads, distance_storage) {
     .Call(`_fastEmbedR_faissr_hnsw_search_cpp`, data, query, n, p, k, target_recall, n_threads, distance_storage)
 }
@@ -655,18 +659,6 @@ massive_validate_csr_graph_cpp <- function(offsets_path, indices_path, weights_p
 
 massive_read_csr_graph_edges_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, access, first_row, count, max_bytes) {
     .Call(`_fastEmbedR_massive_read_csr_graph_edges_cpp`, offsets_path, indices_path, weights_path, n_vertices, access, first_row, count, max_bytes)
-}
-
-massive_exact_graph_batch_cpp <- function(spec, first_row, count, k, reference_chunk, n_threads) {
-    .Call(`_fastEmbedR_massive_exact_graph_batch_cpp`, spec, first_row, count, k, reference_chunk, n_threads)
-}
-
-massive_exact_reference_batch_cpp <- function(query_spec, reference_spec, first_row, count, k, reference_chunk, n_threads) {
-    .Call(`_fastEmbedR_massive_exact_reference_batch_cpp`, query_spec, reference_spec, first_row, count, k, reference_chunk, n_threads)
-}
-
-massive_exact_sample_batch_cpp <- function(query_spec, reference_spec, row_ids, k, reference_chunk, n_threads, exclude_self) {
-    .Call(`_fastEmbedR_massive_exact_sample_batch_cpp`, query_spec, reference_spec, row_ids, k, reference_chunk, n_threads, exclude_self)
 }
 
 massive_vote_landmarks_cpp <- function(indices, distances, landmark_labels, n_threads) {

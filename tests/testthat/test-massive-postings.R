@@ -226,7 +226,7 @@ test_that("posting scans match full exact KNN when all lists are probed", {
         first = 4L, n = 9L, k = 3L, nprobe = 3L,
         reference_chunk = 5L, n.cores = 2L,
         memory_limit = "128MB", exclude_self = TRUE)
-    expected <- fastEmbedR:::massive_exact_graph_batch_cpp(
+    expected <- faissr_exact_graph_batch(
         source, 4, 9L, 3L, 5L, 2L)
     expect_identical(observed$indices, expected$indices)
     expect_equal(observed$distances, expected$distances,
@@ -245,7 +245,7 @@ test_that("posting scans match full exact KNN when all lists are probed", {
     row_ids <- readBin(connection, integer(), n = 45L,
         size = 4L, endian = "little")
     close(connection)
-    all_exact <- fastEmbedR:::massive_exact_graph_batch_cpp(
+    all_exact <- faissr_exact_graph_batch(
         source, 1, 45L, 3L, 5L, 2L)
     expect_identical(grouped$indices[order(row_ids), ],
         all_exact$indices)
@@ -303,7 +303,7 @@ test_that("posting recall pilot detects weak probes before graph build", {
     expect_identical(strong$posting_backend,
         "native_cpu_posting_scan")
     expect_identical(strong$reference_backend,
-        "native_cpu_exact_stream")
+        "faiss_cpu_stream_exact")
     expect_true(all(strong$candidate_count == 7))
     expect_error(massive_posting_recall_pilot(source, postings,
         centers, sample_rows = 9L), "Invalid recall pilot")
@@ -411,7 +411,7 @@ test_that("posting search writes a reusable exact full graph", {
     expect_true(graph$exact)
     expect_true(graph$recall_audited)
     expect_equal(graph$observed_recall, 1)
-    expected <- fastEmbedR:::massive_exact_graph_batch_cpp(
+    expected <- faissr_exact_graph_batch(
         source, 1, 45L, 3L, 5L, 2L)
     for (row in c(1L, 15L, 30L, 45L)) {
         found <- massive_read_graph_edges(graph, row, 1L)

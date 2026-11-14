@@ -475,9 +475,9 @@ massive_posting_recall_pilot <- function(x, postings, centers,
         paths[[2L]], paths[[3L]], centers, 1, count,
         controls$k, controls$probes, plan$reference_chunk,
         workers, TRUE, postings$nrow, FALSE)
-    exact <- massive_exact_sample_batch_cpp(x, x, selection$rows,
+    exact <- massive_exact_audit_batch(x, x, selection$rows,
         controls$k, exact_plan$reference_chunk_rows,
-        workers, TRUE)
+        workers, TRUE, exact_plan$memory_limit_bytes)
     massive_posting_pilot_summary(x, postings, paths, identity,
         selection, observed, exact, controls, target_recall, started)
 }
@@ -485,7 +485,8 @@ massive_posting_recall_pilot <- function(x, postings, centers,
 massive_posting_pilot_summary <- function(x, postings, paths,
         identity, selection, observed, exact, controls,
         target_recall, started) {
-    if (!identical(exact$backend_used, "native_cpu_exact_stream") ||
+    if (!identical(exact$backend_used,
+            "faiss_cpu_stream_exact") ||
         !isTRUE(exact$exact) ||
         !identical(observed$backend_used,
             "native_cpu_posting_scan")) stop(
