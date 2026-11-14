@@ -11,6 +11,7 @@
 #include <Rcpp.h>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cctype>
 #include <cfloat>
@@ -650,6 +651,93 @@ SparseProbabilitiesF build_tsne_probabilities_float(const IntegerMatrix& indices
     p.val[static_cast<std::size_t>(pos)] = value;
   }
 
+  return p;
+}
+
+SparseProbabilitiesF build_tsne_directed_probabilities_float(
+    const IntegerMatrix& indices, const std::vector<float>& distances,
+    double perplexity, int n_threads) {
+  const int n = indices.nrow();
+  const int k = indices.ncol();
+  const std::size_t edges = static_cast<std::size_t>(n) * k;
+  if (edges != distances.size() ||
+      edges > std::vector<int>().max_size() / 2u) {
+    Rcpp::stop("Invalid resident t-SNE graph capacity.");
+  }
+  const int offset = resolve_index_offset(indices);
+  for (int row = 0; row < n; ++row) {
+    const std::size_t base = static_cast<std::size_t>(row) * k;
+    for (int j = 0; j < k; ++j) {
+      const int nb = indices(row, j) - offset;
+      const float d = distances[base + j];
+      if (nb < 0 || nb >= n || !std::isfinite(d) || d < 0.0f) {
+        Rcpp::stop("Invalid resident t-SNE neighbor or distance.");
+      }
+    }
+  }
+  const int threads = resolve_threads(n_threads, n);
+  std::vector<float> conditional(edges, 0.0f);
+  std::vector<std::uint32_t> outgoing(n, 0u);
+  std::vector<std::atomic<std::uint64_t>> incoming(n);
+  for (auto& count : incoming) count.store(0u);
+  std::vector<double> thread_mass(threads, 0.0);
+  parallel_for(n, threads, [&](int first, int last, int thread) {
+    std::vector<float> row_p(k, 0.0f);
+    double mass = 0.0;
+    for (int row = first; row < last; ++row) {
+      compute_row_probabilities_float(distances, row, k,
+                                      perplexity, row_p.data());
+      const std::size_t base = static_cast<std::size_t>(row) * k;
+      for (int j = 0; j < k; ++j) {
+        const int nb = indices(row, j) - offset;
+        if (nb == row) continue;
+        const float value = row_p[j];
+        conditional[base + j] = value;
+        ++outgoing[row];
+        incoming[nb].fetch_add(1u, std::memory_order_relaxed);
+        mass += value;
+      }
+    }
+    thread_mass[thread] = mass;
+  });
+  const double mass = std::accumulate(thread_mass.begin(),
+                                      thread_mass.end(), 0.0);
+  if (!std::isfinite(mass) || mass <= 0.0) {
+    Rcpp::stop("Resident t-SNE probability normalization failed.");
+  }
+  SparseProbabilitiesF p;
+  p.row_ptr.resize(static_cast<std::size_t>(n) + 1u, 0u);
+  for (int row = 0; row < n; ++row) {
+    p.row_ptr[static_cast<std::size_t>(row + 1)] =
+      p.row_ptr[static_cast<std::size_t>(row)] + outgoing[row] +
+      incoming[row].load(std::memory_order_relaxed);
+  }
+  const auto total = p.row_ptr[static_cast<std::size_t>(n)];
+  p.col.resize(static_cast<std::size_t>(total));
+  p.val.resize(static_cast<std::size_t>(total));
+  std::vector<std::atomic<std::uint64_t>> fill(n);
+  for (int row = 0; row < n; ++row) {
+    fill[row].store(p.row_ptr[static_cast<std::size_t>(row)] +
+                    outgoing[row], std::memory_order_relaxed);
+  }
+  const float scale = static_cast<float>(0.5 / mass);
+  parallel_for(n, threads, [&](int first, int last, int) {
+    for (int row = first; row < last; ++row) {
+      const std::size_t base = static_cast<std::size_t>(row) * k;
+      std::uint64_t pos = p.row_ptr[static_cast<std::size_t>(row)];
+      for (int j = 0; j < k; ++j) {
+        const int nb = indices(row, j) - offset;
+        if (nb == row) continue;
+        const float value = conditional[base + j] * scale;
+        p.col[static_cast<std::size_t>(pos)] = nb;
+        p.val[static_cast<std::size_t>(pos++)] = value;
+        const auto reverse = fill[nb].fetch_add(
+          1u, std::memory_order_relaxed);
+        p.col[static_cast<std::size_t>(reverse)] = row;
+        p.val[static_cast<std::size_t>(reverse)] = value;
+      }
+    }
+  });
   return p;
 }
 
@@ -1661,7 +1749,6 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
       init_dims.first != n || init_dims.second != n_components ||
       (n_components != 2 && n_components != 3) ||
       devices.size() < 2 || devices.size() > n ||
-      static_cast<std::size_t>(n) * k > INT_MAX / 2 ||
       early_iter < 0 || normal_iter < 0 ||
       early_iter + normal_iter < 1 || perplexity <= 0 ||
       early_exag <= 0 || exag <= 0 || min_gain <= 0 ||
@@ -1671,7 +1758,7 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
   const int threads = resolve_threads(n_threads, n);
   const auto started = std::chrono::steady_clock::now();
   auto values = copy_distances_float_sexp(distances, threads);
-  auto graph = build_tsne_probabilities_float(
+  auto graph = build_tsne_directed_probabilities_float(
     indices, values, perplexity, threads);
   std::vector<float>().swap(values);
   const auto affinity_end = std::chrono::steady_clock::now();
@@ -1776,7 +1863,7 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
     Rcpp::Named("repulsion") = n_components == 3 ?
       "fft_grid_3d" : "fft_grid",
     Rcpp::Named("precision") = "float32",
-    Rcpp::Named("probabilities") = "symmetric_sparse_knn_host",
+    Rcpp::Named("probabilities") = "symmetric_sparse_knn_host_linear",
     Rcpp::Named("n_threads") = threads,
     Rcpp::Named("learning_rate_early") = learning_rate_auto ?
       n / early_exag : learning_rate,

@@ -577,3 +577,25 @@ test_that("CUDA 2D t-SNE reports native stage timings", {
         cfg$affinity_elapsed_sec + cfg$optimization_elapsed_sec,
         tolerance = 1e-12)
 })
+
+test_that("two CUDA devices use the linear resident affinity graph", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    skip_if_not(fastEmbedR:::massive_cuda_device_count_cpp() >= 2L)
+    n <- 64L
+    k <- 6L
+    rows <- seq_len(n)
+    indices <- vapply(seq_len(k), function(offset)
+        as.integer((rows + offset - 1L) %% n + 1L), integer(n))
+    distances <- matrix(rep(seq_len(k), each = n), n, k)
+    layout <- tsne_knn(indices, distances, n_neighbors = k,
+        perplexity = 2, backend = "cuda", devices = c(0L, 1L),
+        seed = 17L, early_exaggeration_iter = 1L, n_iter = 2L,
+        auto_config = FALSE)
+    cfg <- attr(layout, "fastEmbedR_config")
+    expect_true(all(is.finite(layout)))
+    expect_identical(cfg$optimizer, "cuda_resident_coordinated_nccl")
+    expect_identical(cfg$probabilities,
+        "symmetric_sparse_knn_host_linear")
+    expect_gt(cfg$affinity_elapsed_sec, 0)
+    expect_gt(cfg$optimization_elapsed_sec, 0)
+})
