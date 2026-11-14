@@ -722,10 +722,10 @@ int cuda_tsne_fft_3d_from_knn(
                       0, stream>>>(
     gains, static_cast<int>(layout_items), 1.0f
   );
-  opentsne_affinity_sparse_kernel<<<point_blocks, threads,
-                                    0, stream>>>(
+  opentsne_affinity_sparse_kernel<DistanceT, false>
+      <<<point_blocks, threads, 0, stream>>>(
     d_indices, d_distances, probabilities, n, k,
-    index_offset, perplexity
+    index_offset, perplexity, n, 0, nullptr
   );
   if (check_cuda(cudaGetLastError(),
                  "3D t-SNE affinity kernel")) return 1;
