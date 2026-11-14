@@ -578,7 +578,7 @@ test_that("CUDA 2D t-SNE reports native stage timings", {
         tolerance = 1e-12)
 })
 
-test_that("two CUDA devices use the linear resident affinity graph", {
+test_that("two CUDA devices compute resident affinity shards", {
     skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
     skip_if_not(fastEmbedR:::massive_cuda_device_count_cpp() >= 2L)
     n <- 64L
@@ -595,7 +595,7 @@ test_that("two CUDA devices use the linear resident affinity graph", {
     expect_true(all(is.finite(layout)))
     expect_identical(cfg$optimizer, "cuda_resident_coordinated_nccl")
     expect_identical(cfg$probabilities,
-        "symmetric_sparse_knn_host_linear")
+        "symmetric_sparse_knn_cuda_shards")
     expect_gt(cfg$affinity_elapsed_sec, 0)
     expect_gt(cfg$optimization_elapsed_sec, 0)
 })

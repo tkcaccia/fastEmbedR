@@ -29,6 +29,13 @@ extern "C" void fastembedr_massive_tsne_multigpu_destroy(
 extern "C" int fastembedr_massive_tsne_multigpu_upload(
     void* context, int field, int first, int rows,
     const float* values);
+extern "C" int fastembedr_massive_tsne_multigpu_knn_upload(
+    void* context, int rank, int k, int offset,
+    const int* indices, const float* distances, float perplexity);
+extern "C" int fastembedr_massive_tsne_multigpu_knn_ready(
+    void* context);
+extern "C" int fastembedr_massive_tsne_multigpu_knn_attract(
+    void* context, int rank, float exaggeration);
 extern "C" int fastembedr_massive_tsne_multigpu_begin(
     void* context);
 extern "C" int fastembedr_massive_tsne_multigpu_repulsion_ms(

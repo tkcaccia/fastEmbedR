@@ -104,11 +104,9 @@ int resolve_index_offset(const IntegerMatrix& indices) {
   const int n = indices.nrow();
   int min_idx = std::numeric_limits<int>::max();
   int max_idx = std::numeric_limits<int>::min();
-  for (int i = 0; i < indices.nrow(); ++i) {
-    for (int j = 0; j < indices.ncol(); ++j) {
-      min_idx = std::min(min_idx, indices(i, j));
-      max_idx = std::max(max_idx, indices(i, j));
-    }
+  for (R_xlen_t slot = 0; slot < indices.size(); ++slot) {
+    min_idx = std::min(min_idx, indices[slot]);
+    max_idx = std::max(max_idx, indices[slot]);
   }
   return (min_idx >= 1 && max_idx <= n) ? 1 : 0;
 }
@@ -1758,8 +1756,30 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
   const int threads = resolve_threads(n_threads, n);
   const auto started = std::chrono::steady_clock::now();
   auto values = copy_distances_float_sexp(distances, threads);
-  auto graph = build_tsne_directed_probabilities_float(
-    indices, values, perplexity, threads);
+  SparseProbabilitiesF graph;
+  if (n_components == 3) {
+    graph = build_tsne_directed_probabilities_float(
+      indices, values, perplexity, threads);
+  }
+  const int capacity = n_components == 2 ? 1 :
+    static_cast<int>(std::min<std::size_t>(1000000u,
+      graph.col.size()));
+  void* raw = fastembedr_massive_tsne_multigpu_create(
+    n, n_components, capacity, devices.begin(), devices.size());
+  if (raw == nullptr) resident_tsne_cuda_check(1);
+  std::unique_ptr<void, decltype(&fastembedr_massive_tsne_multigpu_destroy)>
+    context(raw, fastembedr_massive_tsne_multigpu_destroy);
+  if (n_components == 2) {
+    const int offset = resolve_index_offset(indices);
+    for (int rank = 0; rank < devices.size(); ++rank) {
+      resident_tsne_cuda_check(
+        fastembedr_massive_tsne_multigpu_knn_upload(
+          context.get(), rank, k, offset, indices.begin(),
+          values.data(), static_cast<float>(perplexity)));
+    }
+    resident_tsne_cuda_check(
+      fastembedr_massive_tsne_multigpu_knn_ready(context.get()));
+  }
   std::vector<float>().swap(values);
   const auto affinity_end = std::chrono::steady_clock::now();
   auto layout = copy_distances_float_sexp(y_init, threads);
@@ -1767,13 +1787,6 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
       [](float value) { return !std::isfinite(value); })) {
     Rcpp::stop("Initial t-SNE coordinates must be finite.");
   }
-  const int capacity = static_cast<int>(
-    std::min<std::size_t>(1000000u, graph.col.size()));
-  void* raw = fastembedr_massive_tsne_multigpu_create(
-    n, n_components, capacity, devices.begin(), devices.size());
-  if (raw == nullptr) resident_tsne_cuda_check(1);
-  std::unique_ptr<void, decltype(&fastembedr_massive_tsne_multigpu_destroy)>
-    context(raw, fastembedr_massive_tsne_multigpu_destroy);
   constexpr int transfer_rows = 1000000;
   for (int first = 0; first < n; first += transfer_rows) {
     const int rows = std::min(transfer_rows, n - first);
@@ -1790,10 +1803,12 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
   for (int rank = 0; rank < devices.size(); ++rank) {
     const int first = rank * block_rows;
     const int last = std::min(n, first + block_rows);
-    rank_edges[rank] = graph.row_ptr[last] - graph.row_ptr[first];
+    rank_edges[rank] = n_components == 2 ?
+      static_cast<unsigned long long>(last - first) * k :
+      graph.row_ptr[last] - graph.row_ptr[first];
     attraction_edges[rank] = rank_edges[rank];
   }
-  const int cache_state = total > 1 ?
+  const int cache_state = n_components == 3 && total > 1 ?
     fastembedr_massive_tsne_multigpu_cache_begin(
       context.get(), rank_edges.data()) : 0;
   if (cache_state < 0) resident_tsne_cuda_check(1);
@@ -1808,7 +1823,13 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
       early ? initial_momentum : final_momentum);
     resident_tsne_cuda_check(
       fastembedr_massive_tsne_multigpu_begin(context.get()));
-    if (cached && iter > 0) {
+    if (n_components == 2) {
+      for (int rank = 0; rank < devices.size(); ++rank) {
+        resident_tsne_cuda_check(
+          fastembedr_massive_tsne_multigpu_knn_attract(
+            context.get(), rank, phase_exag));
+      }
+    } else if (cached && iter > 0) {
       for (int rank = 0; rank < devices.size(); ++rank) {
         resident_tsne_cuda_check(
           fastembedr_massive_tsne_multigpu_cache_replay(
@@ -1863,7 +1884,9 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
     Rcpp::Named("repulsion") = n_components == 3 ?
       "fft_grid_3d" : "fft_grid",
     Rcpp::Named("precision") = "float32",
-    Rcpp::Named("probabilities") = "symmetric_sparse_knn_host_linear",
+    Rcpp::Named("probabilities") = n_components == 2 ?
+      "symmetric_sparse_knn_cuda_shards" :
+      "symmetric_sparse_knn_host_linear",
     Rcpp::Named("n_threads") = threads,
     Rcpp::Named("learning_rate_early") = learning_rate_auto ?
       n / early_exag : learning_rate,
@@ -1874,9 +1897,11 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
     Rcpp::Named("optimization_elapsed_sec") =
       seconds(affinity_end, optimization_end),
     Rcpp::Named("native_total_elapsed_sec") = seconds(started, finished),
-    Rcpp::Named("graph_cache_mode") = cached ?
+    Rcpp::Named("graph_cache_mode") = n_components == 2 ?
+      "resident_knn_shards" : cached ?
       "resident_device_shards" : "staged_batches",
-    Rcpp::Named("graph_cache_bytes") = cached ?
+    Rcpp::Named("graph_cache_bytes") = n_components == 2 ?
+      static_cast<double>(n) * k * 12.0 : cached ?
       static_cast<double>(graph.col.size()) * 12.0 : 0.0,
     Rcpp::Named("gpu_devices") = devices,
     Rcpp::Named("per_device_attraction_edges") = attraction_edges);
