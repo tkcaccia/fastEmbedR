@@ -1769,6 +1769,8 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
   if (raw == nullptr) resident_tsne_cuda_check(1);
   std::unique_ptr<void, decltype(&fastembedr_massive_tsne_multigpu_destroy)>
     context(raw, fastembedr_massive_tsne_multigpu_destroy);
+  const auto context_end = std::chrono::steady_clock::now();
+  auto shard_upload_end = context_end;
   if (n_components == 2) {
     const int offset = resolve_index_offset(indices);
     const bool float_input = is_float32_s4(distances);
@@ -1810,6 +1812,7 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
       Rcpp::stop("Resident CUDA KNN upload failed: %s",
                  upload_error.c_str());
     }
+    shard_upload_end = std::chrono::steady_clock::now();
     resident_tsne_cuda_check(
       fastembedr_massive_tsne_multigpu_knn_ready(context.get()));
   }
@@ -1827,7 +1830,11 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
         first, rows, layout.data() +
           static_cast<std::size_t>(first) * n_components));
   }
+  const auto layout_upload_end = std::chrono::steady_clock::now();
   double fft_seconds = 0.0;
+  double begin_seconds = 0.0;
+  double attract_seconds = 0.0;
+  double finish_seconds = 0.0;
   const int total = early_iter + normal_iter;
   const int block_rows = (n - 1) / devices.size() + 1;
   NumericVector attraction_edges(devices.size());
@@ -1846,6 +1853,7 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
   if (cache_state < 0) resident_tsne_cuda_check(1);
   const bool cached = cache_state == 1;
   for (int iter = 0; iter < total; ++iter) {
+    const auto begin_start = std::chrono::steady_clock::now();
     const bool early = iter < early_iter;
     const float phase_exag = static_cast<float>(
       early ? early_exag : exag);
@@ -1855,6 +1863,9 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
       early ? initial_momentum : final_momentum);
     resident_tsne_cuda_check(
       fastembedr_massive_tsne_multigpu_begin(context.get()));
+    const auto attract_start = std::chrono::steady_clock::now();
+    begin_seconds += std::chrono::duration<double>(
+      attract_start - begin_start).count();
     if (n_components == 2) {
       for (int rank = 0; rank < devices.size(); ++rank) {
         resident_tsne_cuda_check(
@@ -1880,10 +1891,15 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
       }
       for (auto& task : pending) task.get();
     }
+    const auto finish_start = std::chrono::steady_clock::now();
+    attract_seconds += std::chrono::duration<double>(
+      finish_start - attract_start).count();
     resident_tsne_cuda_check(
       fastembedr_massive_tsne_multigpu_finish(context.get(),
         phase_lr, momentum, static_cast<float>(min_gain),
         static_cast<float>(max_step_norm)));
+    finish_seconds += std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - finish_start).count();
     float fft_ms = 0.0f;
     resident_tsne_cuda_check(
       fastembedr_massive_tsne_multigpu_repulsion_ms(
@@ -1899,6 +1915,7 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
         first, rows, layout.data() +
           static_cast<std::size_t>(first) * n_components));
   }
+  const auto layout_download_end = std::chrono::steady_clock::now();
   NumericMatrix output(n, n_components);
   for (int row = 0; row < n; ++row) {
     for (int axis = 0; axis < n_components; ++axis) {
@@ -1927,6 +1944,21 @@ List knn_tsne_opentsne_cuda_multigpu_cpp(
     Rcpp::Named("learning_rate_normal") = learning_rate_auto ?
       n / exag : learning_rate,
     Rcpp::Named("fft_elapsed_sec") = fft_seconds,
+    Rcpp::Named("cuda_stage_seconds") = List::create(
+      Rcpp::Named("context_create") = seconds(started, context_end),
+      Rcpp::Named("knn_shard_upload") =
+        seconds(context_end, shard_upload_end),
+      Rcpp::Named("knn_shard_ready") =
+        seconds(shard_upload_end, affinity_end),
+      Rcpp::Named("layout_upload") =
+        seconds(affinity_end, layout_upload_end),
+      Rcpp::Named("iteration_begin") = begin_seconds,
+      Rcpp::Named("iteration_attract") = attract_seconds,
+      Rcpp::Named("iteration_finish") = finish_seconds,
+      Rcpp::Named("layout_download") =
+        seconds(optimization_end, layout_download_end),
+      Rcpp::Named("output_convert") =
+        seconds(layout_download_end, finished)),
     Rcpp::Named("affinity_elapsed_sec") = seconds(started, affinity_end),
     Rcpp::Named("optimization_elapsed_sec") =
       seconds(affinity_end, optimization_end),
