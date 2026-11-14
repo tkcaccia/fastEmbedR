@@ -93,7 +93,8 @@ massive_knn_paths <- function(output, output_bytes, resume = FALSE,
 
 massive_knn_reference <- function(reference, k, method,
         n.cores, backend, resources = NULL, hnsw_build = NULL,
-        ef_search = 0L, cuda_provider = "faissR") {
+        ef_search = 0L, cuda_provider = "faissR",
+        target_recall = 0.99) {
     if (backend == "cpu" && method == "exact" &&
         !requireNamespace("float", quietly = TRUE)) stop(
         "Persistent faissR Flat KNN requires `float`.", call. = FALSE)
@@ -105,7 +106,7 @@ massive_knn_reference <- function(reference, k, method,
         provider = "faissR"))
     if (method %in% c("faiss_hnsw", "hnsw")) return(
         massive_faiss_hnsw_reference(reference, k, n.cores,
-            hnsw_build, ef_search))
+            hnsw_build, ef_search, target_recall))
     if (backend == "metal") return(massive_metal_reference(reference))
     if (backend == "cuda" && cuda_provider != "faissR") stop(
         "CUDA KNN indices must be built by faissR.", call. = FALSE)
@@ -189,7 +190,7 @@ massive_metal_reference <- function(reference) {
 }
 
 massive_faiss_hnsw_reference <- function(reference, k, n.cores,
-        hnsw_build = NULL, ef_search = 0L) {
+        hnsw_build = NULL, ef_search = 0L, target_recall = 0.99) {
     if (!requireNamespace("float", quietly = TRUE)) stop(
         "Persistent FAISS HNSW requires `float`.", call. = FALSE)
     started <- proc.time()[[3L]]
@@ -199,7 +200,7 @@ massive_faiss_hnsw_reference <- function(reference, k, n.cores,
     index <- faissr_hnsw_index_build_cpp(data,
         as.integer(reference$nrow), as.integer(reference$ncol),
         k, n.cores, hnsw_build$m %||% 0L,
-        hnsw_build$ef_construction %||% 0L)
+        hnsw_build$ef_construction %||% 0L, target_recall)
     if (ef_search > 0L) {
         index$efSearch <- ef_search
         index$tuning_rule <- "explicit_ef_search"
@@ -1472,6 +1473,7 @@ massive_sharded_signature <- function(setup, backend, source_identity) {
         faissr = if (backend == "cpu" || faissr_cuda)
             massive_faissr_identity() else NULL,
         ef_search = setup$ef_search %||% 0L, hnsw_build = setup$hnsw_build,
+        target_recall = setup$target_recall %||% 0.99,
         k = setup$k, backend = backend, method = setup$method,
         workers = setup$workers,
         build_threads = setup$build_workers %||% setup$workers,
@@ -1722,9 +1724,8 @@ massive_sharded_hnsw_setting <- function(state, setup, shard,
 massive_index_shard <- function(x, setup, parts, shard,
         source_identity, backend, saved) {
     base <- floor(x$nrow / setup$resources$n_shards)
-    extra <- x$nrow %% setup$resources$n_shards
-    first <- 1 + shard * base + min(shard, extra)
-    count <- base + as.integer(shard < extra)
+    first <- 1 + shard * base + min(shard, x$nrow %% setup$resources$n_shards)
+    count <- base + as.integer(shard < x$nrow %% setup$resources$n_shards)
     reference <- massive_matrix_rows(x, first, count)
     tuning_k <- as.integer(min(setup$k + (backend != "cpu"), count))
     method <- if (setup$method == "ivf_sharded") "ivf" else if
@@ -1732,7 +1733,8 @@ massive_index_shard <- function(x, setup, parts, shard,
     provider <- setup$cuda_provider %||% "faissR"
     state <- massive_knn_reference(reference, tuning_k,
         method, setup$build_workers %||% setup$workers, backend,
-        hnsw_build = setup$hnsw_build, cuda_provider = provider)
+        hnsw_build = setup$hnsw_build, cuda_provider = provider,
+        target_recall = setup$target_recall %||% 0.99)
     if (backend == "cuda" && method == "ivf" && provider == "faissR")
         state <- massive_faissr_ivf_pilot(x, state, setup, count)
     if (backend == "cpu" &&
@@ -1791,7 +1793,7 @@ massive_sharded_result <- function(x, paths, setup, backend,
     graph$ivf_settings <- ivf_settings
     graph$target_recall <- if (backend == "cpu" ||
             setup$method == "ivf_sharded") {
-        0.99
+        setup$target_recall %||% 0.99
     } else NA_real_
     graph$recall_audited <- FALSE
     graph$query_storage <- "R_float32"
@@ -1828,7 +1830,8 @@ massive_full_shard_resources <- function(x, k, chunk_rows,
 massive_sharded_graph <- function(x, k, output, n.cores,
         chunk_rows, reference_chunk_rows, memory_limit,
         audit_rows, backend, method, checkpoint, resume,
-        checkpoint_every, ef_search, hnsw_build) {
+        checkpoint_every, ef_search, hnsw_build,
+        target_recall = 0.99) {
     if (backend == "metal" && normalize_nn_threads(n.cores) != 1L)
         stop("Metal full KNN requires `n.cores = 1`.", call. = FALSE)
     resources <- massive_full_shard_resources(x, k, chunk_rows,
@@ -1840,6 +1843,7 @@ massive_sharded_graph <- function(x, k, output, n.cores,
     setup <- list(k = k, workers = normalize_nn_threads(n.cores),
         resources = resources, method = method, ef_search = ef_search,
         hnsw_build = hnsw_build, checkpoint_every = checkpoint_every,
+        target_recall = target_recall,
         cuda_provider = if (backend == "cuda" &&
             method %in% c("exact", "ivf_sharded"))
             "faissR" else NULL,
@@ -2047,7 +2051,8 @@ massive_full_knn_controls <- function(x, k, backend, method,
 
 massive_full_knn_target_recall <- function(value, backend, method) {
     value <- fastembedr_target_recall(value)
-    if (value != 0.99 && !(backend == "cpu" && method == "exact"))
+    if (value != 0.99 && !(backend == "cpu" &&
+            method %in% c("exact", "hnsw_sharded")))
         stop("This full KNN route does not yet tune recall tiers ",
             "below 0.99.", call. = FALSE)
     value
@@ -2174,7 +2179,7 @@ massive_full_knn_graph <- function(x, k, output, backend = "cpu",
         return(massive_sharded_graph(x, k, output, n.cores,
             chunk_rows, reference_chunk_rows, memory_limit, audit_rows,
             backend, method, checkpoint, resume, checkpoint_every,
-            ef_search, hnsw_build))
+            ef_search, hnsw_build, target_recall))
     }
     massive_full_knn_exact(x, k, output, n.cores, chunk_rows,
         reference_chunk_rows, memory_limit, checkpoint, resume,

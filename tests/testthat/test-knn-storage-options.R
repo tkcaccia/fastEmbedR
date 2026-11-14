@@ -244,3 +244,21 @@ test_that("file-backed clustering cannot auto-materialize", {
     }, massive_cluster = function(...) list(...),
         .package = "fastEmbedR")
 })
+test_that("file-backed CPU dispatch forwards approximate recall tier", {
+    observed <- new.env(parent = emptyenv())
+    source <- list(nrow = 5001L, ncol = 2L)
+    testthat::local_mocked_bindings(
+        massive_full_knn_graph = function(data, k, output, backend,
+                n.cores, memory_limit, method, devices, checkpoint,
+                resume, checkpoint_every, target_recall) {
+            observed$method <- method
+            observed$target_recall <- target_recall
+            list(method = method, target_recall = target_recall)
+        }, .package = "fastEmbedR")
+    result <- fastEmbedR:::precompute_knn_backed(source, 5L,
+        "euclidean", "cpu", 1L, tempfile(), "256MB", NULL,
+        FALSE, FALSE, 100L, 0.95)
+    expect_identical(observed$method, "hnsw_sharded")
+    expect_identical(observed$target_recall, 0.95)
+    expect_identical(result$target_recall, 0.95)
+})

@@ -11,6 +11,7 @@ test_that("persistent faissR HNSW reports the actual search", {
     expect_identical(index$efConstruction, expected$ef_construction)
     expect_identical(index$efSearch, expected$ef_search)
     expect_identical(index$tuning_rule, expected$rule)
+    expect_identical(index$target_recall, 0.99)
     expect_true(inherits(index$pointer, "faissR_faiss_hnsw_index"))
     calibrated <- fastEmbedR:::faissr_hnsw_index_build_cpp(
         data, 90L, 6L, 5L, 2L, 16L, 80L)
@@ -30,6 +31,34 @@ test_that("persistent faissR HNSW reports the actual search", {
     expect_error(fastEmbedR:::faissr_hnsw_index_search_cpp(
         new("externalptr"), data[1:2, , drop = FALSE],
         6L, 80L, 2L))
+})
+
+test_that("file-backed CPU HNSW passes requested recall to faissR", {
+    set.seed(246)
+    reference <- matrix(rnorm(90L * 6L), ncol = 6L)
+    data <- float::fl(reference)
+    low <- fastEmbedR:::faissr_hnsw_index_build_cpp(
+        data, 90L, 6L, 5L, 1L, target_recall = 0.90)
+    expected <- faissR:::nn_tune_faiss_hnsw_cpp(
+        90L, 6L, 5L, "euclidean", 0.90)
+    expect_identical(low$target_recall, 0.90)
+    expect_identical(low$efSearch, expected$ef_search)
+    expect_identical(low$tuning_benchmark_source,
+        expected$tuning_benchmark_source)
+    path <- tempfile(fileext = ".f32")
+    prefix <- tempfile()
+    on.exit(unlink(c(path, paste0(prefix,
+        c(".indices.u32", ".distances.f32")))))
+    writeBin(as.vector(t(reference)), path, size = 4L,
+        endian = "little")
+    source <- massive_matrix(path, 90L, 6L, format = "f32")
+    graph <- massive_full_knn_graph(source, 5L, prefix,
+        method = "hnsw_sharded", target_recall = 0.90,
+        reference_chunk_rows = 90L, memory_limit = "256MB",
+        audit_rows = 8L)
+    expect_identical(graph$target_recall, 0.90)
+    expect_true(graph$recall_audited)
+    expect_equal(graph$observed_recall, mean(graph$audit_row_recall))
 })
 
 test_that("HNSW build timing includes reference staging", {

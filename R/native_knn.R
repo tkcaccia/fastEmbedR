@@ -487,7 +487,8 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
             "exact" else "ivf_sharded"
     } else "exact"
     if (target_recall != 0.99 &&
-        !(backend == "cpu" && method == "exact")) stop(
+        !(backend == "cpu" &&
+            method %in% c("exact", "hnsw_sharded"))) stop(
         "This file-backed KNN route does not yet tune recall tiers ",
         "below 0.99.", call. = FALSE)
     massive_full_knn_graph(data, k = k, output = output,

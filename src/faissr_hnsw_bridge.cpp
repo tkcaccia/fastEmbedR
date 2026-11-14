@@ -188,7 +188,8 @@ SEXP faissr_metal_query_knn_cpp(SEXP data, SEXP query, int k,
 Rcpp::List faissr_hnsw_index_build_cpp(SEXP data, int n, int p,
                                         int k, int n_threads,
                                         int m = 0,
-                                        int ef_construction = 0) {
+                                        int ef_construction = 0,
+                                        double target_recall = 0.99) {
   Rcpp::Function load_namespace =
       Rcpp::Environment::base_env()["loadNamespace"];
   load_namespace("faissR");
@@ -197,7 +198,7 @@ Rcpp::List faissr_hnsw_index_build_cpp(SEXP data, int n, int p,
   }
   Rcpp::List tuning = faissR_get_hnsw_tune_v1()(
       Rcpp::wrap(n), Rcpp::wrap(p), Rcpp::wrap(k),
-      Rcpp::wrap("euclidean"), Rcpp::wrap(0.99));
+      Rcpp::wrap("euclidean"), Rcpp::wrap(target_recall));
   if ((m == 0) != (ef_construction == 0)) {
     Rcpp::stop("M and efConstruction must be specified together");
   }
@@ -222,7 +223,10 @@ Rcpp::List faissr_hnsw_index_build_cpp(SEXP data, int n, int p,
       Rcpp::Named("M") = m,
       Rcpp::Named("efConstruction") = ef_construction,
       Rcpp::Named("efSearch") = ef_search,
-      Rcpp::Named("tuning_rule") = tuning["rule"]);
+      Rcpp::Named("tuning_rule") = tuning["rule"],
+      Rcpp::Named("target_recall") = target_recall,
+      Rcpp::Named("tuning_benchmark_source") =
+          tuning["tuning_benchmark_source"]);
 }
 
 // [[Rcpp::export]]

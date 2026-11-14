@@ -341,8 +341,8 @@ faissr_metal_query_knn_cpp <- function(data, query, k, method, metric, target_re
     .Call(`_fastEmbedR_faissr_metal_query_knn_cpp`, data, query, k, method, metric, target_recall)
 }
 
-faissr_hnsw_index_build_cpp <- function(data, n, p, k, n_threads, m = 0L, ef_construction = 0L) {
-    .Call(`_fastEmbedR_faissr_hnsw_index_build_cpp`, data, n, p, k, n_threads, m, ef_construction)
+faissr_hnsw_index_build_cpp <- function(data, n, p, k, n_threads, m = 0L, ef_construction = 0L, target_recall = 0.99) {
+    .Call(`_fastEmbedR_faissr_hnsw_index_build_cpp`, data, n, p, k, n_threads, m, ef_construction, target_recall)
 }
 
 faissr_hnsw_index_search_cpp <- function(index, query, k, ef_search, n_threads) {

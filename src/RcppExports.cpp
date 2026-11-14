@@ -1446,8 +1446,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // faissr_hnsw_index_build_cpp
-Rcpp::List faissr_hnsw_index_build_cpp(SEXP data, int n, int p, int k, int n_threads, int m, int ef_construction);
-RcppExport SEXP _fastEmbedR_faissr_hnsw_index_build_cpp(SEXP dataSEXP, SEXP nSEXP, SEXP pSEXP, SEXP kSEXP, SEXP n_threadsSEXP, SEXP mSEXP, SEXP ef_constructionSEXP) {
+Rcpp::List faissr_hnsw_index_build_cpp(SEXP data, int n, int p, int k, int n_threads, int m, int ef_construction, double target_recall);
+RcppExport SEXP _fastEmbedR_faissr_hnsw_index_build_cpp(SEXP dataSEXP, SEXP nSEXP, SEXP pSEXP, SEXP kSEXP, SEXP n_threadsSEXP, SEXP mSEXP, SEXP ef_constructionSEXP, SEXP target_recallSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1458,7 +1458,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
     Rcpp::traits::input_parameter< int >::type m(mSEXP);
     Rcpp::traits::input_parameter< int >::type ef_construction(ef_constructionSEXP);
-    rcpp_result_gen = Rcpp::wrap(faissr_hnsw_index_build_cpp(data, n, p, k, n_threads, m, ef_construction));
+    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_hnsw_index_build_cpp(data, n, p, k, n_threads, m, ef_construction, target_recall));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3487,7 +3488,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_faissr_gpu_index_set_nprobe_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_index_set_nprobe_cpp, 2},
     {"_fastEmbedR_faissr_metal_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_knn_cpp, 5},
     {"_fastEmbedR_faissr_metal_query_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_query_knn_cpp, 6},
-    {"_fastEmbedR_faissr_hnsw_index_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_build_cpp, 7},
+    {"_fastEmbedR_faissr_hnsw_index_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_build_cpp, 8},
     {"_fastEmbedR_faissr_hnsw_index_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_search_cpp, 5},
     {"_fastEmbedR_faissr_flat_index_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_flat_index_build_cpp, 2},
     {"_fastEmbedR_faissr_flat_index_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_flat_index_search_cpp, 4},
