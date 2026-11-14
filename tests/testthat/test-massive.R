@@ -383,6 +383,24 @@ test_that("auto RAM probe respects host and container reports", {
         "memory.usage_in_bytes"))
     expect_equal(fastEmbedR:::massive_linux_available_ram(
         meminfo, v2, v1), 1610612736)
+    cgroup <- file.path(directory, "cgroup")
+    group <- "system.slice/slurmstepd.scope/job_7/step_batch/user/task_0"
+    writeLines(paste0("0::/", group), cgroup)
+    leaf <- file.path(v2, group)
+    dir.create(leaf, recursive = TRUE)
+    writeLines("max", file.path(leaf, "memory.max"))
+    writeLines("128", file.path(leaf, "memory.current"))
+    user <- dirname(leaf)
+    writeLines("4096", file.path(user, "memory.max"))
+    writeLines("1024", file.path(user, "memory.current"))
+    job <- file.path(v2, "system.slice/slurmstepd.scope/job_7")
+    writeLines("8192", file.path(job, "memory.max"))
+    writeLines("2048", file.path(job, "memory.current"))
+    expect_equal(fastEmbedR:::massive_linux_available_ram(
+        meminfo, v2, v1, cgroup), 3072)
+    writeLines("4096", file.path(user, "memory.current"))
+    expect_equal(fastEmbedR:::massive_linux_available_ram(
+        meminfo, v2, v1, cgroup), 0)
     expect_equal(fastEmbedR:::massive_macos_available_ram(c(
         "The system has 8589934592 (524288 pages).",
         "System-wide memory free percentage: 35%")),

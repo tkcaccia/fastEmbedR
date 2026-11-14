@@ -14,8 +14,43 @@ massive_memory_bytes <- function(value) {
     amount * switch(unit, KB = 1024, MB = 1024^2, GB = 1024^3)
 }
 
+massive_cgroup_number <- function(path) {
+    if (!file.exists(path)) return(NA_real_)
+    value <- tryCatch(readLines(path, n = 1L, warn = FALSE),
+        error = function(e) character())
+    if (length(value) != 1L) return(NA_real_)
+    suppressWarnings(as.numeric(value))
+}
+
+massive_linux_cgroup_v2_available <- function(v2, cgroup) {
+    lines <- tryCatch(readLines(cgroup, warn = FALSE),
+        error = function(e) character())
+    found <- grep("^0::/", lines, value = TRUE)
+    if (length(found) != 1L) return(NA_real_)
+    relative <- sub("^0::/", "", found)
+    segments <- strsplit(relative, "/", fixed = TRUE)[[1L]]
+    if (any(segments %in% c(".", ".."))) return(NA_real_)
+    available <- NA_real_
+    repeat {
+        directory <- file.path(v2, relative)
+        limit <- massive_cgroup_number(file.path(directory, "memory.max"))
+        used <- massive_cgroup_number(file.path(directory,
+            "memory.current"))
+        if (is.finite(limit) && is.finite(used)) {
+            free <- max(0, limit - used)
+            available <- if (is.na(available)) free else
+                min(available, free)
+        }
+        if (!nzchar(relative)) break
+        relative <- dirname(relative)
+        if (identical(relative, ".")) relative <- ""
+    }
+    available
+}
+
 massive_linux_available_ram <- function(meminfo = "/proc/meminfo",
-        v2 = "/sys/fs/cgroup", v1 = "/sys/fs/cgroup/memory") {
+        v2 = "/sys/fs/cgroup", v1 = "/sys/fs/cgroup/memory",
+        cgroup = "/proc/self/cgroup") {
     lines <- tryCatch(readLines(meminfo, warn = FALSE),
         error = function(e) character())
     found <- grep("^MemAvailable:[[:space:]]+[0-9]+", lines,
@@ -23,21 +58,18 @@ massive_linux_available_ram <- function(meminfo = "/proc/meminfo",
     if (length(found) != 1L) return(NA_real_)
     available <- as.numeric(sub(
         "^MemAvailable:[[:space:]]+([0-9]+).*", "\\1", found)) * 1024
-    read_number <- function(path) {
-        if (!file.exists(path)) return(NA_real_)
-        value <- tryCatch(readLines(path, n = 1L, warn = FALSE),
-            error = function(e) character())
-        if (length(value) != 1L) return(NA_real_)
-        suppressWarnings(as.numeric(value))
-    }
-    limit <- read_number(file.path(v2, "memory.max"))
-    used <- read_number(file.path(v2, "memory.current"))
-    if (!is.finite(limit) || !is.finite(used)) {
-        limit <- read_number(file.path(v1, "memory.limit_in_bytes"))
-        used <- read_number(file.path(v1, "memory.usage_in_bytes"))
-    }
-    if (is.finite(limit) && is.finite(used)) {
-        available <- min(available, max(0, limit - used))
+    nested <- massive_linux_cgroup_v2_available(v2, cgroup)
+    if (is.finite(nested)) available <- min(available, nested)
+    roots <- list(
+        c(file.path(v2, "memory.max"),
+            file.path(v2, "memory.current")),
+        c(file.path(v1, "memory.limit_in_bytes"),
+            file.path(v1, "memory.usage_in_bytes")))
+    for (paths in roots) {
+        limit <- massive_cgroup_number(paths[[1L]])
+        used <- massive_cgroup_number(paths[[2L]])
+        if (is.finite(limit) && is.finite(used))
+            available <- min(available, max(0, limit - used))
     }
     available
 }
