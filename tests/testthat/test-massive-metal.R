@@ -60,11 +60,12 @@ test_that("file-backed Metal KNN rejects unsupported routes", {
         fastembedr_metal_knn_available = function() TRUE,
         {
             expect_error(massive_landmark_knn(source, source, 2L,
-                tempfile(), backend = "metal", method = "hnsw"),
+                tempfile(), backend = "metal", method = "hnsw",
+                n.cores = 1L),
                 "Metal landmark KNN supports exact search only")
             expect_error(massive_landmark_knn(source, source, 2L,
                 tempfile(), backend = "metal", n.cores = 4L),
-                "n.cores = 1")
+                "Metal needs one core")
         },
         .package = "fastEmbedR")
     expect_error(massive_full_knn_graph(source, 2L, tempfile(),

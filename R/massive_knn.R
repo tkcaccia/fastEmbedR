@@ -120,7 +120,7 @@ massive_knn_reference <- function(reference, k, method,
         index <- faissr_flat_index_build_cpp(matrix, n.cores)
         return(list(matrix = NULL, index = index,
             build_seconds = unname(proc.time()[[3L]] - started),
-            reference_storage = storage))
+            reference_storage = storage, provider = "faissR"))
     }
     stop("Unsupported landmark KNN index method.", call. = FALSE)
 }

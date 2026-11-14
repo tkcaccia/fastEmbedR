@@ -2059,6 +2059,7 @@ test_that("fresh multi-GPU KNN shards reject fallback and wrong method", {
             result <- massive_landmark_knn(view, landmarks, 2L,
                 task$output, chunk_rows = 3L, memory_limit = "256MB")
             result$backend <- reported_backend
+            result$knn_provider <- "faissR"
             result$method <- reported_method
             result$resources$gpu_device <- task$device
             result$completed_output_identity <-
@@ -2127,6 +2128,7 @@ test_that("multi-GPU KNN resumes verified shards and interrupted merges", {
         result <- massive_landmark_knn(view, landmarks, 3L,
             task$output, chunk_rows = 4L, memory_limit = "256MB")
         result$backend <- "cuda"
+        result$knn_provider <- "faissR"
         result$resources$gpu_device <- task$device
         result$completed_output_identity <-
             fastEmbedR:::massive_checkpoint_input_files_identity(

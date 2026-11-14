@@ -252,6 +252,8 @@ test_that("full multi-GPU KNN resumes after candidate completion", {
             output_identity =
                 fastEmbedR:::massive_checkpoint_file_identity(paths),
             gpu_devices = c(0L, 1L), gpu_identity = c("GPU-0", "GPU-1"),
+            knn_provider = "faissR", query_storage = "R_float32",
+            faissr_identity = fastEmbedR:::massive_faissr_identity(),
             resources = list(output_bytes = 8 * 3 * 8),
             per_device = lapply(tasks, function(task) list(
                 query_row_range = task$row_range,
@@ -675,7 +677,7 @@ test_that("streamed full exact KNN matches an independent distance matrix", {
     if (!faissR::faiss_gpu_available() &&
         !fastEmbedR:::fastembedr_cuda_knn_available()) {
         expect_error(massive_full_knn_graph(source, 3L, tempfile(),
-            backend = "cuda"), "no CPU fallback")
+            backend = "cuda"), "requires faissR GPU")
     }
     expect_error(massive_full_knn_graph(source, 3L, tempfile(),
         chunk_rows = 100000L, memory_limit = "64MB"),

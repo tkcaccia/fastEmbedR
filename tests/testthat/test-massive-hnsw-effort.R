@@ -23,7 +23,8 @@ test_that("sharded HNSW tunes for output k, not the self candidate", {
     observed <- new.env(parent = emptyenv())
     testthat::local_mocked_bindings(
         massive_knn_reference = function(reference, k, method,
-                n.cores, backend, hnsw_build = NULL) {
+                n.cores, backend, hnsw_build = NULL,
+                cuda_provider = "faissR") {
             observed$k <- k
             observed$method <- method
             observed$hnsw_build <- hnsw_build
