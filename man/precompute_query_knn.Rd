@@ -10,7 +10,8 @@ precompute_query_knn(
   k = 30L,
   metric = c("euclidean", "cosine", "correlation"),
   backend = NULL,
-  n.cores = NULL
+  n.cores = NULL,
+  target_recall = NULL
 )
 }
 \arguments{
@@ -28,6 +29,11 @@ precompute_query_knn(
 
 \item{n.cores}{Number of CPU cores. Native GPU backends ignore
 this argument.}
+
+\item{target_recall}{Requested approximate-search recall tier: \code{0.9},
+\code{0.95}, or \code{0.99} (default). When omitted, uses
+\code{options(fastEmbedR.target_recall = ...)}. This is a tuning target,
+not a guarantee of measured recall. Exact search remains exact.}
 }
 \value{
 A \code{fastEmbedR_knn} object with one row per query observation and
@@ -43,7 +49,7 @@ reference-to-reference or query-to-query neighbors.
 CPU uses faissR Flat search when the reference has fewer than
 5,000 rows and faissR's compiled FAISS HNSW interface for Euclidean
 distance otherwise. Cosine and correlation use faissR HNSW. HNSW
-targets recall 0.99 but does not claim a per-call recall audit. Metal
+uses the requested recall tier but does not claim a per-call audit. Metal
 routes between a native
 query-only exact kernel and recall-tuned IVF-Flat from the estimated
 reference-query distance workload. CUDA routes between faissR FAISS GPU

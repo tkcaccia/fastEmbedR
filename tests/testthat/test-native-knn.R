@@ -150,6 +150,55 @@ test_that("precompute_knn preserves the float32 host path", {
     expect_identical(dim(observed$distances), c(180L, 9L))
 })
 
+test_that("KNN recall tier accepts an explicit argument and session option", {
+    x <- matrix(seq_len(80), nrow = 20L)
+    withr::local_options(fastEmbedR.target_recall = 0.90)
+    for (backend in c("cpu", "cuda", "metal")) {
+        expect_equal(fastembedr_embedding_nn_policy(backend, 200000L,
+            16L)$target_recall, 0.90)
+        expect_equal(fastembedr_query_nn_policy(backend, 200000L,
+            1000L, 16L)$target_recall, 0.90)
+    }
+    option_result <- precompute_knn(x, k = 3L, backend = "cpu")
+    expect_equal(option_result$target_recall, 0.90)
+    expect_true(option_result$exact)
+    explicit <- precompute_knn(x, k = 3L, backend = "cpu",
+        target_recall = 0.95)
+    expect_equal(explicit$target_recall, 0.95)
+    queried <- precompute_query_knn(x[1:15, , drop = FALSE],
+        x[16:20, , drop = FALSE], k = 3L, backend = "cpu",
+        target_recall = 0.99)
+    expect_equal(queried$target_recall, 0.99)
+    expect_error(precompute_knn(x, k = 3L, backend = "cpu",
+        target_recall = 0.97), "target_recall")
+    expect_error(precompute_query_knn(x, x, k = 3L,
+        target_recall = NA_real_), "target_recall")
+})
+
+test_that("one-call embedding recall reaches metadata and rejects bypasses", {
+    x <- scale(as.matrix(iris[1:40, 1:4]))
+    withr::local_options(fastEmbedR.target_recall = 0.90)
+    fit_tsne <- tsne(x, perplexity = 5, backend = "cpu", n.cores = 1L,
+        early_exaggeration_iter = 0L, n_iter = 1L,
+        auto_config = FALSE, target_recall = 0.95)
+    expect_equal(fit_tsne$parameters$target_recall, 0.95)
+    fit_umap <- umap(x, n_neighbors = 10L, backend = "cpu",
+        n.cores = 1L, target_recall = 0.99)
+    expect_equal(fit_umap$parameters$target_recall, 0.99)
+    option_fit <- umap(x, n_neighbors = 10L, backend = "cpu",
+        n.cores = 1L)
+    expect_equal(option_fit$parameters$target_recall, 0.90)
+    nn <- precompute_knn(x, k = 10L, backend = "cpu")
+    expect_error(umap(x, nn = nn, n_neighbors = 10L,
+        target_recall = 0.95), "resident matrix input")
+    expect_error(tsne(x, nn = nn, perplexity = 5,
+        target_recall = 0.95), "resident matrix input")
+    expect_error(umap(x, landmarks = 0.5,
+        target_recall = 0.95), "resident matrix input")
+    expect_error(tsne(x, perplexity = 5,
+        target_recall = 0.97), "target_recall")
+})
+
 test_that("native exact KNN agrees across numeric input storage", {
     skip_if_not_installed("float")
     set.seed(47)
@@ -175,7 +224,7 @@ test_that("precompute_knn exposes no search-algorithm selector", {
         names(formals(precompute_knn)),
         c("data", "k", "metric", "backend", "n.cores", "storage",
             "output", "memory_limit", "devices", "checkpoint",
-            "resume", "checkpoint_every")
+            "resume", "checkpoint_every", "target_recall")
     )
     expect_error(
         precompute_knn(matrix(rnorm(40), nrow = 10), k = 10L),

@@ -16,7 +16,8 @@ precompute_knn(
   devices = NULL,
   checkpoint = FALSE,
   resume = FALSE,
-  checkpoint_every = 100L
+  checkpoint_every = 100L,
+  target_recall = NULL
 )
 }
 \arguments{
@@ -51,6 +52,11 @@ omitted, \code{options(memory_limit = ...)} is used, or \code{"8GB"}.}
 \item{resume}{Continue a matching file-backed KNN checkpoint.}
 
 \item{checkpoint_every}{Save progress after this many query blocks.}
+
+\item{target_recall}{Requested approximate-search recall tier: \code{0.9},
+\code{0.95}, or \code{0.99} (default). When omitted, uses
+\code{options(fastEmbedR.target_recall = ...)}. This is a tuning target,
+not a guarantee of measured recall. Exact search remains exact.}
 }
 \value{
 A resident \code{fastEmbedR_knn} object, or a file-backed
@@ -67,14 +73,16 @@ parameter.
 \details{
 CPU uses faissR Flat exact search below 5,000 observations and
 faissR's compiled FAISS HNSW interface for Euclidean distance otherwise.
-Cosine and correlation use faissR HNSW. HNSW targets recall 0.99; its
-recall is not audited during each call. Metal uses native exact search below
+Cosine and correlation use faissR HNSW. HNSW uses the requested recall
+tier; recall is not audited during each call. Metal uses native exact
+search below
 4,096 rows and for inputs with at most 50,000 rows, 16,384 columns, and
 125 billion row-pair feature operations; otherwise it uses recall-tuned
 IVF-Flat. CUDA uses faissR's native FAISS GPU exact search below 100,000
 observations and IVF-Flat above that threshold. Approximate Metal and CUDA
 routes use an internal
-recall target of 0.99 and report whether their pilot audit met it.
+recall tier and report whether their pilot audit met it.
+File-backed KNN currently requires the default 0.99 tier.
 
 A file-backed descriptor uses bounded KNN graph construction and writes
 indices and distances under \code{output}. CPU selects exact search up to 5,000

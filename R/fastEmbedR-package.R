@@ -14,7 +14,8 @@
 #' be passed directly to [umap()] or [tsne()]; full file-backed fits also
 #' expose graph preparation helpers.
 #' Session defaults can be set with
-#' `options(backend = "cpu", n.cores = 4L)`; explicit function arguments take
+#' `options(backend = "cpu", n.cores = 4L,
+#' fastEmbedR.target_recall = 0.99)`; explicit function arguments take
 #' precedence over these options.
 #'
 #' UMAP exposes neighborhood, metric, graph mode, preprocessing, backend, seed,

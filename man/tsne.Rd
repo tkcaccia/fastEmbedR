@@ -47,6 +47,7 @@ tsne(
   checkpoint = FALSE,
   resume = FALSE,
   affinity_k = NULL,
+  target_recall = NULL,
   ...
 )
 }
@@ -227,6 +228,11 @@ also controls the reference fit in resident landmark mode and KNN
 preparation for a file-backed one-call full fit. It is unavailable when
 a prepared affinity graph is supplied.}
 
+\item{target_recall}{Requested KNN tuning tier: \code{0.9}, \code{0.95}, or \code{0.99}.
+\code{NULL} uses \code{options(fastEmbedR.target_recall = ...)}, then \code{0.99}.
+Non-default tiers currently require resident matrix input without
+landmarks or supplied KNN. An exact KNN route remains exact.}
+
 \item{...}{Additional low-level parameters passed to \code{\link[=tsne_knn]{tsne_knn()}}.}
 }
 \value{
@@ -254,9 +260,9 @@ learning rate, momentum, and clipping. FFT repulsion is fixed. Setting
 \code{auto_config = FALSE} disables automatic iteration and stopping choices;
 explicit values always override automatic values. The matrix-input function
 deliberately does not expose a nearest-neighbor index type or tuning
-parameters: it uses the backend router with target recall 0.99. Supply an
-externally generated KNN object to \code{\link[=tsne_knn]{tsne_knn()}} when search policy must be
-controlled independently. The resolved settings are returned in
+parameters: it uses the backend router with the requested recall tier.
+Supply an externally generated KNN object to \code{\link[=tsne_knn]{tsne_knn()}} when search
+policy must be controlled independently. The resolved settings are in
 \code{fit$parameters}. Affinities default to compact support with
 \code{k = ceiling(perplexity)} non-self neighbors. Landmark mode embeds the
 selected reference rows with the same t-SNE implementation and transforms

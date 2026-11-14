@@ -20,7 +20,7 @@ Score embeddings with \code{\link[=evaluate_embedding]{evaluate_embedding()}}. P
 be passed directly to \code{\link[=umap]{umap()}} or \code{\link[=tsne]{tsne()}}; full file-backed fits also
 expose graph preparation helpers.
 Session defaults can be set with
-\code{options(backend = "cpu", n.cores = 4L)}; explicit function arguments take
+\code{options(backend = "cpu", n.cores = 4L, fastEmbedR.target_recall = 0.99)}; explicit function arguments take
 precedence over these options.
 }
 \details{
@@ -45,6 +45,11 @@ Useful links:
 }
 \author{
 \strong{Maintainer}: Stefano Cacciatore \email{tkcaccia@gmail.com} (\href{https://orcid.org/0000-0001-7052-7156}{ORCID})
+
+Authors:
+\itemize{
+  \item Stefano Cacciatore \email{tkcaccia@gmail.com} (\href{https://orcid.org/0000-0001-7052-7156}{ORCID})
+}
 
 }
 \keyword{internal}

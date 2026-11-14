@@ -451,12 +451,13 @@ summarize_tsne_gpu_knn <- function(knn, n, n_neighbors) {
 
 compute_tsne_matrix_knn <- function(
     x, nn, n, n_neighbors, backend, metric, n_threads, keep_knn,
-    retain_cuda_data, devices = NULL
+    retain_cuda_data, devices = NULL, target_recall = NULL
 ) {
     engine <- "supplied"
     if (is.null(nn)) {
         policy <- fastembedr_embedding_nn_policy(
-            backend, n = n, p = ncol(x))
+            backend, n = n, p = ncol(x),
+            target_recall = target_recall)
         if (identical(policy$backend, "cuda")) {
             nn <- run_faissr_cuda_embedding_knn(
                 x, n_neighbors, policy$method, metric,
@@ -574,7 +575,7 @@ tsne_optimizer_settings <- function(
 new_tsne_settings <- function(
     perplexity, n_components, init_data, Y_init, standardize, pca_dims,
     metric, seed, backend, keep_knn, verbose, n.cores, optimizer,
-    devices = NULL, affinity_k = NULL
+    devices = NULL, affinity_k = NULL, target_recall = NULL
 ) {
     list(
         perplexity = perplexity, affinity_k = affinity_k,
@@ -582,7 +583,7 @@ new_tsne_settings <- function(
         init_data = init_data, Y_init = Y_init,
         standardize = standardize, pca_dims = pca_dims, metric = metric,
         seed = seed, backend = backend, keep_knn = isTRUE(keep_knn),
-        devices = devices,
+        devices = devices, target_recall = target_recall,
         verbose = verbose, n_threads = n.cores, optimizer = optimizer
     )
 }
@@ -613,7 +614,10 @@ assemble_matrix_tsne <- function(
         n_components = settings$n_components,
         seed = as.integer(settings$seed), nn_backend = knn$nn_backend,
         nn_engine = knn_state$engine, metric = metric,
-        keep_knn = settings$keep_knn
+        keep_knn = settings$keep_knn,
+        target_recall = if (identical(knn_state$engine, "supplied")) {
+            NA_real_
+        } else settings$target_recall
     ), cfg, prepared$preprocess, list(
         init = init_state$info$method,
         init_backend = init_state$info$backend
@@ -656,7 +660,7 @@ run_matrix_input_tsne <- function(data, nn, settings, extra, input_float) {
     knn <- timed_do_call(compute_tsne_matrix_knn, list(
         x, nn, nrow(x), policy$n_neighbors, settings$backend, metric,
         settings$n_threads, settings$keep_knn, retain_cuda_data,
-        settings$devices
+        settings$devices, settings$target_recall
     ))
     init <- timed_do_call(prepare_tsne_matrix_init, list(
         x, knn$value$input, settings, nrow(x)
@@ -840,6 +844,10 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #'   uses `options(storage = ...)`. Explicit `"resident"` on a
 #'   [massive_matrix()] file descriptor loads float32 input after a RAM and
 #'   `memory_limit` check; the limit does not bound the subsequent fit.
+#' @param target_recall Requested KNN tuning tier: `0.9`, `0.95`, or `0.99`.
+#'   `NULL` uses `options(fastEmbedR.target_recall = ...)`, then `0.99`.
+#'   Non-default tiers currently require resident matrix input without
+#'   landmarks or supplied KNN. An exact KNN route remains exact.
 #' @param checkpoint Save file-backed workflow stages. Resident t-SNE fits
 #'   cannot checkpoint or resume; interruption restarts the fit.
 #'   Full-graph file-backed t-SNE
@@ -870,9 +878,9 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #' `auto_config = FALSE` disables automatic iteration and stopping choices;
 #' explicit values always override automatic values. The matrix-input function
 #' deliberately does not expose a nearest-neighbor index type or tuning
-#' parameters: it uses the backend router with target recall 0.99. Supply an
-#' externally generated KNN object to [tsne_knn()] when search policy must be
-#' controlled independently. The resolved settings are returned in
+#' parameters: it uses the backend router with the requested recall tier.
+#' Supply an externally generated KNN object to [tsne_knn()] when search
+#' policy must be controlled independently. The resolved settings are in
 #' `fit$parameters`. Affinities default to compact support with
 #' `k = ceiling(perplexity)` non-self neighbors. Landmark mode embeds the
 #' selected reference rows with the same t-SNE implementation and transforms
@@ -907,7 +915,7 @@ tsne <- function(data, perplexity = NULL, n_components = 2L, init_data = NULL,
     initialization = c("median", "weighted", "random"), massive = "off",
     output = NULL, chunk_rows = NULL, storage = NULL, memory_limit = "8GB",
     devices = NULL, landmark_method = "reservoir", checkpoint = FALSE,
-    resume = FALSE, affinity_k = NULL, ...) {
+    resume = FALSE, affinity_k = NULL, target_recall = NULL, ...) {
     storage <- fastembedr_embedding_storage(data, landmarks, massive,
         missing(massive), memory_limit, missing(memory_limit), "t-SNE", storage,
         fastembedr_resident_controls_ok(output, chunk_rows,
@@ -915,31 +923,31 @@ tsne <- function(data, perplexity = NULL, n_components = 2L, init_data = NULL,
     data <- storage$data
     massive <- storage$massive
     memory_limit <- storage$memory_limit
+    target_recall <- fastembedr_one_call_target_recall(target_recall,
+        massive, landmarks, !is.null(nn) || is_knn_input(data))
     extra <- validate_tsne_dots(list(...))
     backend <- resolve_embedding_backend(backend)
     optimizer <- tsne_optimizer_settings(
         learning_rate, early_exaggeration_iter, early_exaggeration,
         n_iter, exaggeration, initial_momentum, final_momentum,
-        max_step_norm, negative_gradient_method, record_costs, auto_config
-    )
+        max_step_norm, negative_gradient_method, record_costs, auto_config)
     settings <- new_tsne_settings(perplexity, n_components,
         init_data, Y_init, standardize, pca_dims, metric, seed,
         backend, keep_knn, verbose, n.cores, optimizer, devices,
-        affinity_k)
+        affinity_k, target_recall)
     validate_tsne_affinity_scope(affinity_k, massive)
     controls <- if (!identical(massive, "off") ||
         landmark_embedding_requested(landmarks))
-        tsne_landmark_controls(landmarks, transform_k,
-            transform_perplexity, transform_iter,
-            transform_early_exaggeration_iter,
+        tsne_landmark_controls(landmarks, transform_k, transform_perplexity,
+            transform_iter, transform_early_exaggeration_iter,
             transform_n_negatives, initialization) else NULL
     if (!identical(massive, "off"))
         return(run_massive_tsne(data, nn, settings, extra, controls,
             massive, output, chunk_rows, memory_limit, devices,
             landmark_method, checkpoint, resume))
     massive_embedding_off(output, chunk_rows, storage$control_memory_limit,
-        landmark_method = landmark_method,
-        checkpoint = checkpoint, resume = resume)
+        landmark_method = landmark_method, checkpoint = checkpoint,
+        resume = resume)
     dispatch_tsne_resident(data, nn, settings, controls, extra,
         devices, landmarks)
 }

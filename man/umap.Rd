@@ -36,7 +36,8 @@ umap(
   resume = FALSE,
   cpu_update = "sgd",
   ef_search = 0L,
-  storage = NULL
+  storage = NULL,
+  target_recall = NULL
 )
 }
 \arguments{
@@ -201,6 +202,11 @@ and does not guarantee recall; audit the resulting graph separately.}
 uses \code{options(storage = ...)}. Explicit \code{"resident"} on a
 \code{\link[=massive_matrix]{massive_matrix()}} file descriptor loads float32 input after a RAM and
 \code{memory_limit} check; the limit does not bound the subsequent fit.}
+
+\item{target_recall}{Requested KNN tuning tier: \code{0.9}, \code{0.95}, or \code{0.99}.
+\code{NULL} uses \code{options(fastEmbedR.target_recall = ...)}, then \code{0.99}.
+Non-default tiers currently require resident matrix input without
+landmarks or supplied KNN. An exact KNN route remains exact.}
 }
 \value{
 Resident fits return a \code{fastEmbedR_embedding}; landmark fits

@@ -99,7 +99,7 @@
 NULL
 
 validate_umap_request <- function(backend, graph_mode, n_components,
-                                    n.cores, keep_knn) {
+                                    n.cores, keep_knn, target_recall = NULL) {
     backend <- resolve_embedding_backend(backend)
     graph_mode <- match.arg(graph_mode, c("fuzzy", "binary"))
     n_components <- validate_n_components(n_components)
@@ -111,7 +111,7 @@ validate_umap_request <- function(backend, graph_mode, n_components,
     list(
         backend = backend, graph_mode = graph_mode,
         n_components = n_components, n_threads = n.cores,
-        keep_knn = isTRUE(keep_knn)
+        keep_knn = isTRUE(keep_knn), target_recall = target_recall
     )
 }
 
@@ -231,7 +231,8 @@ compute_umap_matrix_knn <- function(x, nn, n_neighbors, metric, state,
     timed <- system.time({
         result <- if (is.null(nn)) {
             policy <- fastembedr_embedding_nn_policy(
-                state$backend, nrow(x), ncol(x))
+                state$backend, nrow(x), ncol(x),
+                state$target_recall)
             if (identical(policy$backend, "cuda")) {
                 result <- run_faissr_cuda_embedding_knn(
                     x, as.integer(n_neighbors), policy$method, metric,
@@ -295,6 +296,9 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
         preprocess = prepared$prepared$preprocess,
         graph_mode = state$graph_mode, metric = metric,
         nn_engine = knn_state$engine,
+        target_recall = if (identical(knn_state$engine, "supplied")) {
+            NA_real_
+        } else state$target_recall,
         nn_backend = knn_state$knn$backend_used %||%
             attr(knn_state$knn, "backend") %||% "supplied"
     ))
@@ -341,6 +345,10 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #'   uses `options(storage = ...)`. Explicit `"resident"` on a
 #'   [massive_matrix()] file descriptor loads float32 input after a RAM and
 #'   `memory_limit` check; the limit does not bound the subsequent fit.
+#' @param target_recall Requested KNN tuning tier: `0.9`, `0.95`, or `0.99`.
+#'   `NULL` uses `options(fastEmbedR.target_recall = ...)`, then `0.99`.
+#'   Non-default tiers currently require resident matrix input without
+#'   landmarks or supplied KNN. An exact KNN route remains exact.
 #' @param checkpoint Save file-backed workflow stages and completed batches.
 #'   Resident fits, including wide CSR fits, cannot checkpoint or resume.
 #'   An interrupted resident fit must restart from the beginning. A one-call
@@ -403,9 +411,8 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
     local_neighbors = 15L, overlap_rows = 500L, devices = NULL,
     landmark_method = "reservoir", init = NULL, layout_storage = "memory",
     checkpoint = FALSE, resume = FALSE, cpu_update = "sgd", ef_search = 0L,
-    storage = NULL) {
-    resident_epochs <- if (missing(refinement_epochs)) NULL else
-        refinement_epochs
+    storage = NULL, target_recall = NULL) {
+    fit_epochs <- if (missing(refinement_epochs)) NULL else refinement_epochs
     storage <- fastembedr_embedding_storage(data, landmarks, massive,
         missing(massive), memory_limit, missing(memory_limit), "UMAP", storage,
         fastembedr_resident_controls_ok(output, chunk_rows,
@@ -414,6 +421,8 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
     massive <- storage$massive
     memory_limit <- storage$memory_limit
     massive <- massive_embedding_mode(massive, cpu_update)
+    target_recall <- fastembedr_one_call_target_recall(target_recall,
+        massive, landmarks, !is.null(nn) || is_knn_input(data))
     if (!identical(massive, "off")) return(dispatch_massive_umap(data,
         landmarks, n_neighbors, n_components, standardize, pca_dims, metric, nn,
         seed, backend, n.cores, keep_knn, graph_mode, verbose, transform_k,
@@ -423,20 +432,19 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
         resume, cpu_update, ef_search))
     validate_resident_umap_output_controls(devices, backend,
         landmarks, output, chunk_rows, storage$control_memory_limit,
-        resident_epochs, local_refine, local_neighbors,
+        fit_epochs, local_refine, local_neighbors,
         overlap_rows, landmark_method, init, layout_storage,
         checkpoint, resume)
-    if (landmark_embedding_requested(landmarks)) {
+    if (landmark_embedding_requested(landmarks))
         return(run_landmark_umap(
             data, landmarks, n_neighbors, n_components, standardize,
             pca_dims, metric, seed, backend, transform_k, n.cores,
-            keep_knn, graph_mode, verbose, nn, resident_epochs,
+            keep_knn, graph_mode, verbose, nn, fit_epochs,
             devices))
-    }
     if (!identical(ef_search, 0L)) stop(
         "`ef_search` requires massive landmark UMAP.", call. = FALSE)
     state <- validate_umap_request(backend, graph_mode,
-        n_components, n.cores, keep_knn)
+        n_components, n.cores, keep_knn, target_recall)
     if (is_knn_input(data))
         return(umap_knn_input_fit(data, nn, state, seed, verbose,
             devices))

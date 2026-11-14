@@ -101,9 +101,34 @@ fastembedr_cpu_knn_method <- function(n) {
     }
 }
 
+fastembedr_target_recall <- function(value = NULL) {
+    value <- value %||% getOption("fastEmbedR.target_recall", 0.99)
+    allowed <- c(0.90, 0.95, 0.99)
+    if (!is.numeric(value) || length(value) != 1L ||
+        !is.finite(value) || !any(abs(value - allowed) < 1e-8)) {
+        stop("`target_recall` must be 0.9, 0.95, or 0.99.",
+            call. = FALSE)
+    }
+    allowed[[which.min(abs(value - allowed))]]
+}
+
+fastembedr_one_call_target_recall <- function(value, massive,
+        landmarks, supplied_knn) {
+    value <- fastembedr_target_recall(value)
+    if (value != 0.99 && (!identical(massive, "off") ||
+        landmark_embedding_requested(landmarks) || supplied_knn)) {
+        stop("Non-default `target_recall` currently requires resident ",
+            "matrix input without landmarks or supplied KNN.",
+            call. = FALSE)
+    }
+    value
+}
+
 fastembedr_embedding_nn_policy <- function(embedding_backend, n = NULL,
-                                            p = NULL) {
+                                            p = NULL,
+                                            target_recall = NULL) {
     embedding_backend <- resolve_embedding_backend(embedding_backend)
+    target_recall <- fastembedr_target_recall(target_recall)
     n <- integer_scalar(n %||% NA_integer_)
     p <- integer_scalar(p %||% NA_integer_)
     small_enough_for_exact <- length(n) == 1L && !is.na(n) && n < 100000L
@@ -111,7 +136,7 @@ fastembedr_embedding_nn_policy <- function(embedding_backend, n = NULL,
     if (identical(embedding_backend, "cuda")) {
         return(list(
             backend = "cuda", method = method, tuning = "auto",
-            target_recall = 0.99
+            target_recall = target_recall
         ))
     }
     if (identical(embedding_backend, "metal")) {
@@ -126,13 +151,13 @@ fastembedr_embedding_nn_policy <- function(embedding_backend, n = NULL,
                 "ivf"
             },
             tuning = "auto",
-            target_recall = 0.99
+            target_recall = target_recall
         ))
     }
     method <- fastembedr_cpu_knn_method(n)
     list(
         backend = "cpu", method = method,
-        target_recall = 0.99,
+        target_recall = target_recall,
         recall_status = if (identical(method, "exact")) {
             "exact_by_construction"
         } else {
@@ -183,8 +208,10 @@ fastembedr_cuda_query_method <- function(n_reference, n_query, p) {
 fastembedr_query_nn_policy <- function(embedding_backend,
                                         n_reference = NULL,
                                         n_query = NULL,
-                                        p = NULL) {
+                                        p = NULL,
+                                        target_recall = NULL) {
     embedding_backend <- resolve_embedding_backend(embedding_backend)
+    target_recall <- fastembedr_target_recall(target_recall)
     n_reference <- integer_scalar(n_reference %||% NA_integer_)
     n_query <- integer_scalar(n_query %||% NA_integer_)
     p <- integer_scalar(p %||% NA_integer_)
@@ -197,7 +224,7 @@ fastembedr_query_nn_policy <- function(embedding_backend,
                 p
             ),
             tuning = "auto",
-            target_recall = 0.99
+            target_recall = target_recall
         ))
     }
     if (identical(embedding_backend, "metal")) {
@@ -209,13 +236,13 @@ fastembedr_query_nn_policy <- function(embedding_backend,
                 p
             ),
             tuning = "auto",
-            target_recall = 0.99
+            target_recall = target_recall
         ))
     }
     method <- fastembedr_cpu_knn_method(n_reference)
     list(
         backend = "cpu", method = method,
-        target_recall = 0.99,
+        target_recall = target_recall,
         recall_status = if (identical(method, "exact")) {
             "exact_by_construction"
         } else {
@@ -345,18 +372,24 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' @param checkpoint Save completed file-backed KNN query blocks.
 #' @param resume Continue a matching file-backed KNN checkpoint.
 #' @param checkpoint_every Save progress after this many query blocks.
+#' @param target_recall Requested approximate-search recall tier: `0.9`,
+#'   `0.95`, or `0.99` (default). When omitted, uses
+#'   `options(fastEmbedR.target_recall = ...)`. This is a tuning target,
+#'   not a guarantee of measured recall. Exact search remains exact.
 #'
 #' @details
 #' CPU uses faissR Flat exact search below 5,000 observations and
 #' faissR's compiled FAISS HNSW interface for Euclidean distance otherwise.
-#' Cosine and correlation use faissR HNSW. HNSW targets recall 0.99; its
-#' recall is not audited during each call. Metal uses native exact search below
+#' Cosine and correlation use faissR HNSW. HNSW uses the requested recall
+#' tier; recall is not audited during each call. Metal uses native exact
+#' search below
 #' 4,096 rows and for inputs with at most 50,000 rows, 16,384 columns, and
 #' 125 billion row-pair feature operations; otherwise it uses recall-tuned
 #' IVF-Flat. CUDA uses faissR's native FAISS GPU exact search below 100,000
 #' observations and IVF-Flat above that threshold. Approximate Metal and CUDA
 #' routes use an internal
-#' recall target of 0.99 and report whether their pilot audit met it.
+#' recall tier and report whether their pilot audit met it.
+#' File-backed KNN currently requires the default 0.99 tier.
 #'
 #' A file-backed descriptor uses bounded KNN graph construction and writes
 #' indices and distances under `output`. CPU selects exact search up to 5,000
@@ -387,8 +420,9 @@ precompute_knn <- function(data, k = 30L,
         backend = NULL, n.cores = NULL, storage = NULL,
         output = NULL, memory_limit = NULL, devices = NULL,
         checkpoint = FALSE, resume = FALSE,
-        checkpoint_every = 100L) {
+        checkpoint_every = 100L, target_recall = NULL) {
     massive_checkpoint_validate_controls(checkpoint, resume)
+    target_recall <- fastembedr_target_recall(target_recall)
     if (inherits(data, "fastEmbedR_massive_graph")) stop(
         "precompute_knn() needs a data matrix, not a prepared graph.",
         call. = FALSE)
@@ -398,7 +432,7 @@ precompute_knn <- function(data, k = 30L,
     if (fastembedr_file_backed_input(data)) return(
         precompute_knn_backed(data, k, metric, backend, n.cores,
             output, memory_limit, devices, checkpoint, resume,
-            checkpoint_every))
+            checkpoint_every, target_recall))
     if (inherits(data, "fastEmbedR_massive_matrix")) stop(
         "A memory-backed massive_matrix() is not a disk-backed source; ",
         "pass its resident matrix to precompute_knn().", call. = FALSE)
@@ -417,7 +451,8 @@ precompute_knn <- function(data, k = 30L,
     n <- nrow(x)
     k <- validate_precompute_k(k, n - 1L, "nrow(data) - 1")
     policy <- fastembedr_embedding_nn_policy(
-        backend, n = n, p = ncol(x))
+        backend, n = n, p = ncol(x),
+        target_recall = target_recall)
     keep_gpu <- identical(backend, "cuda")
     result <- timed_do_call(run_precompute_knn, list(
         x, k, metric, policy, n.cores, keep_gpu
@@ -432,7 +467,10 @@ precompute_knn <- function(data, k = 30L,
 
 precompute_knn_backed <- function(data, k, metric, backend, n.cores,
         output, memory_limit, devices, checkpoint, resume,
-        checkpoint_every) {
+        checkpoint_every, target_recall) {
+    if (target_recall != 0.99) stop(
+        "File-backed KNN recall tiers below 0.99 are not yet supported.",
+        call. = FALSE)
     if (!identical(metric, "euclidean")) stop(
         "File-backed KNN currently supports Euclidean distance only.",
         call. = FALSE)
@@ -511,7 +549,7 @@ run_precompute_query_knn <- function(reference, query, k, metric,
 #' CPU uses faissR Flat search when the reference has fewer than
 #' 5,000 rows and faissR's compiled FAISS HNSW interface for Euclidean
 #' distance otherwise. Cosine and correlation use faissR HNSW. HNSW
-#' targets recall 0.99 but does not claim a per-call recall audit. Metal
+#' uses the requested recall tier but does not claim a per-call audit. Metal
 #' routes between a native
 #' query-only exact kernel and recall-tuned IVF-Flat from the estimated
 #' reference-query distance workload. CUDA routes between faissR FAISS GPU
@@ -535,7 +573,9 @@ precompute_query_knn <- function(reference,
                                         "euclidean", "cosine", "correlation"
                                     ),
                                     backend = NULL,
-                                    n.cores = NULL) {
+                                    n.cores = NULL,
+                                    target_recall = NULL) {
+    target_recall <- fastembedr_target_recall(target_recall)
     backend <- resolve_embedding_backend(backend)
     metric <- resolve_embedding_metric(metric, reference)
     inputs <- prepare_query_knn_inputs(reference, query, backend)
@@ -551,7 +591,8 @@ precompute_query_knn <- function(reference,
         backend,
         n_reference = nrow(reference),
         n_query = nrow(query),
-        p = ncol(reference)
+        p = ncol(reference),
+        target_recall = target_recall
     )
     keep_gpu <- identical(backend, "cuda")
     result <- timed_do_call(run_precompute_query_knn, list(
