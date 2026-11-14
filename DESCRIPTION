@@ -17,7 +17,7 @@ Description: Native UMAP and interpolation-based t-SNE embeddings, PCA, and
     exact or FAISS HNSW search and faissR's native Apple Metal exact or
     IVF-Flat search. One-call CUDA UMAP and t-SNE matrix KNN use faissR's
     FAISS GPU provider, including private multi-GPU routes. Reusable
-    precomputed CUDA KNN and selected other routes use the RAPIDS cuVS C API.
+    precomputed CUDA KNN also uses faissR's native FAISS GPU provider.
     Preprocessing, graph or affinity
     construction, fixed-reference transforms, and optimizers report their
     CPU, Metal, or CUDA execution backend. Experimental landmark and
@@ -56,8 +56,7 @@ LinkingTo:
 SystemRequirements: C++17; FAISS CPU library for the imported faissR package.
     Optional acceleration uses either the Apple SDK
     Metal frameworks on Apple Silicon (macOS 14 or later and Xcode 15 or
-    later), or an NVIDIA CUDA Toolkit. RAPIDS cuVS is an optional provider
-    for selected CUDA nearest-neighbor routes. RAPIDS RAFT/RMM is an optional
+    later), or an NVIDIA CUDA Toolkit. RAPIDS RAFT/RMM is an optional
     extension, not a core installation requirement. Full-graph multi-GPU
     Leiden/Louvain use package-owned C++ and CUDA kernels.
 VignetteBuilder: knitr

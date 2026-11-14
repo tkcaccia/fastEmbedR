@@ -63,10 +63,8 @@ Package-native CUDA embedding and rSVD require:
 - the CUDA runtime, cuFFT, cuBLAS, cuSOLVER, and cuRAND;
 - CUB and Thrust headers from CUDA Core Compute Libraries (CCCL).
 
-Those components are supplied by a normal CUDA toolkit installation. Complete
-one-call CUDA workflows starting from a data matrix additionally require the
-RAPIDS cuVS C and C++ libraries for exact and IVF-Flat KNN. CUDA embedding from
-a precomputed KNN object does not require cuVS.
+Those components are supplied by a normal CUDA toolkit installation. CUDA KNN
+requires a CUDA-enabled faissR build with its FAISS GPU libraries.
 
 RAFT/RMM provide an optional TSVD branch of the automatic CUDA PCA selector.
 Package-native CUDA rSVD remains available without RAFT and uses cuBLAS,
@@ -80,21 +78,20 @@ select the host compiler explicitly. `nvcc` may invoke this compiler.
 ```sh
 export CUDA_HOME=/usr/local/cuda
 export CCCL_HOME=/opt/cccl
-export CUVS_HOME=/opt/rapids
 export CUDAHOSTCXX=/usr/bin/g++
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin:${PATH}
 export FASTEMBEDR_CUDA_ARCH="89"
 
 PACKAGE_REQUIRE_CUDA=1 \
 FASTEMBEDR_USE_CUDA=1 \
-FASTEMBEDR_USE_CUVS=1 \
 R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 ```
 
 `PACKAGE_REQUIRE_CUDA=1` and its package-specific alias
-`FASTEMBEDR_REQUIRE_CUDA=1` are equivalent. Strict mode compiles and links a
-CUDA test and a cuVS test during configuration. Installation fails if either
-test fails; it cannot produce a CPU fallback build.
+`FASTEMBEDR_REQUIRE_CUDA=1` are equivalent. Strict mode runs a CUDA compile
+and link test during configuration. Installation fails if the
+test fails; it cannot produce a CPU fallback build. Verify that the installed
+faissR build provides its CUDA backend before running a CUDA matrix workflow.
 
 To enable the optional RAFT TSVD branch of CUDA PCA, also set:
 
@@ -132,10 +129,10 @@ When CUDA Core Compute Libraries (CCCL) are installed separately, set
 `CCCL_HOME`. Configuration searches its root, `include`, `include/cccl`, and
 the corresponding `targets/*/include` directories for CUB and Thrust.
 
-Use `CUVS_HOME`, `RAFT_HOME`, and `RAPIDS_HOME` for external prefixes.
-Configure records runtime search paths for detected CUDA, cuVS, and RAFT/RMM
+Use `RAFT_HOME` and `RAPIDS_HOME` for external prefixes.
+Configure records runtime search paths for detected CUDA and RAFT/RMM
 libraries. A matching `LD_LIBRARY_PATH` may still be needed for transitive
-dependencies:
+dependencies.
 
 `FASTEMBEDR_CUDA_CPPFLAGS` supplies CUDA preprocessor and include flags.
 `FASTEMBEDR_CUDA_FLAGS` supplies general NVCC flags. Both are applied to CUDA
@@ -173,15 +170,14 @@ from being accepted as CUDA evidence.
   driver installation.
 - CUDA compile/link probe failure: inspect configure output for missing CUDA
   headers or libraries and mixed target prefixes.
-- cuVS probe failure: make `cuvs/core/c_api.h`, `libcuvs_c`, and `libcuvs`
-  available under one compatible prefix.
+- faissR CUDA backend unavailable: install a CUDA-enabled faissR build with
+  compatible FAISS GPU libraries and verify `faissR::faiss_gpu_available()`.
 - `cudaErrorInsufficientDriver`: use a toolkit/runtime compatible with the
   installed driver; do not let the package change the driver.
 - `cudaErrorNoKernelImageForDevice`: rebuild fastEmbedR and external CUDA
   libraries for the GPU compute capability.
 - undefined `__nvJitLink...`: CUDA and RAPIDS libraries from different
   releases are being mixed. Correct their library search order.
-- missing `libcuvs_c.so`: restore the runtime path matching the build prefix.
 
 See [Backend installation](installation-backends.md) for the complete build
 and validation contract.

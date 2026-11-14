@@ -673,7 +673,7 @@ test_that("streamed full exact KNN matches an independent distance matrix", {
     expect_equal(massive_read_graph_edges(fbin_graph, 1, nrow(x)),
         observed)
     if (!faissR::faiss_gpu_available() &&
-        !fastEmbedR:::native_cuda_knn_available_cpp()) {
+        !fastEmbedR:::fastembedr_cuda_knn_available()) {
         expect_error(massive_full_knn_graph(source, 3L, tempfile(),
             backend = "cuda"), "no CPU fallback")
     }
@@ -761,7 +761,7 @@ test_that("shard balancing cannot exceed a reference-row limit", {
         reference_chunk_rows = 2L, memory_limit = "256MB"),
         "Balanced HNSW shards exceed")
     expect_false(file.exists(paste0(prefix, ".indices.u32")))
-    if (fastEmbedR:::native_cuda_knn_available_cpp()) {
+    if (fastEmbedR:::fastembedr_cuda_knn_available()) {
         expect_error(fastEmbedR:::massive_cuda_sharded_resources(
             source, 2L, 2L, 2L, "256MB"),
             "Balanced CUDA shards exceed")

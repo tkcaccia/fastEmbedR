@@ -271,7 +271,7 @@ test_that("CUDA UMAP reports pooled allocation and graph capture", {
     if (!isTRUE(fastEmbedR:::embedding_cuda_available_cpp())) {
         skip("CUDA embedding backend is not available in this build.")
     }
-    if (!isTRUE(fastEmbedR:::native_cuda_knn_available_cpp())) {
+    if (!isTRUE(fastEmbedR:::fastembedr_cuda_knn_available())) {
         skip("Native CUDA KNN is not available in this build.")
     }
 
@@ -334,7 +334,7 @@ test_that("CUDA landmark t-SNE returns every projected row", {
 
 test_that("3D CUDA landmark t-SNE projects all coordinate axes", {
     skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+    skip_if_not(fastEmbedR:::fastembedr_cuda_knn_available())
 
     x <- scale(as.matrix(iris[, 1:4]))
     fit <- fastEmbedR::tsne(

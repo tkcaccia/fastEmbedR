@@ -1,5 +1,5 @@
 test_that("CUDA IVF pilot guards the strict sampled ID recall", {
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+    skip_if_not(fastEmbedR:::fastembedr_cuda_knn_available())
     root <- tempfile("cuda_ivf_strict_")
     dir.create(root)
     on.exit(unlink(root, recursive = TRUE), add = TRUE)

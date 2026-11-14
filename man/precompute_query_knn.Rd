@@ -46,8 +46,8 @@ distance otherwise. Cosine and correlation use faissR HNSW. HNSW
 targets recall 0.99 but does not claim a per-call recall audit. Metal
 routes between a native
 query-only exact kernel and recall-tuned IVF-Flat from the estimated
-reference-query distance workload. CUDA routes between cuVS brute-force
-exact search and cuVS IVF-Flat using the reference size, query batch size,
+reference-query distance workload. CUDA routes between faissR FAISS GPU
+exact search and IVF-Flat using the reference size, query batch size,
 and feature count. CUDA results remain device-resident for direct consumption
 by landmark UMAP and t-SNE transformations.
 }

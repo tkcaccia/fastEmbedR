@@ -286,7 +286,7 @@ test_that("CUDA t-SNE rejects unavailable cost traces", {
     expect_error(do.call(tsne_knn, args), "record_costs")
     args[[1L]]$distances <- float::fl(knn$distances)
     expect_error(do.call(tsne_knn, args), "record_costs")
-    if (native_cuda_knn_available_cpp()) {
+    if (fastembedr_cuda_knn_available()) {
         gpu_knn <- precompute_knn(x, k = 10L, backend = "cuda")
         args[[1L]] <- gpu_knn
         expect_error(do.call(tsne_knn, args), "record_costs")

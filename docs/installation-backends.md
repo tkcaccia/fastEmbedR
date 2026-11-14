@@ -80,10 +80,9 @@ consistently to compile/link probes and package CUDA translation units.
 
 Detection is not based on the presence of `nvcc` alone. Configure compiles and
 links a C++17 CUDA program that references the CUDA runtime, cuFFT, cuBLAS,
-cuSOLVER, and cuRAND, and verifies CUB and Thrust headers. It separately
-compiles and links a cuVS program against `libcuvs_c` and `libcuvs`.
+cuSOLVER, and cuRAND, and verifies CUB and Thrust headers.
 
-The package's CUDA KNN routes use cuVS brute force and IVF-Flat. RAFT TSVD is
+The package's CUDA KNN routes call faissR's FAISS GPU provider. RAFT TSVD is
 optional and receives its own NVCC compile/link test when requested. CUDA PCA
 always has a package-native rSVD route; a RAFT-enabled build may select RAFT
 TSVD for matrix shapes where it is preferable.
@@ -97,7 +96,6 @@ The system compiler should precede CUDA or Conda wrappers in `PATH`. Set
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin:${PATH}
 export CUDAHOSTCXX=/usr/bin/g++
 export CUDA_HOME=/usr/local/cuda
-export CUVS_HOME=/opt/rapids
 ```
 
 This does not replace R's compiler configuration. It ensures that NVCC uses a
@@ -109,15 +107,14 @@ OpenMP, and C++ runtime linkage.
 ```sh
 PACKAGE_REQUIRE_CUDA=1 \
 FASTEMBEDR_USE_CUDA=1 \
-FASTEMBEDR_USE_CUVS=1 \
 FASTEMBEDR_CUDA_ARCH="80 86 89 90" \
 CUDA_HOME=/usr/local/cuda \
-CUVS_HOME=/opt/rapids \
 CUDAHOSTCXX=/usr/bin/g++ \
 R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 ```
 
-Strict mode fails configuration when native CUDA or cuVS cannot be built.
+Strict mode fails configuration when native CUDA cannot be built. CUDA matrix
+workflows additionally require a CUDA-enabled faissR installation.
 `FASTEMBEDR_REQUIRE_CUDA=1` is an equivalent package-specific spelling.
 
 Optional RAFT TSVD branch for automatic CUDA PCA:
@@ -128,8 +125,8 @@ RAFT_HOME=/opt/rapids \
 RAPIDS_HOME=/opt/rapids
 ```
 
-The architecture list affects fastEmbedR translation units only. cuVS and
-RAFT must also contain compatible kernels or PTX.
+The architecture list affects fastEmbedR translation units only. faissR and
+optional RAFT must also contain compatible kernels or PTX.
 
 ## Runtime paths
 

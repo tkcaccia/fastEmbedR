@@ -159,14 +159,15 @@ print_probe_failure() {
 if [ "${FASTEMBEDR_USE_FAISS_GPU+set}" = "set" ]; then
   fatal "FASTEMBEDR_USE_FAISS_GPU is obsolete; FAISS GPU KNN comes from faissR."
 fi
+if [ "${FASTEMBEDR_USE_CUVS+set}" = "set" ]; then
+  echo "configure: FASTEMBEDR_USE_CUVS is obsolete; KNN uses faissR." >&2
+fi
 
 os_name=$(uname -s 2>/dev/null || echo unknown)
 package_root=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 package_src_dir="$package_root/src"
 use_cuda=$(normalize_switch "${FASTEMBEDR_USE_CUDA:-auto}" \
   FASTEMBEDR_USE_CUDA)
-use_cuvs=$(normalize_switch "${FASTEMBEDR_USE_CUVS:-auto}" \
-  FASTEMBEDR_USE_CUVS)
 use_nccl=$(normalize_switch "${FASTEMBEDR_USE_NCCL:-auto}" \
   FASTEMBEDR_USE_NCCL)
 require_cuda=${FASTEMBEDR_REQUIRE_CUDA:-${PACKAGE_REQUIRE_CUDA:-0}}
@@ -187,14 +188,10 @@ if is_true "$require_cuda"; then
   [ "$diagnostic_only" = "0" ] || \
     fatal "strict CUDA and diagnostic-only modes cannot be combined."
   use_cuda=1
-  [ "$use_cuvs" != "0" ] || \
-    fatal "strict CUDA requires FASTEMBEDR_USE_CUVS=1."
-  use_cuvs=1
 fi
 
 if is_true "$diagnostic_only"; then
   use_cuda=0
-  use_cuvs=0
   use_nccl=0
 fi
 
@@ -249,7 +246,6 @@ libs="-pthread"
 objcxxflags=""
 metal_enabled=0
 cuda_enabled=0
-enable_cuvs=0
 enable_raft=0
 enable_nccl=0
 build_mode=cpu_only
@@ -307,7 +303,6 @@ if [ "$os_name" = "Darwin" ] && ! is_true "$diagnostic_only"; then
 fi
 
 cuda_objects="embedding_cuda_stub.o"
-native_cuda_knn_object="native_knn_cuda_stub.o"
 graph_cuda_object="graph_clustering_cuda_stub.o"
 cuda_rule=""
 cuda_include_dirs=""
@@ -509,122 +504,6 @@ EOF_NCCL
     fi
   fi
 
-  cuvs_home=${CUVS_HOME:-${RAPIDS_HOME:-${CONDA_PREFIX:-}}}
-  if [ "$use_cuvs" = "1" ] || \
-     { [ "$use_cuvs" = "auto" ] && [ -n "$cuvs_home" ]; }; then
-    collect_prefix_dirs "$cuvs_home"
-    cuvs_include=$(find_header_dir \
-      "$prefix_include_dirs" cuvs/core/c_api.h 2>/dev/null || true)
-    cuvs_brute_include=$(find_header_dir \
-      "$prefix_include_dirs" cuvs/neighbors/brute_force.h \
-      2>/dev/null || true)
-    cuvs_ivf_include=$(find_header_dir \
-      "$prefix_include_dirs" cuvs/neighbors/ivf_flat.h \
-      2>/dev/null || true)
-    cuvs_distance_include=$(find_header_dir \
-      "$prefix_include_dirs" cuvs/distance/distance.h \
-      2>/dev/null || true)
-    dlpack_search_dirs=$(append_colon_dir \
-      "$prefix_include_dirs" "$package_src_dir")
-    dlpack_include=$(find_header_dir \
-      "$dlpack_search_dirs" dlpack/dlpack.h 2>/dev/null || true)
-    cuvs_libdir=$(find_library_dir \
-      "$prefix_library_dirs" cuvs_c 2>/dev/null || true)
-    cuvs_cpp_libdir=$(find_library_dir \
-      "$prefix_library_dirs" cuvs 2>/dev/null || true)
-    if [ -n "$cuvs_include" ] && [ -n "$cuvs_brute_include" ] && \
-       [ -n "$cuvs_ivf_include" ] && [ -n "$cuvs_distance_include" ] && \
-       [ -n "$dlpack_include" ] && [ -n "$cuvs_libdir" ] && \
-       [ -n "$cuvs_cpp_libdir" ]; then
-      cat > "$configure_tmp/cuvs-link.cpp" <<'EOF_CUVS'
-#include <cuvs/core/c_api.h>
-#include <cuvs/neighbors/ivf_flat.h>
-
-int main() {
-  const void* symbols[] = {
-    reinterpret_cast<const void*>(&cuvsResourcesCreate),
-    reinterpret_cast<const void*>(&cuvsIvfFlatIndexCreate)
-  };
-  return symbols[0] == nullptr || symbols[1] == nullptr;
-}
-EOF_CUVS
-      cuvs_include_dirs=""
-      for directory in \
-        "$cuvs_include" \
-        "$cuvs_brute_include" \
-        "$cuvs_ivf_include" \
-        "$cuvs_distance_include" \
-        "$dlpack_include"; do
-        cuvs_include_dirs=$(append_colon_dir \
-          "$cuvs_include_dirs" "$directory")
-      done
-      cuvs_include_flags=$(include_flags_from_dirs "$cuvs_include_dirs")
-      nvjitlink_dir=""
-      nvjitlink_flag=""
-      if [ "$os_name" = "Linux" ]; then
-        for candidate in \
-          "$cuvs_libdir"/libnvJitLink.so \
-          "$cuvs_libdir"/libnvJitLink.so.[0-9]* \
-          "$cuvs_cpp_libdir"/libnvJitLink.so \
-          "$cuvs_cpp_libdir"/libnvJitLink.so.[0-9]*; do
-          [ -e "$candidate" ] || continue
-          nvjitlink_dir=$(dirname "$candidate")
-          nvjitlink_name=$(basename "$candidate")
-          case "$nvjitlink_name" in
-            libnvJitLink.so)
-              nvjitlink_flag="-lnvJitLink"
-              ;;
-            *)
-              nvjitlink_flag="-l:$nvjitlink_name"
-              ;;
-          esac
-          break
-        done
-      fi
-      r_cxx17=$("$r_binary" CMD config CXX17)
-      r_cxx17flags=$("$r_binary" CMD config CXX17FLAGS 2>/dev/null || true)
-      cuvs_command="$r_cxx17 $r_cxx17flags -std=c++17"
-      cuvs_command="$cuvs_command $cuda_cpp_flags"
-      cuvs_command="$cuvs_command $cuda_toolkit_include_flags"
-      cuvs_command="$cuvs_command $cuvs_include_flags"
-      cuvs_command="$cuvs_command $configure_tmp/cuvs-link.cpp"
-      cuvs_command="$cuvs_command $cuda_lib_flags -L$cuvs_libdir"
-      cuvs_command="$cuvs_command -L$cuvs_cpp_libdir"
-      cuvs_command="$cuvs_command -lcuvs_c -lcuvs -lcudart"
-      if [ -n "$nvjitlink_flag" ]; then
-        cuvs_command="$cuvs_command -L$nvjitlink_dir"
-        cuvs_command="$cuvs_command -Wl,--no-as-needed"
-        cuvs_command="$cuvs_command $nvjitlink_flag -Wl,--as-needed"
-      fi
-      cuvs_command="$cuvs_command -o $configure_tmp/cuvs-link"
-      if eval "$cuvs_command" \
-         > "$configure_tmp/cuvs-link.log" 2>&1; then
-        enable_cuvs=1
-        native_cuda_knn_object="native_knn_cuda_impl.o"
-        cppflags="$cppflags -DFASTEMBEDR_HAS_CUVS -I."
-        cppflags="$cppflags $cuvs_include_flags"
-        cuda_include_flags="$cuda_include_flags -DFASTEMBEDR_HAS_CUVS"
-        cuda_include_flags="$cuda_include_flags -I."
-        cuda_include_flags="$cuda_include_flags $cuvs_include_flags"
-        libs="$libs -L$cuvs_libdir -L$cuvs_cpp_libdir"
-        libs="$libs $(rpath_flags_from_dirs "$cuvs_libdir:$cuvs_cpp_libdir")"
-        libs="$libs -lcuvs_c -lcuvs"
-        if [ -n "$nvjitlink_flag" ]; then
-          libs="$libs -L$nvjitlink_dir"
-          libs="$libs $(rpath_flags_from_dirs "$nvjitlink_dir")"
-          libs="$libs -Wl,--no-as-needed $nvjitlink_flag"
-          libs="$libs -Wl,--as-needed"
-        fi
-      else
-        print_probe_failure "cuVS compile/link" \
-          "$configure_tmp/cuvs-link.log"
-      fi
-    fi
-    if [ "$enable_cuvs" != "1" ] && [ "$use_cuvs" = "1" ]; then
-      fatal "cuVS headers and linkable libcuvs_c/libcuvs were not found under CUVS_HOME='$cuvs_home'."
-    fi
-  fi
-
   if [ "${FASTEMBEDR_USE_RAFT:-0}" = "1" ]; then
     raft_home=${RAFT_HOME:-${RAPIDS_HOME:-${CONDA_PREFIX:-}}}
     [ -n "$raft_home" ] || \
@@ -694,11 +573,6 @@ EOF_RAFT
     fi
   fi
 
-  if is_true "$require_cuda"; then
-    [ "$enable_cuvs" = "1" ] || \
-      fatal "strict CUDA requires a validated cuVS build."
-  fi
-
   cuda_rule="
 all: \$(SHLIB)
 
@@ -737,7 +611,7 @@ fi
     echo "NVCC = $nvcc"
     printf "%s" "$cuda_rule"
   fi
-  echo "OBJECTS = RcppExports.o tsne_neighbors.o embedding_utils.o massive_matrix.o massive_graph_merge.o massive_graph_reorder.o fast_knn_umap.o graph_clustering.o graph_clustering_cuda_bridge.o graph_clustering_metal_bridge.o native_knn_bridge.o faissr_hnsw_bridge.o $native_cuda_knn_object $graph_cuda_object $metal_objects embedding_cuda_bridge.o $cuda_objects"
+  echo "OBJECTS = RcppExports.o tsne_neighbors.o embedding_utils.o massive_matrix.o massive_graph_merge.o massive_graph_reorder.o fast_knn_umap.o graph_clustering.o graph_clustering_cuda_bridge.o graph_clustering_metal_bridge.o faissr_hnsw_bridge.o $graph_cuda_object $metal_objects embedding_cuda_bridge.o $cuda_objects"
 } > src/Makevars
 
 echo "fastEmbedR configuration:"
@@ -756,7 +630,6 @@ if [ "$cuda_enabled" = "1" ]; then
   echo "  CUDA include dirs:      $cuda_include_dirs"
   echo "  CUDA library dirs:      $cuda_library_dirs"
   echo "  CUDA architectures:     ${FASTEMBEDR_CUDA_ARCH:-nvcc default}"
-  echo "  cuVS linked:            $enable_cuvs"
   echo "  RAFT linked:            $enable_raft"
   echo "  NCCL linked:            $enable_nccl"
 elif [ "$use_cuda" = "auto" ]; then

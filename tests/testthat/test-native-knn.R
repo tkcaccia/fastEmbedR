@@ -480,13 +480,13 @@ test_that("one-call routing uses native CPU and Metal KNN", {
             fastembedr_embedding_nn_policy("cuda", 70000L),
             keep_gpu = TRUE
         ),
-        "native_cuvs_gpu_exact"
+        "faissr_cuda_gpu_exact"
     )
 })
 
 test_that("CUDA resident KNN never silently falls back", {
-    expect_type(native_cuda_knn_available_cpp(), "logical")
-    if (!isTRUE(native_cuda_knn_available_cpp()) &&
+    expect_type(fastembedr_cuda_knn_available(), "logical")
+    if (!isTRUE(fastembedr_cuda_knn_available()) &&
         !isTRUE(faissR::faiss_gpu_available())) {
         expect_error(
             fastembedr_nn_without_self(
@@ -549,63 +549,6 @@ test_that("precompute_knn CUDA output stays resident or fails explicitly", {
     }
 })
 
-test_that(paste(
-    "native CUDA exact KNN remains resident and matches the",
-    "exact oracle"
-), {
-    skip_if_not(
-        isTRUE(native_cuda_knn_available_cpp()),
-        "native CUDA KNN is unavailable"
-    )
-    set.seed(4)
-    x <- matrix(rnorm(256 * 12), nrow = 256)
-    truth <- exact_knn_reference(x, 10L)
-    device_knn <- native_cuda_knn_cpp(
-        x, 10L, "exact", "euclidean", 0.99,
-        keep_gpu = TRUE
-    )
-
-    expect_s3_class(device_knn, "fastEmbedR_gpu_knn")
-    expect_identical(device_knn$result_residency, "cuda")
-    expect_identical(device_knn$layout, "column_major_query_by_k")
-    expect_identical(device_knn$distance_type, "float32")
-    expect_identical(device_knn$device_to_host_result_copies, 0L)
-    expect_false(isTRUE(device_knn$cpu_fallback))
-    expect_equal(device_knn$resident_result_bytes, 256 * 10 * 8)
-    expect_lt(
-        device_knn$peak_temporary_search_bytes,
-        256 * 11 * 16
-    )
-
-    observed <- native_cuda_knn_to_host_cpp(device_knn)
-    expect_identical(dim(observed$indices), c(256L, 10L))
-    expect_equal(knn_recall_test(observed, truth), 1, tolerance = 1e-8)
-    expect_true(all(is.finite(observed$distances)))
-})
-
-test_that("native CUDA exact KNN preserves float32 matrix layout", {
-    skip_if_not_installed("float")
-    skip_if_not(
-        isTRUE(native_cuda_knn_available_cpp()),
-        "native CUDA KNN is unavailable"
-    )
-    set.seed(41)
-    x <- matrix(rnorm(192 * 4096), nrow = 192)
-    truth <- exact_knn_reference(x, 12L)
-    float_x <- float::fl(x)
-
-    device_knn <- native_cuda_knn_cpp(
-        float_x, 12L, "exact", "euclidean", 0.99,
-        keep_gpu = TRUE
-    )
-    observed <- native_cuda_knn_to_host_cpp(device_knn)
-
-    expect_identical(dim(observed$indices), c(192L, 12L))
-    expect_equal(knn_recall_test(observed, truth), 1, tolerance = 1e-8)
-    expect_true(all(is.finite(observed$distances)))
-    expect_false(isTRUE(device_knn$cpu_fallback))
-})
-
 test_that("CUDA query KNN has no fastEmbedR native implementation", {
     expect_false(exists(
         "native_cuda_query_knn_cpp", asNamespace("fastEmbedR"),
@@ -623,4 +566,12 @@ test_that("CUDA query KNN has no fastEmbedR native implementation", {
         "native_cuda_index_search_cpp", asNamespace("fastEmbedR"),
         inherits = FALSE
     ))
+    for (name in c(
+        "native_cuda_knn_cpp",
+        "native_cuda_knn_to_host_cpp",
+        "native_cuda_knn_available_cpp"
+    )) {
+        expect_false(exists(name, asNamespace("fastEmbedR"),
+            inherits = FALSE))
+    }
 })

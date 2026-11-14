@@ -94,7 +94,7 @@ estimated search work is at most 125 billion row-pair feature operations.
 It uses recall-tuned IVF-Flat otherwise.
 One-call CUDA matrix KNN uses faissR FAISS GPU Flat below 100,000 rows and
 IVF-Flat above that threshold; its host neighbors feed UMAP or t-SNE.
-Resident `precompute_knn()` retains a separate device-resident cuVS route.
+Resident `precompute_knn()` uses faissR's device-resident FAISS GPU route.
 No unavailable GPU backend is silently relabelled as CPU.
 
 ## Quick Start
@@ -235,7 +235,7 @@ R CMD INSTALL --preclean fastEmbedR_0.1.tar.gz
 ```
 
 See [Installation][installation] for `fastEmbedR` CPU, Metal, and CUDA
-embedding builds, including RAPIDS cuVS linkage for CUDA KNN.
+embedding builds, with CUDA KNN provided by faissR.
 The CPU build requires R 4.6 or later, Rcpp, faissR, and a C++17 compiler.
 Accelerator libraries are optional and detected during source installation.
 

@@ -281,7 +281,6 @@ test_that("CUDA landmark embeddings run with faissR and no cuVS", {
     skip_if_not(isTRUE(faissR::cuda_available()))
     skip_if_not(faissR::faiss_gpu_available())
     skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
-    skip_if(fastEmbedR:::native_cuda_knn_available_cpp())
     set.seed(1149)
     data <- matrix(rnorm(57L * 4L), ncol = 4L)
     directory <- tempfile()
@@ -311,7 +310,6 @@ test_that("resident CUDA host KNN uses faissR without cuVS", {
     skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
     skip_if_not(isTRUE(faissR::cuda_available()))
     skip_if_not(faissR::faiss_gpu_available())
-    skip_if(fastEmbedR:::native_cuda_knn_available_cpp())
     set.seed(1817)
     data <- matrix(rnorm(61L * 5L), ncol = 5L)
     found <- fastEmbedR:::fastembedr_nn_without_self(
@@ -352,7 +350,6 @@ test_that("faissR resident CUDA KNN feeds both optimizers", {
     skip_if_not(isTRUE(faissR::cuda_available()))
     skip_if_not(faissR::faiss_gpu_available())
     skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
-    skip_if(fastEmbedR:::native_cuda_knn_available_cpp())
     set.seed(2217)
     data <- matrix(rnorm(43L * 5L), ncol = 5L)
     knn <- fastEmbedR:::fastembedr_nn_without_self(
@@ -388,7 +385,6 @@ test_that("faissR owns retained CUDA features for t-SNE PCA init", {
     skip_if_not(isTRUE(faissR::cuda_available()))
     skip_if_not(faissR::faiss_gpu_available())
     skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
-    skip_if(fastEmbedR:::native_cuda_knn_available_cpp())
     set.seed(2240)
     data <- matrix(rnorm(43L * 5L), ncol = 5L)
     knn <- fastEmbedR:::fastembedr_nn_without_self(

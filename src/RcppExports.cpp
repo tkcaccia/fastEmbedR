@@ -3240,54 +3240,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// native_cuda_knn_available_cpp
-bool native_cuda_knn_available_cpp();
-RcppExport SEXP _fastEmbedR_native_cuda_knn_available_cpp() {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    rcpp_result_gen = Rcpp::wrap(native_cuda_knn_available_cpp());
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_cuda_memory_info_cpp
-Rcpp::List native_cuda_memory_info_cpp();
-RcppExport SEXP _fastEmbedR_native_cuda_memory_info_cpp() {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    rcpp_result_gen = Rcpp::wrap(native_cuda_memory_info_cpp());
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_cuda_knn_cpp
-Rcpp::List native_cuda_knn_cpp(SEXP data, int k, std::string method, std::string metric, double target_recall, bool keep_gpu, bool retain_data);
-RcppExport SEXP _fastEmbedR_native_cuda_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP metricSEXP, SEXP target_recallSEXP, SEXP keep_gpuSEXP, SEXP retain_dataSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
-    Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
-    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
-    Rcpp::traits::input_parameter< bool >::type keep_gpu(keep_gpuSEXP);
-    Rcpp::traits::input_parameter< bool >::type retain_data(retain_dataSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_cuda_knn_cpp(data, k, method, metric, target_recall, keep_gpu, retain_data));
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_cuda_knn_to_host_cpp
-Rcpp::List native_cuda_knn_to_host_cpp(SEXP knn);
-RcppExport SEXP _fastEmbedR_native_cuda_knn_to_host_cpp(SEXP knnSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type knn(knnSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_cuda_knn_to_host_cpp(knn));
-    return rcpp_result_gen;
-END_RCPP
-}
 // knn_tsne_opentsne_cuda_multigpu_cpp
 List knn_tsne_opentsne_cuda_multigpu_cpp(IntegerMatrix indices, SEXP distances, SEXP y_init, int n_components, double perplexity, int early_iter, int normal_iter, double early_exag, double exag, double learning_rate, bool learning_rate_auto, double initial_momentum, double final_momentum, double min_gain, double max_step_norm, int n_threads, IntegerVector devices);
 RcppExport SEXP _fastEmbedR_knn_tsne_opentsne_cuda_multigpu_cpp(SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP n_componentsSEXP, SEXP perplexitySEXP, SEXP early_iterSEXP, SEXP normal_iterSEXP, SEXP early_exagSEXP, SEXP exagSEXP, SEXP learning_rateSEXP, SEXP learning_rate_autoSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP min_gainSEXP, SEXP max_step_normSEXP, SEXP n_threadsSEXP, SEXP devicesSEXP) {
@@ -3666,10 +3618,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_posting_distant_rows_cpp", (DL_FUNC) &_fastEmbedR_massive_posting_distant_rows_cpp, 6},
     {"_fastEmbedR_massive_coarse_postings_cpp", (DL_FUNC) &_fastEmbedR_massive_coarse_postings_cpp, 8},
     {"_fastEmbedR_massive_posting_search_cpp", (DL_FUNC) &_fastEmbedR_massive_posting_search_cpp, 14},
-    {"_fastEmbedR_native_cuda_knn_available_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_available_cpp, 0},
-    {"_fastEmbedR_native_cuda_memory_info_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_memory_info_cpp, 0},
-    {"_fastEmbedR_native_cuda_knn_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_cpp, 7},
-    {"_fastEmbedR_native_cuda_knn_to_host_cpp", (DL_FUNC) &_fastEmbedR_native_cuda_knn_to_host_cpp, 1},
     {"_fastEmbedR_knn_tsne_opentsne_cuda_multigpu_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cuda_multigpu_cpp, 17},
     {"_fastEmbedR_opentsne_kl_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_opentsne_kl_diagnostic_cpp, 5},
     {"_fastEmbedR_opentsne_force_diagnostic_cpp", (DL_FUNC) &_fastEmbedR_opentsne_force_diagnostic_cpp, 7},

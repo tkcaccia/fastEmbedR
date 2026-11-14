@@ -1,6 +1,6 @@
 test_that("CUDA UMAP keeps three-dimensional KNN on device", {
     skip_if_not(embedding_cuda_available_cpp())
-    skip_if_not(native_cuda_knn_available_cpp())
+    skip_if_not(fastembedr_cuda_knn_available())
     set.seed(81)
     x <- matrix(rnorm(60L * 4L), nrow = 60L)
     gpu_knn <- precompute_knn(x, k = 10L, backend = "cuda")
@@ -71,7 +71,7 @@ test_that("CUDA 3D UMAP reports nonfinite optimizer coordinates", {
 
 test_that("CUDA landmark UMAP keeps fixed references in three dimensions", {
     skip_if_not(embedding_cuda_available_cpp())
-    skip_if_not(native_cuda_knn_available_cpp())
+    skip_if_not(fastembedr_cuda_knn_available())
     x <- scale(as.matrix(iris[seq_len(45L), 1:4]))
     for (mode in c("fuzzy", "binary")) {
         fit <- umap(

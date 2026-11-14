@@ -132,7 +132,7 @@ test_that("public UMAP and t-SNE landmark modes stay file-backed", {
         landmarks = 20L, output = file.path(directory, "cpu_device.f32"),
         backend = "cpu", devices = 0L), "requires CUDA")
     if (isTRUE(fastEmbedR:::embedding_cuda_available_cpp()) &&
-        isTRUE(fastEmbedR:::native_cuda_knn_available_cpp())) {
+        isTRUE(fastEmbedR:::fastembedr_cuda_knn_available())) {
         gpu_umap <- umap(source, massive = "landmark",
             landmarks = 20L, output = file.path(directory, "gpu_umap.f32"),
             n_neighbors = 5L, transform_k = 5L, chunk_rows = 9L,
@@ -2247,7 +2247,7 @@ test_that("multi-GPU KNN resumes verified shards and interrupted merges", {
 })
 
 test_that("CUDA KNN coordinator resumes a verified device shard", {
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+    skip_if_not(fastEmbedR:::fastembedr_cuda_knn_available())
     set.seed(752)
     query <- matrix(rnorm(19L * 4L), ncol = 4L)
     reference <- matrix(rnorm(11L * 4L), ncol = 4L)
@@ -2287,7 +2287,7 @@ test_that("CUDA KNN coordinator resumes a verified device shard", {
 })
 
 test_that("multi-GPU KNN uses both requested devices without fallback", {
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+    skip_if_not(fastEmbedR:::fastembedr_cuda_knn_available())
     skip_if_not(fastEmbedR:::massive_cuda_device_count_cpp() >= 2L)
     set.seed(742)
     query <- matrix(rnorm(31L * 4L), ncol = 4L)
@@ -2621,7 +2621,7 @@ test_that("streamed exact landmark KNN retains every query row", {
     expect_true(audited$sample_target_met)
     expect_error(massive_audit_landmark_knn(graph, source,
         landmarks, sample_rows = 68L), "matching file-backed")
-    if (!fastEmbedR:::native_cuda_knn_available_cpp()) {
+    if (!fastEmbedR:::fastembedr_cuda_knn_available()) {
         expect_error(massive_landmark_knn(source, landmarks, 5L,
             tempfile(), backend = "cuda"), "no CPU fallback")
     }
@@ -2802,7 +2802,7 @@ test_that("persistent CUDA landmark search preserves exact neighbors", {
 })
 
 test_that("CUDA landmark KNN resumes on CUDA without fallback", {
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+    skip_if_not(fastEmbedR:::fastembedr_cuda_knn_available())
     set.seed(819)
     source <- massive_matrix(matrix(rnorm(19L * 5L), ncol = 5L))
     landmarks <- massive_matrix(matrix(rnorm(37L * 5L), ncol = 5L))
@@ -2849,7 +2849,7 @@ test_that("CUDA KNN planning caps batches before allocation", {
 })
 
 test_that("persistent CUDA IVF reports calibrated pilot recall", {
-    skip_if_not(fastEmbedR:::native_cuda_knn_available_cpp())
+    skip_if_not(fastEmbedR:::fastembedr_cuda_knn_available())
     set.seed(273)
     reference <- matrix(rnorm(15000L * 16L), ncol = 16L)
     query <- matrix(rnorm(128L * 16L), ncol = 16L)
@@ -3787,7 +3787,7 @@ test_that("massive clustering rejects unsafe requests before writing", {
 
 test_that("CUDA landmark clustering honors selected device", {
     skip_if_not(isTRUE(fastEmbedR:::embedding_cuda_available_cpp()))
-    skip_if_not(isTRUE(fastEmbedR:::native_cuda_knn_available_cpp()))
+    skip_if_not(isTRUE(fastEmbedR:::fastembedr_cuda_knn_available()))
     skip_if_not(isTRUE(fastEmbedR:::graph_clustering_cuda_available_cpp()))
     set.seed(427)
     x <- rbind(matrix(rnorm(36L, 0, 0.1), ncol = 2L),

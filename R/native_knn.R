@@ -10,6 +10,12 @@ fastembedr_optional_export <- function(package, name) {
     getExportedValue(package, name)
 }
 
+fastembedr_cuda_knn_available <- function() {
+    requireNamespace("faissR", quietly = TRUE) &&
+        isTRUE(faissR::cuda_available()) &&
+        isTRUE(faissR::faiss_gpu_available())
+}
+
 fastembedr_has_gpu_knn_shape <- function(x) {
     is.list(x) &&
         all(c("indices_ptr", "distances_ptr", "n_query", "k") %in% names(x)) &&
@@ -44,25 +50,8 @@ fastembedr_gpu_knn_to_host <- function(knn) {
         attr(out, "exclude_self") <- knn$exclude_self
         return(out)
     }
-    native_provider <- inherits(knn, "fastEmbedR_gpu_knn") ||
-        startsWith(as.character(knn$gpu_provider %||% ""), "fastEmbedR_native_")
-    if (!native_provider) {
-        stop(
-            "fastEmbedR does not call another package to materialize ",
-            "an external GPU KNN object. Convert it explicitly before ",
-            "passing it to fastEmbedR, ",
-            "or use fastEmbedR's native KNN route.",
-            call. = FALSE
-        )
-    }
-    out <- native_cuda_knn_to_host_cpp(knn)
-    attr(out, "gpu_resident_source") <- TRUE
-    attr(out, "gpu_backend_used") <-
-        knn$backend_used %||% attr(knn, "backend") %||% "cuda"
-    attr(out, "backend") <- attr(out, "backend") %||% "native_cuda_host"
-    metric <- knn$metric %||% attr(knn, "metric")
-    if (!is.null(metric)) attr(out, "metric") <- metric
-    out
+    stop("External GPU KNN objects require explicit materialization ",
+        "before passing them to fastEmbedR.", call. = FALSE)
 }
 
 fastembedr_gpu_knn_info <- function(knn) {
@@ -239,9 +228,9 @@ fastembedr_nn_policy_engine <- function(policy, keep_gpu = FALSE,
                                         metric = "euclidean") {
     if (is.list(policy) && identical(policy$backend, "cuda")) {
         prefix <- if (isTRUE(keep_gpu)) {
-            "native_cuvs_gpu_"
+            "faissr_cuda_gpu_"
         } else {
-            "native_cuvs_cuda_host_"
+            "faissr_cuda_host_"
         }
         return(paste0(prefix, policy$method %||% "auto"))
     }
@@ -255,7 +244,7 @@ fastembedr_nn_policy_engine <- function(policy, keep_gpu = FALSE,
         return(paste0("native_cpu_", policy$method %||% "exact"))
     }
     if (is.list(policy) && identical(policy$backend, "metal")) {
-        return(paste0("native_metal_", policy$method %||% "ivf"))
+        return(paste0("faissr_metal_", policy$method %||% "ivf"))
     }
     "native_unavailable"
 }
@@ -364,9 +353,9 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' recall is not audited during each call. Metal uses native exact search below
 #' 4,096 rows and for inputs with at most 50,000 rows, 16,384 columns, and
 #' 125 billion row-pair feature operations; otherwise it uses recall-tuned
-#' IVF-Flat. CUDA uses RAPIDS
-#' cuVS brute-force exact search below 100,000 observations and cuVS IVF-Flat
-#' above that threshold. Approximate Metal and CUDA routes use an internal
+#' IVF-Flat. CUDA uses faissR's native FAISS GPU exact search below 100,000
+#' observations and IVF-Flat above that threshold. Approximate Metal and CUDA
+#' routes use an internal
 #' recall target of 0.99 and report whether their pilot audit met it.
 #'
 #' A file-backed descriptor uses bounded KNN graph construction and writes
@@ -525,8 +514,8 @@ run_precompute_query_knn <- function(reference, query, k, metric,
 #' targets recall 0.99 but does not claim a per-call recall audit. Metal
 #' routes between a native
 #' query-only exact kernel and recall-tuned IVF-Flat from the estimated
-#' reference-query distance workload. CUDA routes between cuVS brute-force
-#' exact search and cuVS IVF-Flat using the reference size, query batch size,
+#' reference-query distance workload. CUDA routes between faissR FAISS GPU
+#' exact search and IVF-Flat using the reference size, query batch size,
 #' and feature count. CUDA results remain device-resident for direct consumption
 #' by landmark UMAP and t-SNE transformations.
 #'
@@ -580,45 +569,28 @@ precompute_query_knn <- function(reference,
     out
 }
 
-run_native_cuda_knn <- function(data, k, method, metric, output,
-                                target_recall, keep_gpu, retain_data) {
+run_faissr_cuda_resident_knn <- function(data, k, method, metric,
+                                            target_recall, retain_data) {
     allowed <- c("auto", "exact", "flat", "bruteforce", "ivf")
     if (!method %in% allowed) {
-        stop("CUDA native KNN supports `auto`, `exact`, and `ivf`.",
+        stop("faissR CUDA KNN supports `auto`, `exact`, and `ivf`.",
             call. = FALSE
         )
     }
     exact <- method %in% c("exact", "flat", "bruteforce") ||
         (method == "auto" && nrow(data) < 100000L)
-    if (isTRUE(keep_gpu)) {
-        if (exact) {
-            return(run_faissr_cuda_resident_exact(
-                data, k, metric, target_recall, retain_data))
-        }
-        return(run_faissr_cuda_resident_ivf(
+    if (exact) {
+        return(run_faissr_cuda_resident_exact(
             data, k, metric, target_recall, retain_data))
     }
-    if (!isTRUE(native_cuda_knn_available_cpp())) {
-        stop("Native CUDA KNN is unavailable; no fallback was used.",
-            call. = FALSE
-        )
-    }
-    out <- native_cuda_knn_cpp(
-        data,
-        k = k,
-        method = method,
-        metric = metric,
-        target_recall = target_recall,
-        keep_gpu = isTRUE(keep_gpu),
-        retain_data = isTRUE(retain_data)
-    )
-    if (keep_gpu) out else fastembedr_convert_knn_distances(out, output)
+    run_faissr_cuda_resident_ivf(
+        data, k, metric, target_recall, retain_data)
 }
 
 run_faissr_cuda_resident_exact <- function(data, k, metric,
                                             target_recall,
                                             retain_data = FALSE) {
-    if (!isTRUE(faissR::faiss_gpu_available())) stop(
+    if (!fastembedr_cuda_knn_available()) stop(
         "faissR CUDA KNN is unavailable; no fallback was used.",
         call. = FALSE)
     out <- faissr_cuda_resident_knn_cpp(
@@ -680,7 +652,7 @@ fastembedr_audit_resident_ivf <- function(data, knn, k, metric,
 
 run_faissr_cuda_resident_ivf <- function(data, k, metric, target_recall,
                                             retain_data = FALSE) {
-    if (!isTRUE(faissR::faiss_gpu_available())) stop(
+    if (!fastembedr_cuda_knn_available()) stop(
         "faissR CUDA KNN is unavailable; no fallback was used.",
         call. = FALSE)
     params <- utils::getFromNamespace("cuda_ivf_params", "faissR")(
@@ -996,16 +968,18 @@ fastembedr_nn_without_self <- function(data,
     }
     target_recall <- target_recall %||% 0.99
     switch(backend,
-        cuda = if (!isTRUE(keep_gpu) && !isTRUE(retain_data)) {
+        cuda = if (!isTRUE(keep_gpu)) {
+            if (isTRUE(retain_data)) stop(
+                "`retain_data` requires `keep_gpu = TRUE`.",
+                call. = FALSE)
             resolved <- if (method == "auto") {
                 fastembedr_embedding_nn_policy("cuda", nrow(data))$method
             } else if (method == "bruteforce") "exact" else method
             run_faissr_cuda_embedding_knn(
                 data, k, resolved, metric, output, target_recall
             )
-        } else run_native_cuda_knn(
-            data, k, method, metric, output, target_recall, keep_gpu,
-            retain_data
+        } else run_faissr_cuda_resident_knn(
+            data, k, method, metric, target_recall, retain_data
         ),
         cpu = run_native_cpu_knn(
             data, k, method, metric, output, target_recall, n_threads

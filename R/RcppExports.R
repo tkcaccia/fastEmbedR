@@ -745,22 +745,6 @@ massive_posting_search_cpp <- function(query_spec, feature_path, ids_path, offse
     .Call(`_fastEmbedR_massive_posting_search_cpp`, query_spec, feature_path, ids_path, offsets_path, centers, first_row, count, k, nprobe, reference_chunk, workers, exclude_self, posting_rows, verbose)
 }
 
-native_cuda_knn_available_cpp <- function() {
-    .Call(`_fastEmbedR_native_cuda_knn_available_cpp`)
-}
-
-native_cuda_memory_info_cpp <- function() {
-    .Call(`_fastEmbedR_native_cuda_memory_info_cpp`)
-}
-
-native_cuda_knn_cpp <- function(data, k, method = "auto", metric = "euclidean", target_recall = 0.99, keep_gpu = TRUE, retain_data = FALSE) {
-    .Call(`_fastEmbedR_native_cuda_knn_cpp`, data, k, method, metric, target_recall, keep_gpu, retain_data)
-}
-
-native_cuda_knn_to_host_cpp <- function(knn) {
-    .Call(`_fastEmbedR_native_cuda_knn_to_host_cpp`, knn)
-}
-
 knn_tsne_opentsne_cuda_multigpu_cpp <- function(indices, distances, y_init, n_components, perplexity, early_iter, normal_iter, early_exag, exag, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, n_threads, devices) {
     .Call(`_fastEmbedR_knn_tsne_opentsne_cuda_multigpu_cpp`, indices, distances, y_init, n_components, perplexity, early_iter, normal_iter, early_exag, exag, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, n_threads, devices)
 }

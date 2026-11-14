@@ -427,24 +427,21 @@ test_that("CPU matrix input uses faissR Flat and HNSW search", {
     expect_true(exact$exact_recall_by_construction)
 })
 
-test_that("CUDA KNN bridge consumes native GPU-resident output", {
+test_that("CUDA KNN bridge consumes faissR GPU-resident output", {
     set.seed(47)
     x <- matrix(rnorm(40L), 10L, 4L)
     captured <- new.env(parent = emptyenv())
-    native_mock <- function(data, k, method, metric, target_recall, keep_gpu,
-                            retain_data) {
+    faissr_mock <- function(data, k, metric, target_recall, retain_data) {
         captured$called <- TRUE
         captured$k <- k
-        captured$method <- method
         captured$metric <- metric
         captured$target_recall <- target_recall
-        captured$keep_gpu <- keep_gpu
         captured$retain_data <- retain_data
         structure(
             list(
                 handle = "mock",
-                backend_used = "native_cuda_cuvs_exact",
-                gpu_provider = "fastEmbedR_native_cuvs",
+                backend_used = "faiss_gpu_resident_flat",
+                gpu_provider = "faissR",
                 metric = metric,
                 n_query = nrow(data),
                 k = k,
@@ -453,12 +450,11 @@ test_that("CUDA KNN bridge consumes native GPU-resident output", {
                 distance_type = "float32",
                 layout = "column_major_query_by_k"
             ),
-            class = "fastEmbedR_gpu_knn"
+            class = "faissR_gpu_knn"
         )
     }
     with_mocked_bindings(
-        native_cuda_knn_available_cpp = function() TRUE,
-        native_cuda_knn_cpp = native_mock,
+        run_faissr_cuda_resident_exact = faissr_mock,
         {
             out <- fastEmbedR:::fastembedr_nn_without_self(
                 x,
@@ -475,12 +471,10 @@ test_that("CUDA KNN bridge consumes native GPU-resident output", {
     )
 
     expect_true(captured$called)
-    expect_true(captured$keep_gpu)
     expect_false(captured$retain_data)
-    expect_equal(captured$method, "auto")
     expect_equal(captured$target_recall, 0.99)
-    expect_s3_class(out, "fastEmbedR_gpu_knn")
-    expect_equal(out$backend_used, "native_cuda_cuvs_exact")
+    expect_s3_class(out, "faissR_gpu_knn")
+    expect_equal(out$backend_used, "faiss_gpu_resident_flat")
     expect_equal(out$metric, "correlation")
 })
 
@@ -500,7 +494,7 @@ test_that("external GPU KNN objects require explicit user materialization", {
 
     expect_error(
         fastEmbedR:::coerce_knn_input(gpu_knn),
-        "does not call another package"
+        "require explicit materialization"
     )
 })
 
