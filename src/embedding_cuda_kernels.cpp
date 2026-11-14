@@ -7991,24 +7991,22 @@ extern "C" int fastembedr_massive_tsne_multigpu_knn_upload(
   shard.first = first;
   shard.k = k;
   shard.offset = offset;
-  const std::size_t source_index_pitch =
-    static_cast<std::size_t>(ctx->n) * sizeof(int);
-  const std::size_t target_index_pitch =
-    static_cast<std::size_t>(rows) * sizeof(int);
-  const std::size_t source_distance_pitch =
-    static_cast<std::size_t>(ctx->n) * distance_bytes;
-  const std::size_t target_distance_pitch =
-    static_cast<std::size_t>(rows) * distance_bytes;
-  const auto* distance_source = static_cast<const char*>(distances) +
-    static_cast<std::size_t>(first) * distance_bytes;
-  if (check_cuda(cudaMemcpy2DAsync(shard.indices,
-        target_index_pitch, indices + first, source_index_pitch,
-        target_index_pitch, k, cudaMemcpyHostToDevice, worker->stream),
-        "cudaMemcpy2DAsync(t-SNE KNN indices)")) return 1;
-  if (check_cuda(cudaMemcpy2DAsync(shard.distances,
-        target_distance_pitch, distance_source, source_distance_pitch,
-        target_distance_pitch, k, cudaMemcpyHostToDevice, worker->stream),
-        "cudaMemcpy2DAsync(t-SNE KNN distances)")) return 1;
+  for (int col = 0; col < k; ++col) {
+    const auto source = static_cast<std::size_t>(col) * ctx->n + first;
+    const auto target = static_cast<std::size_t>(col) * rows;
+    if (check_cuda(cudaMemcpyAsync(shard.indices + target,
+          indices + source, static_cast<std::size_t>(rows) *
+            sizeof(int), cudaMemcpyHostToDevice, worker->stream),
+          "cudaMemcpyAsync(t-SNE KNN indices)")) return 1;
+    auto* destination = static_cast<char*>(shard.distances) +
+      target * distance_bytes;
+    const auto* origin = static_cast<const char*>(distances) +
+      source * distance_bytes;
+    if (check_cuda(cudaMemcpyAsync(destination, origin,
+          static_cast<std::size_t>(rows) * distance_bytes,
+          cudaMemcpyHostToDevice, worker->stream),
+          "cudaMemcpyAsync(t-SNE KNN distances)")) return 1;
+  }
   if (check_cuda(cudaMemsetAsync(shard.invalid, 0, sizeof(int),
         worker->stream), "cudaMemsetAsync(t-SNE KNN validation)")) return 1;
   const int blocks = (rows - 1) / 256 + 1;
