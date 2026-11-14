@@ -95,7 +95,8 @@ test_that("single-GPU IVF graph exposes per-shard settings", {
             list(source = "test"),
         {
             graph <- fastEmbedR:::massive_sharded_result(
-                list(nrow = 4L), paths, setup, "cuda", list(),
+                list(nrow = 4L, format = "memory"), paths, setup,
+                "cuda", list(),
                 1, proc.time()[[3L]], 0L, FALSE, FALSE,
                 list(), list(setting))
             expect_identical(graph$ivf_settings, list(setting))

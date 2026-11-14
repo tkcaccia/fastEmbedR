@@ -33,7 +33,7 @@ test_that("landmark clustering rejects invalid reference and device routes", {
         "nrow\\(reference\\) - 1")
     if (!fastEmbedR:::graph_clustering_cuda_available_cpp()) {
         expect_error(cluster_landmarks(x, 1:10, k = 5L,
-            backend = "cuda"), "CUDA")
+            backend = "cuda"), "GPU backend|CUDA")
     }
     if (!fastEmbedR:::graph_clustering_metal_available_cpp()) {
         expect_error(cluster_landmarks(x, 1:10, k = 5L,
