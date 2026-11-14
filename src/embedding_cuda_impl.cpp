@@ -30,6 +30,8 @@ bool fastembedr_cuda_available();
 const char* fastembedr_cuda_embedding_last_error();
 const char* fastembedr_cuda_workspace_allocator();
 int fastembedr_cuda_last_tsne_graph_capture();
+int fastembedr_cuda_last_tsne_stage_times(
+    double* affinity, double* optimization, double* total);
 int fastembedr_cuda_last_umap_graph_capture();
 int fastembedr_cuda_opentsne_fft_grid_size(int n);
 int fastembedr_cuda_embed(const int* neighbors,
@@ -2264,6 +2266,13 @@ List knn_tsne_opentsne_cuda_impl(IntegerMatrix indices,
     if (status != 0) {
       Rcpp::stop("CUDA openTSNE FFT-grid failed: %s", cuda_embedding_error_message());
     }
+    double affinity_sec = NA_REAL;
+    double optimization_sec = NA_REAL;
+    double native_sec = NA_REAL;
+    if (n_components == 2 && fastembedr_cuda_last_tsne_stage_times(
+          &affinity_sec, &optimization_sec, &native_sec) != 0) {
+      Rcpp::stop("CUDA t-SNE stage timings are unavailable.");
+    }
 
     NumericMatrix result(n, n_components);
     for (int i = 0; i < n; ++i) {
@@ -2291,6 +2300,9 @@ List knn_tsne_opentsne_cuda_impl(IntegerMatrix indices,
       Rcpp::Named("probabilities") = "symmetric_sparse_knn_cuda",
       Rcpp::Named("n_negatives") = NA_INTEGER,
       Rcpp::Named("n_threads") = NA_INTEGER,
+      Rcpp::Named("affinity_elapsed_sec") = affinity_sec,
+      Rcpp::Named("optimization_elapsed_sec") = optimization_sec,
+      Rcpp::Named("native_total_elapsed_sec") = native_sec,
       Rcpp::Named("learning_rate_early") = learning_rate_auto ?
         static_cast<double>(n) / static_cast<double>(early_exaggeration) :
         static_cast<double>(learning_rate),
@@ -2411,6 +2423,13 @@ List knn_tsne_opentsne_cuda_float_impl(IntegerMatrix indices,
   if (status != 0) {
     Rcpp::stop("CUDA openTSNE FFT-grid failed: %s", cuda_embedding_error_message());
   }
+  double affinity_sec = NA_REAL;
+  double optimization_sec = NA_REAL;
+  double native_sec = NA_REAL;
+  if (n_components == 2 && fastembedr_cuda_last_tsne_stage_times(
+        &affinity_sec, &optimization_sec, &native_sec) != 0) {
+    Rcpp::stop("CUDA t-SNE stage timings are unavailable.");
+  }
 
   NumericMatrix result(n, n_components);
   for (int i = 0; i < n; ++i) {
@@ -2439,6 +2458,9 @@ List knn_tsne_opentsne_cuda_float_impl(IntegerMatrix indices,
     Rcpp::Named("precision") = "float32",
     Rcpp::Named("n_negatives") = NA_INTEGER,
     Rcpp::Named("n_threads") = NA_INTEGER,
+    Rcpp::Named("affinity_elapsed_sec") = affinity_sec,
+    Rcpp::Named("optimization_elapsed_sec") = optimization_sec,
+    Rcpp::Named("native_total_elapsed_sec") = native_sec,
     Rcpp::Named("learning_rate_early") = learning_rate_auto ?
       static_cast<double>(n) / static_cast<double>(early_exaggeration) :
       static_cast<double>(learning_rate),

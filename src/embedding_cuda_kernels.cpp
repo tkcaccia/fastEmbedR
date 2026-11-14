@@ -90,6 +90,12 @@ struct KnnPrepParams {
 thread_local std::string embedding_last_error;
 thread_local bool last_tsne_cuda_graph_capture = false;
 thread_local bool last_umap_cuda_graph_capture = false;
+thread_local double last_tsne_affinity_seconds =
+  std::numeric_limits<double>::quiet_NaN();
+thread_local double last_tsne_optimization_seconds =
+  std::numeric_limits<double>::quiet_NaN();
+thread_local double last_tsne_total_seconds =
+  std::numeric_limits<double>::quiet_NaN();
 
 void set_embedding_error(const std::string& message) {
   embedding_last_error = message;
@@ -4455,6 +4461,16 @@ extern "C" int fastembedr_cuda_last_tsne_graph_capture() {
   return last_tsne_cuda_graph_capture ? 1 : 0;
 }
 
+extern "C" int fastembedr_cuda_last_tsne_stage_times(
+    double* affinity, double* optimization, double* total) {
+  if (affinity == nullptr || optimization == nullptr || total == nullptr ||
+      !std::isfinite(last_tsne_total_seconds)) return 1;
+  *affinity = last_tsne_affinity_seconds;
+  *optimization = last_tsne_optimization_seconds;
+  *total = last_tsne_total_seconds;
+  return 0;
+}
+
 extern "C" int fastembedr_cuda_last_umap_graph_capture() {
   return last_umap_cuda_graph_capture ? 1 : 0;
 }
@@ -8300,6 +8316,13 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
                                                        cudaMemcpyKind input_copy_kind) {
   embedding_last_error.clear();
   last_tsne_cuda_graph_capture = false;
+  last_tsne_affinity_seconds =
+    std::numeric_limits<double>::quiet_NaN();
+  last_tsne_optimization_seconds =
+    std::numeric_limits<double>::quiet_NaN();
+  last_tsne_total_seconds =
+    std::numeric_limits<double>::quiet_NaN();
+  const auto tsne_started = std::chrono::steady_clock::now();
   if (indices == nullptr || distances == nullptr || out == nullptr ||
       (has_init && init == nullptr)) {
     set_embedding_error("null CUDA openTSNE input pointer");
@@ -8555,6 +8578,7 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
     cleanup();
     return 1;
   }
+  const auto affinity_finished = std::chrono::steady_clock::now();
 
   const int total_iter = early_exaggeration_iter + n_iter;
   const TsneFft2dIteration repulsion = {
@@ -8730,6 +8754,13 @@ int fastembedr_cuda_opentsne_fft_from_knn_impl(const int* indices,
     return 1;
   }
   cleanup();
+  const auto tsne_finished = std::chrono::steady_clock::now();
+  last_tsne_affinity_seconds =
+    std::chrono::duration<double>(affinity_finished - tsne_started).count();
+  last_tsne_optimization_seconds =
+    std::chrono::duration<double>(tsne_finished - affinity_finished).count();
+  last_tsne_total_seconds =
+    last_tsne_affinity_seconds + last_tsne_optimization_seconds;
   return 0;
 }
 
