@@ -63,6 +63,52 @@ test_that("faissR retains non-Euclidean exact CUDA KNN data", {
     }
 })
 
+test_that("faissR keeps non-Euclidean IVF neighbors on CUDA", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    skip_if_not(isTRUE(faissR::cuda_available()))
+    skip_if_not(faissR::faiss_gpu_available())
+    set.seed(2026)
+    data <- matrix(rnorm(500L * 8L), ncol = 8L)
+    for (metric in c("cosine", "correlation")) {
+        found <- fastEmbedR:::faissr_gpu_metric_ivf_knn_cpp(
+            data, 5L, metric, 0L, 16L, 16L)
+        observed <- faissR::gpu_knn_to_host(found)
+        expected <- faissR::nn(data, k = 5L, backend = "cpu",
+            method = "flat", metric = metric, exclude_self = TRUE)
+        recall <- mean(vapply(seq_len(nrow(data)), function(i) {
+            sum(observed$indices[i, ] %in% expected$indices[i, ]) / 5
+        }, numeric(1L)))
+        expect_s3_class(found, "faissR_gpu_knn")
+        expect_identical(found$result_residency, "cuda")
+        expect_identical(found$metric, metric)
+        expect_false(isTRUE(found$cpu_fallback))
+        expect_gte(recall, 0.99)
+        expect_equal(observed$distances, expected$distances,
+            tolerance = 1e-4)
+    }
+})
+
+test_that("resident metric IVF audits recall before retention", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    skip_if_not(isTRUE(faissR::cuda_available()))
+    skip_if_not(faissR::faiss_gpu_available())
+    set.seed(2027)
+    data <- matrix(rnorm(5000L * 8L), ncol = 8L)
+    for (metric in c("cosine", "correlation")) {
+        found <- fastEmbedR:::fastembedr_nn_without_self(
+            data, 5L, backend = "cuda", method = "ivf",
+            metric = metric, keep_gpu = TRUE, retain_data = TRUE,
+            target_recall = 0.99)
+        expect_s3_class(found, "faissR_gpu_knn")
+        expect_identical(found$metric, metric)
+        expect_identical(found$data_residency, "cuda_device")
+        expect_true(found$target_met)
+        expect_gte(found$pilot_recall, 0.99)
+        expect_identical(found$pilot_reference_backend,
+            paste0("faiss_flat_", metric))
+    }
+})
+
 test_that("single-device IVF returns distances for its selected IDs", {
     skip_if_not_installed("float")
     skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
@@ -420,7 +466,7 @@ test_that("resident faissR IVF is checked against exact pilot rows", {
     )
     expect_error(
         fastEmbedR:::fastembedr_audit_resident_ivf(
-            data, weak, 5L, 0.99
+            data, weak, 5L, "euclidean", 0.99
         ),
         "below target|invalid pilot IDs"
     )

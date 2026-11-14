@@ -1297,6 +1297,22 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// faissr_gpu_metric_ivf_knn_cpp
+SEXP faissr_gpu_metric_ivf_knn_cpp(SEXP data, int k, std::string metric, Rcpp::IntegerVector devices, int nlist, int nprobe);
+RcppExport SEXP _fastEmbedR_faissr_gpu_metric_ivf_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP metricSEXP, SEXP devicesSEXP, SEXP nlistSEXP, SEXP nprobeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< std::string >::type metric(metricSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type devices(devicesSEXP);
+    Rcpp::traits::input_parameter< int >::type nlist(nlistSEXP);
+    Rcpp::traits::input_parameter< int >::type nprobe(nprobeSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_gpu_metric_ivf_knn_cpp(data, k, metric, devices, nlist, nprobe));
+    return rcpp_result_gen;
+END_RCPP
+}
 // faissr_gpu_knn_sample_cpp
 SEXP faissr_gpu_knn_sample_cpp(SEXP result, Rcpp::IntegerVector rows);
 RcppExport SEXP _fastEmbedR_faissr_gpu_knn_sample_cpp(SEXP resultSEXP, SEXP rowsSEXP) {
@@ -3539,6 +3555,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_project_embedding_affine_parallel_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_parallel_cpp, 9},
     {"_fastEmbedR_faissr_hnsw_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_search_cpp, 8},
     {"_fastEmbedR_faissr_gpu_multi_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_multi_knn_cpp, 8},
+    {"_fastEmbedR_faissr_gpu_metric_ivf_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_metric_ivf_knn_cpp, 6},
     {"_fastEmbedR_faissr_gpu_knn_sample_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_knn_sample_cpp, 2},
     {"_fastEmbedR_faissr_gpu_knn_retain_data_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_knn_retain_data_cpp, 2},
     {"_fastEmbedR_faissr_cuda_resident_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_cuda_resident_knn_cpp, 5},

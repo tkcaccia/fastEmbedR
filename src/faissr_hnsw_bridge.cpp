@@ -32,6 +32,22 @@ SEXP faissr_gpu_multi_knn_cpp(SEXP data, int k,
 }
 
 // [[Rcpp::export]]
+SEXP faissr_gpu_metric_ivf_knn_cpp(SEXP data, int k,
+                                   std::string metric,
+                                   Rcpp::IntegerVector devices,
+                                   int nlist, int nprobe) {
+  Rcpp::Function load_namespace =
+      Rcpp::Environment::base_env()["loadNamespace"];
+  load_namespace("faissR");
+  if (faissR_c_api_version() != 1) {
+    Rcpp::stop("Unsupported faissR C API version");
+  }
+  return faissR_get_gpu_metric_ivf_knn_v1()(
+      data, Rcpp::wrap(k), Rcpp::wrap(metric), devices,
+      Rcpp::wrap(nlist), Rcpp::wrap(nprobe));
+}
+
+// [[Rcpp::export]]
 SEXP faissr_gpu_knn_sample_cpp(SEXP result, Rcpp::IntegerVector rows) {
   Rcpp::Function load_namespace =
       Rcpp::Environment::base_env()["loadNamespace"];
