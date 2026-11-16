@@ -1598,6 +1598,25 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// faissr_hnsw_file_index_build_cpp
+Rcpp::List faissr_hnsw_file_index_build_cpp(SEXP source, int n, int p, int k, int n_threads, int m, int ef_construction, double target_recall, int chunk_rows);
+RcppExport SEXP _fastEmbedR_faissr_hnsw_file_index_build_cpp(SEXP sourceSEXP, SEXP nSEXP, SEXP pSEXP, SEXP kSEXP, SEXP n_threadsSEXP, SEXP mSEXP, SEXP ef_constructionSEXP, SEXP target_recallSEXP, SEXP chunk_rowsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type source(sourceSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< int >::type p(pSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    Rcpp::traits::input_parameter< int >::type m(mSEXP);
+    Rcpp::traits::input_parameter< int >::type ef_construction(ef_constructionSEXP);
+    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
+    Rcpp::traits::input_parameter< int >::type chunk_rows(chunk_rowsSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_hnsw_file_index_build_cpp(source, n, p, k, n_threads, m, ef_construction, target_recall, chunk_rows));
+    return rcpp_result_gen;
+END_RCPP
+}
 // faissr_hnsw_index_search_cpp
 Rcpp::List faissr_hnsw_index_search_cpp(SEXP index, SEXP query, int k, int ef_search, int n_threads);
 RcppExport SEXP _fastEmbedR_faissr_hnsw_index_search_cpp(SEXP indexSEXP, SEXP querySEXP, SEXP kSEXP, SEXP ef_searchSEXP, SEXP n_threadsSEXP) {
@@ -3555,6 +3574,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_faissr_metal_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_knn_cpp, 5},
     {"_fastEmbedR_faissr_metal_query_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_query_knn_cpp, 6},
     {"_fastEmbedR_faissr_hnsw_index_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_build_cpp, 8},
+    {"_fastEmbedR_faissr_hnsw_file_index_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_file_index_build_cpp, 9},
     {"_fastEmbedR_faissr_hnsw_index_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_search_cpp, 5},
     {"_fastEmbedR_faissr_hnsw_index_save_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_save_cpp, 2},
     {"_fastEmbedR_faissr_hnsw_index_load_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_load_cpp, 2},

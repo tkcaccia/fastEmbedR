@@ -73,7 +73,7 @@ test_that("file-backed CPU HNSW passes requested recall to faissR", {
 })
 
 test_that("HNSW build timing includes reference staging", {
-    source <- list(nrow = 4L, ncol = 2L)
+    source <- list(nrow = 4L, ncol = 2L, format = "memory")
     data <- float::fl(matrix(seq_len(8L), ncol = 2L))
     result <- with_mocked_bindings(
         fastEmbedR:::massive_faiss_hnsw_reference(source, 2L, 1L),

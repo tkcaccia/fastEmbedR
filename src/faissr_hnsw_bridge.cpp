@@ -513,6 +513,54 @@ Rcpp::List faissr_hnsw_index_build_cpp(SEXP data, int n, int p,
 }
 
 // [[Rcpp::export]]
+Rcpp::List faissr_hnsw_file_index_build_cpp(SEXP source, int n, int p,
+    int k, int n_threads, int m = 0, int ef_construction = 0,
+    double target_recall = 0.99, int chunk_rows = 100000) {
+  Rcpp::Function load_namespace =
+      Rcpp::Environment::base_env()["loadNamespace"];
+  load_namespace("faissR");
+  if (faissR_c_api_version() != 1) {
+    Rcpp::stop("Unsupported faissR C API version");
+  }
+  Rcpp::List tuning = faissR_get_hnsw_tune_v1()(
+      Rcpp::wrap(n), Rcpp::wrap(p), Rcpp::wrap(k),
+      Rcpp::wrap("euclidean"), Rcpp::wrap(target_recall));
+  if ((m == 0) != (ef_construction == 0) || m < 0 ||
+      ef_construction < 0 ||
+      (m > 0 && (m < 2 || ef_construction < m))) {
+    Rcpp::stop("Invalid explicit HNSW build settings");
+  }
+  if (m == 0) {
+    m = Rcpp::as<int>(tuning["m"]);
+    ef_construction = Rcpp::as<int>(tuning["ef_construction"]);
+  } else {
+    tuning["rule"] = "explicit";
+  }
+  const int ef_search = Rcpp::as<int>(tuning["ef_search"]);
+  SEXP pointer = faissR_get_hnsw_file_index_build_v1()(
+      source, Rcpp::wrap(m), Rcpp::wrap(ef_construction),
+      Rcpp::wrap(n_threads), Rcpp::wrap(chunk_rows));
+  Rcpp::RObject fitted(pointer);
+  if (Rcpp::as<std::string>(fitted.attr("backend_used")) !=
+      "faiss_cpu_hnsw_file_index") {
+    Rcpp::stop("faissR changed the file-backed HNSW backend");
+  }
+  return Rcpp::List::create(
+      Rcpp::Named("pointer") = pointer,
+      Rcpp::Named("method") = "faissr_hnsw_persistent",
+      Rcpp::Named("M") = fitted.attr("m"),
+      Rcpp::Named("efConstruction") =
+          fitted.attr("ef_construction"),
+      Rcpp::Named("efSearch") = ef_search,
+      Rcpp::Named("tuning_rule") = tuning["rule"],
+      Rcpp::Named("target_recall") = target_recall,
+      Rcpp::Named("tuning_benchmark_source") =
+          tuning["tuning_benchmark_source"],
+      Rcpp::Named("backend_used") =
+          fitted.attr("backend_used"));
+}
+
+// [[Rcpp::export]]
 Rcpp::List faissr_hnsw_index_search_cpp(SEXP index, SEXP query,
                                          int k, int ef_search,
                                          int n_threads) {

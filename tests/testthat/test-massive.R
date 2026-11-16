@@ -2974,7 +2974,7 @@ test_that("persistent HNSW agrees across bounded query batches", {
         index$pointer, float::fl(query), 7L,
         index$efSearch, 2L)
     expect_true(graph$index_reused)
-    expect_identical(graph$reference_storage, "R_float32")
+    expect_identical(graph$reference_storage, "file_backed_float32")
     expect_identical(graph$query_storage, "R_float32")
     expect_identical(graph$hnsw_settings$tuning_rule,
         index$tuning_rule)
@@ -2988,7 +2988,7 @@ test_that("persistent HNSW agrees across bounded query batches", {
         tolerance = 1e-5)
 })
 
-test_that("file-backed HNSW uses faissR float32 storage", {
+test_that("file-backed HNSW keeps reference outside R memory", {
     set.seed(210)
     reference <- matrix(rnorm(180L * 6L), ncol = 6L)
     query <- matrix(rnorm(24L * 6L), ncol = 6L)
@@ -3005,7 +3005,7 @@ test_that("file-backed HNSW uses faissR float32 storage", {
         5L, native$index$efSearch, 1L)
     expected <- search(memory$index$pointer, float::fl(query),
         5L, memory$index$efSearch, 1L)
-    expect_identical(native$reference_storage, "R_float32")
+    expect_identical(native$reference_storage, "file_backed_float32")
     expect_identical(memory$reference_storage, "R_float32")
     expect_equal(observed$indices, expected$indices)
     expect_equal(observed$distances, expected$distances,

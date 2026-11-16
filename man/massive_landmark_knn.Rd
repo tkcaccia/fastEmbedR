@@ -100,7 +100,9 @@ and \code{pilot_tied_rows} expose boundary-tie effects. Stricter probing
 can increase query time substantially.
 CPU uses exact search by default below 5,000 landmarks.
 Output files contain row-major, one-based \code{uint32} landmark indices and
-float32 distances. HNSW's 0.99 recall is a target, not a measured result.
+float32 distances. File-backed CPU HNSW streams reference chunks through
+faissR into a resident index; the index itself is not disk resident.
+HNSW's 0.99 recall is a target, not a measured result.
 Checkpointed HNSW uses one index-build thread for reproducible resume;
 \code{n.cores} still controls query search. The effective build thread count
 is recorded in \code{hnsw_settings}.

@@ -196,20 +196,30 @@ massive_faiss_hnsw_reference <- function(reference, k, n.cores,
     if (!requireNamespace("float", quietly = TRUE)) stop(
         "Persistent FAISS HNSW requires `float`.", call. = FALSE)
     started <- proc.time()[[3L]]
-    data <- massive_read_rows_cpp(reference, 1L,
-        as.integer(reference$nrow),
-        4 * reference$nrow * reference$ncol, TRUE)
-    index <- faissr_hnsw_index_build_cpp(data,
-        as.integer(reference$nrow), as.integer(reference$ncol),
-        k, n.cores, hnsw_build$m %||% 0L,
-        hnsw_build$ef_construction %||% 0L, target_recall)
+    file_input <- reference$format != "memory"
+    if (file_input) {
+        index <- faissr_hnsw_file_index_build_cpp(reference,
+            as.integer(reference$nrow), as.integer(reference$ncol),
+            k, n.cores, hnsw_build$m %||% 0L,
+            hnsw_build$ef_construction %||% 0L, target_recall,
+            as.integer(min(reference$nrow, 100000L)))
+    } else {
+        data <- massive_read_rows_cpp(reference, 1L,
+            as.integer(reference$nrow),
+            4 * reference$nrow * reference$ncol, TRUE)
+        index <- faissr_hnsw_index_build_cpp(data,
+            as.integer(reference$nrow), as.integer(reference$ncol),
+            k, n.cores, hnsw_build$m %||% 0L,
+            hnsw_build$ef_construction %||% 0L, target_recall)
+    }
     if (ef_search > 0L) {
         index$efSearch <- ef_search
         index$tuning_rule <- "explicit_ef_search"
     }
     list(index = index, build_seconds = unname(
         proc.time()[[3L]] - started),
-        reference_storage = "R_float32", build_threads = n.cores)
+        reference_storage = if (file_input) "file_backed_float32" else
+            "R_float32", build_threads = n.cores)
 }
 
 massive_knn_query <- function(state, query, k, method,
@@ -682,7 +692,9 @@ massive_knn_query_storage <- function(x, setup, state) {
 #' can increase query time substantially.
 #' CPU uses exact search by default below 5,000 landmarks.
 #' Output files contain row-major, one-based `uint32` landmark indices and
-#' float32 distances. HNSW's 0.99 recall is a target, not a measured result.
+#' float32 distances. File-backed CPU HNSW streams reference chunks through
+#' faissR into a resident index; the index itself is not disk resident.
+#' HNSW's 0.99 recall is a target, not a measured result.
 #' Checkpointed HNSW uses one index-build thread for reproducible resume;
 #' `n.cores` still controls query search. The effective build thread count
 #' is recorded in `hnsw_settings`.
