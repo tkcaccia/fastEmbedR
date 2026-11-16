@@ -413,7 +413,10 @@ run_knn_input_tsne <- function(data, nn, settings, extra) {
         k = prepared$knn$n_neighbors + 1L,
         n_components = settings$n_components, seed = as.integer(settings$seed),
         nn_backend = backend, keep_knn = settings$keep_knn
-    ), cfg, list(preprocess = "none_precomputed_knn"))
+    ), cfg, list(
+        preprocess = "none_precomputed_knn",
+        knn_input_provenance = fastembedr_knn_provenance(data)
+    ))
     kept <- if (settings$keep_knn) {
         prepared$knn[c("indices", "distances")]
     } else {
@@ -623,7 +626,10 @@ assemble_matrix_tsne <- function(
     ), cfg, prepared$preprocess, list(
         init = init_state$info$method,
         init_backend = init_state$info$backend
-    ))
+    ), if (identical(knn_state$engine, "supplied")) {
+        list(knn_input_provenance =
+            fastembedr_knn_provenance(knn_state$input))
+    } else list())
     kept <- if (settings$keep_knn) {
         if (fastembedr_is_gpu_knn(knn_state$input)) {
             knn_state$input

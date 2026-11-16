@@ -156,6 +156,7 @@ resolve_umap_layout_k <- function(data, cfg) {
 umap_knn_input_fit <- function(data, nn, state, seed, verbose,
                                 devices = NULL) {
     if (fastembedr_is_gpu_knn(data)) data <- fastembedr_as_gpu_knn(data)
+    provenance <- fastembedr_knn_provenance(data)
     if (!is.null(nn)) {
         stop("When `data` is a KNN object, do not also pass `nn`.",
             call. = FALSE
@@ -176,7 +177,8 @@ umap_knn_input_fit <- function(data, nn, state, seed, verbose,
         knn_elapsed = 0, embedding_elapsed = timed$time[["elapsed"]]
     )
     new_embedding_result(
-        layout, "umap", metrics, cfg,
+        layout, "umap", metrics,
+        c(cfg, list(knn_input_provenance = provenance)),
         rbind(
             preprocess = timed$time * 0, knn = timed$time * 0,
             embedding = timed$time
@@ -228,6 +230,8 @@ validate_umap_supplied_knn <- function(nn, backend, n, n_neighbors) {
 compute_umap_matrix_knn <- function(x, nn, n_neighbors, metric, state,
                                     devices = NULL) {
     engine <- "supplied"
+    provenance <- if (is.null(nn)) NULL else
+        fastembedr_knn_provenance(nn)
     timed <- system.time({
         result <- if (is.null(nn)) {
             policy <- fastembedr_embedding_nn_policy(
@@ -259,7 +263,8 @@ compute_umap_matrix_knn <- function(x, nn, n_neighbors, metric, state,
             validate_umap_supplied_knn(nn, state$backend, nrow(x), n_neighbors)
         }
     })
-    list(knn = result, engine = engine, time = timed)
+    list(knn = result, engine = engine, time = timed,
+        provenance = provenance)
 }
 
 new_embedding_result <- function(layout, method, metrics, parameters,
@@ -302,7 +307,9 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
         } else state$target_recall,
         nn_backend = knn_state$knn$backend_used %||%
             attr(knn_state$knn, "backend") %||% "supplied"
-    ))
+    ), if (identical(knn_state$engine, "supplied")) {
+        list(knn_input_provenance = knn_state$provenance)
+    } else list())
     new_embedding_result(
         layout, "umap", metrics, params,
         rbind(

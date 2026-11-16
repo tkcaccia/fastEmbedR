@@ -112,6 +112,23 @@ fastembedr_target_recall <- function(value = NULL) {
     allowed[[which.min(abs(value - allowed))]]
 }
 
+fastembedr_knn_provenance <- function(nn) {
+    field <- function(name) {
+        value <- if (is.list(nn)) nn[[name]] else NULL
+        value %||% attr(nn, name)
+    }
+    list(
+        provider = field("knn_provider") %||% field("provider"),
+        backend_used = field("backend_used") %||%
+            field("execution_backend") %||% field("backend"),
+        target_recall = field("target_recall"),
+        measured_recall = field("measured_recall"),
+        recall_status = field("recall_status"),
+        exact_recall_by_construction =
+            isTRUE(field("exact_recall_by_construction"))
+    )
+}
+
 fastembedr_one_call_target_recall <- function(value, massive,
         landmarks, supplied_knn) {
     if (supplied_knn && !is.null(value)) stop(
