@@ -1237,6 +1237,7 @@ validate_faissr_metal_knn <- function(out, target_recall) {
             "no fallback was used.", call. = FALSE)
         out$recall_audited <- TRUE
         out$recall_status <- "runtime_audited_target_met"
+        out$exact_recall_by_construction <- FALSE
     } else {
         if (!isTRUE(out$exact) || !isTRUE(out$target_met)) stop(
             "faissR Metal exact KNN changed method or result status.",
@@ -1244,6 +1245,7 @@ validate_faissr_metal_knn <- function(out, target_recall) {
         out$pilot_recall <- NA_real_
         out$recall_audited <- FALSE
         out$recall_status <- "exact_by_construction"
+        out$exact_recall_by_construction <- TRUE
     }
     out
 }

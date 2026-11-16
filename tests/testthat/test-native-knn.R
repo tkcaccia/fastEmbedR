@@ -397,6 +397,7 @@ test_that("Metal recall tiers distinguish pilots from exact search", {
         expect_identical(found$backend_used,
             "faissr_native_metal_ivf")
         expect_true(found$recall_audited)
+        expect_false(found$exact_recall_by_construction)
         expect_identical(found$recall_status,
             "runtime_audited_target_met")
         expect_gte(found$pilot_recall, tier)
@@ -404,6 +405,7 @@ test_that("Metal recall tiers distinguish pilots from exact search", {
     exact <- precompute_knn(x[1:64, , drop = FALSE], k = 12L,
         backend = "metal", target_recall = 0.90)
     expect_identical(exact$recall_status, "exact_by_construction")
+    expect_true(exact$exact_recall_by_construction)
     expect_false(exact$recall_audited)
     expect_true(is.na(exact$pilot_recall))
 })
