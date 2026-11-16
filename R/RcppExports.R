@@ -389,8 +389,8 @@ faissr_hnsw_index_load_cpp <- function(path, n_threads) {
     .Call(`_fastEmbedR_faissr_hnsw_index_load_cpp`, path, n_threads)
 }
 
-faissr_hnsw_index_calibrate_cpp <- function(index, query, self_ids, k, target_recall, initial_ef, n_threads) {
-    .Call(`_fastEmbedR_faissr_hnsw_index_calibrate_cpp`, index, query, self_ids, k, target_recall, initial_ef, n_threads)
+faissr_hnsw_index_calibrate_cpp <- function(index, query, self_ids, k, target_recall, initial_ef, max_ef, n_threads) {
+    .Call(`_fastEmbedR_faissr_hnsw_index_calibrate_cpp`, index, query, self_ids, k, target_recall, initial_ef, max_ef, n_threads)
 }
 
 faissr_flat_index_build_cpp <- function(data, n_threads) {

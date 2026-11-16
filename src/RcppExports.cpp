@@ -1656,8 +1656,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // faissr_hnsw_index_calibrate_cpp
-Rcpp::List faissr_hnsw_index_calibrate_cpp(SEXP index, SEXP query, Rcpp::IntegerVector self_ids, int k, double target_recall, int initial_ef, int n_threads);
-RcppExport SEXP _fastEmbedR_faissr_hnsw_index_calibrate_cpp(SEXP indexSEXP, SEXP querySEXP, SEXP self_idsSEXP, SEXP kSEXP, SEXP target_recallSEXP, SEXP initial_efSEXP, SEXP n_threadsSEXP) {
+Rcpp::List faissr_hnsw_index_calibrate_cpp(SEXP index, SEXP query, Rcpp::IntegerVector self_ids, int k, double target_recall, int initial_ef, int max_ef, int n_threads);
+RcppExport SEXP _fastEmbedR_faissr_hnsw_index_calibrate_cpp(SEXP indexSEXP, SEXP querySEXP, SEXP self_idsSEXP, SEXP kSEXP, SEXP target_recallSEXP, SEXP initial_efSEXP, SEXP max_efSEXP, SEXP n_threadsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1667,8 +1667,9 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type k(kSEXP);
     Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
     Rcpp::traits::input_parameter< int >::type initial_ef(initial_efSEXP);
+    Rcpp::traits::input_parameter< int >::type max_ef(max_efSEXP);
     Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
-    rcpp_result_gen = Rcpp::wrap(faissr_hnsw_index_calibrate_cpp(index, query, self_ids, k, target_recall, initial_ef, n_threads));
+    rcpp_result_gen = Rcpp::wrap(faissr_hnsw_index_calibrate_cpp(index, query, self_ids, k, target_recall, initial_ef, max_ef, n_threads));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3578,7 +3579,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_faissr_hnsw_index_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_search_cpp, 5},
     {"_fastEmbedR_faissr_hnsw_index_save_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_save_cpp, 2},
     {"_fastEmbedR_faissr_hnsw_index_load_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_load_cpp, 2},
-    {"_fastEmbedR_faissr_hnsw_index_calibrate_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_calibrate_cpp, 7},
+    {"_fastEmbedR_faissr_hnsw_index_calibrate_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_calibrate_cpp, 8},
     {"_fastEmbedR_faissr_flat_index_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_flat_index_build_cpp, 2},
     {"_fastEmbedR_faissr_flat_index_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_flat_index_search_cpp, 4},
     {"_fastEmbedR_knn_connectivity_range_cpp", (DL_FUNC) &_fastEmbedR_knn_connectivity_range_cpp, 3},

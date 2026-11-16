@@ -601,17 +601,17 @@ SEXP faissr_hnsw_index_load_cpp(std::string path, int n_threads) {
 // [[Rcpp::export]]
 Rcpp::List faissr_hnsw_index_calibrate_cpp(SEXP index, SEXP query,
     Rcpp::IntegerVector self_ids, int k, double target_recall,
-    int initial_ef, int n_threads) {
+    int initial_ef, int max_ef, int n_threads) {
   Rcpp::Function load_namespace =
       Rcpp::Environment::base_env()["loadNamespace"];
   load_namespace("faissR");
   if (faissR_c_api_version() != 1) {
     Rcpp::stop("Unsupported faissR C API version");
   }
-  return faissR_get_hnsw_index_calibrate_v1()(
+  return faissR_get_hnsw_index_calibrate_v2()(
       index, query, self_ids, Rcpp::wrap(k),
       Rcpp::wrap(target_recall), Rcpp::wrap(initial_ef),
-      Rcpp::wrap(n_threads));
+      Rcpp::wrap(max_ef), Rcpp::wrap(n_threads));
 }
 
 // [[Rcpp::export]]

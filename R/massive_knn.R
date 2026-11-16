@@ -1896,15 +1896,19 @@ massive_hnsw_calibrate_shard <- function(x, state, setup,
     self_ids <- ifelse(rows >= first & rows < first + count,
         rows - first + 1L, 0L)
     requested <- setup$ef_search %||% 0L
+    max_ef <- if (requested > 0L) requested else
+        as.integer(min(count, max(4096L, setup$k)))
     pilot <- faissr_hnsw_index_calibrate_cpp(
         state$index$pointer, query,
         as.integer(self_ids), setup$k,
         setup$target_recall %||% 0.99,
         if (requested > 0L) requested else setup$k,
+        max_ef,
         setup$build_workers %||% setup$workers)
     if (!identical(pilot$pilot_reference, "full_cpu_flat") ||
         !isTRUE(pilot$target_met) ||
         pilot$pilot_rows != length(rows) ||
+        pilot$max_ef_search != max_ef ||
         pilot$pilot_recall < pilot$pilot_guard_recall ||
         pilot$target_recall != (setup$target_recall %||% 0.99)) stop(
             "faissR HNSW pilot changed its recall reference or target.",
