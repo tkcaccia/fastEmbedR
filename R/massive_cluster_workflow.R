@@ -93,6 +93,14 @@ massive_cluster_reuse <- function(x, nn, landmarks, k,
     massive_embedding_reused_graph(x, nn, count, k, backend)
 }
 
+massive_cluster_recall_tier <- function(value, reused) {
+    if (is.null(reused)) return(fastembedr_target_recall(value))
+    tier <- reused$graph$target_recall
+    if (is.null(tier) || length(tier) != 1L || is.na(tier)) stop(
+        "Reused KNN lacks a recall-tier identity.", call. = FALSE)
+    fastembedr_target_recall(tier)
+}
+
 massive_cluster_output_plan <- function(x, count, k, output,
         resume = FALSE, checkpoint = FALSE, reuse = FALSE) {
     paths <- massive_cluster_paths(output, x$nrow * 8, resume)
@@ -131,7 +139,7 @@ massive_cluster_workflow <- function(x, plan, paths, k, method,
         chunk_rows, memory_limit,
         resolution, n_iterations, n_runs, steps, seed,
         checkpoint, checkpoint_every, resume, reused,
-        parallel.mode = "restarts") {
+        parallel.mode = "restarts", target_recall = 0.99) {
     started <- proc.time()[[3L]]
     estimates <- massive_cluster_workflow_report(x, plan, paths,
         backend, method)
@@ -144,13 +152,14 @@ massive_cluster_workflow <- function(x, plan, paths, k, method,
         workers, plan$devices, landmark_method, knn_method,
         chunk_rows, memory_limit, resolution, n_iterations,
         n_runs, steps, seed, checkpoint_every,
-        parallel.mode)
+        parallel.mode, target_recall)
     workflow <- massive_cluster_workflow_checkpoint(x, plan, paths,
         controls, checkpoint, resume, reused)
     precompute_started <- proc.time()[[3L]]
     prepared <- massive_cluster_precompute(x, plan, paths, k, backend,
         workers, landmark_method, knn_method, chunk_rows,
-        memory_limit, seed, workflow, checkpoint, resume, reused)
+        memory_limit, seed, workflow, checkpoint, resume, reused,
+        target_recall)
     precompute_seconds <- unname(proc.time()[[3L]] - precompute_started)
     low_sidecar <- paste0(paths$prefix, ".checkpoint.rds")
     cluster_started <- proc.time()[[3L]]
@@ -181,6 +190,11 @@ massive_cluster_workflow_result <- function(result, prepared,
     result$knn <- prepared$knn
     result$graph_reused <- !is.null(reused)
     result$reference_graph_parameters <- prepared$graph$parameters
+    result$target_recall <- prepared$knn$target_recall
+    result$reference_knn_recall <-
+        prepared$graph$parameters$measured_recall
+    result$query_knn_recall <- prepared$knn$pilot_recall
+    result$recall_status <- prepared$knn$recall_status
     result$workflow_elapsed_sec <- unname(proc.time()[[3L]] - started)
     result$resources$workflow_disk_estimate_bytes <- paths$disk_bytes
     result$resources$reference_ram_estimate_bytes <-
@@ -194,7 +208,7 @@ massive_cluster_workflow_result <- function(result, prepared,
 massive_cluster_in_memory <- function(x, k, method, backend,
         workers, resolution, n_iterations, n_runs, steps,
         seed, estimate, devices = NULL,
-        parallel.mode = "restarts") {
+        parallel.mode = "restarts", target_recall = NULL) {
     message("EXPERIMENTAL auto clustering selected in-memory graph")
     if (length(devices) >= 1L) {
         original <- massive_cuda_memory_cpp()$device
@@ -204,7 +218,7 @@ massive_cluster_in_memory <- function(x, k, method, backend,
     data <- if (inherits(x, "fastEmbedR_massive_matrix"))
         massive_auto_materialize(x) else x
     graph <- knn_graph(data, k, backend = backend,
-        n.cores = workers)
+        n.cores = workers, target_recall = target_recall)
     result <- graph_cluster(graph, method, backend, resolution,
         n_iterations, n_runs, steps, seed,
         n.cores = massive_cluster_fit_workers(method, backend,
@@ -214,6 +228,9 @@ massive_cluster_in_memory <- function(x, k, method, backend,
     result$massive_auto <- "in_memory"
     result$massive_auto_estimated_ram_bytes <- estimate
     result$mode <- "in_memory"
+    result$target_recall <- graph$parameters$target_recall
+    result$measured_recall <- graph$parameters$measured_recall
+    result$recall_status <- graph$parameters$recall_status
     result$experimental <- TRUE
     result
 }
@@ -385,6 +402,8 @@ massive_cluster_auto_result <- function(result, massive, plan) {
 #' @param checkpoint_every Landmark label batches between checkpoints.
 #' @param initial Optional saved landmark-clustering result used to
 #'   initialize full-graph Louvain or Leiden. Other modes reject it.
+#' @param target_recall Requested KNN tuning tier in data-input modes:
+#'   `0.9`, `0.95`, or `0.99`. Prepared graphs do not compute KNN.
 #' @return An experimental file-backed clustering result, a file-backed
 #'   Louvain or Leiden result in full-graph mode, or an in-memory
 #'   `graph_cluster()` result when auto mode selects the resident route.
@@ -399,7 +418,7 @@ massive_cluster <- function(x, method = c("leiden", "louvain"),
         checkpoint = FALSE, resume = FALSE, checkpoint_every = 100L,
         initial = NULL, nn = NULL,
         parallel.mode = c("restarts", "fit"),
-        gpu_storage = c("resident", "stream")) {
+        gpu_storage = c("resident", "stream"), target_recall = NULL) {
     method <- match.arg(method)
     if (!identical(steps, 4L)) stop(
         "`steps` is no longer supported.", call. = FALSE)
@@ -416,6 +435,9 @@ massive_cluster <- function(x, method = c("leiden", "louvain"),
         "`parallel.mode = \"fit\"` requires CPU Louvain or Leiden ",
         "clustering.", call. = FALSE)
     if (massive == "out_of_core_graph") {
+        if (!is.null(target_recall)) stop(
+            "Prepared graphs cannot be retuned with `target_recall`.",
+            call. = FALSE)
         if (normalize_nn_threads(n.cores) != 1L &&
             parallel.mode != "fit") stop(
             "Full-graph multi-CPU clustering requires ",
@@ -432,14 +454,18 @@ massive_cluster <- function(x, method = c("leiden", "louvain"),
         output, backend, n.cores, devices, landmark_method, knn_method,
         chunk_rows, memory_limit, resolution, n_iterations, n_runs,
         steps, seed, checkpoint, resume, checkpoint_every, initial,
-        nn, parallel.mode)
+        nn, parallel.mode, target_recall)
 }
 
 massive_cluster_landmark_request <- function(x, method, massive,
         landmarks, k, output, backend, n.cores, devices,
         landmark_method, knn_method, chunk_rows, memory_limit,
         resolution, n_iterations, n_runs, steps, seed, checkpoint,
-        resume, checkpoint_every, initial, nn, parallel.mode) {
+        resume, checkpoint_every, initial, nn, parallel.mode,
+        target_recall) {
+    if (!is.null(nn) && !is.null(target_recall)) stop(
+        "Reused KNN cannot be retuned with `target_recall`.",
+        call. = FALSE)
     if (!is.null(initial)) stop("`initial` requires out_of_core_graph.")
     checkpoint_every <- massive_cluster_checkpoint_controls(
         checkpoint, resume, checkpoint_every)
@@ -458,6 +484,7 @@ massive_cluster_landmark_request <- function(x, method, massive,
     graph_cluster_settings(method, backend, resolution, n_iterations,
         n_runs, steps, seed)
     reused <- massive_cluster_reuse(x, nn, landmarks, k, backend, massive)
+    target_recall <- massive_cluster_recall_tier(target_recall, reused)
     if (!is.null(reused)) landmarks <- length(reused$selection$indices)
     plan <- massive_cluster_auto_plan(x, landmarks, k, backend, workers,
         memory_limit, massive, output, devices, method, n_runs,
@@ -466,7 +493,7 @@ massive_cluster_landmark_request <- function(x, method, massive,
         if (checkpoint || resume) stop("In-memory mode cannot checkpoint.")
         return(massive_cluster_in_memory(x, k, method, backend, workers,
             resolution, n_iterations, n_runs, steps, seed, plan$estimate,
-            plan$devices, parallel.mode))
+            plan$devices, parallel.mode, target_recall))
     }
     massive_knn_method(knn_method, backend, plan$count, k)
     paths <- massive_cluster_output_plan(x, plan$count, k, output,
@@ -475,6 +502,6 @@ massive_cluster_landmark_request <- function(x, method, massive,
         backend, workers, landmark_method, knn_method, chunk_rows,
         memory_limit, resolution, n_iterations, n_runs, steps, seed,
         checkpoint, checkpoint_every, resume, reused,
-        parallel.mode)
+        parallel.mode, target_recall)
     massive_cluster_auto_result(result, massive, plan)
 }

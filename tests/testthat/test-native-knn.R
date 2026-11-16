@@ -31,6 +31,22 @@ knn_recall_test <- function(observed, expected) {
     }, numeric(1)))
 }
 
+test_that("faissR persistent CUDA host output excludes self natively", {
+    skip_if_not(fastembedr_cuda_knn_available())
+    set.seed(20261115)
+    x <- matrix(rnorm(128L * 8L), nrow = 128L)
+    index <- faissr_gpu_index_build_cpp(x, 6L, "flat", 0L,
+        1L, 1L, FALSE)
+    found <- faissr_gpu_index_search_cpp(index$pointer, x, 5L,
+        "double_self_exclude")
+    truth <- exact_knn_reference(x, 5L)
+    expect_identical(found$indices, truth$indices)
+    expect_equal(found$distances, truth$distances, tolerance = 1e-5)
+    expect_true(found$exclude_self)
+    expect_identical(found$backend_used, "faiss_gpu_persistent_query")
+    expect_identical(found$devices, 0L)
+})
+
 metric_knn_reference <- function(x, k, metric) {
     if (identical(metric, "correlation")) {
         x <- x - rowMeans(x)
@@ -109,6 +125,7 @@ test_that(paste(
     expect_equal(knn_recall_test(observed, truth), 1)
     expect_identical(observed$backend_requested, "cpu")
     expect_identical(observed$execution_backend, "cpu")
+    expect_identical(observed$knn_provider, "faissR")
     expect_identical(observed$engine, "faissr_cpu_flat")
     expect_identical(observed$result_residency, "host")
     expect_equal(observed$target_recall, 0.99)
@@ -175,6 +192,19 @@ test_that("KNN recall tier accepts an explicit argument and session option", {
         target_recall = NA_real_), "target_recall")
 })
 
+test_that("Euclidean IVF audit counts ties and checks distances", {
+    x <- rbind(c(0, 0), c(2, 0), c(0, 2), c(4, 0))
+    found <- matrix(3L, nrow = 1L)
+    truth <- matrix(c(1L, 2L), nrow = 1L)
+    audited <- fastembedr_euclidean_tie_audit(
+        x, 1L, found, matrix(2, nrow = 1L), truth, 1L)
+    expect_equal(audited$mean, 1)
+    expect_equal(audited$max_relative_distance_error, 0)
+    expect_error(fastembedr_euclidean_tie_audit(
+        x, 1L, found, matrix(5, nrow = 1L), truth, 1L),
+        "distances disagree")
+})
+
 test_that("one-call embedding recall reaches metadata and rejects bypasses", {
     x <- scale(as.matrix(iris[1:40, 1:4]))
     withr::local_options(fastEmbedR.target_recall = 0.90)
@@ -189,12 +219,15 @@ test_that("one-call embedding recall reaches metadata and rejects bypasses", {
         n.cores = 1L)
     expect_equal(option_fit$parameters$target_recall, 0.90)
     nn <- precompute_knn(x, k = 10L, backend = "cpu")
+    supplied <- umap(x, nn = nn, n_neighbors = 10L, n.cores = 1L)
+    expect_true(is.na(supplied$parameters$target_recall))
     expect_error(umap(x, nn = nn, n_neighbors = 10L,
-        target_recall = 0.95), "resident matrix input")
+        target_recall = 0.95), "Precomputed KNN")
     expect_error(tsne(x, nn = nn, perplexity = 5,
-        target_recall = 0.95), "resident matrix input")
-    expect_error(umap(x, landmarks = 0.5,
-        target_recall = 0.95), "resident matrix input")
+        target_recall = 0.95), "Precomputed KNN")
+    landmark <- umap(x, landmarks = 0.5, n_neighbors = 5L,
+        target_recall = 0.95)
+    expect_identical(landmark$parameters$target_recall, 0.95)
     expect_error(tsne(x, perplexity = 5,
         target_recall = 0.97), "target_recall")
 })
@@ -244,6 +277,7 @@ test_that("precompute_knn Metal output is native or fails explicitly", {
         observed <- precompute_knn(x, k = 7L, backend = "metal")
         expect_s3_class(observed, "fastEmbedR_knn")
         expect_identical(observed$execution_backend, "metal")
+        expect_identical(observed$knn_provider, "faissR")
         expect_identical(observed$result_residency, "host")
         expect_match(observed$method, "native_metal_(exact|ivf)")
     }
@@ -272,10 +306,12 @@ test_that("large CPU matrix search uses faissR HNSW without fallback", {
     expect_identical(observed$backend_used, "faiss_hnsw")
     expect_identical(observed$method, "faiss_hnsw")
     expect_false(any(observed$indices == row(observed$indices)))
-    expect_false(observed$recall_audited)
+    expect_true(observed$recall_audited)
+    expect_true(observed$target_met)
+    expect_gte(observed$pilot_recall, observed$pilot_guard_recall)
     expect_identical(
         observed$recall_status,
-        "calibration_informed_not_runtime_audited"
+        "pilot_exact_reference_passed"
     )
     query <- precompute_query_knn(
         x, x[1:4, , drop = FALSE], k = 8L,
@@ -285,6 +321,7 @@ test_that("large CPU matrix search uses faissR HNSW without fallback", {
     expect_identical(query$backend_used, "faiss_hnsw")
     expect_identical(query$method, "faiss_hnsw_query")
     expect_identical(dim(query$indices), c(4L, 8L))
+    expect_true(query$recall_audited)
     cosine <- precompute_knn(
         x, k = 8L, metric = "cosine", backend = "cpu", n.cores = 2L
     )
@@ -348,6 +385,45 @@ test_that("native Metal exact and IVF searches are recall checked", {
     expect_identical(ivf$backend_used, "faissr_native_metal_ivf")
 })
 
+test_that("Metal recall tiers distinguish pilots from exact search", {
+    skip_if_not(fastembedr_metal_knn_available(),
+        "Metal is unavailable")
+    set.seed(164)
+    x <- matrix(rnorm(50001L * 8L), ncol = 8L)
+    for (tier in c(0.90, 0.95, 0.99)) {
+        found <- precompute_knn(x, k = 12L, backend = "metal",
+            target_recall = tier)
+        expect_identical(found$target_recall, tier)
+        expect_identical(found$backend_used,
+            "faissr_native_metal_ivf")
+        expect_true(found$recall_audited)
+        expect_identical(found$recall_status,
+            "runtime_audited_target_met")
+        expect_gte(found$pilot_recall, tier)
+    }
+    exact <- precompute_knn(x[1:64, , drop = FALSE], k = 12L,
+        backend = "metal", target_recall = 0.90)
+    expect_identical(exact$recall_status, "exact_by_construction")
+    expect_false(exact$recall_audited)
+    expect_true(is.na(exact$pilot_recall))
+})
+
+test_that("Metal recall validation rejects misses and changed targets", {
+    out <- list(method = "native_metal_ivf",
+        backend_used = "faissr_native_metal_ivf",
+        accelerator = "metal", target_recall = 0.95,
+        pilot_recall = 0.90, target_met = TRUE)
+    expect_error(fastEmbedR:::validate_faissr_metal_knn(out, 0.95),
+        "did not meet")
+    out$pilot_recall <- 0.97
+    out$target_met <- FALSE
+    expect_error(fastEmbedR:::validate_faissr_metal_knn(out, 0.95),
+        "did not meet")
+    out$target_met <- TRUE
+    expect_error(fastEmbedR:::validate_faissr_metal_knn(out, 0.99),
+        "changed the backend or recall target")
+})
+
 test_that("native Metal exact search supports high-dimensional rows", {
     skip_if_not(
         isTRUE(fastembedr_metal_knn_available()),
@@ -367,6 +443,36 @@ test_that("native Metal exact search supports high-dimensional rows", {
     )
     expect_identical(dim(query_result$indices), c(5L, 6L))
     expect_true(all(is.finite(query_result$distances)))
+})
+
+test_that("Metal query bridge rejects changed method and backend", {
+    valid <- list(
+        indices = matrix(1L, 2L, 1L),
+        distances = matrix(0, 2L, 1L),
+        backend = "metal", accelerator = "metal",
+        backend_used = "faissr_native_metal_exact_query",
+        method = "native_metal_exact_query", index_base = 1L,
+        metric = "euclidean", target_recall = 0.99,
+        n_reference = 3L, n_query = 2L,
+        exclude_self = FALSE, exact = TRUE, target_met = TRUE
+    )
+    check <- fastEmbedR:::fastembedr_check_metal_query_knn
+    expect_invisible(check(valid, 3L, 2L, 1L, "exact",
+        "euclidean", 0.99))
+    changed <- valid
+    changed$backend_used <- "faiss_cpu_flat_query"
+    expect_error(check(changed, 3L, 2L, 1L, "exact",
+        "euclidean", 0.99), "requested Metal")
+    changed <- valid
+    changed$method <- "native_metal_ivf_query"
+    changed$backend_used <- "faissr_native_metal_ivf_query"
+    changed$exact <- FALSE
+    expect_error(check(changed, 3L, 2L, 1L, "exact",
+        "euclidean", 0.99), "requested Metal")
+    changed <- valid
+    changed$target_met <- FALSE
+    expect_error(check(changed, 3L, 2L, 1L, "exact",
+        "euclidean", 0.99), "recall target")
 })
 
 test_that("native Metal top-k supports standard t-SNE affinity width", {
@@ -561,7 +667,10 @@ test_that("CUDA embedding KNN uses the faissR GPU provider", {
         out <- fastEmbedR:::run_faissr_cuda_embedding_knn(
             x, 8L, method, "euclidean", "float", 0.99
         )
-        expect_identical(out$backend_used, "faiss_gpu_single_self")
+        expected_backend <- if (method == "ivf") {
+            "faiss_gpu_persistent_query"
+        } else "faiss_gpu_single_self"
+        expect_identical(out$backend_used, expected_backend)
         expect_identical(out$multi_gpu_mode, "single")
         expect_identical(out$result_residency, "host")
         expect_identical(dim(out$indices), c(200L, 8L))
@@ -569,6 +678,9 @@ test_that("CUDA embedding KNN uses the faissR GPU provider", {
         expect_false(isTRUE(out$cpu_fallback))
         if (method == "exact") {
             expect_equal(knn_recall_test(out, truth), 1)
+        } else {
+            expect_true(out$recall_audited)
+            expect_gte(out$pilot_recall, 0.99)
         }
     }
     expect_error(
@@ -593,9 +705,95 @@ test_that("precompute_knn CUDA output stays resident or fails explicitly", {
         expect_s3_class(observed, "fastEmbedR_gpu_knn")
         expect_s3_class(observed, "fastEmbedR_knn")
         expect_identical(observed$result_residency, "cuda")
+        expect_identical(observed$knn_provider, "faissR")
         expect_identical(observed$device_to_host_result_copies, 0L)
         expect_false(any(c("indices", "distances") %in% names(observed)))
     }
+})
+
+test_that("resident precompute KNN forwards explicit CUDA devices", {
+    x <- matrix(seq_len(20), nrow = 5L)
+    expect_error(precompute_knn(x, 2L, backend = "cpu", devices = 0L),
+        "requires CUDA")
+    with_mocked_bindings(
+        massive_validate_devices = function(devices, backend, nrow) {
+            expect_identical(backend, "cuda")
+            expect_identical(devices, c(0L, 1L))
+            expect_identical(nrow, 5L)
+            devices
+        },
+        run_faissr_cuda_multi_knn = function(data, k, method, metric,
+                output, target_recall, devices) {
+            expect_identical(devices, c(0L, 1L))
+            expect_identical(target_recall, 0.95)
+            list(indices = matrix(2L, 5L, k),
+                distances = matrix(1, 5L, k),
+                backend_used = "faiss_gpu_multi_replicate",
+                devices = devices, gpu_count = 2L,
+                multi_gpu_mode = "replicate", cpu_fallback = FALSE)
+        },
+        {
+            observed <- precompute_knn(x, 2L, backend = "cuda",
+                devices = c(0L, 1L), target_recall = 0.95)
+            expect_s3_class(observed, "fastEmbedR_knn")
+            expect_false(inherits(observed, "fastEmbedR_gpu_knn"))
+            expect_identical(observed$result_residency, "host")
+            expect_identical(observed$knn_provider, "faissR")
+            expect_identical(observed$devices, c(0L, 1L))
+            expect_identical(observed$target_recall, 0.95)
+        }, .package = "fastEmbedR")
+})
+
+test_that("host IVF output gets exact-reference recall and distance audit", {
+    set.seed(213L)
+    x <- matrix(rnorm(40L * 6L), nrow = 40L)
+    found <- faissR::nn(x, k = 5L, exclude_self = TRUE,
+        backend = "cpu", method = "flat", metric = "euclidean")
+    found$result_residency <- "host"
+    audit <- fastEmbedR:::fastembedr_audit_resident_ivf(
+        x, found, 5L, "euclidean", 0.99)
+    expect_equal(audit$mean, 1)
+    expect_equal(audit$tie$mean, 1)
+    expect_lte(audit$tie$max_relative_distance_error, 1e-5)
+})
+
+test_that("host CUDA IVF recall metadata rejects an audited miss", {
+    x <- matrix(1:20, nrow = 5L)
+    local_mocked_bindings(
+        fastembedr_audit_resident_ivf = function(...) list(
+            rows = 1:2, mean = 0.97, minimum = 0.9,
+            reference_backend = "faiss_flat_l2",
+            tie = list(mean = 0.98)),
+        .package = "fastEmbedR")
+    exact <- fastEmbedR:::fastembedr_cuda_multi_recall_result(
+        list(), x, 2L, "flat", "euclidean", 0.95)
+    expect_identical(exact$recall_status, "exact_by_construction")
+    expect_false(exact$recall_audited)
+    expect_true(exact$target_met)
+    passing <- fastEmbedR:::fastembedr_cuda_multi_recall_result(
+        list(), x, 2L, "ivf", "euclidean", 0.95)
+    expect_equal(passing$pilot_recall, 0.97)
+    expect_true(passing$recall_audited)
+    expect_identical(passing$recall_status, "runtime_audited_target_met")
+    expect_error(fastEmbedR:::fastembedr_cuda_multi_recall_result(
+        list(), x, 2L, "ivf", "euclidean", 0.99),
+        "below target")
+})
+
+test_that("CUDA query IVF requires a measured passing faissR pilot", {
+    out <- list(accelerator = "cuda", backend_used = "faiss_gpu_ivf_flat",
+        indices = matrix(1L, 2L, 1L), index_base = 1L,
+        cpu_fallback = FALSE, target_met = TRUE,
+        pilot_recall = 0.96)
+    checked <- fastEmbedR:::fastembedr_check_cuda_query_knn(
+        out, 2L, 1L, "ivf", 0.95)
+    expect_identical(attr(checked, "backend"), "cuda")
+    expect_identical(attr(checked, "exclude_self"), FALSE)
+    expect_error(fastEmbedR:::fastembedr_check_cuda_query_knn(
+        out, 2L, 1L, "ivf", 0.99), "missed")
+    out$pilot_recall <- NULL
+    expect_error(fastEmbedR:::fastembedr_check_cuda_query_knn(
+        out, 2L, 1L, "ivf", 0.95), "missed")
 })
 
 test_that("CUDA query KNN has no fastEmbedR native implementation", {

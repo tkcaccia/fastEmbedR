@@ -388,7 +388,8 @@ test_that("3D CUDA one-call fit retains native PCA and FFT", {
     )
     expect_identical(dim(fit$layout), c(120L, 3L))
     expect_true(all(is.finite(fit$layout)))
-    expect_match(fit$parameters$nn_backend, "^native_cuda_")
+    expect_identical(fit$parameters$nn_backend,
+        "faiss_gpu_bfknn_l2")
     expect_match(fit$parameters$init_backend, "^cuda_")
     expect_identical(fit$parameters$repulsion, "fft_grid_3d_cuda_cufft")
 })

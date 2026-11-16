@@ -205,7 +205,7 @@ uses \code{options(storage = ...)}. Explicit \code{"resident"} on a
 
 \item{target_recall}{Requested KNN tuning tier: \code{0.9}, \code{0.95}, or \code{0.99}.
 \code{NULL} uses \code{options(fastEmbedR.target_recall = ...)}, then \code{0.99}.
-Non-default tiers currently require resident matrix input without
+Non-default tiers require resident or full file-backed input without
 landmarks or supplied KNN. An exact KNN route remains exact.}
 }
 \value{

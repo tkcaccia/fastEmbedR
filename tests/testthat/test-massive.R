@@ -374,6 +374,8 @@ test_that("auto RAM probe respects host and container reports", {
     available <- fastEmbedR:::massive_linux_available_ram(
         meminfo, v2, v1)
     expect_equal(available, 805306368)
+    expect_warning(fastEmbedR:::massive_linux_cgroup_v2_available(
+        v2, file.path(directory, "missing-cgroup")), NA)
     expect_equal(fastEmbedR:::massive_auto_memory_limit(
         "8GB", available), 0.8 * available)
     writeLines("max", file.path(v2, "memory.max"))
@@ -2076,7 +2078,7 @@ test_that("fresh multi-GPU KNN shards reject fallback and wrong method", {
         paths <- fastEmbedR:::massive_knn_paths(
             file.path(directory, name), 9 * 2 * 8)
         setup <- list(paths = paths, reference = landmarks,
-            k = 2L, method = "exact",
+            k = 2L, method = "exact", target_recall = 0.99,
             resources = list(output_bytes = 9 * 2 * 8))
         list(paths = paths, result = fastEmbedR:::
             massive_knn_devices_execute(source, setup, c(0L, 1L),
@@ -2166,7 +2168,7 @@ test_that("multi-GPU KNN resumes verified shards and interrupted merges", {
     controls <- list(x = source, reference = landmarks, k = 3L,
         method = "exact", chunk_rows = 4L)
     invalid <- list(paths = paths, reference = landmarks,
-        k = 3L, method = "exact",
+        k = 3L, method = "exact", target_recall = 0.99,
         resources = list(output_bytes = 19 * 3 * 8))
     expect_error(fastEmbedR:::massive_knn_devices_execute(
         source, invalid, c(0L, 1L), controls, TRUE, FALSE),
@@ -2214,7 +2216,7 @@ test_that("multi-GPU KNN resumes verified shards and interrupted merges", {
     expect_silent(fastEmbedR:::massive_knn_paths(prefix,
         19 * 3 * 8, TRUE, TRUE))
     merged_setup <- list(paths = paths, reference = landmarks,
-        k = 3L, method = "exact",
+        k = 3L, method = "exact", target_recall = 0.99,
         resources = list(output_bytes = 19 * 3 * 8))
     merged_sidecar <- fastEmbedR:::massive_knn_devices_checkpoint(
         source, merged_setup, tasks, c(0L, 1L), controls, FALSE)
@@ -2267,6 +2269,7 @@ test_that("multi-GPU KNN resumes verified shards and interrupted merges", {
 })
 
 test_that("CUDA KNN coordinator resumes a verified device shard", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
     skip_if_not(fastEmbedR:::fastembedr_cuda_knn_available())
     set.seed(752)
     query <- matrix(rnorm(19L * 4L), ncol = 4L)
@@ -2307,6 +2310,7 @@ test_that("CUDA KNN coordinator resumes a verified device shard", {
 })
 
 test_that("multi-GPU KNN uses both requested devices without fallback", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
     skip_if_not(fastEmbedR:::fastembedr_cuda_knn_available())
     skip_if_not(fastEmbedR:::massive_cuda_device_count_cpp() >= 2L)
     set.seed(742)
@@ -2354,6 +2358,7 @@ test_that("multi-GPU KNN uses both requested devices without fallback", {
 
 test_that("sharded CUDA landmark KNN keeps one shard on device", {
     skip_if_not(faissR::faiss_gpu_available())
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
     set.seed(748)
     reference <- matrix(rnorm(23L * 5L), ncol = 5L)
     query <- matrix(rnorm(11L * 5L), ncol = 5L)
@@ -2391,6 +2396,7 @@ test_that("sharded CUDA landmark KNN keeps one shard on device", {
 
 test_that("sharded CUDA landmark KNN accepts 256 neighbors", {
     skip_if_not(faissR::faiss_gpu_available())
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
     set.seed(749)
     reference <- matrix(rnorm(260L * 3L), ncol = 3L)
     query <- matrix(rnorm(2L * 3L), ncol = 3L)
@@ -2416,6 +2422,7 @@ test_that("sharded CUDA landmark KNN accepts 256 neighbors", {
 
 test_that("sharded CUDA landmark KNN resumes committed query rows", {
     skip_if_not(faissR::faiss_gpu_available())
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
     set.seed(750)
     reference <- matrix(rnorm(23L * 5L), ncol = 5L)
     query <- matrix(rnorm(11L * 5L), ncol = 5L)
@@ -2643,7 +2650,8 @@ test_that("streamed exact landmark KNN retains every query row", {
         landmarks, sample_rows = 68L), "matching file-backed")
     if (!fastEmbedR:::fastembedr_cuda_knn_available()) {
         expect_error(massive_landmark_knn(source, landmarks, 5L,
-            tempfile(), backend = "cuda"), "no CPU fallback")
+            tempfile(), backend = "cuda"),
+            "no CPU fallback|unavailable in this build")
     }
 })
 
@@ -2725,7 +2733,7 @@ test_that("exact landmark search can stream a nonresident reference", {
     expect_error(massive_landmark_knn(source, landmarks, 5L,
         file.path(directory, "cuda"), backend = "cuda",
         method = "stream_exact", reference_chunk_rows = 9L),
-        "no CUDA fallback")
+        "no fallback")
 })
 
 test_that("streamed-reference KNN resumes with the same chunk policy", {
@@ -2822,6 +2830,7 @@ test_that("persistent CUDA landmark search preserves exact neighbors", {
 })
 
 test_that("CUDA landmark KNN resumes on CUDA without fallback", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
     skip_if_not(fastEmbedR:::fastembedr_cuda_knn_available())
     set.seed(819)
     source <- massive_matrix(matrix(rnorm(19L * 5L), ncol = 5L))
@@ -2868,7 +2877,8 @@ test_that("CUDA KNN planning caps batches before allocation", {
         resources, reference, 30L, "ivf", info), "free-VRAM")
 })
 
-test_that("persistent CUDA IVF reports calibrated pilot recall", {
+test_that("persistent CUDA IVF discloses preset tuning and audit", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
     skip_if_not(fastEmbedR:::fastembedr_cuda_knn_available())
     set.seed(273)
     reference <- matrix(rnorm(15000L * 16L), ncol = 16L)
@@ -2894,14 +2904,14 @@ test_that("persistent CUDA IVF reports calibrated pilot recall", {
     expect_identical(graph$method, "ivf")
     expect_true(graph$index_reused)
     expect_false(graph$recall_audited)
-    expect_identical(graph$pilot_recall_metric, "distance_at_k")
-    expect_equal(graph$pilot_rows, 64L)
-    expect_gte(graph$pilot_recall, 0.99)
-    expect_gte(graph$pilot_id_recall, 0.98)
+    expect_true(nzchar(graph$ivf_tuning_source))
+    expect_equal(graph$pilot_rows, 0L)
+    expect_true(is.na(graph$pilot_recall))
+    expect_true(is.na(graph$pilot_id_recall))
     expect_lte(graph$nprobe, graph$nlist)
     expect_lte(graph$resources$peak_vram_bytes,
         graph$resources$vram_budget_bytes)
-    expect_gte(recall, 0.98)
+    expect_gte(recall, 0.99)
     expect_true(all(is.finite(observed$distances)))
     audited <- massive_audit_landmark_knn(graph,
         query_source, reference_source, sample_rows = 5L,

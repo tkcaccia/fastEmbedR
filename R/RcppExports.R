@@ -297,6 +297,34 @@ faissr_matrix_knn_batch_cpp <- function(query, reference, row_ids, k, backend, m
     .Call(`_fastEmbedR_faissr_matrix_knn_batch_cpp`, query, reference, row_ids, k, backend, method, reference_chunk, memory_limit, n_threads, exclude_self)
 }
 
+faissr_matrix_knn_batch_devices_cpp <- function(query, reference, row_ids, k, reference_chunk, memory_limit, exclude_self, devices) {
+    .Call(`_fastEmbedR_faissr_matrix_knn_batch_devices_cpp`, query, reference, row_ids, k, reference_chunk, memory_limit, exclude_self, devices)
+}
+
+faissr_posting_search_cpp <- function(query, feature_path, ids_path, offsets_path, centers, first_row, count, k, nprobe, reference_chunk, workers, exclude_self, posting_rows, verbose) {
+    .Call(`_fastEmbedR_faissr_posting_search_cpp`, query, feature_path, ids_path, offsets_path, centers, first_row, count, k, nprobe, reference_chunk, workers, exclude_self, posting_rows, verbose)
+}
+
+massive_merge_knn_shard_cpp <- function(indices_path, distances_path, indices, distances, query_first, shard_first, shard_rows, n_vertices, k, first_shard, n_queries = -1.0, exclude_self = TRUE) {
+    invisible(.Call(`_fastEmbedR_massive_merge_knn_shard_cpp`, indices_path, distances_path, indices, distances, query_first, shard_first, shard_rows, n_vertices, k, first_shard, n_queries, exclude_self))
+}
+
+massive_posting_distant_rows_cpp <- function(spec, centers_r, sample, chunk_rows, workers, candidate_rows = 0L) {
+    .Call(`_fastEmbedR_massive_posting_distant_rows_cpp`, spec, centers_r, sample, chunk_rows, workers, candidate_rows)
+}
+
+massive_coarse_postings_cpp <- function(spec, centers_r, prefix, chunk_rows, workers, resume_state, checkpoint_callback, checkpoint_every) {
+    .Call(`_fastEmbedR_massive_coarse_postings_cpp`, spec, centers_r, prefix, chunk_rows, workers, resume_state, checkpoint_callback, checkpoint_every)
+}
+
+massive_read_knn_rows_cpp <- function(indices_path, distances_path, n_rows, k, n_reference, first_row, count, max_bytes) {
+    .Call(`_fastEmbedR_massive_read_knn_rows_cpp`, indices_path, distances_path, n_rows, k, n_reference, first_row, count, max_bytes)
+}
+
+massive_reorder_posting_graph_cpp <- function(posting_ids_path, grouped_indices_path, grouped_distances_path, output_indices_path, output_distances_path, n_vertices, k, bucket_rows, read_rows, restart_work) {
+    invisible(.Call(`_fastEmbedR_massive_reorder_posting_graph_cpp`, posting_ids_path, grouped_indices_path, grouped_distances_path, output_indices_path, output_distances_path, n_vertices, k, bucket_rows, read_rows, restart_work))
+}
+
 faissr_hnsw_search_cpp <- function(data, query, n, p, k, target_recall, n_threads, distance_storage) {
     .Call(`_fastEmbedR_faissr_hnsw_search_cpp`, data, query, n, p, k, target_recall, n_threads, distance_storage)
 }
@@ -325,8 +353,8 @@ faissr_gpu_index_build_cpp <- function(data, k, method, devices, nlist, nprobe, 
     .Call(`_fastEmbedR_faissr_gpu_index_build_cpp`, data, k, method, devices, nlist, nprobe, shard)
 }
 
-faissr_gpu_index_search_cpp <- function(index, query, k) {
-    .Call(`_fastEmbedR_faissr_gpu_index_search_cpp`, index, query, k)
+faissr_gpu_index_search_cpp <- function(index, query, k, output = "double") {
+    .Call(`_fastEmbedR_faissr_gpu_index_search_cpp`, index, query, k, output)
 }
 
 faissr_gpu_index_set_nprobe_cpp <- function(index, nprobe) {
@@ -347,6 +375,18 @@ faissr_hnsw_index_build_cpp <- function(data, n, p, k, n_threads, m = 0L, ef_con
 
 faissr_hnsw_index_search_cpp <- function(index, query, k, ef_search, n_threads) {
     .Call(`_fastEmbedR_faissr_hnsw_index_search_cpp`, index, query, k, ef_search, n_threads)
+}
+
+faissr_hnsw_index_save_cpp <- function(index, path) {
+    invisible(.Call(`_fastEmbedR_faissr_hnsw_index_save_cpp`, index, path))
+}
+
+faissr_hnsw_index_load_cpp <- function(path, n_threads) {
+    .Call(`_fastEmbedR_faissr_hnsw_index_load_cpp`, path, n_threads)
+}
+
+faissr_hnsw_index_calibrate_cpp <- function(index, query, self_ids, k, target_recall, initial_ef, n_threads) {
+    .Call(`_fastEmbedR_faissr_hnsw_index_calibrate_cpp`, index, query, self_ids, k, target_recall, initial_ef, n_threads)
 }
 
 faissr_flat_index_build_cpp <- function(data, n_threads) {
@@ -489,14 +529,6 @@ fastembedr_graph_cluster_metal_cpp <- function(from, to, weight, n_vertices, met
     .Call(`_fastEmbedR_fastembedr_graph_cluster_metal_cpp`, from, to, weight, n_vertices, method, resolution, n_iterations, n_runs, seed, force_wide)
 }
 
-massive_merge_knn_shard_cpp <- function(indices_path, distances_path, indices, distances, query_first, shard_first, shard_rows, n_vertices, k, first_shard, n_queries = -1.0, exclude_self = TRUE) {
-    invisible(.Call(`_fastEmbedR_massive_merge_knn_shard_cpp`, indices_path, distances_path, indices, distances, query_first, shard_first, shard_rows, n_vertices, k, first_shard, n_queries, exclude_self))
-}
-
-massive_reorder_posting_graph_cpp <- function(posting_ids_path, grouped_indices_path, grouped_distances_path, output_indices_path, output_distances_path, n_vertices, k, bucket_rows, read_rows, restart_work) {
-    invisible(.Call(`_fastEmbedR_massive_reorder_posting_graph_cpp`, posting_ids_path, grouped_indices_path, grouped_distances_path, output_indices_path, output_distances_path, n_vertices, k, bucket_rows, read_rows, restart_work))
-}
-
 pca_cuda_resident_covariance_cpp <- function(input, devices, centered) {
     .Call(`_fastEmbedR_pca_cuda_resident_covariance_cpp`, input, devices, centered)
 }
@@ -579,10 +611,6 @@ resident_float32_project_cpu_cpp <- function(input, loadings, centers, scales, n
 
 massive_read_rows_cpp <- function(spec, first_row, count, max_bytes, float32 = FALSE, row_major = FALSE) {
     .Call(`_fastEmbedR_massive_read_rows_cpp`, spec, first_row, count, max_bytes, float32, row_major)
-}
-
-massive_read_knn_rows_cpp <- function(indices_path, distances_path, n_rows, k, n_reference, first_row, count, max_bytes) {
-    .Call(`_fastEmbedR_massive_read_knn_rows_cpp`, indices_path, distances_path, n_rows, k, n_reference, first_row, count, max_bytes)
 }
 
 massive_validate_graph_cpp <- function(indices_path, distances_path, n_vertices, k, access, kind) {
@@ -723,18 +751,6 @@ massive_pca_project_cuda_cpp <- function(spec, output, loadings, center, scale, 
 
 massive_landmark_sample_cpp <- function(spec, landmarks, seed, chunk_rows, output, method) {
     .Call(`_fastEmbedR_massive_landmark_sample_cpp`, spec, landmarks, seed, chunk_rows, output, method)
-}
-
-massive_posting_distant_rows_cpp <- function(spec, centers_r, sample, chunk_rows, workers, candidate_rows = 0L) {
-    .Call(`_fastEmbedR_massive_posting_distant_rows_cpp`, spec, centers_r, sample, chunk_rows, workers, candidate_rows)
-}
-
-massive_coarse_postings_cpp <- function(spec, centers_r, prefix, chunk_rows, workers, resume_state, checkpoint_callback, checkpoint_every) {
-    .Call(`_fastEmbedR_massive_coarse_postings_cpp`, spec, centers_r, prefix, chunk_rows, workers, resume_state, checkpoint_callback, checkpoint_every)
-}
-
-massive_posting_search_cpp <- function(query_spec, feature_path, ids_path, offsets_path, centers, first_row, count, k, nprobe, reference_chunk, workers, exclude_self, posting_rows, verbose) {
-    .Call(`_fastEmbedR_massive_posting_search_cpp`, query_spec, feature_path, ids_path, offsets_path, centers, first_row, count, k, nprobe, reference_chunk, workers, exclude_self, posting_rows, verbose)
 }
 
 knn_tsne_opentsne_cuda_multigpu_cpp <- function(indices, distances, y_init, n_components, perplexity, early_iter, normal_iter, early_exag, exag, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, n_threads, devices) {

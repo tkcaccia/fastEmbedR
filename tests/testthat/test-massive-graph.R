@@ -255,6 +255,7 @@ test_that("full multi-GPU KNN resumes after candidate completion", {
                 fastEmbedR:::massive_checkpoint_file_identity(paths),
             gpu_devices = c(0L, 1L), gpu_identity = c("GPU-0", "GPU-1"),
             knn_provider = "faissR", query_storage = "R_float32",
+            target_recall = 0.99,
             faissr_identity = fastEmbedR:::massive_faissr_identity(),
             resources = list(output_bytes = 8 * 3 * 8),
             per_device = lapply(tasks, function(task) list(
@@ -769,7 +770,8 @@ test_that("shard balancing cannot exceed a reference-row limit", {
         reference_chunk_rows = 2L, memory_limit = "256MB"),
         "Balanced HNSW shards exceed")
     expect_false(file.exists(paste0(prefix, ".indices.u32")))
-    if (fastEmbedR:::fastembedr_cuda_knn_available()) {
+    if (fastEmbedR:::embedding_cuda_available_cpp() &&
+        fastEmbedR:::fastembedr_cuda_knn_available()) {
         expect_error(fastEmbedR:::massive_cuda_sharded_resources(
             source, 2L, 2L, 2L, "256MB"),
             "Balanced CUDA shards exceed")
@@ -833,6 +835,7 @@ test_that("sharded HNSW resumes a partially written first shard", {
     checkpoint_path <- paste0(output, ".checkpoint.rds")
     on.exit(unlink(c(source_path, paste0(output, suffix),
         paste0(output, suffix, ".part"), checkpoint_path,
+        paste0(checkpoint_path, ".shard-1.faiss"),
         paste0(expected_path, suffix))))
     source <- massive_matrix(source_path, 23L, 4L)
     expected <- massive_full_knn_graph(source, 3L, expected_path,
@@ -845,48 +848,50 @@ test_that("sharded HNSW resumes a partially written first shard", {
         resources$output_bytes)
     parts <- stats::setNames(paste0(unname(paths), ".part"),
         names(paths))
-    setup <- list(k = 3L, workers = 2L, build_workers = 1L,
+    setup <- list(k = 3L, workers = 2L, build_workers = 2L,
         resources = resources,
-        method = "hnsw_sharded", checkpoint_every = 100L)
+        method = "hnsw_sharded", checkpoint_every = 1L)
     saved <- fastEmbedR:::massive_sharded_checkpoint(source,
         setup, paths, "cpu", FALSE)
-    fastEmbedR:::massive_index_shard(source, setup, parts, 0L,
-        fastEmbedR:::massive_checkpoint_source_identity(source),
-        "cpu", saved)
     reference <- fastEmbedR:::massive_matrix_rows(source, 1L, 6L)
-    index <- fastEmbedR:::massive_knn_reference(reference,
-        3L, "faiss_hnsw", 1L, "cpu")
-    query <- fastEmbedR:::massive_read_rows_cpp(source, 1L,
-        4L, 128, TRUE)
-    pilot <- fastEmbedR:::massive_knn_query(index, query,
-        4L, "faiss_hnsw", 2L, "cpu")
+    prepared <- fastEmbedR:::massive_index_shard_state(source,
+        reference, setup, 0L, 1L, 6L, "faiss_hnsw", "cpu", saved)
+    fastEmbedR:::massive_sharded_batch(source, setup, parts,
+        prepared$state, 0L, 1L, 6L, 1L,
+        "faiss_hnsw", "cpu", prepared$saved)
     state <- readRDS(checkpoint_path)
-    state$shard <- 0L
-    state$completed_rows <- 4
-    state$pilot_signature <-
-        fastEmbedR:::massive_knn_probe_signature(pilot)
+    expect_equal(state$completed_rows, 4)
+    expect_true(file.exists(state$active_index$file))
+    hash <- state$active_index$md5
+    state$active_index$md5 <- "invalid"
+    saveRDS(state, checkpoint_path)
+    expect_error(massive_full_knn_graph(source, 3L, output,
+        method = "hnsw_sharded", checkpoint = TRUE, resume = TRUE,
+        n.cores = 2L, chunk_rows = 4L, reference_chunk_rows = 6L,
+        memory_limit = "256MB", checkpoint_every = 1L),
+        "checkpoint")
+    state$active_index$md5 <- hash
     saveRDS(state, checkpoint_path)
     expect_error(massive_full_knn_graph(source, 3L, output,
         method = "hnsw_sharded", checkpoint = TRUE, resume = TRUE,
         n.cores = 2L, chunk_rows = 5L, reference_chunk_rows = 6L,
-        memory_limit = "256MB"), "checkpoint")
+        memory_limit = "256MB", checkpoint_every = 1L), "checkpoint")
+    original <- state$pilot_signature
     state$pilot_signature <- "wrong"
     saveRDS(state, checkpoint_path)
     expect_error(massive_full_knn_graph(source, 3L, output,
         method = "hnsw_sharded", checkpoint = TRUE, resume = TRUE,
         n.cores = 2L, chunk_rows = 4L, reference_chunk_rows = 6L,
-        memory_limit = "256MB"), "pilot")
-    expect_equal(file.info(parts)$size, rep(23L * 3L * 4L, 2L))
-    state$pilot_signature <-
-        fastEmbedR:::massive_knn_probe_signature(pilot)
+        memory_limit = "256MB", checkpoint_every = 1L), "pilot")
+    state$pilot_signature <- original
     saveRDS(state, checkpoint_path)
     observed <- massive_full_knn_graph(source, 3L, output,
         method = "hnsw_sharded", checkpoint = TRUE, resume = TRUE,
         n.cores = 2L, chunk_rows = 4L, reference_chunk_rows = 6L,
-        memory_limit = "256MB")
+        memory_limit = "256MB", checkpoint_every = 1L)
     expect_identical(observed$method, expected$method)
     expect_true(all(vapply(observed$hnsw_settings,
-        function(item) item$build_threads == 1L, TRUE)))
+        function(item) item$build_threads == 2L, TRUE)))
     expect_true(observed$resumed)
     expect_false(file.exists(checkpoint_path))
     expect_equal(massive_read_graph_edges(observed, 1L, 23L),
@@ -903,6 +908,7 @@ test_that("sharded HNSW replays an uncommitted merge idempotently", {
     on.exit(unlink(c(source_path, paste0(output, suffix),
         paste0(output, suffix, ".part"),
         paste0(output, ".checkpoint.rds"),
+        paste0(output, ".checkpoint.rds.shard-2.faiss"),
         paste0(expected_path, suffix))))
     source <- massive_matrix(source_path, 23L, 4L)
     expected <- massive_full_knn_graph(source, 3L, expected_path,
@@ -916,7 +922,7 @@ test_that("sharded HNSW replays an uncommitted merge idempotently", {
         names(paths))
     setup <- list(k = 3L, workers = 1L, build_workers = 1L,
         resources = resources,
-        method = "hnsw_sharded", checkpoint_every = 100L)
+        method = "hnsw_sharded", checkpoint_every = 1L)
     saved <- fastEmbedR:::massive_sharded_checkpoint(source,
         setup, paths, "cpu", FALSE)
     identity <- fastEmbedR:::massive_checkpoint_source_identity(source)
@@ -925,22 +931,16 @@ test_that("sharded HNSW replays an uncommitted merge idempotently", {
     fastEmbedR:::massive_index_shard(source, setup, parts,
         1L, identity, "cpu", first$saved)
     reference <- fastEmbedR:::massive_matrix_rows(source, 7L, 6L)
-    index <- fastEmbedR:::massive_knn_reference(reference,
-        3L, "faiss_hnsw", 1L, "cpu")
-    query <- fastEmbedR:::massive_read_rows_cpp(source, 1L,
-        4L, 128, TRUE)
-    pilot <- fastEmbedR:::massive_knn_query(index, query,
-        4L, "faiss_hnsw", 1L, "cpu")
-    state <- readRDS(paste0(output, ".checkpoint.rds"))
-    state$shard <- 1L
-    state$completed_rows <- 4
-    state$pilot_signature <-
-        fastEmbedR:::massive_knn_probe_signature(pilot)
-    saveRDS(state, paste0(output, ".checkpoint.rds"))
+    saved <- first$saved
+    prepared <- fastEmbedR:::massive_index_shard_state(source,
+        reference, setup, 1L, 7L, 6L, "faiss_hnsw", "cpu", saved)
+    fastEmbedR:::massive_sharded_batch(source, setup, parts,
+        prepared$state, 1L, 7L, 6L, 1L,
+        "faiss_hnsw", "cpu", prepared$saved)
     observed <- massive_full_knn_graph(source, 3L, output,
         method = "hnsw_sharded", checkpoint = TRUE, resume = TRUE,
         chunk_rows = 4L, reference_chunk_rows = 6L,
-        memory_limit = "256MB")
+        memory_limit = "256MB", checkpoint_every = 1L)
     expect_equal(massive_read_graph_edges(observed, 1L, 23L),
         massive_read_graph_edges(expected, 1L, 23L))
 })
@@ -955,6 +955,7 @@ test_that("sharded checkpoint interval replays pending query blocks", {
     on.exit(unlink(c(source_path, paste0(output, suffix),
         paste0(output, suffix, ".part"),
         paste0(output, ".checkpoint.rds"),
+        paste0(output, ".checkpoint.rds.shard-1.faiss"),
         paste0(expected_path, suffix))))
     source <- massive_matrix(source_path, 23L, 4L)
     expected <- massive_full_knn_graph(source, 3L, expected_path,
@@ -972,13 +973,15 @@ test_that("sharded checkpoint interval replays pending query blocks", {
     saved <- fastEmbedR:::massive_sharded_checkpoint(source,
         setup, paths, "cpu", FALSE)
     reference <- fastEmbedR:::massive_matrix_rows(source, 1L, 6L)
-    index <- fastEmbedR:::massive_knn_reference(reference,
-        3L, "faiss_hnsw", 1L, "cpu")
+    prepared <- fastEmbedR:::massive_index_shard_state(source,
+        reference, setup, 0L, 1L, 6L, "faiss_hnsw", "cpu", saved)
     first <- fastEmbedR:::massive_sharded_batch(source, setup,
-        parts, index, 0L, 1L, 6L, 1L, "faiss_hnsw", "cpu", saved)
+        parts, prepared$state, 0L, 1L, 6L, 1L,
+        "faiss_hnsw", "cpu", prepared$saved)
     expect_equal(readRDS(saved$path)$completed_rows, 0)
     fastEmbedR:::massive_sharded_batch(source, setup,
-        parts, index, 0L, 1L, 6L, 5L, "faiss_hnsw", "cpu", first$saved)
+        parts, prepared$state, 0L, 1L, 6L, 5L,
+        "faiss_hnsw", "cpu", first$saved)
     expect_equal(readRDS(saved$path)$completed_rows, 8)
     observed <- massive_full_knn_graph(source, 3L, output,
         method = "hnsw_sharded", chunk_rows = 4L,
@@ -990,8 +993,9 @@ test_that("sharded checkpoint interval replays pending query blocks", {
         massive_read_graph_edges(expected, 1L, 23L))
 })
 
-test_that("sharded CUDA exact KNN matches the streamed CPU graph", {
+test_that("faissR CUDA exact KNN matches the streamed CPU graph", {
     skip_if_not(faissR::faiss_gpu_available())
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
     set.seed(1603)
     x <- matrix(stats::rnorm(41L * 6L), ncol = 6L)
     source_path <- write_massive_matrix_fixture(x)
@@ -1013,8 +1017,8 @@ test_that("sharded CUDA exact KNN matches the streamed CPU graph", {
         backend = "cuda", chunk_rows = 7L,
         reference_chunk_rows = 13L, memory_limit = "512MB")
     expect_identical(gpu$backend, "cuda")
-    expect_identical(gpu$method, "faiss_gpu_flat_sharded")
-    expect_identical(gpu$query_storage, "R_float32")
+    expect_identical(gpu$method, "faiss_gpu_flat_file_batch")
+    expect_identical(gpu$query_storage, "file_backed_float32")
     expect_identical(gpu$knn_provider, "faissR")
     expect_true(gpu$exact)
     expect_gt(gpu$resources$n_shards, 1L)
@@ -1024,26 +1028,26 @@ test_that("sharded CUDA exact KNN matches the streamed CPU graph", {
     expect_identical(observed$to, reference$to)
     expect_equal(observed$distance, reference$distance,
         tolerance = 1e-4)
-    resources <- fastEmbedR:::massive_cuda_sharded_resources(
-        source, 5L, 7L, 13L, "512MB")
-    paths <- fastEmbedR:::massive_knn_paths(resumed_prefix,
-        resources$output_bytes)
-    parts <- stats::setNames(paste0(unname(paths), ".part"),
-        names(paths))
-    setup <- list(k = 5L, workers = 1L, resources = resources,
-        method = "exact", checkpoint_every = 2L,
-        cuda_provider = "faissR")
-    saved <- fastEmbedR:::massive_sharded_checkpoint(source,
-        setup, paths, "cuda", FALSE)
-    fastEmbedR:::massive_index_shard(source, setup, parts, 0L,
-        fastEmbedR:::massive_checkpoint_source_identity(source),
-        "cuda", saved)
+    batch <- fastEmbedR:::faissr_matrix_knn_batch_cpp
+    calls <- 0L
+    expect_error(testthat::with_mocked_bindings(
+        massive_full_knn_graph(source, 5L, resumed_prefix,
+            backend = "cuda", chunk_rows = 7L,
+            reference_chunk_rows = 13L, memory_limit = "512MB",
+            checkpoint = TRUE, checkpoint_every = 1L),
+        faissr_matrix_knn_batch_cpp = function(...) {
+            calls <<- calls + 1L
+            if (calls > 1L) stop("injected interruption")
+            batch(...)
+        }, .package = "fastEmbedR"), "injected interruption")
+    expect_equal(readRDS(paste0(resumed_prefix,
+        ".checkpoint.rds"))$completed_rows, 7)
     resumed <- massive_full_knn_graph(source, 5L, resumed_prefix,
         backend = "cuda", chunk_rows = 7L,
         reference_chunk_rows = 13L, memory_limit = "512MB",
-        checkpoint = TRUE, resume = TRUE, checkpoint_every = 2L)
+        checkpoint = TRUE, resume = TRUE, checkpoint_every = 1L)
     expect_identical(resumed$backend, "cuda")
-    expect_identical(resumed$checkpoint_every, 2L)
+    expect_identical(resumed$checkpoint_every, 1L)
     expect_true(resumed$resumed)
     expect_equal(massive_read_graph_edges(resumed, 1L, nrow(x)),
         observed, tolerance = 1e-4)

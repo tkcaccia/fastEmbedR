@@ -105,7 +105,9 @@ massive_posting_finalize <- function(x, centers, prefix, paths,
         offsets_path = paths[[3L]], counts = built$counts,
         offsets = built$offsets, nlist = nrow(centers),
         nrow = x$nrow, ncol = x$ncol, backend = "cpu",
+        provider = built$provider, backend_used = built$backend_used,
         method = "nearest_center_physical_postings",
+        build_seconds = built$build_seconds,
         centers_hash = massive_checkpoint_signature(centers),
         source_identity = before, resources = plan,
         file_identity = massive_checkpoint_file_identity(paths),
@@ -164,9 +166,11 @@ massive_coarse_postings <- function(x, centers, output,
     if (!resume && disk >
         0.8 * massive_disk_available_cpp(paths[[1L]]))
         stop("Postings exceed the free-disk budget.", call. = FALSE)
+    started <- proc.time()[["elapsed"]]
     built <- massive_coarse_postings_cpp(x, centers, prefix,
         plan$chunk_rows, workers, saved$state, saved$progress,
         saved$every)
+    built$build_seconds <- proc.time()[["elapsed"]] - started
     if (!identical(before, massive_checkpoint_source_identity(x)))
         stop("Posting input changed during construction.",
             call. = FALSE)
@@ -398,7 +402,7 @@ massive_search_postings <- function(query, postings, centers,
     native_query <- query
     if (exclude_self && grouped && !original)
         native_query$query_ids_path <- postings$ids_path
-    result <- massive_posting_search_cpp(native_query, paths[[1L]],
+    result <- faissr_posting_search_cpp(native_query, paths[[1L]],
         paths[[2L]], paths[[3L]], centers, controls$first,
         controls$count, controls$k, controls$probes,
         plan$reference_chunk,
@@ -471,7 +475,7 @@ massive_posting_recall_pilot <- function(x, postings, centers,
     query <- x
     query$selected_rows <- selection$rows
     started <- proc.time()[[3L]]
-    observed <- massive_posting_search_cpp(query, paths[[1L]],
+    observed <- faissr_posting_search_cpp(query, paths[[1L]],
         paths[[2L]], paths[[3L]], centers, 1, count,
         controls$k, controls$probes, plan$reference_chunk,
         workers, TRUE, postings$nrow, FALSE)
@@ -489,7 +493,7 @@ massive_posting_pilot_summary <- function(x, postings, paths,
             "faiss_cpu_stream_exact") ||
         !isTRUE(exact$exact) ||
         !identical(observed$backend_used,
-            "native_cpu_posting_scan")) stop(
+            "faissr_cpu_posting_scan")) stop(
         "Recall pilot backend changed.", call. = FALSE)
     rows <- selection$rows
     recall <- vapply(seq_along(rows), function(i) sum(
@@ -521,7 +525,7 @@ massive_posting_pilot_summary <- function(x, postings, paths,
 massive_posting_graph_batch <- function(query, postings, centers,
         first, count, k, probes, reference_chunk, workers) {
     massive_posting_assert_files(postings)
-    result <- massive_posting_search_cpp(query,
+    result <- faissr_posting_search_cpp(query,
         postings$features$path, postings$ids_path,
         postings$offsets_path, centers, first, count, k,
         probes, reference_chunk, workers, TRUE,
@@ -562,7 +566,7 @@ massive_posting_graph_setup <- function(x, postings, centers,
     setup <- list(output = prefix, paths = paths, k = k,
         workers = workers, resources = resources,
         checkpoint_every = checkpoint_every,
-        method = "coarse_postings", backend_used = "native_cpu_posting_scan",
+        method = "coarse_postings", backend_used = "faissr_cpu_posting_scan",
         exact = controls$probes == postings$nlist,
         query_source = query,
         posting_identity = c(list(files = postings$file_identity,

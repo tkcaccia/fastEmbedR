@@ -70,8 +70,8 @@ bounded attraction-edge buffer per requested device.}
 }
 \value{
 An experimental file-backed \code{fastEmbedR_massive_matrix}.
-CUDA results include host-call stage times. \code{attraction_sync}
-can include previously queued FFT work.
+CUDA results include host-call stage times. In coordinated CUDA fits,
+\code{attraction_sync} includes batch packing, enqueue, and slot waits.
 }
 \description{
 Optimizes a normalized symmetric CSR affinity graph from disk.

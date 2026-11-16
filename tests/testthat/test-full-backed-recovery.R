@@ -1,5 +1,6 @@
 test_that("one-call full UMAP resumes after graph-stage failure", {
     skip_on_os("windows")
+    withr::local_options(fastEmbedR.target_recall = 0.90)
     x <- as.matrix(iris[, 1:4])
     work <- tempfile("full-umap-recovery-")
     dir.create(work)
@@ -14,7 +15,7 @@ test_that("one-call full UMAP resumes after graph-stage failure", {
         backend = "cpu", n.cores = 1L, seed = 11L,
         storage = "file_backed", output = path,
         memory_limit = "512MB", checkpoint = TRUE,
-        resume = resume)
+        resume = resume, target_recall = 0.95)
     expect_error(testthat::with_mocked_bindings(
         run(output),
         massive_umap_fuzzy_graph = function(...) stop(
@@ -23,7 +24,7 @@ test_that("one-call full UMAP resumes after graph-stage failure", {
         "injected graph interruption")
     sidecar <- sub("\\.f32$", ".pipeline.rds", output)
     expect_true(file.exists(sidecar))
-    expect_error(umap(input, n_neighbors = 11L,
+    expect_error(umap(input, n_neighbors = 10L,
         n_components = 2L, backend = "cpu", n.cores = 1L,
         seed = 11L, storage = "file_backed", output = output,
         memory_limit = "512MB", checkpoint = TRUE,
@@ -38,6 +39,8 @@ test_that("one-call full UMAP resumes after graph-stage failure", {
     expect_identical(resumed$pipeline$initialization$method,
         "streamed_graph_spectral")
     expect_identical(resumed$pipeline$stage_backend[["init"]], "cpu")
+    expect_identical(resumed$pipeline$knn_target_recall, 0.95)
+    expect_true(resumed$pipeline$knn_exact)
     expect_equal(massive_read_rows(resumed, 1L, nrow(x)),
         massive_read_rows(reference, 1L, nrow(x)),
         tolerance = 1e-4)
@@ -199,13 +202,14 @@ test_that("one-call full 3D t-SNE resumes after graph failure", {
         endian = "little")
     input <- massive_matrix(input_path, nrow(x), ncol(x))
     output <- file.path(work, "resumed.f32")
-    run <- function(path, resume = FALSE) tsne(input,
+    run <- function(path, resume = FALSE, tier = 0.90) tsne(input,
         perplexity = 5, affinity_k = 10L,
         n_components = 3L, n_iter = 20L,
         early_exaggeration_iter = 5L, backend = "cpu",
         n.cores = 1L, seed = 11L, storage = "file_backed",
         output = path, memory_limit = "2GB",
-        checkpoint = TRUE, resume = resume)
+        checkpoint = TRUE, resume = resume,
+        target_recall = tier)
     expect_error(testthat::with_mocked_bindings(
         run(output),
         massive_tsne_affinities = function(...) stop(
@@ -214,6 +218,8 @@ test_that("one-call full 3D t-SNE resumes after graph failure", {
         "injected affinity interruption")
     sidecar <- sub("\\.f32$", ".pipeline.rds", output)
     expect_true(file.exists(sidecar))
+    expect_error(run(output, resume = TRUE, tier = 0.95),
+        "checkpoint does not match")
     resumed <- run(output, resume = TRUE)
     reference <- run(file.path(work, "reference.f32"))
     expect_false(file.exists(sidecar))
@@ -221,6 +227,8 @@ test_that("one-call full 3D t-SNE resumes after graph failure", {
         ".knn.indices.u32", output)))
     expect_identical(resumed$pipeline$fit_scope,
         "all_rows_optimized")
+    expect_identical(resumed$pipeline$knn_target_recall, 0.90)
+    expect_true(resumed$pipeline$knn_exact)
     expect_equal(massive_read_rows(resumed, 1L, nrow(x)),
         massive_read_rows(reference, 1L, nrow(x)),
         tolerance = 1e-4)

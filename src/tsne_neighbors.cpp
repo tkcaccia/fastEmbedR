@@ -652,6 +652,7 @@ SparseProbabilitiesF build_tsne_probabilities_float(const IntegerMatrix& indices
   return p;
 }
 
+#if defined(FASTEMBEDR_HAS_CUDA) && defined(FASTEMBEDR_HAS_NCCL)
 SparseProbabilitiesF build_tsne_directed_probabilities_float(
     const IntegerMatrix& indices, const std::vector<float>& distances,
     double perplexity, int n_threads) {
@@ -738,6 +739,7 @@ SparseProbabilitiesF build_tsne_directed_probabilities_float(
   });
   return p;
 }
+#endif
 
 template <typename T>
 struct FftPlanT {

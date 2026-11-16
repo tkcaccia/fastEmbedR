@@ -20,6 +20,8 @@
 #' @param n.cores CPU worker limit for selection, fit, and voting.
 #' @param devices Optional coordinated CUDA devices for the graph fit.
 #' @param parallel.mode CPU fit or restart parallelism.
+#' @param target_recall Requested KNN tuning tier for reference and vote
+#'   neighbors: `0.9`, `0.95`, or `0.99`.
 #' @return A `fastEmbedR_landmark_clusters` list with all-row membership,
 #'   confidence, selection, reference fit, stage times, and backend labels.
 #'   Graph assembly and label voting are CPU stages on every backend.
@@ -29,8 +31,9 @@ cluster_landmarks <- function(data, landmarks, method = c("leiden",
         metric = "euclidean", weight = "snn", resolution = 1,
         n_iterations = 10L, n_runs = 1L, seed = 1L,
         n.cores = 1L, devices = NULL,
-        parallel.mode = c("restarts", "fit")) {
+        parallel.mode = c("restarts", "fit"), target_recall = NULL) {
     started <- proc.time()[[3L]]
+    target_recall <- fastembedr_target_recall(target_recall)
     method <- match.arg(method)
     backend <- resolve_embedding_backend(backend)
     x <- coerce_embedding_data(data)$data
@@ -45,43 +48,46 @@ cluster_landmarks <- function(data, landmarks, method = c("leiden",
     selection_time <- proc.time()[[3L]] - started
     reference <- x[selected$indices, , drop = FALSE]
     graph <- knn_graph(reference, k = k, backend = backend,
-        metric = metric, weight = weight, n.cores = n.cores)
+        metric = metric, weight = weight, n.cores = n.cores,
+        target_recall = target_recall)
     graph_time <- proc.time()[[3L]] - started - selection_time
     fit <- graph_cluster(graph, method = method, backend = backend,
         resolution = resolution, n_iterations = n_iterations,
         n_runs = n_runs, seed = seed, n.cores = if (backend == "cpu")
             n.cores else 1L, devices = devices,
         parallel.mode = parallel.mode)
-    if (!identical(fit$backend, backend)) stop(
-        "Landmark graph fit changed backend.", call. = FALSE)
+    if (!identical(fit$backend, backend)) stop("Landmark backend changed.")
     fit_time <- proc.time()[[3L]] - started - selection_time - graph_time
     assigned <- cluster_landmarks_vote(x, selected, reference,
-        fit$membership, vote_k, metric, backend, n.cores)
+        fit$membership, vote_k, metric, backend, n.cores, target_recall)
     times <- c(selection = selection_time, graph = graph_time,
         fit = fit_time, vote = proc.time()[[3L]] - started -
             selection_time - graph_time - fit_time)
     out <- c(assigned, list(selection = selected,
         reference_fit = fit, fit_scope = "landmark_fit_plus_projection",
-        method = method, backend = backend,
-        gpu_devices = fit$gpu_devices,
-        gpu_identity = fit$gpu_identity,
+        method = method, backend = backend, target_recall = target_recall,
+        gpu_devices = fit$gpu_devices, gpu_identity = fit$gpu_identity,
         n_reference = selected$n_landmarks,
         n_query = length(selected$query_indices),
         graph_assembly_backend = "cpu", vote_backend = "cpu",
+        reference_knn_recall = graph$parameters$measured_recall,
+        vote_knn_recall = assigned$query_knn_measured_recall,
         stage_seconds = times))
     class(out) <- c("fastEmbedR_landmark_clusters", "list")
     out
 }
 
 cluster_landmarks_vote <- function(x, selected, reference, labels,
-        vote_k, metric, backend, n.cores) {
+        vote_k, metric, backend, n.cores, target_recall = NULL) {
     labels <- as.integer(labels)
     if (length(labels) != selected$n_landmarks || anyNA(labels) ||
         any(labels < 1L)) stop("Reference clustering labels changed.",
         call. = FALSE)
     query <- x[selected$query_indices, , drop = FALSE]
     knn <- precompute_query_knn(reference, query, k = vote_k,
-        metric = metric, backend = backend, n.cores = n.cores)
+        metric = metric, backend = backend, n.cores = n.cores,
+        target_recall = target_recall)
+    measured <- knn$pilot_recall %||% NA_real_
     source_gpu <- fastembedr_is_gpu_knn(knn)
     if (source_gpu) knn <- fastembedr_gpu_knn_to_host(knn)
     voted <- massive_vote_landmarks_cpp(knn$indices,
@@ -94,6 +100,7 @@ cluster_landmarks_vote <- function(x, selected, reference, labels,
     confidence[selected$indices] <- 1
     confidence[selected$query_indices] <- voted$confidence
     list(membership = membership, confidence = confidence,
+        query_knn_measured_recall = measured,
         query_knn_backend = if (source_gpu) "cuda_to_host" else
             attr(knn, "backend") %||% knn$backend %||% backend)
 }

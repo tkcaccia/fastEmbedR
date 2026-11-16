@@ -65,6 +65,11 @@ test_that("file-backed CPU HNSW passes requested recall to faissR", {
         expected$tuning_benchmark_source)
     expect_true(graph$recall_audited)
     expect_equal(graph$observed_recall, mean(graph$audit_row_recall))
+    pilot <- graph$hnsw_settings[[1L]]$pilot
+    expect_equal(pilot$target_recall, 0.90)
+    expect_gte(pilot$pilot_recall, pilot$pilot_guard_recall)
+    expect_length(intersect(pilot$sample_rows,
+        graph$audit_sample_rows), 0L)
 })
 
 test_that("HNSW build timing includes reference staging", {

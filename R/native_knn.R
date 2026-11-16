@@ -114,13 +114,16 @@ fastembedr_target_recall <- function(value = NULL) {
 
 fastembedr_one_call_target_recall <- function(value, massive,
         landmarks, supplied_knn) {
+    if (supplied_knn && !is.null(value)) stop(
+        "Precomputed KNN cannot be retuned with `target_recall`.",
+        call. = FALSE)
+    if (is.null(value) && (identical(massive,
+            "out_of_core_graph") || supplied_knn)) return(0.99)
     value <- fastembedr_target_recall(value)
-    if (value != 0.99 && (!identical(massive, "off") ||
-        landmark_embedding_requested(landmarks) || supplied_knn)) {
-        stop("Non-default `target_recall` currently requires resident ",
-            "matrix input without landmarks or supplied KNN.",
-            call. = FALSE)
-    }
+    if (value != 0.99 &&
+        !massive %in% c("off", "out_of_core_data", "landmark")) stop(
+        "Non-default `target_recall` requires a data-input mode.",
+        call. = FALSE)
     value
 }
 
@@ -301,12 +304,14 @@ finish_precomputed_knn <- function(out, metadata, policy, elapsed) {
     out$exclude_self <- metadata$exclude_self
     out$backend_requested <- metadata$backend
     out$execution_backend <- metadata$backend
+    out$knn_provider <- "faissR"
     out$engine <- fastembedr_nn_policy_engine(
         policy, keep_gpu, metadata$metric
     )
     out$elapsed_sec <- unname(elapsed[["elapsed"]])
     if (identical(policy$backend, "cpu") &&
-        !identical(policy$method, "exact")) {
+        !identical(policy$method, "exact") &&
+        !isTRUE(out$recall_audited)) {
         out$target_recall <- policy$target_recall
         out$target_met <- NA
         out$recall_audited <- FALSE
@@ -330,7 +335,11 @@ finish_precomputed_knn <- function(out, metadata, policy, elapsed) {
 }
 
 run_precompute_knn <- function(x, k, metric, policy, n_threads,
-                                keep_gpu) {
+                                keep_gpu, devices = NULL) {
+    if (!is.null(devices)) return(run_faissr_cuda_multi_knn(
+        x, k, policy$method, metric,
+        fastembedr_knn_output_type(x, policy$backend),
+        policy$target_recall, devices))
     fastembedr_nn_without_self(
         x,
         k = k,
@@ -367,8 +376,10 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' @param output New file prefix required for a file-backed KNN result.
 #' @param memory_limit Host working-memory budget for file-backed KNN. When
 #'   omitted, `options(memory_limit = ...)` is used, or `"8GB"`.
-#' @param devices Optional CUDA device indices for file-backed KNN. Resident
-#'   `precompute_knn()` does not accept this argument.
+#' @param devices Optional distinct CUDA device indices. For resident input,
+#'   explicit devices use faissR Flat or IVF and return host KNN matrices;
+#'   multiple devices use a replicated index. File-backed input uses
+#'   disjoint query ranges.
 #' @param checkpoint Save completed file-backed KNN query blocks.
 #' @param resume Continue a matching file-backed KNN checkpoint.
 #' @param checkpoint_every Save progress after this many query blocks.
@@ -380,8 +391,10 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' @details
 #' CPU uses faissR Flat exact search below 5,000 observations and
 #' faissR's compiled FAISS HNSW interface for Euclidean distance otherwise.
-#' Cosine and correlation use faissR HNSW. HNSW uses the requested recall
-#' tier; recall is not audited during each call. Metal uses native exact
+#' Euclidean resident HNSW audits a full-reference pilot and increases
+#' search effort when needed; it fails if the pilot misses the target.
+#' Cosine and correlation use faissR HNSW with shape-based tuning and
+#' report recall as unaudited. Metal uses native exact
 #' search below
 #' 4,096 rows and for inputs with at most 50,000 rows, 16,384 columns, and
 #' 125 billion row-pair feature operations; otherwise it uses recall-tuned
@@ -389,7 +402,9 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' observations and IVF-Flat above that threshold. Approximate Metal and CUDA
 #' routes use an internal
 #' recall tier and report whether their pilot audit met it.
-#' File-backed KNN currently requires the default 0.99 tier.
+#' File-backed approximate CPU HNSW and CUDA IVF use the selected recall
+#' tier for tuning; exact routes report exact search by construction.
+#' A requested tier is not a measured recall guarantee.
 #'
 #' A file-backed descriptor uses bounded KNN graph construction and writes
 #' indices and distances under `output`. CPU selects exact search up to 5,000
@@ -400,8 +415,10 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' result is a `fastEmbedR_massive_graph` descriptor; construct UMAP fuzzy
 #' weights or t-SNE affinities from it before full-graph fitting.
 #'
-#' The resident CUDA result remains on the GPU and can be passed directly to
-#' [umap_knn()] or [tsne_knn()] with `backend = "cuda"`. CPU and Metal
+#' A resident CUDA result without explicit `devices` remains on the GPU and
+#' can be passed directly to [umap_knn()] or [tsne_knn()] with
+#' `backend = "cuda"`. An explicit device selection returns host matrices.
+#' CPU and Metal
 #' results contain one-based `indices` and `distances` matrices. Every result
 #' excludes the observation itself. An unavailable requested backend raises an
 #' error; no CPU fallback is reported as GPU work.
@@ -409,7 +426,8 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' @return A resident `fastEmbedR_knn` object, or a file-backed
 #'   `fastEmbedR_massive_graph` descriptor. Resident host results contain
 #'   `indices` and `distances`; resident CUDA results additionally inherit
-#'   from `fastEmbedR_gpu_knn` and own device-resident buffers.
+#'   from `fastEmbedR_gpu_knn` and own device-resident buffers. Resident
+#'   results record `knn_provider = "faissR"` and the selected engine.
 #' @examples
 #' x <- scale(as.matrix(iris[, 1:4]))
 #' knn <- precompute_knn(x, k = 15, backend = "cpu", n.cores = 2)
@@ -436,7 +454,7 @@ precompute_knn <- function(data, k = 30L,
     if (inherits(data, "fastEmbedR_massive_matrix")) stop(
         "A memory-backed massive_matrix() is not a disk-backed source; ",
         "pass its resident matrix to precompute_knn().", call. = FALSE)
-    if (!is.null(output) || !is.null(memory_limit) || !is.null(devices) ||
+    if (!is.null(output) || !is.null(memory_limit) ||
         checkpoint || resume || !identical(checkpoint_every, 100L)) stop(
         "File-backed KNN controls require a disk-backed massive_matrix().",
         call. = FALSE)
@@ -448,14 +466,15 @@ precompute_knn <- function(data, k = 30L,
         backend = backend
     )
     x <- prepared$data
+    devices <- massive_validate_devices(devices, backend, nrow(x))
     n <- nrow(x)
     k <- validate_precompute_k(k, n - 1L, "nrow(data) - 1")
     policy <- fastembedr_embedding_nn_policy(
         backend, n = n, p = ncol(x),
         target_recall = target_recall)
-    keep_gpu <- identical(backend, "cuda")
+    keep_gpu <- identical(backend, "cuda") && is.null(devices)
     result <- timed_do_call(run_precompute_knn, list(
-        x, k, metric, policy, n.cores, keep_gpu
+        x, k, metric, policy, n.cores, keep_gpu, devices
     ))
     metadata <- list(
         n = n, k = k, metric = metric, exclude_self = TRUE,
@@ -488,7 +507,8 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
     } else "exact"
     supports_tier <- (backend == "cpu" &&
         method %in% c("exact", "hnsw_sharded")) ||
-        (backend == "metal" && method == "exact")
+        (backend == "metal" && method == "exact") ||
+        (backend == "cuda" && method %in% c("exact", "ivf_sharded"))
     if (target_recall != 0.99 && !supports_tier) stop(
         "This file-backed KNN route does not yet tune recall tiers ",
         "below 0.99.", call. = FALSE)
@@ -655,12 +675,48 @@ run_faissr_cuda_resident_exact <- function(data, k, metric,
     out
 }
 
+fastembedr_euclidean_tie_audit <- function(data, rows, found,
+                                            found_distances, reference,
+                                            k) {
+    if (!identical(dim(found_distances), dim(found)) ||
+        any(!is.finite(found_distances))) stop(
+        "faissR resident IVF returned invalid pilot distances.",
+        call. = FALSE)
+    values <- vapply(seq_along(rows), function(i) {
+        ids <- found[i, ]
+        truth <- reference[i, ]
+        truth <- truth[truth != rows[i]][seq_len(k)]
+        query <- as.vector(as.numeric(data[rows[i], ]))
+        distance <- function(selected) {
+            selected <- matrix(as.vector(as.numeric(
+                data[selected, , drop = FALSE])), nrow = length(selected))
+            rowSums(sweep(selected, 2L, query, "-")^2)
+        }
+        actual <- distance(ids)
+        kth <- max(distance(truth))
+        tolerance <- max(1e-5, 1e-6 * kth)
+        c(tie = sum(actual <= kth + tolerance) / k,
+            error = max(abs(found_distances[i, ] - sqrt(actual)) /
+                pmax(1e-12, sqrt(actual))))
+    }, numeric(2L))
+    if (any(values["error", ] > 1e-3)) stop(
+        "faissR resident IVF pilot distances disagree with input.",
+        call. = FALSE)
+    list(mean = mean(values["tie", ]),
+        minimum = min(values["tie", ]),
+        max_relative_distance_error = max(values["error", ]))
+}
+
 fastembedr_audit_resident_ivf <- function(data, knn, k, metric,
                                             target_recall) {
     rows <- unique(as.integer(round(seq(
         1, nrow(data), length.out = min(256L, nrow(data))
     ))))
-    sampled <- faissr_gpu_knn_sample_cpp(knn, rows)
+    sampled <- if (identical(knn$result_residency, "host")) {
+        list(indices = knn$indices[rows, , drop = FALSE],
+            distances = matrix(as.double(
+                knn$distances[rows, , drop = FALSE]), length(rows), k))
+    } else faissr_gpu_knn_sample_cpp(knn, rows)
     found <- sampled$indices
     if (!identical(dim(found), c(length(rows), as.integer(k))) ||
         anyNA(found) || any(found < 1L | found > nrow(data))) {
@@ -689,10 +745,101 @@ fastembedr_audit_resident_ivf <- function(data, knn, k, metric,
         "faissR resident IVF pilot recall ",
         format(mean_recall, digits = 5L), " is below target ",
         target_recall, ".", call. = FALSE)
+    tie <- if (identical(metric, "euclidean")) {
+        fastembedr_euclidean_tie_audit(data, rows, found,
+            sampled$distances, reference$indices, k)
+    } else NULL
     list(
         rows = rows, mean = mean_recall, minimum = min(row_recall),
-        reference_backend = reference$backend_used
+        reference_backend = reference$backend_used, tie = tie
     )
+}
+
+fastembedr_cuda_ivf_probe_reference <- function(data, rows, k) {
+    reference <- faissR::nn(
+        data, points = data[rows, , drop = FALSE],
+        k = k + 1L, exclude_self = FALSE, backend = "cpu",
+        method = "flat", metric = "euclidean", output = "double"
+    )
+    if (!isTRUE(reference$exact) ||
+        !startsWith(reference$backend_used %||% "", "faiss_flat_")) {
+        stop("faissR did not return an exact CPU pilot reference.",
+            call. = FALSE)
+    }
+    reference
+}
+
+fastembedr_cuda_ivf_probe_score <- function(data, rows, k,
+                                            index, reference) {
+    found <- faissr_gpu_index_search_cpp(index,
+        data[rows, , drop = FALSE], k + 1L)
+    if (!identical(dim(found$indices), c(length(rows), k + 1L)) ||
+        !identical(dim(found$distances), c(length(rows), k + 1L))) {
+        stop("faissR returned an invalid IVF pilot shape.",
+            call. = FALSE)
+    }
+    keep <- lapply(seq_along(rows), function(i) {
+        selected <- which(found$indices[i, ] != rows[i])
+        if (length(selected) < k) stop(
+            "faissR IVF pilot lacks non-self neighbors.", call. = FALSE)
+        selected[seq_len(k)]
+    })
+    ids <- t(vapply(seq_along(rows), function(i)
+        found$indices[i, keep[[i]]], integer(k)))
+    distances <- t(vapply(seq_along(rows), function(i)
+        found$distances[i, keep[[i]]], numeric(k)))
+    recall <- vapply(seq_along(rows), function(i) {
+        if (anyDuplicated(ids[i, ])) return(0)
+        truth <- reference$indices[i, ]
+        truth <- truth[truth != rows[i]][seq_len(k)]
+        sum(ids[i, ] %in% truth) / k
+    }, numeric(1L))
+    tie <- fastembedr_euclidean_tie_audit(data, rows, ids,
+        distances, reference$indices, k)
+    list(mean = mean(recall), minimum = min(recall), tie = tie,
+        rows = rows, reference_backend = reference$backend_used)
+}
+
+fastembedr_cuda_ivf_tune_persistent <- function(data, k, params,
+                                                target_recall) {
+    pilot_started <- proc.time()[["elapsed"]]
+    pilot_guard <- min(1, target_recall + 0.005)
+    rows <- unique(as.integer(round(seq(
+        1, nrow(data), length.out = min(256L, nrow(data))
+    ))))
+    reference <- fastembedr_cuda_ivf_probe_reference(data, rows, k)
+    index <- faissr_gpu_index_build_cpp(data, k + 1L, "ivf", 0L,
+        as.integer(params$nlist), as.integer(params$nprobe), FALSE)
+    nprobe <- as.integer(params$nprobe)
+    trace <- list()
+    repeat {
+        faissr_gpu_index_set_nprobe_cpp(index$pointer, nprobe)
+        pilot <- fastembedr_cuda_ivf_probe_score(data, rows, k,
+            index$pointer, reference)
+        trace[[length(trace) + 1L]] <- c(nprobe = nprobe,
+            measured_recall = pilot$mean)
+        if (pilot$mean >= pilot_guard) break
+        if (nprobe >= params$nlist) stop(
+            "faissR IVF missed recall even at full probe width.",
+            call. = FALSE)
+        nprobe <- as.integer(min(params$nlist,
+            max(nprobe + 1L, ceiling(nprobe * 1.5))))
+    }
+    pilot_seconds <- proc.time()[["elapsed"]] - pilot_started
+    search_seconds <- system.time({
+        out <- faissr_gpu_index_search_cpp(index$pointer, data, k,
+            "gpu_self_exclude")
+    })[["elapsed"]]
+    out$gpu_index_persistent <- FALSE
+    out$index_residency <- "transient_gpu_index_during_call"
+    out$cpu_training_seconds <- index$cpu_training_seconds
+    out$gpu_clone_seconds <- index$gpu_clone_seconds
+    out$gpu_add_seconds <- index$gpu_add_seconds
+    out$pilot_tune_call_seconds <- pilot_seconds
+    out$full_search_call_seconds <- unname(search_seconds)
+    list(out = out, pilot = pilot, nprobe = nprobe,
+        pilot_guard_recall = pilot_guard,
+        trace = do.call(rbind, trace))
 }
 
 run_faissr_cuda_resident_ivf <- function(data, k, metric, target_recall,
@@ -703,12 +850,12 @@ run_faissr_cuda_resident_ivf <- function(data, k, metric, target_recall,
     params <- utils::getFromNamespace("cuda_ivf_params", "faissR")(
         nrow(data), ncol(data), k, metric, target_recall
     )
-    out <- if (identical(metric, "euclidean")) {
-        faissr_gpu_multi_knn_cpp(
-            data, as.integer(k), "ivf", 0L,
-            as.integer(params$nlist), as.integer(params$nprobe),
-            FALSE, "gpu")
-    } else faissr_gpu_metric_ivf_knn_cpp(
+    tuned <- if (identical(metric, "euclidean")) {
+        fastembedr_cuda_ivf_tune_persistent(
+            data, k, params, target_recall)
+    } else NULL
+    out <- if (!is.null(tuned)) tuned$out else
+        faissr_gpu_metric_ivf_knn_cpp(
         data, as.integer(k), metric, 0L,
         as.integer(params$nlist), as.integer(params$nprobe))
     if (!inherits(out, "faissR_gpu_knn") ||
@@ -719,15 +866,23 @@ run_faissr_cuda_resident_ivf <- function(data, k, metric, target_recall,
         isTRUE(out$cpu_fallback)) stop(
         "faissR did not return resident CUDA IVF KNN.",
         call. = FALSE)
-    pilot <- fastembedr_audit_resident_ivf(
-        data, out, k, metric, target_recall)
+    pilot <- if (!is.null(tuned)) tuned$pilot else
+        fastembedr_audit_resident_ivf(data, out, k, metric, target_recall)
     out$nlist <- as.integer(params$nlist)
-    out$nprobe <- as.integer(params$nprobe)
+    out$nprobe <- if (!is.null(tuned)) tuned$nprobe else
+        as.integer(params$nprobe)
+    out$pilot_probe_trace <- if (!is.null(tuned)) tuned$trace else NULL
+    out$pilot_guard_recall <- tuned$pilot_guard_recall %||% NA_real_
     out$target_recall <- target_recall
     out$pilot_recall <- pilot$mean
     out$pilot_min_row_recall <- pilot$minimum
     out$pilot_rows <- pilot$rows
     out$pilot_reference_backend <- pilot$reference_backend
+    out$pilot_distance_tie_recall <- pilot$tie$mean %||% NA_real_
+    out$pilot_min_distance_tie_recall <-
+        pilot$tie$minimum %||% NA_real_
+    out$pilot_max_relative_distance_error <-
+        pilot$tie$max_relative_distance_error %||% NA_real_
     out$recall_audited <- TRUE
     out$recall_status <- "fixed_rows_exact_reference"
     out$target_met <- TRUE
@@ -737,9 +892,14 @@ run_faissr_cuda_resident_ivf <- function(data, k, metric, target_recall,
     out
 }
 
-run_faissr_cuda_embedding_knn <- function(data, k, method, metric,
-                                            output, target_recall,
-                                            devices = NULL) {
+run_faissr_cuda_embedding_knn <- function(data, k, method, metric, output,
+        target_recall, devices = NULL, prefer_resident = FALSE,
+        retain_data = FALSE) {
+    if (isTRUE(prefer_resident) && is.null(devices) &&
+        method %in% c("exact", "flat")) {
+        return(run_faissr_cuda_resident_knn(
+            data, k, method, metric, target_recall, retain_data))
+    }
     if (identical(metric, "euclidean")) {
         return(run_faissr_cuda_multi_knn(
             data, k, method, metric, output, target_recall,
@@ -747,10 +907,8 @@ run_faissr_cuda_embedding_knn <- function(data, k, method, metric,
         ))
     }
     if (!is.null(devices) && !identical(as.integer(devices), 0L)) {
-        stop(
-            "Non-Euclidean faissR CUDA KNN currently uses GPU 0.",
-            call. = FALSE
-        )
+        stop("Non-Euclidean faissR CUDA KNN currently uses GPU 0.",
+            call. = FALSE)
     }
     method <- if (method %in% c("exact", "flat")) "flat" else method
     if (!method %in% c("flat", "ivf")) {
@@ -767,9 +925,8 @@ run_faissr_cuda_embedding_knn <- function(data, k, method, metric,
         target_recall = target_recall, output = output
     )
     expected <- if (identical(method, "flat")) {
-        paste0("faiss_gpu_flat_", if (identical(metric, "euclidean")) {
-            "l2"
-        } else metric)
+        paste0("faiss_gpu_flat_",
+            if (identical(metric, "euclidean")) "l2" else metric)
     } else "faiss_gpu_ivf_flat"
     actual <- out$backend_used %||% attr(out, "backend_used")
     if (!identical(actual, expected) ||
@@ -782,6 +939,84 @@ run_faissr_cuda_embedding_knn <- function(data, k, method, metric,
     }
     out$result_residency <- "host"
     out$exclude_self <- TRUE
+    out
+}
+
+fastembedr_cuda_multi_recall_result <- function(out, data, k, method,
+                                                metric, target_recall) {
+    pilot <- if (identical(method, "ivf")) {
+        fastembedr_audit_resident_ivf(data, out, k, metric, target_recall)
+    } else NULL
+    if (!is.null(pilot) && (length(pilot$mean) != 1L ||
+        !is.finite(pilot$mean) || pilot$mean < target_recall)) stop(
+        "faissR CUDA IVF pilot recall is below target.", call. = FALSE)
+    out$target_recall <- target_recall
+    out$pilot_recall <- pilot$mean %||% NA_real_
+    out$pilot_min_row_recall <- pilot$minimum %||% NA_real_
+    out$pilot_rows <- pilot$rows %||% integer()
+    out$pilot_reference_backend <- pilot$reference_backend %||%
+        NA_character_
+    out$pilot_distance_tie_recall <- pilot$tie$mean %||% NA_real_
+    out$target_met <- if (identical(method, "flat")) TRUE else
+        pilot$mean >= target_recall
+    out$recall_audited <- !is.null(pilot)
+    out$recall_status <- if (identical(method, "flat")) {
+        "exact_by_construction"
+    } else "runtime_audited_target_met"
+    out
+}
+
+fastembedr_cuda_host_pilot <- function(index, data, rows, k,
+        reference) {
+    found <- faissr_gpu_index_search_cpp(index,
+        data[rows, , drop = FALSE], k + 1L, "double")
+    if (!identical(dim(found$indices), c(length(rows), k + 1L))) stop(
+        "faissR CUDA IVF pilot returned an invalid shape.", call. = FALSE)
+    recall <- vapply(seq_along(rows), function(i) {
+        ids <- found$indices[i, ]
+        ids <- ids[ids != rows[i]][seq_len(k)]
+        truth <- reference$indices[i, ]
+        truth <- truth[truth != rows[i]][seq_len(k)]
+        if (anyNA(ids) || anyDuplicated(ids)) return(0)
+        mean(ids %in% truth)
+    }, numeric(1L))
+    mean(recall)
+}
+
+fastembedr_cuda_tune_host_index <- function(data, k, params,
+                                            target_recall, devices,
+                                            output) {
+    rows <- unique(as.integer(round(seq(1, nrow(data),
+        length.out = min(256L, nrow(data))))))
+    reference <- fastembedr_cuda_ivf_probe_reference(data, rows, k)
+    index <- faissr_gpu_index_build_cpp(data, k + 1L, "ivf",
+        as.integer(devices), as.integer(params$nlist),
+        as.integer(params$nprobe), FALSE)
+    nprobe <- as.integer(params$nprobe)
+    trace <- list()
+    repeat {
+        faissr_gpu_index_set_nprobe_cpp(index$pointer, nprobe)
+        measured <- fastembedr_cuda_host_pilot(index$pointer, data,
+            rows, k, reference)
+        trace[[length(trace) + 1L]] <- c(nprobe = nprobe,
+            measured_recall = measured)
+        if (measured >= target_recall) break
+        if (nprobe >= params$nlist) stop(
+            "faissR CUDA IVF missed target at full probe width.",
+            call. = FALSE)
+        nprobe <- as.integer(min(params$nlist,
+            max(nprobe + 1L, ceiling(nprobe * 1.5))))
+    }
+    out <- faissr_gpu_index_search_cpp(index$pointer, data, k,
+        paste0(output, "_self_exclude"))
+    out$cpu_training_seconds <- index$cpu_training_seconds
+    out$gpu_clone_seconds <- index$gpu_clone_seconds
+    out$gpu_add_seconds <- index$gpu_add_seconds
+    out$pilot_probe_trace <- do.call(rbind, trace)
+    out$pilot_tuned_nprobe <- nprobe
+    out$index_reused <- FALSE
+    out$gpu_index_persistent <- FALSE
+    out$index_residency <- "transient_gpu_index_during_call"
     out
 }
 
@@ -804,36 +1039,54 @@ run_faissr_cuda_multi_knn <- function(data, k, method, metric,
             nrow(data), ncol(data), k, metric, target_recall
         )
     } else list(nlist = 1L, nprobe = 1L)
-    out <- faissr_gpu_multi_knn_cpp(
-        data, as.integer(k), method, as.integer(devices),
-        as.integer(params$nlist), as.integer(params$nprobe),
-        FALSE, output
-    )
+    tuned_host <- identical(method, "ivf") && output %in%
+        c("double", "float")
+    out <- if (tuned_host) fastembedr_cuda_tune_host_index(
+        data, k, params, target_recall, devices, output) else
+        faissr_gpu_multi_knn_cpp(
+            data, as.integer(k), method, as.integer(devices),
+            as.integer(params$nlist), as.integer(params$nprobe),
+            FALSE, output)
     expected_mode <- if (length(devices) == 1L) "single" else "replicate"
     expected_backend <- if (length(devices) == 1L) {
         "faiss_gpu_single_self"
     } else "faiss_gpu_multi_replicate"
+    if (tuned_host) expected_backend <- "faiss_gpu_persistent_query"
     if (!identical(out$accelerator, "cuda") ||
         !identical(out$multi_gpu_mode, expected_mode) ||
         !identical(out$backend_used, expected_backend) ||
         !identical(out$devices, as.integer(devices)) ||
         !identical(dim(out$indices), c(nrow(data), as.integer(k))) ||
-        !identical(out$index_base, 1L) || isTRUE(out$cpu_fallback)) {
+        !identical(out$index_base, 1L) ||
+        (tuned_host && !isTRUE(out$exclude_self)) ||
+        isTRUE(out$cpu_fallback)) {
         stop("faissR did not return the requested multi-GPU KNN.",
             call. = FALSE)
     }
-    out$target_recall <- target_recall
-    out$recall_audited <- FALSE
-    out$recall_status <- if (identical(method, "flat")) {
-        "exact_by_construction"
-    } else "calibration_informed_not_runtime_audited"
-    out
+    fastembedr_cuda_multi_recall_result(out, data, k, method,
+        metric, target_recall)
 }
 
 faissr_hnsw_input <- function(x) {
     if (is_float32_matrix(x)) return(float::dbl(x))
     if (is.integer(x)) return(matrix(as.double(x), nrow(x), ncol(x)))
     x
+}
+
+faissr_hnsw_recall_check <- function(out, metric) {
+    if (!identical(metric, "euclidean")) {
+        out$recall_audited <- FALSE
+        out$target_met <- NA
+        out$recall_status <-
+            "calibration_informed_not_runtime_audited"
+        return(out)
+    }
+    if (!isTRUE(out$recall_audited) || !isTRUE(out$target_met) ||
+        !identical(out$recall_status, "pilot_exact_reference_passed")) {
+        stop("faissR CPU HNSW pilot did not meet the recall target.",
+            call. = FALSE)
+    }
+    out
 }
 
 run_faissr_hnsw <- function(data, query, k, metric, output,
@@ -874,9 +1127,7 @@ run_faissr_hnsw <- function(data, query, k, metric, output,
     out$M <- out$m
     out$efConstruction <- out$ef_construction
     out$efSearch <- out$ef_search
-    out$recall_audited <- FALSE
-    out$target_met <- NA
-    out$recall_status <- "calibration_informed_not_runtime_audited"
+    out <- faissr_hnsw_recall_check(out, metric)
     attr(out, "backend") <- "cpu"
     attr(out, "method") <- out$method
     attr(out, "exclude_self") <- self
@@ -953,15 +1204,29 @@ fastembedr_metal_knn_available <- function() {
             "faissR")())
 }
 
-validate_faissr_metal_knn <- function(out) {
-    failed <- identical(out$method, "native_metal_ivf") &&
-        !isTRUE(out$target_met)
-    if (failed) {
-        stop(
+validate_faissr_metal_knn <- function(out, target_recall) {
+    if (!out$method %in% c("native_metal_exact", "native_metal_ivf") ||
+        !identical(out$backend_used, paste0("faissr_", out$method)) ||
+        !identical(out$accelerator, "metal") ||
+        !identical(out$target_recall, target_recall)) stop(
+        "faissR Metal KNN changed the backend or recall target.",
+        call. = FALSE)
+    if (identical(out$method, "native_metal_ivf")) {
+        measured <- out$pilot_recall
+        if (!is.numeric(measured) || length(measured) != 1L ||
+            !is.finite(measured) || measured < target_recall ||
+            !isTRUE(out$target_met)) stop(
             "Native Metal IVF did not meet the requested recall target; ",
-            "no fallback was used.",
-            call. = FALSE
-        )
+            "no fallback was used.", call. = FALSE)
+        out$recall_audited <- TRUE
+        out$recall_status <- "runtime_audited_target_met"
+    } else {
+        if (!isTRUE(out$exact) || !isTRUE(out$target_met)) stop(
+            "faissR Metal exact KNN changed method or result status.",
+            call. = FALSE)
+        out$pilot_recall <- NA_real_
+        out$recall_audited <- FALSE
+        out$recall_status <- "exact_by_construction"
     }
     out
 }
@@ -990,7 +1255,7 @@ run_faissr_metal_knn <- function(data, k, method, metric, output,
         metric = metric,
         target_recall = target_recall
     )
-    out <- validate_faissr_metal_knn(out)
+    out <- validate_faissr_metal_knn(out, target_recall)
     attr(out, "backend") <- "metal"
     attr(out, "exclude_self") <- TRUE
     fastembedr_convert_knn_distances(out, output)
@@ -1082,14 +1347,9 @@ fastembedr_native_query_knn <- function(data, query, k,
             k = k, method = method, metric = metric,
             target_recall = target_recall
         )
-        if (identical(out$method, "native_metal_ivf_query") &&
-            !isTRUE(out$target_met)) {
-            stop(
-                "Native Metal query IVF missed the requested recall target; ",
-                "no fallback was used.",
-                call. = FALSE
-            )
-        }
+        fastembedr_check_metal_query_knn(
+            out, nrow(data), nrow(query), k, method, metric,
+            target_recall)
         attr(out, "backend") <- "metal"
         attr(out, "exclude_self") <- FALSE
         return(fastembedr_convert_knn_distances(out, output))
@@ -1098,6 +1358,57 @@ fastembedr_native_query_knn <- function(data, query, k,
         data, query, k, method, metric, output,
         target_recall, n_threads
     )
+}
+
+fastembedr_check_metal_query_knn <- function(out, n_reference,
+        n_query, k, requested_method, metric, target_recall) {
+    expected <- paste0("native_metal_",
+        c("exact", "ivf"), "_query")
+    allowed <- if (identical(requested_method, "auto")) expected else
+        paste0("native_metal_", requested_method, "_query")
+    if (!out$method %in% allowed ||
+        !identical(out$backend, "metal") ||
+        !identical(out$accelerator, "metal") ||
+        !identical(out$backend_used,
+            paste0("faissr_", out$method)) ||
+        !identical(out$index_base, 1L) ||
+        !identical(out$metric, metric) ||
+        !identical(out$target_recall, target_recall) ||
+        !identical(out$n_reference, as.integer(n_reference)) ||
+        !identical(out$n_query, as.integer(n_query)) ||
+        !identical(dim(out$indices), c(n_query, as.integer(k))) ||
+        !identical(dim(out$distances), c(n_query, as.integer(k))) ||
+        isTRUE(out$exclude_self) ||
+        !identical(out$exact,
+            identical(out$method, "native_metal_exact_query"))) {
+        stop("faissR did not return the requested Metal query KNN.",
+            call. = FALSE)
+    }
+    if (!isTRUE(out$target_met)) stop(
+        "Native Metal query IVF missed the requested recall target; ",
+        "no fallback was used.", call. = FALSE)
+    invisible(out)
+}
+
+fastembedr_check_cuda_query_knn <- function(out, n_query, k, method,
+                                            target_recall) {
+    if (!identical(out$accelerator, "cuda") ||
+        !startsWith(out$backend_used %||% "", "faiss_gpu") ||
+        !identical(dim(out$indices), c(n_query, as.integer(k))) ||
+        !identical(out$index_base, 1L) || isTRUE(out$cpu_fallback)) {
+        stop("faissR did not return CUDA query KNN.", call. = FALSE)
+    }
+    if (identical(method, "ivf") &&
+        (!isTRUE(out$target_met) ||
+            !is.numeric(out$pilot_recall) ||
+            length(out$pilot_recall) != 1L ||
+            !is.finite(out$pilot_recall) ||
+            out$pilot_recall < target_recall)) stop(
+        "faissR CUDA query IVF missed the requested recall target.",
+        call. = FALSE)
+    attr(out, "backend") <- "cuda"
+    attr(out, "exclude_self") <- FALSE
+    out
 }
 
 run_faissr_cuda_query_knn <- function(data, query, k, method, metric,
@@ -1136,15 +1447,10 @@ run_faissr_cuda_query_knn <- function(data, query, k, method, metric,
         return(out)
     }
     out <- do.call(faissR::nn, c(args, list(
-        backend = "cuda", tuning = "auto", output = output
+        backend = "cuda",
+        tuning = if (identical(method, "ivf")) "pilot" else "auto",
+        output = output
     )))
-    if (!identical(out$accelerator, "cuda") ||
-        !startsWith(out$backend_used %||% "", "faiss_gpu") ||
-        !identical(dim(out$indices), c(nrow(query), as.integer(k))) ||
-        !identical(out$index_base, 1L) || isTRUE(out$cpu_fallback)) {
-        stop("faissR did not return CUDA query KNN.", call. = FALSE)
-    }
-    attr(out, "backend") <- "cuda"
-    attr(out, "exclude_self") <- FALSE
-    out
+    fastembedr_check_cuda_query_knn(
+        out, nrow(query), k, method, target_recall)
 }

@@ -237,7 +237,8 @@ compute_umap_matrix_knn <- function(x, nn, n_neighbors, metric, state,
                 result <- run_faissr_cuda_embedding_knn(
                     x, as.integer(n_neighbors), policy$method, metric,
                     fastembedr_knn_output_type(x, policy$backend),
-                    policy$target_recall, devices
+                    policy$target_recall, devices,
+                    prefer_resident = TRUE
                 )
                 engine <- result$backend_used
                 result
@@ -347,7 +348,7 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #'   `memory_limit` check; the limit does not bound the subsequent fit.
 #' @param target_recall Requested KNN tuning tier: `0.9`, `0.95`, or `0.99`.
 #'   `NULL` uses `options(fastEmbedR.target_recall = ...)`, then `0.99`.
-#'   Non-default tiers currently require resident matrix input without
+#'   Non-default tiers require resident or full file-backed input without
 #'   landmarks or supplied KNN. An exact KNN route remains exact.
 #' @param checkpoint Save file-backed workflow stages and completed batches.
 #'   Resident fits, including wide CSR fits, cannot checkpoint or resume.
@@ -429,7 +430,7 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
         massive, output, chunk_rows, memory_limit, refinement_epochs,
         local_refine, local_neighbors, overlap_rows, devices,
         landmark_method, init, layout_storage, checkpoint,
-        resume, cpu_update, ef_search))
+        resume, cpu_update, ef_search, target_recall))
     validate_resident_umap_output_controls(devices, backend,
         landmarks, output, chunk_rows, storage$control_memory_limit,
         fit_epochs, local_refine, local_neighbors,
@@ -440,7 +441,7 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
             data, landmarks, n_neighbors, n_components, standardize,
             pca_dims, metric, seed, backend, transform_k, n.cores,
             keep_knn, graph_mode, verbose, nn, fit_epochs,
-            devices))
+            devices, target_recall))
     if (!identical(ef_search, 0L)) stop(
         "`ef_search` requires massive landmark UMAP.", call. = FALSE)
     state <- validate_umap_request(backend, graph_mode,
@@ -480,13 +481,14 @@ run_landmark_umap <- function(data, landmarks, n_neighbors, n_components,
                                 standardize, pca_dims, metric, seed, backend,
                                 transform_k, n.cores, keep_knn, graph_mode,
                                 verbose, nn = NULL, refinement_epochs = NULL,
-                                devices = NULL) {
+                                devices = NULL, target_recall = 0.99) {
     if (!is.null(nn) || is_knn_input(data))
         stop("Landmark UMAP requires matrix input without `nn`.",
             call. = FALSE)
     state <- prepare_landmark_umap(
         data, landmarks, n_neighbors, n_components, standardize,
-        pca_dims, metric, seed, backend, n.cores, graph_mode
+        pca_dims, metric, seed, backend, n.cores, graph_mode,
+        target_recall
     )
     if (state$all_landmarks) {
         return(run_full_landmark_umap(
@@ -543,7 +545,7 @@ validate_umap_n_neighbors <- function(n_neighbors, n) {
 prepare_landmark_umap <- function(data, landmarks, n_neighbors,
                                     n_components, standardize, pca_dims,
                                     metric, seed, backend, n.cores,
-                                    graph_mode) {
+                                    graph_mode, target_recall = 0.99) {
     backend <- resolve_embedding_backend(backend)
     graph_mode <- match.arg(graph_mode, c("fuzzy", "binary"))
     n_components <- validate_n_components(n_components)
@@ -582,7 +584,8 @@ prepare_landmark_umap <- function(data, landmarks, n_neighbors,
         p = p, float32 = float32,
         n_neighbors = n_neighbors, n_components = n_components,
         backend = backend, n_threads = n.cores,
-        graph_mode = graph_mode, metric = metric, seed = seed
+        graph_mode = graph_mode, metric = metric, seed = seed,
+        target_recall = target_recall
     )
 }
 
@@ -596,7 +599,7 @@ run_full_landmark_umap <- function(state, seed, keep_knn, verbose,
         seed = seed, backend = state$backend,
         n.cores = state$n_threads, keep_knn = keep_knn,
         graph_mode = state$graph_mode, verbose = verbose,
-        devices = devices
+        devices = devices, target_recall = state$target_recall
     )
     elapsed <- state$preprocess_time[["elapsed"]] +
         fit$metrics$elapsed[[1L]]
@@ -623,7 +626,8 @@ fit_landmark_umap_reference <- function(state, seed, keep_knn, verbose,
         knn <- landmark_reference_knn(
             x_landmarks,
             k = k, backend = state$backend,
-            n_threads = state$n_threads, metric = state$metric
+            n_threads = state$n_threads, metric = state$metric,
+            target_recall = state$target_recall
         )
         fit <- umap(
             x_landmarks,
@@ -688,7 +692,8 @@ project_landmark_umap_rows <- function(state, fit, transform_k, seed,
             state$partition$landmarks, state$partition$query,
             k = transform_k, backend = state$backend,
             seed = seed + 503L, n_threads = state$n_threads,
-            metric = state$metric
+            metric = state$metric,
+            target_recall = state$target_recall
         )
         resident <- identical(state$backend, "cuda") &&
             fastembedr_is_gpu_knn(knn)
@@ -942,12 +947,7 @@ landmark_umap_parameters <- function(state, reference, projection,
                                         refinement, keep_knn) {
     approximation <- attr(projection$knn, "approximation", exact = TRUE)
     strategy <- approximation$strategy %||% if (
-        isTRUE(attr(projection$knn, "exact"))
-    ) {
-        "exact"
-    } else {
-        NA_character_
-    }
+        isTRUE(attr(projection$knn, "exact"))) "exact" else NA_character_
     n_landmarks <- nrow(state$partition$landmarks)
     memory <- landmark_memory_estimate(
         state$n, n_landmarks, state$n_neighbors,
@@ -967,6 +967,9 @@ landmark_umap_parameters <- function(state, reference, projection,
         landmark_fraction = n_landmarks / state$n,
         landmark_selection = state$selection$method,
         graph_mode = state$graph_mode, metric = state$metric,
+        target_recall = state$target_recall,
+        reference_knn_recall = reference$knn$pilot_recall %||% NA_real_,
+        projection_knn_recall = projection$knn$pilot_recall %||% NA_real_,
         checkpoint_scope = "none", resume_supported = FALSE,
         transform_k = projection$transform_k,
         landmark_refinement = if (refinement$epochs > 0L) {

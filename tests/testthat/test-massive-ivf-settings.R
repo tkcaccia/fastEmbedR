@@ -5,7 +5,8 @@ test_that("sharded IVF records effective settings", {
         pilot_rows = 32L, tuning_attempts = 2L,
         pilot_recall = 1, pilot_id_recall = 1,
         pilot_min_row_recall = 1,
-        pilot_recall_metric = "distance_at_k")
+        pilot_recall_metric = "distance_at_k",
+        pilot_target_recall = 0.99)
     setting <- fastEmbedR:::massive_sharded_ivf_setting(
         found, 1L, 101L, 500L)
     expect_identical(setting$shard, 2L)
@@ -15,6 +16,11 @@ test_that("sharded IVF records effective settings", {
     expect_identical(setting$nprobe, 16L)
     expect_identical(setting$tuning_attempts, 2L)
     expect_identical(setting$pilot_min_row_recall, 1)
+    expect_identical(setting$target_recall, 0.99)
+    found$pilot_target_recall <- 0.95
+    expect_identical(fastEmbedR:::massive_sharded_ivf_setting(
+        found, 1L, 101L, 500L, 0.95)$target_recall, 0.95)
+    found$pilot_target_recall <- 0.99
     found$pilot_min_row_recall <- NULL
     expect_error(fastEmbedR:::massive_sharded_ivf_setting(
         found, 1L, 101L, 500L), "effective tuning settings")
@@ -22,6 +28,10 @@ test_that("sharded IVF records effective settings", {
     expect_error(fastEmbedR:::massive_sharded_ivf_setting(
         found, 1L, 101L, 500L), "effective tuning settings")
     found$pilot_min_row_recall <- 1
+    found$pilot_target_recall <- 0.95
+    expect_error(fastEmbedR:::massive_sharded_ivf_setting(
+        found, 1L, 101L, 500L), "effective tuning settings")
+    found$pilot_target_recall <- 0.99
     found$nprobe <- 65L
     expect_error(fastEmbedR:::massive_sharded_ivf_setting(
         found, 1L, 101L, 500L), "effective tuning settings")
@@ -44,6 +54,52 @@ test_that("IVF pilot retries sparse FAISS results but stops other errors", {
         .package = "fastEmbedR")
 })
 
+test_that("IVF pilot distinguishes tied IDs from untied misses", {
+    exact <- list(indices = matrix(1:4, nrow = 1L),
+        distances = matrix(c(0.1, 0.2, 0.2, 0.2), nrow = 1L))
+    found <- list(indices = matrix(c(1L, 2L, 4L), nrow = 1L),
+        distances = matrix(c(0.1, 0.2, 0.2), nrow = 1L))
+    tied <- fastEmbedR:::massive_ivf_pilot_scores(found, exact, 3L)
+    expect_equal(tied$id, 2 / 3)
+    expect_equal(tied$distance, 1)
+    expect_true(tied$tie)
+    expect_equal(tied$effective, 1)
+    exact$distances[1L, ] <- c(0.1, 0.2, 0.3, 0.5)
+    found$distances[1L, ] <- c(0.1, 0.2, 0.5)
+    missed <- fastEmbedR:::massive_ivf_pilot_scores(found, exact, 3L)
+    expect_false(missed$tie)
+    expect_equal(missed$id, 2 / 3)
+    expect_equal(missed$effective, 2 / 3)
+})
+
+test_that("CUDA sharded IVF receives and verifies the selected tier", {
+    for (tier in c(0.9, 0.95, 0.99)) {
+        expect_identical(fastEmbedR:::massive_full_knn_target_recall(
+            tier, "cuda", "ivf_sharded"), tier)
+        found <- list(backend_used = "faiss_gpu_persistent_query",
+            method = "ivf", index_reused = TRUE,
+            pilot_target_recall = tier,
+            pilot_min_row_recall = tier,
+            pilot_id_recall = tier)
+        expect_true(fastEmbedR:::massive_sharded_result_valid(
+            found, "ivf", "cuda", "faissR", tier))
+        found$pilot_min_row_recall <- tier - 0.01
+        expect_false(fastEmbedR:::massive_sharded_result_valid(
+            found, "ivf", "cuda", "faissR", tier))
+    }
+    input <- list(nrow = 100000L, ncol = 10L)
+    with_mocked_bindings(
+        massive_full_knn_graph = function(..., method, target_recall)
+            list(method = method, target_recall = target_recall),
+        {
+            selected <- fastEmbedR:::precompute_knn_backed(input,
+                10L, "euclidean", "cuda", 1L, tempfile(), "8GB",
+                0L, FALSE, FALSE, 100L, 0.95)
+            expect_identical(selected$method, "ivf_sharded")
+            expect_identical(selected$target_recall, 0.95)
+        }, .package = "fastEmbedR")
+})
+
 test_that("sharded IVF rejects changed settings on resume", {
     root <- tempfile("ivf_settings_")
     dir.create(root)
@@ -54,7 +110,8 @@ test_that("sharded IVF rejects changed settings on resume", {
         pilot_rows = 32L, tuning_attempts = 2L,
         pilot_recall = 1, pilot_id_recall = 1,
         pilot_min_row_recall = 1,
-        pilot_recall_metric = "distance_at_k")
+        pilot_recall_metric = "distance_at_k",
+        pilot_target_recall = 0.99)
     setup <- list(k = 2L, workers = 1L,
         resources = list(chunk_rows = 2L),
         checkpoint_every = 1L, cuda_provider = "faissR")
@@ -145,4 +202,32 @@ test_that("single-GPU IVF resumes a completed reference shard", {
     expect_equal(fastEmbedR:::massive_read_graph_edges(
         observed, 1L, 40L),
         fastEmbedR:::massive_read_graph_edges(expected, 1L, 40L))
+})
+
+test_that("single-GPU IVF audits every requested recall tier", {
+    skip_if_not(faissR::faiss_gpu_available())
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    root <- tempfile("ivf_tiers_")
+    dir.create(root)
+    on.exit(unlink(root, recursive = TRUE))
+    input <- file.path(root, "input.f32")
+    set.seed(19L)
+    writeBin(as.vector(t(matrix(rnorm(600L), 100L, 6L))),
+        input, size = 4L)
+    source <- massive_matrix(input, 100L, 6L)
+    for (tier in c(0.9, 0.95, 0.99)) {
+        graph <- massive_full_knn_graph(source, 3L,
+            file.path(root, paste0("tier", tier)),
+            backend = "cuda", method = "ivf_sharded",
+            devices = 0L, target_recall = tier,
+            chunk_rows = 16L, reference_chunk_rows = 40L,
+            memory_limit = "512MB", audit_rows = 12L)
+        expect_identical(graph$target_recall, tier)
+        expect_identical(graph$knn_provider, "faissR")
+        expect_identical(graph$gpu_devices, 0L)
+        expect_true(graph$recall_audited)
+        expect_gte(graph$observed_recall, tier)
+        expect_true(all(vapply(graph$ivf_settings,
+            function(x) identical(x$target_recall, tier), TRUE)))
+    }
 })

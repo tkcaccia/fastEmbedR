@@ -20,7 +20,8 @@ massive_landmark_knn(
   resume = FALSE,
   devices = NULL,
   checkpoint_every = 100L,
-  ef_search = 0L
+  ef_search = 0L,
+  target_recall = NULL
 )
 }
 \arguments{
@@ -71,6 +72,9 @@ CUDA search. Other search methods use their existing checkpoint policy.}
 \item{ef_search}{CPU HNSW landmark search effort. Zero uses the faissR
 preset. A positive value must be at least \code{k + 1}; it changes search
 effort but does not guarantee recall, which needs a separate audit.}
+
+\item{target_recall}{Requested tuning tier: \code{0.9}, \code{0.95}, or \code{0.99}.
+\code{NULL} uses \code{options(fastEmbedR.target_recall = ...)}, then \code{0.99}.}
 }
 \value{
 A lightweight \code{fastEmbedR_massive_knn} descriptor.
@@ -90,8 +94,10 @@ audit is run. Sharded IVF-Flat calibrates on the first query batch;
 pilot recall is not guaranteed for later rows. For CUDA IVF,
 \code{pilot_recall} counts distance-equivalent ties at the exact kth distance;
 \code{pilot_id_recall} reports mean neighbor-ID overlap. Persistent sharded
-IVF also requires \code{pilot_min_row_recall} to meet its target; stricter
-probing can increase query time substantially.
+IVF also requires tie-aware \code{pilot_min_row_recall} and mean strict
+\code{pilot_id_recall} to meet the target. \code{pilot_min_strict_row_recall}
+and \code{pilot_tied_rows} expose boundary-tie effects. Stricter probing
+can increase query time substantially.
 CPU uses exact search by default below 5,000 landmarks.
 Output files contain row-major, one-based \code{uint32} landmark indices and
 float32 distances. HNSW's 0.99 recall is a target, not a measured result.

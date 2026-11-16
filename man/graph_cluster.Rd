@@ -24,6 +24,7 @@ graph_cluster(
   landmarks = NULL,
   k = 30L,
   vote_k = k,
+  target_recall = NULL,
   ...
 )
 }
@@ -117,6 +118,9 @@ selection.}
 
 \item{vote_k}{Neighbors for assigning non-landmark resident rows.
 File-backed data and prepared graphs reject it.}
+
+\item{target_recall}{Requested KNN tuning tier for data input: \code{0.9},
+\code{0.95}, or \code{0.99}. Prepared graphs retain their KNN provenance.}
 
 \item{...}{For file-backed data, storage
 controls such as \code{output}, \code{chunk_rows},

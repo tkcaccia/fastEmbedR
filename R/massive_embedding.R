@@ -95,10 +95,22 @@ massive_embedding_ef_search <- function(value, nn, backend) {
     value
 }
 
+massive_embedding_recall_tier <- function(value, nn) {
+    if (is.null(nn)) return(fastembedr_target_recall(value))
+    if (!inherits(nn, "fastEmbedR_massive_projection") ||
+        !inherits(nn$graph, "fastEmbedR_massive_knn")) stop(
+        "Reused landmark KNN is invalid.", call. = FALSE)
+    tier <- nn$graph$target_recall
+    if (is.null(tier) || length(tier) != 1L || is.na(tier)) stop(
+        "Reused landmark KNN lacks a recall-tier identity.",
+        call. = FALSE)
+    fastembedr_target_recall(tier)
+}
+
 massive_embedding_request <- function(data, landmarks, backend,
         metric, standardize, pca_dims, nn, keep_knn, output,
         memory_limit, chunk_rows, devices, landmark_method,
-        checkpoint, resume, ef_search = 0L) {
+        checkpoint, resume, ef_search = 0L, target_recall = 0.99) {
     massive_checkpoint_validate_controls(checkpoint, resume)
     if (!inherits(data, "fastEmbedR_massive_matrix")) stop(
         "EXPERIMENTAL landmark mode requires `massive_matrix()`.",
@@ -142,7 +154,8 @@ massive_embedding_request <- function(data, landmarks, backend,
         devices = massive_validate_devices(devices, backend, data$nrow),
         landmark_method = match.arg(landmark_method,
             c("reservoir", "random")), checkpoint = checkpoint,
-        resume = resume, ef_search = ef_search)
+        resume = resume, ef_search = ef_search,
+        target_recall = massive_embedding_recall_tier(target_recall, nn))
 }
 
 massive_embedding_reused_graph <- function(data, previous, count,
@@ -194,6 +207,7 @@ massive_embedding_workflow <- function(data, request, paths, config) {
         k = config$k, dimensions = config$dimensions,
         backend = config$backend, workers = config$workers,
         seed = config$seed, chunk_rows = request$chunk_rows,
+        target_recall = request$target_recall,
         memory_limit = request$memory_limit, devices = request$devices,
         fit = config$fit, projection = config$projection,
         reused_graph = if (is.null(reused)) NULL else
@@ -312,14 +326,18 @@ massive_embedding_graph <- function(data, selection, request, paths,
             memory_limit = request$memory_limit,
             devices = request$devices, checkpoint = request$checkpoint,
             resume = request$resume && file.exists(sidecar),
-            ef_search = request$ef_search)
+            ef_search = request$ef_search,
+            target_recall = request$target_recall)
     workflow <- massive_workflow_stage(workflow, "graph",
         list(graph = graph))
     list(graph = graph, workflow = workflow)
 }
 
-massive_embedding_result_resources <- function(result, paths,
-                                                graph, reused) {
+massive_embedding_finish_result <- function(result, paths,
+        graph, reused) {
+    result$target_recall <- graph$target_recall
+    result$measured_recall <- graph$pilot_recall
+    result$recall_status <- graph$recall_status
     result$resources$reference_ram_bytes <- paths$reference_ram_bytes
     result$resources$graph_bytes <- paths$graph_bytes
     result$resources$peak_ram_bytes <- max(
@@ -370,7 +388,8 @@ dispatch_massive_umap <- function(data, landmarks, n_neighbors,
         transform_k, massive, output, chunk_rows, memory_limit,
         refinement_epochs, local_refine, local_neighbors,
         overlap_rows, devices, landmark_method, init,
-        layout_storage, checkpoint, resume, cpu_update, ef_search) {
+        layout_storage, checkpoint, resume, cpu_update, ef_search,
+        target_recall = 0.99) {
     if (identical(massive, "out_of_core_data")) return(
         run_full_backed_umap(data, landmarks, n_neighbors,
             n_components, standardize, pca_dims, metric, nn, seed,
@@ -379,7 +398,7 @@ dispatch_massive_umap <- function(data, landmarks, n_neighbors,
             refinement_epochs, local_refine, local_neighbors,
             overlap_rows, devices, landmark_method, init,
             layout_storage, checkpoint, resume, cpu_update,
-            ef_search))
+            ef_search, target_recall))
     if (identical(massive, "out_of_core_graph")) return(
         run_massive_umap_graph(data, init, output, n_components,
             seed, backend, n.cores, chunk_rows, memory_limit,
@@ -397,7 +416,7 @@ dispatch_massive_umap <- function(data, landmarks, n_neighbors,
         keep_knn, graph_mode, verbose, transform_k, massive, output,
         chunk_rows, memory_limit, refinement_epochs, local_refine,
         local_neighbors, overlap_rows, devices, landmark_method,
-        checkpoint, resume, ef_search)
+        checkpoint, resume, ef_search, target_recall)
 }
 
 run_massive_umap_graph <- function(data, init, output, n_components,
@@ -492,7 +511,7 @@ massive_embedding_run <- function(data, request, k, dimensions, backend,
     result$reference_fit_path <- paths$model
     result$selection <- selection
     result$graph_reused <- !is.null(reused)
-    result <- massive_embedding_result_resources(result, paths,
+    result <- massive_embedding_finish_result(result, paths,
         built$graph, !is.null(reused))
     result$stage_seconds <- list(selection = selection_seconds,
         reference_fit = reference_seconds, query_knn = graph_seconds,
@@ -533,7 +552,7 @@ run_massive_umap_landmark <- function(data, landmarks, n_neighbors,
                             refinement_epochs, local_refine,
                             local_neighbors, overlap_rows, devices,
                             landmark_method, checkpoint, resume,
-                            ef_search = 0L) {
+                            ef_search = 0L, target_recall = 0.99) {
     match.arg(massive, c("landmark"))
     state <- validate_umap_request(backend, graph_mode,
         n_components, n.cores, keep_knn)
@@ -551,7 +570,7 @@ run_massive_umap_landmark <- function(data, landmarks, n_neighbors,
     request <- massive_embedding_request(data, landmarks,
         state$backend, metric, standardize, pca_dims, nn,
         keep_knn, output, memory_limit, chunk_rows, devices,
-        landmark_method, checkpoint, resume, ef_search)
+        landmark_method, checkpoint, resume, ef_search, target_recall)
     n_neighbors <- validate_umap_n_neighbors(n_neighbors, request$count)
     k <- integer_scalar(transform_k %||% n_neighbors)
     if (is.na(k) || k < 1L || k > request$count)
@@ -567,7 +586,8 @@ run_massive_umap_landmark <- function(data, landmarks, n_neighbors,
     fit_reference <- function(reference) umap(reference,
         n_neighbors = n_neighbors, n_components = state$n_components,
         backend = state$backend, n.cores = workers,
-        graph_mode = state$graph_mode, seed = seed, verbose = verbose)
+        graph_mode = state$graph_mode, seed = seed, verbose = verbose,
+        target_recall = request$target_recall)
     massive_embedding_run(data, request, k, state$n_components,
         state$backend, workers, seed, fit_reference, epochs, 250L, 5,
         local_refine, local_neighbors, overlap_rows,
@@ -672,7 +692,8 @@ run_massive_tsne_landmark <- function(data, nn, settings, extra, controls,
         settings$backend, settings$metric, settings$standardize,
         settings$pca_dims, nn, settings$keep_knn, output,
         memory_limit, chunk_rows, devices, landmark_method,
-        checkpoint, resume)
+        checkpoint, resume, target_recall = settings$target_recall)
+    settings$target_recall <- request$target_recall
     if (!is.null(settings$init_data) || !is.null(settings$Y_init) ||
         !identical(controls$transform_early_exaggeration_iter, 0L) ||
         !is.null(controls$transform_n_negatives) ||

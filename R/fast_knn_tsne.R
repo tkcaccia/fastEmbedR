@@ -462,7 +462,9 @@ compute_tsne_matrix_knn <- function(
             nn <- run_faissr_cuda_embedding_knn(
                 x, n_neighbors, policy$method, metric,
                 fastembedr_knn_output_type(x, policy$backend),
-                policy$target_recall, devices
+                policy$target_recall, devices,
+                prefer_resident = TRUE,
+                retain_data = retain_cuda_data
             )
             engine <- nn$backend_used
         } else {
@@ -846,8 +848,9 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #'   `memory_limit` check; the limit does not bound the subsequent fit.
 #' @param target_recall Requested KNN tuning tier: `0.9`, `0.95`, or `0.99`.
 #'   `NULL` uses `options(fastEmbedR.target_recall = ...)`, then `0.99`.
-#'   Non-default tiers currently require resident matrix input without
-#'   landmarks or supplied KNN. An exact KNN route remains exact.
+#'   Non-default tiers require resident or full file-backed input without
+#'   landmarks or supplied KNN.
+#'   An exact KNN route remains exact.
 #' @param checkpoint Save file-backed workflow stages. Resident t-SNE fits
 #'   cannot checkpoint or resume; interruption restarts the fit.
 #'   Full-graph file-backed t-SNE

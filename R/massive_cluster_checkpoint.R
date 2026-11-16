@@ -34,7 +34,8 @@ massive_cluster_workflow_checkpoint <- function(x, plan, paths,
 massive_cluster_workflow_controls <- function(k, method, backend,
         workers, devices, landmark_method, knn_method, chunk_rows,
         memory_limit, resolution, n_iterations, n_runs, steps,
-        seed, checkpoint_every, parallel.mode = "restarts") {
+        seed, checkpoint_every, parallel.mode = "restarts",
+        target_recall = 0.99) {
     list(k = k, method = method, backend = backend,
         workers = workers, devices = devices,
         landmark_method = landmark_method, knn_method = knn_method,
@@ -42,7 +43,7 @@ massive_cluster_workflow_controls <- function(k, method, backend,
         resolution = resolution, n_iterations = n_iterations,
         n_runs = n_runs, steps = steps, seed = seed,
         checkpoint_every = checkpoint_every,
-        parallel.mode = parallel.mode)
+        parallel.mode = parallel.mode, target_recall = target_recall)
 }
 
 massive_cluster_checkpoint_controls <- function(checkpoint, resume,
@@ -66,7 +67,7 @@ massive_cluster_workflow_report <- function(x, plan, paths, backend,
 }
 
 massive_cluster_reference_graph <- function(x, selection, plan, k,
-        backend, workers, workflow) {
+        backend, workers, workflow, target_recall = 0.99) {
     stage <- workflow$state$stage %||% "initial"
     if (stage %in% c("graph", "knn")) {
         graph <- tryCatch(validate_fastembedr_graph(
@@ -79,7 +80,7 @@ massive_cluster_reference_graph <- function(x, selection, plan, k,
     reference <- massive_read_rows_cpp(selection$data, 1,
         plan$count, 8 * plan$count * x$ncol)
     graph <- knn_graph(reference, k = k, backend = backend,
-        n.cores = workers)
+        n.cores = workers, target_recall = target_recall)
     workflow <- massive_workflow_stage(workflow, "graph", list(
         graph = graph))
     list(graph = graph, workflow = workflow)
@@ -87,7 +88,8 @@ massive_cluster_reference_graph <- function(x, selection, plan, k,
 
 massive_cluster_query_knn <- function(x, selection, plan, paths,
         k, backend, workers, method, chunk_rows, memory_limit,
-        workflow, resume, checkpoint, reused) {
+        workflow, resume, checkpoint, reused,
+        target_recall = 0.99) {
     stage <- workflow$state$stage %||% "initial"
     if (stage == "knn") {
         knn <- workflow$state$knn
@@ -104,7 +106,8 @@ massive_cluster_query_knn <- function(x, selection, plan, paths,
             devices = plan$devices, method = method,
             chunk_rows = chunk_rows, memory_limit = memory_limit,
             checkpoint = checkpoint,
-            resume = resume && file.exists(sidecar))
+            resume = resume && file.exists(sidecar),
+            target_recall = target_recall)
     massive_embedding_checked_graph(x, selection, knn,
         plan$count, k, backend)
     workflow <- massive_workflow_stage(workflow, "knn", list(knn = knn))
@@ -113,17 +116,18 @@ massive_cluster_query_knn <- function(x, selection, plan, paths,
 
 massive_cluster_precompute <- function(x, plan, paths, k, backend,
         workers, landmark_method, knn_method, chunk_rows,
-        memory_limit, seed, workflow, checkpoint, resume, reused) {
+        memory_limit, seed, workflow, checkpoint, resume, reused,
+        target_recall = 0.99) {
     request <- list(count = plan$count, chunk_rows = chunk_rows,
         memory_limit = memory_limit, landmark_method = landmark_method)
     selected <- massive_workflow_selection(x, request, paths,
         seed, workflow, reused)
     built <- massive_cluster_reference_graph(x, selected$selection,
-        plan, k, backend, workers, selected$workflow)
+        plan, k, backend, workers, selected$workflow, target_recall)
     searched <- massive_cluster_query_knn(x, selected$selection,
         plan, paths, k, backend, workers, knn_method,
         chunk_rows, memory_limit, built$workflow, resume,
-        checkpoint, reused)
+        checkpoint, reused, target_recall)
     list(selection = selected$selection, graph = built$graph,
         knn = searched$knn, workflow = searched$workflow)
 }

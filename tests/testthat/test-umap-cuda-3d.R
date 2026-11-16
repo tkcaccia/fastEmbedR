@@ -83,8 +83,9 @@ test_that("CUDA landmark UMAP keeps fixed references in three dimensions", {
         expect_identical(dim(layout), c(45L, 3L))
         expect_true(all(is.finite(layout)))
         expect_gt(sd(layout[, 3L]), 0)
-        expect_equal(layout[fit$landmarks$indices, , drop = FALSE],
-            as.matrix(fit$landmarks$layout), tolerance = 1e-5)
+        expect_equal(as.vector(layout[fit$landmarks$indices,
+            , drop = FALSE]),
+            as.vector(fit$landmarks$layout), tolerance = 1e-5)
         expect_identical(fit$parameters$landmark_refinement_backend,
             "cuda")
         held_out <- project_landmark_model(

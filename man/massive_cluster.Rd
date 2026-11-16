@@ -29,7 +29,8 @@ massive_cluster(
   initial = NULL,
   nn = NULL,
   parallel.mode = c("restarts", "fit"),
-  gpu_storage = c("resident", "stream")
+  gpu_storage = c("resident", "stream"),
+  target_recall = NULL
 )
 }
 \arguments{
@@ -92,6 +93,9 @@ File-backed full-graph fits require \code{"fit"} when \code{n.cores > 1}.}
 
 \item{gpu_storage}{\code{"resident"} for GPU-held CSR shards or \code{"stream"} for
 bounded multi-GPU Louvain or Leiden local moves in full-graph CUDA mode.}
+
+\item{target_recall}{Requested KNN tuning tier in data-input modes:
+\code{0.9}, \code{0.95}, or \code{0.99}. Prepared graphs do not compute KNN.}
 }
 \value{
 An experimental file-backed clustering result, a file-backed

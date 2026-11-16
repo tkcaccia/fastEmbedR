@@ -1,5 +1,6 @@
 graph_build_settings <- function(k, backend, metric, weight,
-                                    mutual, prune, n.cores) {
+                                    mutual, prune, n.cores,
+                                    target_recall = NULL) {
     mutual <- isTRUE(mutual)
     prune <- as.numeric(prune)
     if (length(prune) != 1L || !is.finite(prune) || prune < 0) {
@@ -20,7 +21,8 @@ graph_build_settings <- function(k, backend, metric, weight,
         ),
         mutual = mutual,
         prune = prune,
-        n_threads = resolve_n_cores(n.cores)
+        n_threads = resolve_n_cores(n.cores),
+        target_recall = fastembedr_target_recall(target_recall)
     )
 }
 
@@ -36,7 +38,11 @@ compute_graph_input_knn <- function(x, source, settings) {
         return(list(
             value = coerce_knn_input(x),
             backend = attr(x, "backend") %||% NA_character_,
-            source = source
+            source = source,
+            target_recall = x$target_recall %||% NA_real_,
+            exact = x$exact %||% NA,
+            measured_recall = x$pilot_recall %||% NA_real_,
+            recall_status = x$recall_status %||% NA_character_
         ))
     }
     if (!(is.matrix(x) || is.data.frame(x) || is_float32_matrix(x))) {
@@ -49,13 +55,17 @@ compute_graph_input_knn <- function(x, source, settings) {
     }
     policy <- fastembedr_embedding_nn_policy(
         settings$backend,
-        nrow(x), ncol(x)
+        nrow(x), ncol(x), settings$target_recall
     )
     found <- graph_data_knn(x, settings, policy)
     list(
         value = coerce_knn_input(found),
         backend = attr(found, "backend") %||% policy$backend,
-        source = if (source == "embedding") "embedding" else "data"
+        source = if (source == "embedding") "embedding" else "data",
+        target_recall = found$target_recall %||% policy$target_recall,
+        exact = found$exact %||% NA,
+        measured_recall = found$pilot_recall %||% NA_real_,
+        recall_status = found$recall_status %||% NA_character_
     )
 }
 
@@ -114,6 +124,10 @@ finish_knn_graph <- function(graph, input, selected, settings, started) {
             input$value$input_backend,
             input$backend
         ),
+        target_recall = input$target_recall,
+        knn_exact = input$exact,
+        measured_recall = input$measured_recall,
+        recall_status = input$recall_status,
         n.cores = settings$n_threads,
         elapsed_sec = unname(proc.time()[[3L]] - started)
     )
@@ -125,8 +139,7 @@ finish_knn_graph <- function(graph, input, selected, settings, started) {
 #'
 #' `knn_graph()` converts a data matrix, a `fastEmbedR_embedding`, or a
 #' precomputed KNN object into a native undirected edge graph. When neighbors
-#' must be computed, the function uses fastEmbedR's existing native KNN route;
-#' it does not expose a second nearest-neighbor tuning API.
+#' must be computed, the function uses fastEmbedR's faissR-backed KNN route.
 #'
 #' @param x Numeric data matrix, a `fastEmbedR_embedding`, a list containing
 #'   `indices` and `distances`, or an existing `fastEmbedR_graph`.
@@ -141,6 +154,10 @@ finish_knn_graph <- function(graph, input, selected, settings, started) {
 #' @param prune Remove edges whose final weight is less than or equal to this
 #'   non-negative threshold.
 #' @param n.cores CPU cores used by KNN search and graph construction.
+#' @param target_recall Requested approximate KNN recall tier: `0.9`,
+#'   `0.95`, or `0.99`. `NULL` uses
+#'   `options(fastEmbedR.target_recall = ...)`, then `0.99`.
+#'   Precomputed KNN keeps its own provenance.
 #' @return A compact `fastEmbedR_graph` list with `from`, `to`, `weight`,
 #'   `n_vertices`, and construction metadata.
 #' @references
@@ -158,7 +175,7 @@ knn_graph <- function(x,
                         weight = c("snn", "distance", "binary"),
                         mutual = FALSE,
                         prune = 0,
-                        n.cores = NULL) {
+                        n.cores = NULL, target_recall = NULL) {
     if (fastembedr_file_backed_input(x)) stop(
         "Use precompute_knn(x, output = ...) for file-backed KNN, then ",
         "massive_umap_fuzzy_graph() for an undirected fuzzy graph.",
@@ -166,12 +183,16 @@ knn_graph <- function(x,
     if (inherits(x, "fastEmbedR_graph")) {
         return(validate_fastembedr_graph(x))
     }
+    if (is_knn_input(x) && !is.null(target_recall)) stop(
+        "Precomputed KNN cannot be retuned with `target_recall`.",
+        call. = FALSE)
     if (length(mutual) != 1L || is.na(mutual)) {
         stop("`mutual` must be TRUE or FALSE.", call. = FALSE)
     }
     started <- proc.time()[[3L]]
     settings <- graph_build_settings(
-        k, backend, metric, weight, mutual, prune, n.cores
+        k, backend, metric, weight, mutual, prune, n.cores,
+        target_recall
     )
     source <- graph_input_source(x)
     graph_check_knn_capacity(source$value, settings$k,
@@ -492,6 +513,8 @@ graph_cluster_input_controls <- function(graph, landmarks, k,
 #'   `landmarks` is supplied. Prepared graphs reject it.
 #' @param vote_k Neighbors for assigning non-landmark resident rows.
 #'   File-backed data and prepared graphs reject it.
+#' @param target_recall Requested KNN tuning tier for data input: `0.9`,
+#'   `0.95`, or `0.99`. Prepared graphs retain their KNN provenance.
 #' @param ... For file-backed data, storage
 #'   controls such as `output`, `chunk_rows`,
 #'   `memory_limit`, `checkpoint`, `resume`, and `gpu_storage`.
@@ -624,24 +647,24 @@ graph_cluster_input_controls <- function(graph, landmarks, k,
 #' clusters <- graph_cluster(graph, method = "leiden", seed = 1)
 #' table(clusters$membership)
 #' @export
-graph_cluster <- function(graph,
-                            method = c("leiden", "louvain"),
-                            backend = NULL, resolution = 1,
-                            n_iterations = 10L,
-                            n_runs = 1L,
-                            steps = 4L,
-                            seed = 1L,
-                            layout_merge = NULL,
-                            projection = NULL,
-                            small_groups = NULL,
-                            n.cores = 1L, devices = NULL,
-                            parallel.mode = c("restarts", "fit"),
-                            massive = NULL, storage = NULL,
-                            landmarks = NULL, k = 30L, vote_k = k, ...) {
-    prepared <- graph_cluster_prepare_input(graph, storage,
-        list(...), massive)
+graph_cluster <- function(graph, method = c("leiden", "louvain"),
+        backend = NULL, resolution = 1, n_iterations = 10L,
+        n_runs = 1L, steps = 4L, seed = 1L, layout_merge = NULL,
+        projection = NULL, small_groups = NULL, n.cores = 1L,
+        devices = NULL, parallel.mode = c("restarts", "fit"),
+        massive = NULL, storage = NULL, landmarks = NULL,
+        k = 30L, vote_k = k, target_recall = NULL, ...) {
+    if (!is.null(target_recall))
+        target_recall <- fastembedr_target_recall(target_recall)
+    prepared <- graph_cluster_prepare_input(graph, storage, list(...), massive)
     graph <- prepared$graph
     dots <- prepared$dots
+    if (!is.null(target_recall) &&
+        !(is.matrix(graph) || is_float32_matrix(graph) ||
+            inherits(graph, "fastEmbedR_massive_matrix"))) stop(
+        "Prepared graphs cannot be retuned with `target_recall`.",
+        call. = FALSE)
+    if (!is.null(target_recall)) dots$target_recall <- target_recall
     storage <- fastembedr_storage_option(graph, storage)
     controls <- graph_cluster_input_controls(graph, landmarks,
         k, vote_k, !missing(k), !missing(vote_k), dots)
@@ -738,6 +761,9 @@ graph_cluster_resident <- function(graph, method, backend,
             call. = FALSE)
         settings$devices <- massive_validate_devices(devices,
             settings$backend, graph$n_vertices)
+        if (settings$n.cores != 1L) stop(
+            "Resident CUDA device clustering cannot use CPU workers.",
+            call. = FALSE)
     }
     if (settings$backend == "cuda" &&
         isTRUE(graph_clustering_cuda_available_cpp()))

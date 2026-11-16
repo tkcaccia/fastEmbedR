@@ -68,7 +68,7 @@ full_backed_knn_route <- function(data, backend, workers) {
 }
 
 full_backed_knn_stage <- function(data, k, backend, workers,
-        paths, memory_limit, devices, state) {
+        paths, memory_limit, devices, state, target_recall = 0.99) {
     files <- paste0(paths$knn,
         c(".indices.u32", ".distances.f32"))
     saved <- full_backed_checkpoint_get(state, "knn", files)
@@ -84,6 +84,7 @@ full_backed_knn_stage <- function(data, k, backend, workers,
         n.cores = route$workers, storage = "file_backed",
         output = paths$knn,
         memory_limit = memory_limit, devices = devices,
+        target_recall = target_recall,
         checkpoint = !is.null(state),
         resume = !is.null(state) && file.exists(sidecar))
     seconds <- proc.time()[[3L]] - started

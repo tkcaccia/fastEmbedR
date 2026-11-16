@@ -19,7 +19,8 @@ cluster_landmarks(
   seed = 1L,
   n.cores = 1L,
   devices = NULL,
-  parallel.mode = c("restarts", "fit")
+  parallel.mode = c("restarts", "fit"),
+  target_recall = NULL
 )
 }
 \arguments{
@@ -52,6 +53,9 @@ cluster_landmarks(
 \item{devices}{Optional coordinated CUDA devices for the graph fit.}
 
 \item{parallel.mode}{CPU fit or restart parallelism.}
+
+\item{target_recall}{Requested KNN tuning tier for reference and vote
+neighbors: \code{0.9}, \code{0.95}, or \code{0.99}.}
 }
 \value{
 A \code{fastEmbedR_landmark_clusters} list with all-row membership,

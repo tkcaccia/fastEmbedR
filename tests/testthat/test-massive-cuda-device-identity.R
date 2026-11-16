@@ -16,20 +16,127 @@ test_that("CUDA checkpoint IDs require physical UUIDs", {
 })
 
 test_that("single-GPU full KNN records physical device identity", {
+    selected <- NULL
     with_mocked_bindings(
         massive_validate_devices = function(...) 1L,
         massive_cuda_memory_cpp = function(...) list(device = 0L),
         massive_cuda_select_cpp = function(...) NULL,
-        massive_sharded_graph = function(...) list(method = "ivf_sharded"),
+        massive_sharded_graph = function(..., target_recall) {
+            selected <<- target_recall
+            list(method = "ivf_sharded")
+        },
         massive_cuda_device_uuids = function(...) "GPU-B",
         {
             graph <- fastEmbedR:::massive_full_knn_device_request(
                 list(nrow = 8L), 2L, "unused", "cuda", 1L,
                 2L, 4L, "256MB", FALSE, FALSE, 0L,
-                100L, 1L, "ivf_sharded")
+                100L, 1L, "ivf_sharded", 0.95)
             expect_identical(graph$gpu_devices, 1L)
             expect_identical(graph$gpu_identity, "GPU-B")
+            expect_identical(selected, 0.95)
         }, .package = "fastEmbedR")
+})
+
+test_that("multi-GPU IVF accepts a lower recall tier", {
+    selected <- NA_real_
+    with_mocked_bindings(
+        massive_validate_devices = function(...) c(0L, 1L),
+        massive_full_knn_devices = function(..., target_recall) {
+            selected <<- target_recall
+            list(route = "multi-gpu")
+        },
+        expect_identical(fastEmbedR:::massive_full_knn_device_request(
+            list(nrow = 8L), 2L, "unused", "cuda", 1L,
+            2L, 4L, "256MB", FALSE, FALSE, 0L,
+            100L, c(0L, 1L), "ivf_sharded", 0.95)$route,
+            "multi-gpu"),
+        .package = "fastEmbedR")
+    expect_identical(selected, 0.95)
+})
+
+test_that("multi-GPU exact KNN selects the faissR v2 graph route", {
+    selected <- NULL
+    with_mocked_bindings(
+        massive_validate_devices = function(...) c(0L, 1L),
+        massive_cuda_memory_cpp = function(...) list(device = 0L),
+        massive_cuda_select_cpp = function(...) 0L,
+        massive_cuda_device_uuids = function(...)
+            c("GPU-A", "GPU-B"),
+        massive_full_knn_devices = function(...) stop(
+            "Unexpected legacy multi-GPU graph route"),
+        massive_full_knn_exact = function(..., devices) {
+            selected <<- devices
+            list(method = "faiss_gpu_flat_file_shards")
+        }, {
+            graph <- fastEmbedR:::massive_full_knn_device_request(
+                list(nrow = 8L), 2L, "unused", "cuda", 1L,
+                2L, 4L, "256MB", FALSE, FALSE, 0L,
+                100L, c(0L, 1L), "exact", 0.95)
+            expect_identical(selected, c(0L, 1L))
+            expect_identical(graph$method,
+                "faiss_gpu_flat_file_shards")
+            expect_identical(graph$gpu_devices, c(0L, 1L))
+        }, .package = "fastEmbedR")
+})
+
+test_that("full KNN passes a tier to explicit CUDA device dispatch", {
+    selected <- NULL
+    with_mocked_bindings(
+        massive_full_knn_controls = function(...)
+            list(k = 3L, backend = "cuda", method = "ivf_sharded",
+                audit_rows = 0L, ef_search = 0L,
+                hnsw_build = NULL, checkpoint_every = 100L,
+                query_order = "original"),
+        massive_full_knn_device_request = function(...) {
+            selected <<- tail(list(...), 1L)[[1L]]
+            list(target_recall = selected)
+        },
+        {
+            graph <- fastEmbedR::massive_full_knn_graph(
+                list(nrow = 8L), 3L, "unused", backend = "cuda",
+                method = "ivf_sharded", devices = 0L,
+                target_recall = 0.90)
+            expect_identical(graph$target_recall, 0.90)
+            expect_identical(selected, 0.90)
+        }, .package = "fastEmbedR")
+})
+
+test_that("exact file-backed CUDA KNN uses faissR on one device", {
+    skip_if_not(faissR::cuda_available())
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    root <- tempfile("faissr_cuda_exact_")
+    dir.create(root)
+    on.exit(unlink(root, recursive = TRUE))
+    set.seed(42L)
+    input <- file.path(root, "input.f32")
+    writeBin(as.vector(t(matrix(rnorm(600L), 100L, 6L))),
+        input, size = 4L)
+    source <- massive_matrix(input, 100L, 6L)
+    graph <- massive_full_knn_graph(source, 3L,
+        file.path(root, "exact"), backend = "cuda",
+        method = "exact", devices = 0L, n.cores = 1L,
+        target_recall = 0.90, chunk_rows = 16L,
+        reference_chunk_rows = 40L, memory_limit = "512MB",
+        audit_rows = 12L)
+    expect_identical(graph$method, "faiss_gpu_flat_file_batch")
+    expect_identical(graph$knn_provider, "faissR")
+    expect_identical(graph$device_ids, 0L)
+    expect_true(graph$exact)
+    expect_identical(graph$target_recall, 0.90)
+    expect_true(graph$sample_target_met)
+    expect_identical(graph$observed_recall, 1)
+    expect_gt(graph$build_seconds, 0)
+    expect_gt(graph$search_seconds, 0)
+    expect_gt(graph$resources$peak_device_bytes, 0)
+    selected <- fastEmbedR:::faissr_matrix_knn_batch_devices_cpp(
+        source, source, c(1, 5), 3L, 40L, 512 * 1024^2,
+        TRUE, 0L)
+    legacy <- fastEmbedR:::faissr_matrix_knn_batch_cpp(
+        source, source, c(1, 5), 3L, "cuda", "stream_exact",
+        40L, 512 * 1024^2, 1L, TRUE)
+    expect_identical(selected$device_ids, 0L)
+    expect_identical(selected$indices, legacy$indices)
+    expect_equal(selected$distances, legacy$distances)
 })
 
 test_that("optimizer checkpoints bind physical CUDA device identity", {

@@ -1,4 +1,5 @@
 test_that("CUDA IVF pilot guards the strict sampled ID recall", {
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
     skip_if_not(fastEmbedR:::fastembedr_cuda_knn_available())
     root <- tempfile("cuda_ivf_strict_")
     dir.create(root)
@@ -15,6 +16,9 @@ test_that("CUDA IVF pilot guards the strict sampled ID recall", {
         audit_rows = 32L)
     setting <- graph$ivf_settings[[1L]]
     expect_gte(setting$pilot_min_row_recall, 0.99)
-    expect_gte(setting$pilot_id_recall, setting$pilot_min_row_recall)
+    expect_gte(setting$pilot_id_recall,
+        setting$pilot_min_strict_row_recall)
+    expect_lte(setting$pilot_min_strict_row_recall,
+        setting$pilot_min_row_recall)
     expect_true(graph$sample_target_met)
 })

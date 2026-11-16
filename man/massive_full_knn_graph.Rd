@@ -67,8 +67,8 @@ Multi-GPU IVF excludes each device's first tuning query batch and
 samples only untouched rows.
 Defaults to zero. Reported recall covers only sampled rows, not
 the full graph. Strict ID \code{sample_target_met} requires every sampled
-row to meet 0.99. \code{distance_equivalent_recall} also accepts exact
-kth-distance ties; the CUDA IVF pilot additionally gates strict IDs.}
+row to meet the selected tier. \code{distance_equivalent_recall} also accepts
+exact kth-distance ties; the CUDA IVF pilot additionally gates strict IDs.}
 
 \item{checkpoint_every}{Commit every this many query blocks. A shard
 boundary is always committed. Defaults to 100.}
@@ -83,21 +83,24 @@ boundary is always committed. Defaults to 100.}
 order; \code{"posting"} scans grouped posting rows and externally restores
 original graph order with bounded memory and additional disk space.}
 
-\item{ef_search}{CPU HNSW search effort per shard. Zero uses the tuned
-shape-based default. A positive value must be at least \code{k + 1} and
+\item{ef_search}{CPU HNSW search effort per shard. Zero starts from the
+shape-based setting and increases effort until a separate, full-reference
+pilot meets the selected recall guard. A positive value is checked by
+that pilot and must be at least \code{k + 1}; it
 cannot exceed the smallest reference shard. Other methods reject it.}
 
 \item{hnsw_build}{Optional named list with \code{m} and \code{ef_construction} for
 an explicitly calibrated CPU HNSW build. \code{NULL} uses faissR's
-shape-based policy. Other methods and backends reject this setting.}
+shape-based build policy. Other methods and backends reject this setting.}
 
 \item{devices}{Optional CUDA device indices. Two or more devices require
 exact or IVF sharded search and a file-backed source. CPU and Metal
 requests fail explicitly; the graph is never moved to another route.}
 
 \item{target_recall}{Requested recall tier (\code{0.9}, \code{0.95}, or \code{0.99}).
-Exact CPU and Metal search are unchanged by the tier and remain exact
-by construction. Other file-backed routes currently require \code{0.99}.}
+Exact CPU, CUDA, and Metal search are unchanged by the tier and remain
+exact by construction. CPU HNSW and CUDA IVF use the tier in sampled
+pilots. Other file-backed routes currently require \code{0.99}.}
 }
 \value{
 A validated \code{fastEmbedR_massive_graph} descriptor.
@@ -109,9 +112,11 @@ per reference shard, searches all query blocks against it, and merges
 candidates into the file-backed output. It is approximate; its target
 recall is not measured unless \code{audit_rows} is positive. Multiple shard
 passes can be I/O-heavy.
-Checkpointed HNSW builds each shard with one thread for reproducible
-resume; queries still use \code{n.cores} threads. Each shard records the
-effective build thread count in \code{hnsw_settings}.
+Checkpointed HNSW builds each shard with \code{n.cores} threads and saves
+its native faissR index until that shard is complete. Resume checks
+the index file hash and a fixed search probe before reusing it.
+The result records build threads in \code{hnsw_settings} and the time to
+reload an index in \code{index_load_seconds}.
 CUDA \code{method = "exact"} builds and queries bounded faissR GPU Flat shards.
 It also scans the full query source per shard, so this exact route is a
 correctness baseline rather than a billion-row ANN solution. A CUDA

@@ -595,7 +595,7 @@ massive_knn_device_worker <- function(task, arguments, package_path,
 }
 
 massive_knn_device_result_check <- function(result, task, view,
-        reference, k, method, paths) {
+        reference, k, method, paths, target_recall = 0.99) {
     if (!is.list(result) ||
         !identical(result$backend, "cuda") ||
         !identical(result$knn_provider, "faissR") ||
@@ -603,6 +603,7 @@ massive_knn_device_result_check <- function(result, task, view,
         !identical(result$faissr_identity,
             massive_faissr_identity()) ||
         !identical(result$method, method) ||
+        !identical(result$target_recall, target_recall) ||
         !identical(result$nrow, view$nrow) ||
         !identical(result$ncol, k) ||
         !identical(result$n_reference, reference$nrow) ||
@@ -627,7 +628,7 @@ massive_knn_device_result_check <- function(result, task, view,
 }
 
 massive_knn_device_status <- function(task, x, reference, k,
-        method, resume) {
+        method, resume, target_recall = 0.99) {
     paths <- paste0(task$output,
         c(".indices.u32", ".distances.f32"))
     parts <- paste0(paths, ".part")
@@ -644,7 +645,7 @@ massive_knn_device_status <- function(task, x, reference, k,
         view <- massive_matrix_rows(x, task$row_range[1L],
             diff(task$row_range) + 1)
         massive_knn_device_result_check(result, task, view,
-            reference, k, method, paths)
+            reference, k, method, paths, target_recall)
         task$status <- "complete"
         task$result <- result
         task$remaining <- 0
@@ -850,9 +851,8 @@ massive_knn_devices_execute <- function(x, setup, devices, arguments,
     identity <- massive_knn_inputs_identity(x, setup$reference)
     prefix <- sub("\\.indices\\.u32$", "", setup$paths[["indices"]])
     tasks <- massive_knn_device_tasks(x, setup$k, prefix, devices)
-    tasks <- lapply(tasks, massive_knn_device_status,
-        x = x, reference = setup$reference, k = setup$k,
-        method = setup$method, resume = resume)
+    tasks <- lapply(tasks, massive_knn_device_status, x, setup$reference,
+        setup$k, setup$method, resume, setup$target_recall)
     shard_paths <- unlist(lapply(tasks, function(task)
         paste0(task$output, c(".indices.u32", ".distances.f32"))))
     merged_paths <- unname(setup$paths)
@@ -880,7 +880,8 @@ massive_knn_devices_execute <- function(x, setup, devices, arguments,
             diff(task$row_range) + 1)
         paths <- paste0(task$output, c(".indices.u32", ".distances.f32"))
         massive_knn_device_result_check(results[[i]], task, view,
-            setup$reference, setup$k, setup$method, paths)
+            setup$reference, setup$k, setup$method, paths,
+            setup$target_recall)
     }
     merge_started <- proc.time()[[3L]]
     massive_knn_merge_shards(results, setup$paths, tasks, resume)
@@ -907,16 +908,18 @@ massive_knn_devices_check <- function(x, n.cores) {
 
 massive_knn_devices <- function(x, reference, k, output, n.cores,
                                 method, chunk_rows, memory_limit,
-                                checkpoint, resume, devices) {
+                                checkpoint, resume, devices,
+                                target_recall = 0.99) {
     massive_knn_devices_check(x, n.cores)
     worker_limit <- massive_memory_bytes(memory_limit) / length(devices)
     setup <- massive_knn_setup(x, reference, k, output, "cuda", 1L,
         method, chunk_rows, worker_limit, resume,
         cuda_memory = FALSE, allow_final_resume = resume,
-        cuda_provider = "faissR")
+        cuda_provider = "faissR", target_recall = target_recall)
     arguments <- list(x = x, reference = setup$reference, k = setup$k,
         backend = "cuda", n.cores = 1L, method = setup$method,
-        chunk_rows = chunk_rows, memory_limit = worker_limit)
+        chunk_rows = chunk_rows, memory_limit = worker_limit,
+        target_recall = target_recall)
     massive_knn_devices_execute(x, setup, devices, arguments,
         checkpoint, resume)
 }
@@ -924,21 +927,23 @@ massive_knn_devices <- function(x, reference, k, output, n.cores,
 massive_knn_sharded_devices <- function(x, reference, k, output,
         n.cores, chunk_rows, reference_chunk_rows, memory_limit,
         checkpoint, resume, devices, method = "sharded_exact",
-        checkpoint_every = 100L) {
+        checkpoint_every = 100L, target_recall = 0.99) {
     massive_knn_devices_check(x, n.cores)
     worker_limit <- massive_memory_bytes(memory_limit) / length(devices)
     request <- massive_landmark_sharded_setup(x, reference, k,
         output, "cuda", 1L, chunk_rows, reference_chunk_rows,
         worker_limit, FALSE, resume, devices[[1L]],
         allow_final_resume = resume, method = method,
-        checkpoint_every = checkpoint_every)
+        checkpoint_every = checkpoint_every,
+        target_recall = target_recall)
     setup <- request$setup
     arguments <- list(x = x, reference = request$reference,
         k = setup$k, backend = "cuda", n.cores = 1L,
         method = method, chunk_rows = chunk_rows,
         reference_chunk_rows = reference_chunk_rows,
         memory_limit = worker_limit,
-        checkpoint_every = checkpoint_every)
+        checkpoint_every = checkpoint_every,
+        target_recall = target_recall)
     massive_knn_devices_execute(x, setup, devices, arguments,
         checkpoint, resume)
 }
@@ -1035,7 +1040,9 @@ massive_full_knn_devices_result <- function(graph, candidates,
     graph$method <- paste0("faiss_gpu_",
         if (graph$exact) "flat" else "ivf", "_multigpu_sharded")
     graph$spanning_links <- graph$recall_audited <- FALSE
-    graph$target_recall <- if (graph$exact) NA_real_ else 0.99
+    graph$target_recall <- candidates$target_recall
+    graph$recall_status <- if (graph$exact) "exact_by_construction" else
+        "not_runtime_audited"
     graph$query_storage <- "R_float32"
     graph$knn_provider <- "faissR"
     graph$faissr_identity <- candidates$faissr_identity
@@ -1085,7 +1092,8 @@ massive_full_knn_device_audit <- function(graph, devices) {
             sampled_rows = rows[selected],
             recall_mean = mean(recall[selected]),
             recall_min = min(recall[selected]),
-            rows_below_target = sum(recall[selected] < 0.99))
+            rows_below_target = sum(recall[selected] <
+                graph$target_recall))
     }, parts, devices)
     assigned <- unlist(lapply(graph$per_device_audit, `[[`,
         "sampled_rows"), use.names = FALSE)
@@ -1098,20 +1106,26 @@ massive_full_knn_device_audit <- function(graph, devices) {
 massive_full_knn_device_request <- function(x, k, output, backend,
         n.cores, chunk_rows, reference_chunk_rows, memory_limit,
         checkpoint, resume, audit_rows, checkpoint_every, devices,
-        method) {
+        method, target_recall = 0.99) {
     devices <- massive_validate_devices(devices, backend, x$nrow)
-    if (length(devices) > 1L) return(
+    if (length(devices) > 1L && method != "exact") return(
         massive_full_knn_devices(x, k, output, n.cores,
             chunk_rows, reference_chunk_rows, memory_limit,
             checkpoint, resume, audit_rows, checkpoint_every,
-            devices, method))
+            devices, method, target_recall = target_recall))
     previous <- massive_cuda_memory_cpp()$device
     on.exit(massive_cuda_select_cpp(previous), add = TRUE)
     massive_cuda_select_cpp(devices[[1L]])
-    graph <- massive_sharded_graph(x, k, output, n.cores,
-        chunk_rows, reference_chunk_rows, memory_limit, audit_rows,
-        "cuda", method, checkpoint, resume, checkpoint_every,
-        0L, NULL)
+    graph <- if (method == "exact") massive_full_knn_exact(
+        x, k, output, n.cores, chunk_rows, reference_chunk_rows,
+        memory_limit, checkpoint, resume, audit_rows,
+        checkpoint_every, target_recall, "cuda",
+        devices = devices) else
+        massive_sharded_graph(x, k, output, n.cores,
+            chunk_rows, reference_chunk_rows, memory_limit,
+            audit_rows, "cuda", method, checkpoint, resume,
+            checkpoint_every, 0L, NULL,
+            target_recall = target_recall)
     graph$gpu_devices <- devices
     graph$gpu_identity <- massive_cuda_device_uuids(devices)
     graph
@@ -1119,11 +1133,13 @@ massive_full_knn_device_request <- function(x, k, output, backend,
 
 massive_full_knn_devices_checkpoint <- function(x, k, output,
         method, devices, chunk_rows, reference_chunk_rows,
-        memory_limit, audit_rows, checkpoint_every, resume) {
-    signature <- massive_checkpoint_signature(list(version = 1L,
+        memory_limit, audit_rows, checkpoint_every, resume,
+        target_recall = 0.99) {
+    signature <- massive_checkpoint_signature(list(version = 2L,
         implementation = massive_checkpoint_implementation_identity(),
         source = massive_checkpoint_source_identity(x),
-        output = output, k = k, method = method, devices = devices,
+        output = output, k = k, method = method,
+        target_recall = target_recall, devices = devices,
         gpu_identity = massive_cuda_device_uuids(devices),
         chunk_rows = chunk_rows,
         reference_chunk_rows = reference_chunk_rows,
@@ -1164,6 +1180,8 @@ massive_full_knn_devices_finish <- function(candidates, x, k,
         workers = 1L)
     graph <- massive_full_knn_audit(graph, x, audit_rows, setup,
         rows = rows)
+    if (audit_rows > 0L && !graph$exact)
+        graph$recall_status <- "sampled_exact_reference"
     if (audit_rows > 0L) graph <- massive_full_knn_device_audit(
         graph, devices)
     if (!is.null(rows)) graph$audit_scope <- "untouched_query_rows"
@@ -1173,7 +1191,8 @@ massive_full_knn_devices_finish <- function(candidates, x, k,
 }
 
 massive_full_knn_candidate_check <- function(saved, x, k,
-        candidate_path, devices, shard_files) {
+        candidate_path, devices, shard_files,
+        target_recall = 0.99) {
     paths <- c(saved$indices_path, saved$distances_path)
     identity <- massive_checkpoint_source_identity(x)
     tasks <- massive_knn_device_tasks(x, k + 1L,
@@ -1196,6 +1215,7 @@ massive_full_knn_candidate_check <- function(saved, x, k,
     if (!inherits(saved, "fastEmbedR_massive_knn") ||
         saved$nrow != x$nrow || saved$ncol != k + 1L ||
         saved$n_reference != x$nrow ||
+        !identical(saved$target_recall, target_recall) ||
         !massive_checkpoint_same_paths(paths,
             paste0(candidate_path,
                 c(".indices.u32", ".distances.f32"))) ||
@@ -1224,7 +1244,8 @@ massive_full_knn_candidates <- function(x, k, candidate_path,
         devices, ".result.rds"))
     if (!is.null(saved)) {
         massive_full_knn_candidate_check(saved, x, k,
-            candidate_path, devices, shard_files)
+            candidate_path, devices, shard_files,
+            controls$target_recall)
         if (any(unlink(obsolete) != 0L)) stop(
             "Could not remove completed GPU KNN shards.",
             call. = FALSE)
@@ -1248,7 +1269,8 @@ massive_full_knn_candidates <- function(x, k, candidate_path,
         "Multi-GPU KNN candidates are incomplete.", call. = FALSE)
     candidates$peak_payload_bytes <- sum(sizes)
     massive_full_knn_candidate_check(candidates, x, k,
-        candidate_path, devices, shard_files)
+        candidate_path, devices, shard_files,
+        controls$target_recall)
     if (!is.null(sidecar)) massive_checkpoint_write(
         c(state, list(candidates = candidates)), sidecar)
     if (any(unlink(obsolete) != 0L)) stop(
@@ -1259,7 +1281,7 @@ massive_full_knn_candidates <- function(x, k, candidate_path,
 massive_full_knn_devices <- function(x, k, output, n.cores,
         chunk_rows, reference_chunk_rows, memory_limit,
         checkpoint, resume, audit_rows, checkpoint_every,
-        devices, method) {
+        devices, method, target_recall = 0.99) {
     if (k > 255L) stop("Multi-GPU CUDA KNN requires k <= 255.")
     if (audit_rows > 0L && audit_rows < length(devices))
         stop("Multi-GPU KNN audit needs one row per device.")
@@ -1280,12 +1302,13 @@ massive_full_knn_devices <- function(x, k, output, n.cores,
     sidecar <- if (checkpoint) massive_full_knn_devices_checkpoint(
         x, k, output, method, devices, chunk_rows,
         reference_chunk_rows, memory_limit, audit_rows,
-        checkpoint_every, resume) else NULL
+        checkpoint_every, resume, target_recall) else NULL
     started <- proc.time()[[3L]]
     search <- if (method == "ivf_sharded") "sharded_ivf" else "sharded_exact"
     controls <- list(method = search, chunk_rows = chunk_rows,
         reference_chunk_rows = reference_chunk_rows,
-        memory_limit = memory_limit, checkpoint_every = checkpoint_every)
+        memory_limit = memory_limit, checkpoint_every = checkpoint_every,
+        target_recall = target_recall)
     candidates <- massive_full_knn_candidates(x, k,
         candidate_path, devices, checkpoint, resume, controls, sidecar)
     temporary <- c(candidates$indices_path, candidates$distances_path,

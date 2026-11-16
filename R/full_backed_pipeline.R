@@ -139,6 +139,10 @@ full_backed_pipeline_record <- function(fit, data, neighbors, graph,
             graph = "cpu",
             init = prepared$backend, optimize = optimize_backend),
         knn_method = neighbors$method %||% NA_character_,
+        knn_exact = neighbors$exact %||% NA,
+        knn_target_recall = neighbors$target_recall %||% 0.99,
+        knn_observed_recall = neighbors$observed_recall %||% NA_real_,
+        knn_recall_audited = neighbors$recall_audited %||% FALSE,
         stage_resources = list(knn = neighbors$resources,
             graph = list(working_memory_budget_bytes =
                     massive_memory_bytes(memory_limit),
@@ -183,14 +187,15 @@ full_backed_umap_controls <- function(landmarks, standardize,
 full_backed_umap_request <- function(data, output, dimensions,
         memory_limit, init, k, backend, workers, fit_workers,
         seed, devices, chunk_rows, layout_storage, cpu_update,
-        keep_knn, checkpoint, resume) {
+        keep_knn, checkpoint, resume, target_recall = 0.99) {
     controls <- list(method = "umap", k = k,
         dimensions = dimensions, backend = backend,
         workers = workers, fit_workers = fit_workers, seed = seed,
         memory_bytes = massive_memory_bytes(memory_limit),
         devices = devices, chunk_rows = chunk_rows,
         layout_storage = layout_storage,
-        cpu_update = cpu_update, keep_knn = keep_knn)
+        cpu_update = cpu_update, keep_knn = keep_knn,
+        target_recall = target_recall)
     full_backed_pipeline_start(data, output, dimensions,
         memory_limit, init, controls, checkpoint, resume, keep_knn)
 }
@@ -216,7 +221,8 @@ run_full_backed_umap <- function(data, landmarks, n_neighbors,
         transform_k, output, chunk_rows, memory_limit,
         refinement_epochs, local_refine, local_neighbors,
         overlap_rows, devices, landmark_method, init,
-        layout_storage, checkpoint, resume, cpu_update, ef_search) {
+        layout_storage, checkpoint, resume, cpu_update, ef_search,
+        target_recall = 0.99) {
     full_backed_umap_controls(landmarks, standardize, pca_dims,
         metric, nn, keep_knn, graph_mode, verbose, transform_k,
         refinement_epochs, local_refine, local_neighbors,
@@ -236,11 +242,11 @@ run_full_backed_umap <- function(data, landmarks, n_neighbors,
     request <- full_backed_umap_request(data, output, n_components,
         memory_limit, init, k, backend, workers, fit_workers,
         seed, devices, chunk_rows, layout_storage, cpu_update,
-        keep_knn, checkpoint, resume)
+        keep_knn, checkpoint, resume, target_recall)
     if (!is.null(request$completed)) return(request$completed)
     paths <- request$paths
     knn <- full_backed_knn_stage(data, k, backend, workers,
-        paths, memory_limit, devices, request$state)
+        paths, memory_limit, devices, request$state, target_recall)
     graph_stage <- full_backed_umap_graph_stage(knn$object, paths,
         memory_limit, keep_knn, workers, knn$state)
     prepared_stage <- full_backed_init_stage(data, init, paths,
@@ -299,7 +305,8 @@ full_backed_tsne_request <- function(data, output, policy,
         seed = settings$seed, optimizer = settings$optimizer,
         dimensions = settings$n_components,
         memory_bytes = massive_memory_bytes(memory_limit),
-        devices = devices, keep_knn = settings$keep_knn)
+        devices = devices, keep_knn = settings$keep_knn,
+        target_recall = settings$target_recall)
     full_backed_pipeline_start(data, output,
         settings$n_components, memory_limit, settings$Y_init,
         controls, checkpoint, resume, settings$keep_knn)
@@ -338,7 +345,7 @@ run_full_backed_tsne <- function(data, nn, settings, extra, controls,
     paths <- request$paths
     knn <- full_backed_knn_stage(data, policy$n_neighbors,
         backend, workers, paths, memory_limit, devices,
-        request$state)
+        request$state, settings$target_recall)
     graph_stage <- full_backed_tsne_graph_stage(knn$object,
         policy$perplexity, paths, memory_limit, workers,
         settings$keep_knn, knn$state)

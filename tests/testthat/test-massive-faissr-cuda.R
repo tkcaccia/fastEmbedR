@@ -237,12 +237,15 @@ test_that("full-graph exact CUDA KNN uses faissR and excludes self", {
         reference_chunk_rows = 11L, memory_limit = "256MB",
         audit_rows = 5L
     )
-    expect_identical(graph$method, "faiss_gpu_flat_sharded")
+    expect_identical(graph$method, "faiss_gpu_flat_file_batch")
     expect_identical(graph$knn_provider, "faissR")
-    expect_identical(graph$query_storage, "R_float32")
+    expect_identical(graph$query_storage, "file_backed_float32")
     expect_true(graph$exact)
     expect_true(graph$recall_audited)
     expect_equal(graph$observed_recall, 1)
+    expect_length(graph$device_ids, 1L)
+    expect_length(graph$resources$peak_device_bytes_by_id, 1L)
+    expect_gt(graph$resources$peak_device_bytes_by_id[[1L]], 0)
     distance <- as.matrix(stats::dist(data))
     diag(distance) <- Inf
     for (row in seq_len(nrow(data))) {
@@ -271,8 +274,36 @@ test_that("private faissR IVF index updates nprobe in place", {
         k = 4L, backend = "cpu", method = "flat", n_threads = 1L)
     expect_identical(found$nprobe, 8L)
     expect_equal(found$indices, exact$indices)
+    smaller <- fastEmbedR:::faissr_gpu_index_search_cpp(
+        index$pointer, query, 3L)
+    expect_identical(smaller$indices,
+        exact$indices[, 1:3, drop = FALSE])
+    expect_error(fastEmbedR:::faissr_gpu_index_search_cpp(
+        index$pointer, query, 5L), "dimensions or k")
     expect_error(fastEmbedR:::faissr_gpu_index_set_nprobe_cpp(
         index$pointer, 9L), "nprobe")
+})
+
+test_that("resident CUDA IVF raises probe width after a pilot miss", {
+    skip_if_not_installed("float")
+    skip_if_not(fastEmbedR:::embedding_cuda_available_cpp())
+    skip_if_not(isTRUE(faissR::faiss_gpu_available()))
+    set.seed(151104)
+    data <- matrix(rnorm(1000L * 8L), nrow = 1000L)
+    tuned <- fastEmbedR:::fastembedr_cuda_ivf_tune_persistent(
+        data, 4L, list(nlist = 16L, nprobe = 1L), 0.99)
+    expect_gt(nrow(tuned$trace), 1L)
+    expect_gt(tuned$nprobe, 1L)
+    expect_gte(tuned$pilot$mean, 0.995)
+    expect_identical(tuned$pilot_guard_recall, 0.995)
+    expect_s3_class(tuned$out, "faissR_gpu_knn")
+    expect_identical(tuned$out$result_residency, "cuda")
+    expect_true(tuned$out$exclude_self)
+    expect_true(is.finite(tuned$out$cpu_training_seconds))
+    expect_true(is.finite(tuned$out$full_search_call_seconds))
+    sampled <- fastEmbedR:::faissr_gpu_knn_sample_cpp(
+        tuned$out, 1:5)
+    expect_false(any(sampled$indices == 1:5))
 })
 
 test_that("CUDA landmark embeddings run with faissR and no cuVS", {

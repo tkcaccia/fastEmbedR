@@ -40,6 +40,22 @@ test_that("small one-call Metal KNN uses one native worker", {
     expect_identical(route, list(backend = "metal", workers = 1L))
 })
 
+test_that("one-call KNN stage forwards selected recall tier", {
+    source <- structure(list(nrow = 100L, ncol = 4L),
+        class = "fastEmbedR_massive_matrix")
+    paths <- list(knn = tempfile("backed-tier-"))
+    observed <- NULL
+    testthat::local_mocked_bindings(
+        precompute_knn = function(..., target_recall) {
+            observed <<- target_recall
+            list(target_recall = target_recall)
+        }, .package = "fastEmbedR")
+    stage <- fastEmbedR:::full_backed_knn_stage(source, 10L,
+        "cpu", 1L, paths, "8GB", NULL, NULL, 0.90)
+    expect_identical(observed, 0.90)
+    expect_identical(stage$object$target_recall, 0.90)
+})
+
 test_that("Metal t-SNE reports graph-only streaming scope", {
     graph <- list(n_vertices = 1000000, n_edges = 60000000)
     plan <- list(backend = "metal", peak_ram = 2e9,

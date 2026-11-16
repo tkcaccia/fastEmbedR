@@ -3081,12 +3081,14 @@ __global__ void embed_epoch_coo_atomic_kernel(float* layout,
   }
 }
 
-__device__ void add_umap_delta(float* delta, std::size_t index,
+static __device__ __forceinline__ void add_umap_delta(
+                               float* delta, std::size_t index,
                                float gradient, double) {
   atomicAdd(delta + index, gradient);
 }
 
-__device__ void add_umap_delta(unsigned long long* delta,
+[[maybe_unused]] static __device__ __forceinline__ void add_umap_delta(
+                               unsigned long long* delta,
                                std::size_t index, float gradient,
                                double scale) {
   const auto value = __double2ll_rn(
@@ -3176,7 +3178,8 @@ __global__ void embed_epoch_coo_delta_kernel(const float* layout,
   }
 }
 
-__device__ void update_umap_row_atomic(float* layout,
+static __device__ __forceinline__ void update_umap_row_atomic(
+                                       float* layout,
                                        const int* neighbors,
                                        const float* weights,
                                        EmbedParams p,

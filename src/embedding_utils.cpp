@@ -23,7 +23,7 @@ extern "C" void F77_NAME(sgemm)(const char*, const char*, const int*,
     const float*, const int*, const float*, float*, const int* FCLEN FCLEN);
 #endif
 
-#include "native_knn_common.h"
+#include "float_matrix_common.h"
 
 using Rcpp::IntegerMatrix;
 using Rcpp::IntegerVector;
@@ -2378,21 +2378,13 @@ List project_embedding_affine_parallel_cpp(SEXP reference_data_sexp,
                                            double max_extrapolation = 2.5,
                                            int n_threads = 1) {
   fastembedr::FloatMatrix reference_data =
-    fastembedr::matrix_to_row_major_float(
-      reference_data_sexp, fastembedr::KnnMetric::Euclidean
-    );
+    fastembedr::matrix_to_row_major_float(reference_data_sexp);
   fastembedr::FloatMatrix query_data =
-    fastembedr::matrix_to_row_major_float(
-      query_data_sexp, fastembedr::KnnMetric::Euclidean
-    );
+    fastembedr::matrix_to_row_major_float(query_data_sexp);
   fastembedr::FloatMatrix reference_layout =
-    fastembedr::matrix_to_row_major_float(
-      reference_layout_sexp, fastembedr::KnnMetric::Euclidean
-    );
+    fastembedr::matrix_to_row_major_float(reference_layout_sexp);
   fastembedr::FloatMatrix projection_distances =
-    fastembedr::matrix_to_row_major_float(
-      projection_distances_sexp, fastembedr::KnnMetric::Euclidean
-    );
+    fastembedr::matrix_to_row_major_float(projection_distances_sexp);
   const int n_reference = reference_layout.nrow;
   const int n_components = reference_layout.ncol;
   const int n_query = projection_indices.nrow();

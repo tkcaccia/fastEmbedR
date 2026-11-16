@@ -30,6 +30,7 @@ test_that("multi-GPU graph reports the verified faissR provider", {
     graph <- list(indices_path = "indices", distances_path = "distances")
     candidates <- list(knn_provider = "faissR",
         query_storage = "R_float32", faissr_identity = "source-locked",
+        target_recall = 0.90,
         gpu_identity = c("GPU-A", "GPU-B"), per_device = list(),
         source_identity = "input", resources = list(output_bytes = 64),
         build_seconds = 1, query_seconds = 2)
@@ -43,6 +44,7 @@ test_that("multi-GPU graph reports the verified faissR provider", {
             expect_identical(found$knn_provider, "faissR")
             expect_identical(found$query_storage, "R_float32")
             expect_identical(found$faissr_identity, "source-locked")
+            expect_identical(found$target_recall, 0.90)
             candidates$knn_provider <- "fastEmbedR_native"
             expect_error(result(graph, candidates, "ivf_sharded",
                 c(0L, 1L), 32, 64, proc.time()[[3L]]),
@@ -151,6 +153,7 @@ test_that("multi-GPU IVF resume keeps only verified complete shards", {
                 complete$row_range[[1L]],
                 diff(complete$row_range) + 1)
             result <- list(backend = "cuda", method = "sharded_ivf",
+                target_recall = 0.99,
                 knn_provider = "faissR", query_storage = "R_float32",
                 faissr_identity = fastEmbedR:::massive_faissr_identity(),
                 nrow = view$nrow, ncol = 2L, n_reference = source$nrow,
@@ -176,6 +179,12 @@ test_that("multi-GPU IVF resume keeps only verified complete shards", {
                 method = "sharded_ivf", resume = TRUE)
             expect_identical(vapply(found, `[[`, "", "status"),
                 c("complete", "restart"))
+            changed <- result
+            changed$target_recall <- 0.9
+            saveRDS(changed, paste0(complete$output, ".result.rds"))
+            expect_error(status(complete, source, source, 2L,
+                "sharded_ivf", TRUE), "inconsistent")
+            saveRDS(result, paste0(complete$output, ".result.rds"))
             checkpoint(source, setup, found, devices, controls, TRUE)
             expect_true(all(file.exists(finished)))
             expect_false(any(file.exists(interrupted)))
@@ -351,6 +360,7 @@ test_that("multi-GPU KNN rejects a corrupted resumed merge prefix", {
 test_that("multi-GPU KNN reports exact recall for every device", {
     graph <- list(audit_sample_rows = c(5L, 15L, 17L),
         audit_row_recall = c(1, 0.9, 0.8),
+        target_recall = 0.95,
         per_device = list(
             list(query_row_range = c(1L, 10L),
                 resources = list(gpu_device = 0L)),
@@ -363,6 +373,9 @@ test_that("multi-GPU KNN reports exact recall for every device", {
     expect_equal(vapply(result, `[[`, 0, "recall_mean"), c(1, 0.85))
     expect_identical(vapply(result, `[[`, 0L, "rows_below_target"),
         c(0L, 2L))
+    graph$target_recall <- 0.90
+    expect_identical(vapply(audit(graph, c(0L, 1L))$per_device_audit,
+        `[[`, 0L, "rows_below_target"), c(0L, 1L))
     graph$audit_sample_rows <- c(5L, 15L, 21L)
     expect_error(audit(graph, c(0L, 1L)), "ownership is invalid")
     graph$audit_sample_rows <- 5L
@@ -401,6 +414,7 @@ test_that("saved full KNN candidates reject changed device ownership", {
     identity <- fastEmbedR:::massive_checkpoint_source_identity(source)
     saved <- structure(list(indices_path = paths[[1L]],
         distances_path = paths[[2L]], nrow = 6L, ncol = 3L,
+        target_recall = 0.99,
         n_reference = 6L, gpu_devices = devices,
         gpu_identity = c("GPU-A", "GPU-B"),
         source_identity = identity, reference_identity = identity,
@@ -428,6 +442,13 @@ test_that("saved full KNN candidates reject changed device ownership", {
             devices, shards), "candidates changed"),
         .package = "fastEmbedR")
     saved$per_device[[1L]]$query_row_range <- tasks[[1L]]$row_range
+    saved$target_recall <- 0.90
+    with_mocked_bindings(
+        massive_cuda_device_uuids = function(...) c("GPU-A", "GPU-B"),
+        expect_error(check(saved, source, 2L, prefix,
+            devices, shards), "candidates changed"),
+        .package = "fastEmbedR")
+    saved$target_recall <- 0.99
     saved$per_device[[2L]]$resources$chunk_rows <- 1.5
     with_mocked_bindings(
         massive_cuda_device_uuids = function(...) c("GPU-A", "GPU-B"),

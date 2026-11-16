@@ -44,8 +44,10 @@ silently copied to disk.}
 \item{memory_limit}{Host working-memory budget for file-backed KNN. When
 omitted, \code{options(memory_limit = ...)} is used, or \code{"8GB"}.}
 
-\item{devices}{Optional CUDA device indices for file-backed KNN. Resident
-\code{precompute_knn()} does not accept this argument.}
+\item{devices}{Optional distinct CUDA device indices. For resident input,
+explicit devices use faissR Flat or IVF and return host KNN matrices;
+multiple devices use a replicated index. File-backed input uses
+disjoint query ranges.}
 
 \item{checkpoint}{Save completed file-backed KNN query blocks.}
 
@@ -62,7 +64,8 @@ not a guarantee of measured recall. Exact search remains exact.}
 A resident \code{fastEmbedR_knn} object, or a file-backed
 \code{fastEmbedR_massive_graph} descriptor. Resident host results contain
 \code{indices} and \code{distances}; resident CUDA results additionally inherit
-from \code{fastEmbedR_gpu_knn} and own device-resident buffers.
+from \code{fastEmbedR_gpu_knn} and own device-resident buffers. Resident
+results record \code{knn_provider = "faissR"} and the selected engine.
 }
 \description{
 \code{precompute_knn()} exposes the same nearest-neighbor search
@@ -73,8 +76,10 @@ parameter.
 \details{
 CPU uses faissR Flat exact search below 5,000 observations and
 faissR's compiled FAISS HNSW interface for Euclidean distance otherwise.
-Cosine and correlation use faissR HNSW. HNSW uses the requested recall
-tier; recall is not audited during each call. Metal uses native exact
+Euclidean resident HNSW audits a full-reference pilot and increases
+search effort when needed; it fails if the pilot misses the target.
+Cosine and correlation use faissR HNSW with shape-based tuning and
+report recall as unaudited. Metal uses native exact
 search below
 4,096 rows and for inputs with at most 50,000 rows, 16,384 columns, and
 125 billion row-pair feature operations; otherwise it uses recall-tuned
@@ -82,7 +87,9 @@ IVF-Flat. CUDA uses faissR's native FAISS GPU exact search below 100,000
 observations and IVF-Flat above that threshold. Approximate Metal and CUDA
 routes use an internal
 recall tier and report whether their pilot audit met it.
-File-backed KNN currently requires the default 0.99 tier.
+File-backed approximate CPU HNSW and CUDA IVF use the selected recall
+tier for tuning; exact routes report exact search by construction.
+A requested tier is not a measured recall guarantee.
 
 A file-backed descriptor uses bounded KNN graph construction and writes
 indices and distances under \code{output}. CPU selects exact search up to 5,000
@@ -93,8 +100,10 @@ search. File-backed KNN currently supports Euclidean distance only. The
 result is a \code{fastEmbedR_massive_graph} descriptor; construct UMAP fuzzy
 weights or t-SNE affinities from it before full-graph fitting.
 
-The resident CUDA result remains on the GPU and can be passed directly to
-\code{\link[=umap_knn]{umap_knn()}} or \code{\link[=tsne_knn]{tsne_knn()}} with \code{backend = "cuda"}. CPU and Metal
+A resident CUDA result without explicit \code{devices} remains on the GPU and
+can be passed directly to \code{\link[=umap_knn]{umap_knn()}} or \code{\link[=tsne_knn]{tsne_knn()}} with
+\code{backend = "cuda"}. An explicit device selection returns host matrices.
+CPU and Metal
 results contain one-based \code{indices} and \code{distances} matrices. Every result
 excludes the observation itself. An unavailable requested backend raises an
 error; no CPU fallback is reported as GPU work.

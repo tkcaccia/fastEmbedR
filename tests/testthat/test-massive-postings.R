@@ -16,6 +16,10 @@ test_that("physical postings preserve all source rows and IDs", {
     expect_identical(reopened$postings$counts, index$counts)
     expect_true(file.exists(index$manifest_path))
     expect_s3_class(index, "fastEmbedR_massive_postings")
+    expect_identical(index$provider, "faissR")
+    expect_identical(index$backend_used,
+        "faissr_cpu_posting_build")
+    expect_true(is.finite(index$build_seconds))
     expect_identical(index$method, "nearest_center_physical_postings")
     expect_equal(sum(index$counts), nrow(values))
     expect_equal(tail(index$offsets, 1L), nrow(values))
@@ -234,7 +238,7 @@ test_that("posting scans match full exact KNN when all lists are probed", {
     expect_true(observed$exact)
     expect_true(all(observed$candidate_count == 44))
     expect_identical(observed$backend_used,
-        "native_cpu_posting_scan")
+        "faissr_cpu_posting_scan")
     expect_equal(observed$posting_read_bytes,
         45 * (4 * ncol(values) + 4))
     grouped <- massive_search_postings(postings$features,
@@ -301,7 +305,7 @@ test_that("posting recall pilot detects weak probes before graph build", {
     expect_true(strong$sample_target_met)
     expect_equal(strong$observed_recall, 1)
     expect_identical(strong$posting_backend,
-        "native_cpu_posting_scan")
+        "faissr_cpu_posting_scan")
     expect_identical(strong$reference_backend,
         "faiss_cpu_stream_exact")
     expect_true(all(strong$candidate_count == 7))
@@ -311,7 +315,7 @@ test_that("posting recall pilot detects weak probes before graph build", {
         centers, target_recall = 2), "Invalid recall pilot")
     query <- source
     query$selected_rows <- c(0, 1)
-    expect_error(fastEmbedR:::massive_posting_search_cpp(query,
+    expect_error(fastEmbedR:::faissr_posting_search_cpp(query,
         postings$features$path, postings$ids_path,
         postings$offsets_path, centers, 1, 2L, 1L, 2L,
         4L, 1L, TRUE, postings$nrow, FALSE),
@@ -407,7 +411,7 @@ test_that("posting search writes a reusable exact full graph", {
     expect_false(file.exists(paste0(
         sub("\\.indices\\.u32$", "", grouped$indices_path),
         ".grouped.indices.u32")))
-    expect_identical(graph$method, "native_cpu_posting_scan")
+    expect_identical(graph$method, "faissr_cpu_posting_scan")
     expect_true(graph$exact)
     expect_true(graph$recall_audited)
     expect_equal(graph$observed_recall, 1)

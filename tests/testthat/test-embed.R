@@ -589,16 +589,19 @@ test_that("CUDA UMAP keeps native fastEmbedR GPU KNN on device", {
     expect_equal(fit$parameters$knn_residency, "cuda_device")
 })
 
-test_that("one-call CUDA embeddings use faissR host KNN", {
+test_that("explicit CUDA devices preserve faissR host KNN output", {
     x <- matrix(stats::rnorm(32L), 8L, 4L)
     y_init <- matrix(0, 8L, 2L)
     captured <- new.env(parent = emptyenv())
     captured$methods <- list()
+    captured$devices <- list()
     with_mocked_bindings(
         run_faissr_cuda_embedding_knn = function(
                 data, k, method, metric, output, target_recall,
-                devices = NULL) {
+                devices = NULL, prefer_resident = FALSE,
+                retain_data = FALSE) {
             captured$methods[[length(captured$methods) + 1L]] <- method
+            captured$devices[[length(captured$devices) + 1L]] <- devices
             idx <- t(vapply(seq_len(nrow(data)), function(i) {
                 head(setdiff(seq_len(nrow(data)), i), k)
             }, integer(k)))
@@ -637,17 +640,19 @@ test_that("one-call CUDA embeddings use faissR host KNN", {
         {
             fit_umap <- umap(
                 x, n_neighbors = 3L, backend = "cuda",
-                keep_knn = TRUE
+                keep_knn = TRUE, devices = 0L
             )
             fit_tsne <- tsne(
                 x, perplexity = 2, Y_init = y_init,
-                backend = "cuda", keep_knn = TRUE
+                backend = "cuda", keep_knn = TRUE,
+                devices = 0L
             )
         },
         .package = "fastEmbedR"
     )
 
     expect_equal(captured$methods, list("exact", "exact"))
+    expect_equal(captured$devices, list(0L, 0L))
     expect_false(captured$umap_gpu_input)
     expect_true(captured$umap_distances_null)
     expect_false(captured$tsne_gpu_input)

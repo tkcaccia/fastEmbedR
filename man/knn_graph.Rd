@@ -12,7 +12,8 @@ knn_graph(
   weight = c("snn", "distance", "binary"),
   mutual = FALSE,
   prune = 0,
-  n.cores = NULL
+  n.cores = NULL,
+  target_recall = NULL
 )
 }
 \arguments{
@@ -36,6 +37,11 @@ inverse distance (\code{"distance"}), or unit weights (\code{"binary"}).}
 non-negative threshold.}
 
 \item{n.cores}{CPU cores used by KNN search and graph construction.}
+
+\item{target_recall}{Requested approximate KNN recall tier: \code{0.9},
+\code{0.95}, or \code{0.99}. \code{NULL} uses
+\code{options(fastEmbedR.target_recall = ...)}, then \code{0.99}.
+Precomputed KNN keeps its own provenance.}
 }
 \value{
 A compact \code{fastEmbedR_graph} list with \code{from}, \code{to}, \code{weight},
@@ -44,8 +50,7 @@ A compact \code{fastEmbedR_graph} list with \code{from}, \code{to}, \code{weight
 \description{
 \code{knn_graph()} converts a data matrix, a \code{fastEmbedR_embedding}, or a
 precomputed KNN object into a native undirected edge graph. When neighbors
-must be computed, the function uses fastEmbedR's existing native KNN route;
-it does not expose a second nearest-neighbor tuning API.
+must be computed, the function uses fastEmbedR's faissR-backed KNN route.
 }
 \examples{
 x <- scale(as.matrix(iris[, 1:4]))

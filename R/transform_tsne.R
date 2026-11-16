@@ -494,7 +494,8 @@ landmark_reference_knn <- function(x_landmarks,
                                     k,
                                     backend,
                                     n_threads,
-                                    metric = "euclidean") {
+                                    metric = "euclidean",
+                                    target_recall = 0.99) {
     knn_backend <- embedding_knn_backend(backend)
     fastembedr_nn_without_self(
         x_landmarks,
@@ -505,7 +506,7 @@ landmark_reference_knn <- function(x_landmarks,
         output = fastembedr_knn_output_type(x_landmarks, knn_backend),
         n_threads = n_threads,
         tuning = "auto",
-        target_recall = 0.99,
+        target_recall = target_recall,
         keep_gpu = identical(knn_backend, "cuda")
     )
 }
@@ -516,7 +517,8 @@ landmark_projection_knn <- function(x_landmarks,
                                     backend,
                                     seed,
                                     n_threads = NULL,
-                                    metric = "euclidean") {
+                                    metric = "euclidean",
+                                    target_recall = 0.99) {
     backend <- as.character(backend)[1L]
     if (length(backend) != 1L || is.na(backend) || !nzchar(backend)) {
         backend <- "cpu"
@@ -526,7 +528,8 @@ landmark_projection_knn <- function(x_landmarks,
         backend,
         n_reference = nrow(x_landmarks),
         n_query = nrow(x_query),
-        p = ncol(x_landmarks)
+        p = ncol(x_landmarks),
+        target_recall = target_recall
     )
     result <- fastembedr_native_query_knn(
         x_landmarks,
@@ -863,6 +866,7 @@ run_full_landmark_tsne <- function(state, request) {
         verbose = request$verbose,
         n.cores = request$n_threads,
         affinity_k = request$affinity_k,
+        target_recall = request$target_recall,
         devices = request$devices
     )
     fit <- do.call(tsne, c(args, request$extra))
@@ -947,7 +951,8 @@ run_landmark_tsne_reference <- function(state, request, policy) {
         k = policy$n_neighbors,
         backend = request$backend,
         n_threads = request$n_threads,
-        metric = state$metric
+        metric = state$metric,
+        target_recall = request$target_recall
     )
     layout <- do.call(
         tsne_knn,
@@ -1026,6 +1031,7 @@ fit_landmark_tsne_reference <- function(state, request) {
     )
     state$policy <- policy
     state$reference_time <- result$time
+    state$reference_knn_recall <- result$value$knn$pilot_recall %||% NA_real_
     state$reference_fit <- landmark_tsne_reference_fit(
         result,
         state,
@@ -1115,7 +1121,8 @@ compute_landmark_tsne_projection_knn <- function(
         backend = request$backend,
         seed = request$seed + 503L,
         n_threads = request$n_threads,
-        metric = state$metric
+        metric = state$metric,
+        target_recall = request$target_recall
     )
 }
 
@@ -1528,6 +1535,9 @@ landmark_tsne_parameters <- function(state, request) {
         landmark_fraction = state$n_landmarks / state$n,
         landmark_selection = state$selection$method,
         metric = state$metric,
+        target_recall = request$target_recall,
+        reference_knn_recall = state$reference_knn_recall,
+        projection_knn_recall = projection$knn$pilot_recall %||% NA_real_,
         keep_knn = request$keep_knn,
         provenance = "landmark_tsne_fixed_reference_native_cpp"
     )
@@ -1598,6 +1608,7 @@ run_landmark_tsne <- function(data, nn, settings, controls, extra) {
         n_components = settings$n_components,
         standardize = settings$standardize, pca_dims = settings$pca_dims,
         metric = settings$metric, seed = settings$seed,
+        target_recall = settings$target_recall,
         affinity_k = settings$affinity_k,
         backend = settings$backend, keep_knn = settings$keep_knn,
         devices = settings$devices,

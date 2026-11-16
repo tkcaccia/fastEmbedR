@@ -107,7 +107,8 @@ massive_knn_reference <- function(reference, k, method,
     if (method %in% c("faiss_hnsw", "hnsw")) return(
         massive_faiss_hnsw_reference(reference, k, n.cores,
             hnsw_build, ef_search, target_recall))
-    if (backend == "metal") return(massive_metal_reference(reference))
+    if (backend == "metal") return(massive_metal_reference(
+        reference, target_recall))
     if (backend == "cuda" && cuda_provider != "faissR") stop(
         "CUDA KNN indices must be built by faissR.", call. = FALSE)
     started <- proc.time()[[3L]]
@@ -117,7 +118,7 @@ massive_knn_reference <- function(reference, k, method,
     storage <- input$storage
     if (backend == "cuda") {
         return(massive_faissr_cuda_reference(
-            matrix, k, method, started, storage))
+            matrix, k, method, started, storage, target_recall))
     }
     if (method == "exact") {
         index <- faissr_flat_index_build_cpp(matrix, n.cores)
@@ -150,13 +151,13 @@ massive_knn_reference_input <- function(reference, backend, method,
 }
 
 massive_faissr_cuda_reference <- function(data, k, method,
-                                            started, storage) {
+        started, storage, target_recall) {
     if (!method %in% c("exact", "ivf")) stop(
         "faissR CUDA landmark KNN requires exact or IVF search.",
         call. = FALSE)
     params <- if (method == "ivf") {
         utils::getFromNamespace("cuda_ivf_params", "faissR")(
-            nrow(data), ncol(data), k, "euclidean", 0.99)
+            nrow(data), ncol(data), k, "euclidean", target_recall)
     } else list(nlist = 1L, nprobe = 1L,
         tuning_benchmark_source = "exact_by_construction")
     device <- as.integer(massive_cuda_memory_cpp()$device)
@@ -177,7 +178,7 @@ massive_faissr_cuda_reference <- function(data, k, method,
         tuning_source = params$tuning_benchmark_source)
 }
 
-massive_metal_reference <- function(reference) {
+massive_metal_reference <- function(reference, target_recall) {
     if (!requireNamespace("float", quietly = TRUE)) stop(
         "File-backed Metal KNN requires `float`.", call. = FALSE)
     started <- proc.time()[[3L]]
@@ -186,7 +187,8 @@ massive_metal_reference <- function(reference) {
         4 * as.double(reference$nrow) * reference$ncol, TRUE)
     list(matrix = data, build_seconds = unname(
         proc.time()[[3L]] - started),
-        reference_storage = "R_float32")
+        reference_storage = "R_float32", provider = "faissR",
+        target_recall = target_recall)
 }
 
 massive_faiss_hnsw_reference <- function(reference, k, n.cores,
@@ -229,8 +231,15 @@ massive_knn_query <- function(state, query, k, method,
         if (!is.null(state$pilot)) out[names(state$pilot)] <- state$pilot
         return(out)
     }
-    if (backend == "metal") return(faissr_metal_query_knn_cpp(
-        state$matrix, query, k, "exact", "euclidean", 0.99))
+    if (backend == "metal") {
+        out <- faissr_metal_query_knn_cpp(
+            state$matrix, query, k, "exact", "euclidean",
+            state$target_recall)
+        fastembedr_check_metal_query_knn(out, nrow(state$matrix),
+            nrow(query), k, "exact", "euclidean",
+            state$target_recall)
+        return(out)
+    }
     if (method %in% c("faiss_hnsw", "hnsw")) return(
         faissr_hnsw_index_search_cpp(state$index$pointer, query,
             k, if (ef_search == 0L) state$index$efSearch else ef_search,
@@ -275,8 +284,7 @@ massive_knn_finish <- function(indices, distances, parts,
 }
 
 massive_knn_checkpoint <- function(x, setup, resume) {
-    path <- sub("\\.indices\\.u32$", ".checkpoint.rds",
-        setup$paths[["indices"]])
+    path <- sub("\\.indices\\.u32$", ".checkpoint.rds", setup$paths[[1L]])
     settings <- list(
         version = 1L,
         implementation = massive_checkpoint_implementation_identity(),
@@ -286,11 +294,12 @@ massive_knn_checkpoint <- function(x, setup, resume) {
         query = massive_checkpoint_source_identity(x),
         reference = massive_checkpoint_source_identity(setup$reference),
         k = setup$k, method = setup$method,
+        target_recall = setup$target_recall,
         backend = setup$backend, workers = setup$workers,
         build_threads = if (setup$method == "hnsw") 1L else NULL,
         chunk_rows = setup$resources$chunk_rows)
-    if (!is.null(setup$cuda_provider)) settings$cuda_provider <-
-        setup$cuda_provider
+    if (!is.null(setup$cuda_provider))
+        settings$cuda_provider <- setup$cuda_provider
     if ((setup$ef_search %||% 0L) > 0L) settings$ef_search <- setup$ef_search
     if (setup$method == "stream_exact")
         settings$reference_chunk_rows <- setup$resources$reference_chunk_rows
@@ -534,7 +543,7 @@ massive_knn_setup <- function(x, reference, k, output, backend,
         n.cores, method, chunk_rows, memory_limit, resume,
         cuda_memory = TRUE, reference_chunk_rows = NULL,
         allow_final_resume = FALSE, ef_search = 0L,
-        cuda_provider = "faissR") {
+        cuda_provider = "faissR", target_recall = 0.99) {
     if (!inherits(x, "fastEmbedR_massive_matrix"))
         stop("`x` must be a massive_matrix() descriptor.", call. = FALSE)
     if (is.list(reference) && inherits(reference$data,
@@ -577,7 +586,7 @@ massive_knn_setup <- function(x, reference, k, output, backend,
         resume, allow_final_resume)
     list(reference = reference, k = k, backend = backend,
         method = method, workers = workers, resources = resources,
-        paths = paths, ef_search = ef_search,
+        paths = paths, ef_search = ef_search, target_recall = target_recall,
         cuda_provider = if (backend == "cuda") cuda_provider else NULL)
 }
 
@@ -595,15 +604,12 @@ massive_knn_result <- function(x, setup, state, elapsed,
     out <- list(indices_path = paths[["indices"]],
         distances_path = paths[["distances"]],
         nrow = x$nrow, ncol = setup$k, n_reference = setup$reference$nrow,
-        source_identity = if (x$format != "memory") {
-            massive_checkpoint_source_identity(x)
-        } else NULL,
-        reference_identity = if (setup$reference$format != "memory") {
-            massive_checkpoint_source_identity(setup$reference)
-        } else NULL,
+        source_identity = if (x$format != "memory")
+            massive_checkpoint_source_identity(x) else NULL,
+        reference_identity = if (setup$reference$format != "memory")
+            massive_checkpoint_source_identity(setup$reference) else NULL,
         output_identity = massive_checkpoint_file_identity(unname(paths)),
-        implementation_identity =
-            massive_checkpoint_implementation_identity(),
+        implementation_identity = massive_checkpoint_implementation_identity(),
         faissr_identity = if (setup$backend == "cpu" ||
             identical(state$provider, "faissR"))
             massive_faissr_identity() else NULL,
@@ -616,9 +622,14 @@ massive_knn_result <- function(x, setup, state, elapsed,
         index_reused = setup$backend != "metal" &&
             (setup$backend == "cuda" ||
                 setup$method %in% c("hnsw", "exact")),
-        target_recall = 0.99, recall_audited = setup$method %in% c(
+        target_recall = setup$target_recall,
+        recall_status = if (setup$method %in% c("exact", "stream_exact",
+            "sharded_exact")) "exact_by_construction" else
+                "not_runtime_audited",
+        recall_audited = setup$method %in% c(
             "exact", "stream_exact", "sharded_exact"),
-        pilot_recall = elapsed$pilot_recall,
+        pilot_recall = if (setup$method %in% c("exact", "stream_exact",
+            "sharded_exact")) NA_real_ else elapsed$pilot_recall,
         pilot_id_recall = elapsed$pilot_id_recall,
         pilot_min_row_recall = elapsed$pilot_min_row_recall,
         pilot_recall_metric = elapsed$pilot_recall_metric,
@@ -665,8 +676,10 @@ massive_knn_query_storage <- function(x, setup, state) {
 #' pilot recall is not guaranteed for later rows. For CUDA IVF,
 #' `pilot_recall` counts distance-equivalent ties at the exact kth distance;
 #' `pilot_id_recall` reports mean neighbor-ID overlap. Persistent sharded
-#' IVF also requires `pilot_min_row_recall` to meet its target; stricter
-#' probing can increase query time substantially.
+#' IVF also requires tie-aware `pilot_min_row_recall` and mean strict
+#' `pilot_id_recall` to meet the target. `pilot_min_strict_row_recall`
+#' and `pilot_tied_rows` expose boundary-tie effects. Stricter probing
+#' can increase query time substantially.
 #' CPU uses exact search by default below 5,000 landmarks.
 #' Output files contain row-major, one-based `uint32` landmark indices and
 #' float32 distances. HNSW's 0.99 recall is a target, not a measured result.
@@ -710,6 +723,8 @@ massive_knn_query_storage <- function(x, setup, state) {
 #' @param ef_search CPU HNSW landmark search effort. Zero uses the faissR
 #'   preset. A positive value must be at least `k + 1`; it changes search
 #'   effort but does not guarantee recall, which needs a separate audit.
+#' @param target_recall Requested tuning tier: `0.9`, `0.95`, or `0.99`.
+#'   `NULL` uses `options(fastEmbedR.target_recall = ...)`, then `0.99`.
 #' @return A lightweight `fastEmbedR_massive_knn` descriptor.
 #' @keywords internal
 massive_landmark_knn <- function(x, reference, k, output,
@@ -718,7 +733,9 @@ massive_landmark_knn <- function(x, reference, k, output,
             "hnsw", "ivf", "sharded_exact", "sharded_ivf"),
         chunk_rows = NULL, reference_chunk_rows = NULL,
         memory_limit = "8GB", checkpoint = FALSE, resume = FALSE,
-        devices = NULL, checkpoint_every = 100L, ef_search = 0L) {
+        devices = NULL, checkpoint_every = 100L, ef_search = 0L,
+        target_recall = NULL) {
+    target_recall <- fastembedr_target_recall(target_recall)
     massive_checkpoint_validate_controls(checkpoint, resume)
     method <- match.arg(method)
     checkpoint_every <- integer_scalar(checkpoint_every)
@@ -731,32 +748,30 @@ massive_landmark_knn <- function(x, reference, k, output,
         massive_landmark_knn_sharded(x, reference, k, output,
             backend, n.cores, chunk_rows, reference_chunk_rows,
             memory_limit, checkpoint, resume, devices, method,
-            checkpoint_every))
-    if (checkpoint_every != 100L) stop(
-        "`checkpoint_every` requires sharded CUDA search.",
-        call. = FALSE)
-    if (!is.null(reference_chunk_rows) && backend == "cuda") stop(
-        "`reference_chunk_rows` requires CPU stream_exact; ",
-        "no CUDA fallback was used.", call. = FALSE)
+            checkpoint_every, target_recall))
+    if (checkpoint_every != 100L)
+        stop("`checkpoint_every` requires sharded CUDA search.")
+    if (!is.null(reference_chunk_rows) && backend == "cuda")
+        stop("CUDA does not support reference_chunk_rows; no fallback.")
     if (!is.null(devices)) {
         devices <- massive_validate_devices(devices, backend, x$nrow)
         if (length(devices) > 1L) return(massive_knn_devices(x,
             reference, k, output, n.cores, method, chunk_rows,
-            memory_limit, checkpoint, resume, devices))
+            memory_limit, checkpoint, resume, devices, target_recall))
         massive_cuda_select_cpp(devices[1L])
     }
     setup <- massive_knn_setup(x, reference, k, output, backend,
         n.cores, method, chunk_rows, memory_limit, resume,
         reference_chunk_rows = reference_chunk_rows, ef_search = ef_search,
-        cuda_provider = if (backend == "cuda") "faissR" else NULL)
+        cuda_provider = if (backend == "cuda") "faissR" else NULL,
+        target_recall = target_recall)
     saved <- if (resume) massive_knn_checkpoint(x, setup, TRUE) else NULL
-    message("EXPERIMENTAL landmark KNN: ", setup$method,
-        "; backend=", setup$backend, "; CPU workers=", setup$workers,
-        "; chunk rows=", setup$resources$chunk_rows)
+    message("EXPERIMENTAL landmark KNN: ", setup$method, "; ", setup$backend)
     state <- massive_knn_reference(setup$reference, setup$k, setup$method,
         if (checkpoint && setup$method == "hnsw") 1L else setup$workers,
         setup$backend, setup$resources, ef_search = setup$ef_search,
-        cuda_provider = setup$cuda_provider %||% "faissR")
+        cuda_provider = setup$cuda_provider %||% "faissR",
+        target_recall = target_recall)
     if (checkpoint && !resume) saved <- massive_knn_checkpoint(x,setup,FALSE)
     elapsed <- massive_knn_stream(x, state, setup$k, setup$method,
         setup$workers, setup$backend, setup$resources, setup$paths, saved)
@@ -842,7 +857,7 @@ massive_landmark_run_shard <- function(x, reference, setup,
     search <- if (setup$method == "sharded_ivf") "ivf" else "exact"
     state <- massive_knn_reference(view,
         as.integer(min(setup$k, count)), search, setup$workers,
-        "cuda", cuda_provider = "faissR")
+        "cuda", cuda_provider = "faissR", target_recall = setup$target_recall)
     massive_landmark_shard_probe(x, setup, state, saved, count)
     if (shard == 0L && !is.null(saved))
         massive_sharded_restore_first(setup$parts,
@@ -908,7 +923,7 @@ massive_landmark_sharded_setup <- function(x, reference, k, output,
         backend, n.cores, chunk_rows, reference_chunk_rows,
         memory_limit, checkpoint, resume, devices,
         allow_final_resume = FALSE, method = "sharded_exact",
-        checkpoint_every = 100L) {
+        checkpoint_every = 100L, target_recall = 0.99) {
     if (backend != "cuda") stop(
         "Sharded exact KNN needs CUDA; no fallback.", call. = FALSE)
     if (method == "sharded_ivf" && (checkpoint || resume)) stop(
@@ -943,6 +958,7 @@ massive_landmark_sharded_setup <- function(x, reference, k, output,
         backend = backend, method = method,
         workers = normalize_nn_threads(n.cores),
         resources = resources, checkpoint_every = checkpoint_every,
+        target_recall = target_recall,
         cuda_provider = "faissR")
     identity <- list(query = massive_checkpoint_source_identity(x),
         reference = massive_checkpoint_source_identity(reference))
@@ -957,19 +973,20 @@ massive_landmark_sharded_setup <- function(x, reference, k, output,
 massive_landmark_knn_sharded <- function(x, reference, k, output,
         backend, n.cores, chunk_rows, reference_chunk_rows,
         memory_limit, checkpoint, resume, devices, method,
-        checkpoint_every) {
+        checkpoint_every, target_recall) {
     if (!is.null(devices)) {
         devices <- massive_validate_devices(devices, backend, x$nrow)
         if (length(devices) > 1L) return(
             massive_knn_sharded_devices(x, reference, k, output,
                 n.cores, chunk_rows, reference_chunk_rows,
                 memory_limit, checkpoint, resume, devices, method,
-                checkpoint_every))
+                checkpoint_every, target_recall))
     }
     request <- massive_landmark_sharded_setup(x, reference, k,
         output, backend, n.cores, chunk_rows, reference_chunk_rows,
         memory_limit, checkpoint, resume, devices,
-        method = method, checkpoint_every = checkpoint_every)
+        method = method, checkpoint_every = checkpoint_every,
+        target_recall = target_recall)
     setup <- request$setup
     parts <- setup$parts
     committed <- FALSE
@@ -1196,6 +1213,8 @@ massive_full_knn_checkpoint <- function(x, setup, resume) {
         reference_rows = setup$resources$reference_chunk_rows,
         workers = setup$workers,
         backend = setup[["backend"]] %||% "cpu",
+        gpu_identity = if (identical(setup$backend, "cuda"))
+            massive_cuda_device_uuids(setup$device) else NULL,
         method = setup$method,
         provider_method = setup$backend_used,
         target_recall = setup$target_recall,
@@ -1468,7 +1487,7 @@ massive_metal_sharded_resources <- function(x, k, chunk_rows,
 massive_sharded_signature <- function(setup, backend, source_identity) {
     faissr_cuda <- identical(setup$cuda_provider, "faissR")
     massive_checkpoint_signature(Filter(Negate(is.null), list(
-        version = if (backend == "cpu") 4L else if (faissr_cuda) 3L else 2L,
+        version = if (backend == "cpu") 5L else if (faissr_cuda) 3L else 2L,
         source = source_identity,
         implementation = massive_checkpoint_implementation_identity(),
         faissr = if (backend == "cpu" || faissr_cuda)
@@ -1493,7 +1512,8 @@ massive_sharded_checkpoint <- function(x, setup, paths, backend,
     if (!resume) {
         if (file.exists(path)) stop("Sharded checkpoint exists; use resume.")
         state <- list(signature = signature, shard = 0L,
-            completed_rows = 0, pilot_signature = NULL)
+            completed_rows = 0, pilot_signature = NULL,
+            active_index = NULL)
         massive_checkpoint_write(state, path)
         return(list(path = path, state = state))
     }
@@ -1520,8 +1540,101 @@ massive_sharded_checkpoint <- function(x, setup, paths, backend,
             setup$k * 4 else full) &&
         all(sizes <= full) && (shard == 0 || all(exists)) &&
         (rows == 0 || all(exists))
+    if (isTRUE(valid) && backend == "cpu" && rows > 0 &&
+        is.null(state$active_index))
+        valid <- FALSE
+    if (!is.null(state$active_index)) valid <- isTRUE(valid) &&
+        massive_hnsw_snapshot_valid(state$active_index, path,
+                                    shard, backend)
     if (!isTRUE(valid)) stop("Sharded KNN checkpoint or files do not match.")
     list(path = path, state = state)
+}
+
+massive_hnsw_snapshot_valid <- function(snapshot, checkpoint_path,
+        shard, backend) {
+    if (backend != "cpu" || !is.list(snapshot) ||
+        !is.numeric(shard) || length(shard) != 1L ||
+        !is.finite(shard)) return(FALSE)
+    expected <- paste0(checkpoint_path, ".shard-", shard + 1L,
+        ".faiss")
+    if (!file.exists(expected) ||
+        !identical(snapshot$file, expected) ||
+        !identical(snapshot$shard, shard)) return(FALSE)
+    bytes <- file.info(expected)$size
+    hash <- unname(tools::md5sum(expected))
+    is.character(snapshot$md5) && length(snapshot$md5) == 1L &&
+        !is.na(hash) && identical(snapshot$md5, hash) &&
+        is.numeric(snapshot$bytes) && identical(snapshot$bytes, bytes) &&
+        is.list(snapshot$setting) &&
+        is.character(snapshot$probe_signature) &&
+        length(snapshot$probe_signature) == 1L
+}
+
+massive_hnsw_snapshot_probe <- function(x, state, setup, count) {
+    rows <- as.integer(min(setup$resources$chunk_rows, x$nrow))
+    query <- massive_sharded_query(x, 1L, rows, "faiss_hnsw", "cpu")
+    found <- massive_knn_query(state, query,
+        as.integer(min(setup$k + 1L, count)),
+        "faiss_hnsw", setup$workers, "cpu",
+        setup$ef_search %||% 0L)
+    massive_knn_probe_signature(found)
+}
+
+massive_hnsw_snapshot_save <- function(x, state, setup, saved,
+        shard, count, setting) {
+    if (is.null(saved)) return(saved)
+    path <- paste0(saved$path, ".shard-", shard + 1L, ".faiss")
+    temporary <- paste0(path, ".tmp")
+    if (file.exists(path) || file.exists(temporary) ||
+        !is.null(saved$state$active_index)) stop(
+        "HNSW snapshot already exists; preserve and inspect it.",
+        call. = FALSE)
+    probe <- massive_hnsw_snapshot_probe(x, state, setup, count)
+    faissr_hnsw_index_save_cpp(state$index$pointer, temporary)
+    bytes <- file.info(temporary)$size
+    hash <- unname(tools::md5sum(temporary))
+    if (length(bytes) != 1L || !is.finite(bytes) || bytes <= 0 ||
+        length(hash) != 1L || is.na(hash) ||
+        !file.rename(temporary, path)) stop(
+        "Cannot finalize HNSW index snapshot.", call. = FALSE)
+    saved$state$active_index <- list(file = path, md5 = hash,
+        bytes = bytes, shard = shard, setting = setting,
+        probe_signature = probe)
+    massive_checkpoint_write(saved$state, saved$path)
+    saved
+}
+
+massive_hnsw_snapshot_load <- function(x, setup, saved, shard, count) {
+    snapshot <- saved$state$active_index
+    started <- proc.time()[[3L]]
+    pointer <- faissr_hnsw_index_load_cpp(snapshot$file,
+        setup$build_workers)
+    setting <- snapshot$setting
+    if (!isTRUE(attr(pointer, "native_persistence_supported")) ||
+        !identical(attr(pointer, "n"), as.integer(count)) ||
+        !identical(attr(pointer, "p"), as.integer(x$ncol)) ||
+        !identical(attr(pointer, "m"), setting$m) ||
+        !identical(attr(pointer, "ef_construction"),
+            setting$ef_construction) ||
+        !identical(attr(pointer, "ef_search"),
+            setting$ef_search)) stop(
+        "Restored FAISS HNSW index differs from checkpoint.",
+        call. = FALSE)
+    index <- list(pointer = pointer, method = "faissr_hnsw_persistent",
+        M = setting$m, efConstruction = setting$ef_construction,
+        efSearch = setting$ef_search,
+        tuning_rule = setting$tuning_rule,
+        tuning_benchmark_source = setting$tuning_benchmark_source,
+        target_recall = setting$target_recall, pilot = setting$pilot)
+    state <- list(index = index, build_seconds = 0,
+        load_seconds = unname(proc.time()[[3L]] - started),
+        reference_storage = "FAISS_native_file",
+        build_threads = setup$build_workers)
+    if (!identical(massive_hnsw_snapshot_probe(x, state, setup, count),
+            snapshot$probe_signature)) stop(
+        "Restored HNSW index changed the checkpoint probe.",
+        call. = FALSE)
+    state
 }
 
 massive_sharded_restore_first <- function(parts, completed, k) {
@@ -1565,7 +1678,7 @@ massive_saved_ivf_setting <- function(saved, shard) {
 }
 
 massive_sharded_result_valid <- function(found, method, backend,
-        cuda_provider) {
+        cuda_provider, target_recall) {
     if (backend == "cuda") {
         identical(cuda_provider, "faissR") &&
             identical(found$backend_used,
@@ -1573,7 +1686,9 @@ massive_sharded_result_valid <- function(found, method, backend,
             identical(found$method, method) &&
             isTRUE(found$index_reused) &&
             (method != "ivf" || isTRUE(
-                found$pilot_min_row_recall >= 0.99))
+                found$pilot_target_recall == target_recall &&
+                found$pilot_min_row_recall >= target_recall &&
+                found$pilot_id_recall >= target_recall))
     } else identical(found$backend, "cpu") &&
         identical(found$method,
             ifelse(method == "exact", "faissr_flat_query_reused",
@@ -1591,10 +1706,12 @@ massive_sharded_batch <- function(x, setup, parts, state, shard,
     found <- massive_knn_query(state, query, local_k,
         method, setup$workers, backend, setup$ef_search %||% 0L)
     valid <- massive_sharded_result_valid(found, method, backend,
-        setup$cuda_provider %||% "faissR")
+        setup$cuda_provider %||% "faissR",
+        setup$target_recall %||% 0.99)
     if (!valid) stop("Sharded KNN changed algorithm or backend.", call. = FALSE)
     ivf_setting <- if (method == "ivf") {
-        massive_sharded_ivf_setting(found, shard, first, count)
+        massive_sharded_ivf_setting(found, shard, first, count,
+            setup$target_recall %||% 0.99)
     } else NULL
     if (!is.null(saved) && !is.null(ivf_setting)) {
         previous <- massive_saved_ivf_setting(saved, shard)
@@ -1621,7 +1738,8 @@ massive_sharded_batch <- function(x, setup, parts, state, shard,
     list(rows = rows, saved = saved, ivf_setting = ivf_setting)
 }
 
-massive_sharded_ivf_setting <- function(found, shard, first, count) {
+massive_sharded_ivf_setting <- function(found, shard, first, count,
+        target_recall = 0.99) {
     values <- found[c("nlist", "nprobe", "pilot_rows",
         "tuning_attempts")]
     minimum <- found$pilot_min_row_recall
@@ -1632,7 +1750,12 @@ massive_sharded_ivf_setting <- function(found, shard, first, count) {
         values$nlist < 1L || values$nprobe < 1L ||
         values$nprobe > values$nlist ||
         length(minimum) != 1L || !is.numeric(minimum) ||
-        !is.finite(minimum) || minimum < 0.99 || minimum > 1) stop(
+        !is.finite(minimum) || minimum < target_recall || minimum > 1 ||
+        length(found$pilot_id_recall) != 1L ||
+        !is.numeric(found$pilot_id_recall) ||
+        !is.finite(found$pilot_id_recall) ||
+        found$pilot_id_recall < target_recall ||
+        !identical(found$pilot_target_recall, target_recall)) stop(
         "Sharded IVF query omitted effective tuning settings.",
         call. = FALSE)
     c(list(shard = shard + 1L, first_row = first,
@@ -1640,7 +1763,11 @@ massive_sharded_ivf_setting <- function(found, shard, first, count) {
         list(pilot_recall = found$pilot_recall,
             pilot_id_recall = found$pilot_id_recall,
             pilot_min_row_recall = minimum,
-            pilot_recall_metric = found$pilot_recall_metric))
+            pilot_min_strict_row_recall =
+                found$pilot_min_strict_row_recall %||% minimum,
+            pilot_tied_rows = found$pilot_tied_rows %||% 0L,
+            pilot_recall_metric = found$pilot_recall_metric,
+            target_recall = target_recall))
 }
 
 massive_faissr_ivf_search <- function(state, query, k, workers) {
@@ -1652,19 +1779,45 @@ massive_faissr_ivf_search <- function(state, query, k, workers) {
     })
 }
 
+massive_ivf_pilot_scores <- function(found, exact, k) {
+    rows <- nrow(exact$indices)
+    if (ncol(exact$indices) < k ||
+        !identical(dim(exact$indices), dim(exact$distances))) stop(
+        "Invalid exact IVF pilot reference.", call. = FALSE)
+    tie <- rep(FALSE, rows)
+    if (ncol(exact$indices) > k) {
+        gap <- exact$distances[, k + 1L] - exact$distances[, k]
+        tie <- abs(gap) <= pmax(1e-5,
+            1e-6 * abs(exact$distances[, k]))
+    }
+    if (is.null(found)) return(list(id = rep(0, rows),
+        distance = rep(0, rows), effective = rep(0, rows), tie = tie))
+    if (!identical(dim(found$indices), c(rows, k)) ||
+        !identical(dim(found$distances), c(rows, k))) stop(
+        "Invalid faissR IVF pilot result.", call. = FALSE)
+    id <- vapply(seq_len(rows), function(i)
+        mean(found$indices[i, ] %in% exact$indices[i, seq_len(k)]), 0.0)
+    distance <- vapply(seq_len(rows), function(i)
+        massive_recall_distance_row(exact$distances[i, seq_len(k)],
+            found$distances[i, ]), 0.0)
+    list(id = id, distance = distance,
+        effective = ifelse(tie, distance, id), tie = tie)
+}
+
 massive_faissr_ivf_pilot <- function(x, state, setup, count) {
+    target <- setup$target_recall %||% 0.99
+    distance_gate <- min(0.995, target + 0.005)
     rows <- as.integer(min(256L, x$nrow))
-    query <- massive_sharded_query(x, 1L, rows, "ivf", "cuda",
-        "faissR")
+    query <- massive_sharded_query(x, 1L, rows, "ivf", "cuda", "faissR")
     k <- as.integer(min(setup$k + 1L, count))
+    exact_k <- as.integer(min(k + 1L, count))
     exact <- utils::getFromNamespace(
         "nn_faiss_flat_float32_cpp", "faissR")(
-            state$matrix, query, k, FALSE,
+            state$matrix, query, exact_k, FALSE,
             setup$workers, "euclidean", "double")
     if (!isTRUE(exact$exact) ||
-        !identical(dim(exact$indices), c(rows, k))) stop(
-        "faissR IVF pilot did not obtain an exact reference.",
-        call. = FALSE)
+        !identical(dim(exact$indices), c(rows, exact_k))) stop(
+        "faissR IVF pilot did not obtain an exact reference.")
     probe <- as.integer(state$index$nprobe)
     attempts <- 0L
     repeat {
@@ -1674,28 +1827,28 @@ massive_faissr_ivf_pilot <- function(x, state, setup, count) {
         if (!is.null(found) && !identical(found$nprobe, probe)) stop(
             "faissR IVF index changed nprobe unexpectedly.",
             call. = FALSE)
-        id <- distance <- 0
-        if (!is.null(found)) {
-            id <- vapply(seq_len(rows), function(i)
-                mean(found$indices[i, ] %in% exact$indices[i, ]), 0.0)
-            distance <- vapply(seq_len(rows), function(i)
-                massive_recall_distance_row(exact$distances[i, ],
-                    found$distances[i, ]), 0.0)
-        }
-        if ((mean(distance) >= 0.995 && min(id) >= 0.99) ||
-            probe == state$index$nlist) break
+        score <- massive_ivf_pilot_scores(found, exact, k)
+        passed <- mean(score$distance) >= distance_gate &&
+            mean(score$id) >= target && min(score$effective) >= target
+        if (passed || probe == state$index$nlist) break
         probe <- as.integer(min(state$index$nlist,
             max(probe + 1L, probe * 2L)))
         faissr_gpu_index_set_nprobe_cpp(state$index$pointer, probe)
         state$index$nprobe <- probe
     }
-    if (mean(distance) < 0.99 || min(id) < 0.99) stop(
-        "faissR IVF pilot did not meet 0.99 recall.", call. = FALSE)
+    if (!passed) stop(sprintf(
+        "IVF pilot missed %.2f: mean IDs %.4f, min tie-aware %.4f, ",
+        target, mean(score$id), min(score$effective)),
+        "tie rows ", sum(score$tie), ", nprobe ", probe,
+        ".", call. = FALSE)
     state$pilot <- list(pilot_rows = rows,
-        tuning_attempts = attempts, pilot_recall = mean(distance),
-        pilot_id_recall = mean(id),
-        pilot_min_row_recall = min(id),
-        pilot_recall_metric = "distance_at_k")
+        tuning_attempts = attempts, pilot_recall = mean(score$distance),
+        pilot_id_recall = mean(score$id),
+        pilot_min_row_recall = min(score$effective),
+        pilot_min_strict_row_recall = min(score$id),
+        pilot_tied_rows = sum(score$tie),
+        pilot_recall_metric = "distance_at_k", pilot_target_recall = target,
+        pilot_distance_gate = distance_gate)
     state$matrix <- NULL
     state
 }
@@ -1705,19 +1858,110 @@ massive_hnsw_add_setting <- function(settings, observed) {
     c(settings, list(observed))
 }
 
+massive_hnsw_pilot_rows <- function(n, audit_rows) {
+    count <- as.integer(min(128L, floor(n / 2)))
+    if (count < 1L) stop("HNSW calibration needs at least two rows.")
+    pilot <- as.integer(floor((seq_len(count) - 0.25) * n /
+        count) + 1)
+    if (audit_rows > 0L) {
+        audited <- as.integer(floor((seq_len(audit_rows) - 0.5) *
+            n / audit_rows) + 1)
+        pilot <- setdiff(pilot, audited)
+    }
+    if (!length(pilot)) stop("No HNSW calibration rows remain.")
+    pilot
+}
+
+massive_hnsw_calibrate_shard <- function(x, state, setup,
+        first, count) {
+    if (state$index$method != "faissr_hnsw_persistent") stop(
+        "Expected CPU HNSW index was not built.", call. = FALSE)
+    rows <- massive_hnsw_pilot_rows(x$nrow,
+        setup$audit_rows %||% 0L)
+    query <- do.call(rbind, lapply(rows, function(row) {
+        massive_read_rows_cpp(x, row, 1L, 4 * x$ncol, TRUE)
+    }))
+    self_ids <- ifelse(rows >= first & rows < first + count,
+        rows - first + 1L, 0L)
+    requested <- setup$ef_search %||% 0L
+    pilot <- faissr_hnsw_index_calibrate_cpp(
+        state$index$pointer, query,
+        as.integer(self_ids), setup$k,
+        setup$target_recall %||% 0.99,
+        if (requested > 0L) requested else setup$k,
+        setup$build_workers %||% setup$workers)
+    if (!identical(pilot$pilot_reference, "full_cpu_flat") ||
+        !isTRUE(pilot$target_met) ||
+        pilot$pilot_rows != length(rows) ||
+        pilot$pilot_recall < pilot$pilot_guard_recall ||
+        pilot$target_recall != (setup$target_recall %||% 0.99)) stop(
+            "faissR HNSW pilot changed its recall reference or target.",
+            call. = FALSE)
+    if (requested > 0L && pilot$ef_search != requested) stop(
+        "Explicit efSearch missed the HNSW pilot recall guard.",
+        call. = FALSE)
+    state$index$efSearch <- as.integer(pilot$ef_search)
+    state$index$tuning_rule <- if (requested > 0L)
+        "explicit" else "full_reference_pilot"
+    state$index$pilot <- c(pilot, list(sample_rows = rows))
+    state
+}
+
 massive_sharded_hnsw_setting <- function(state, setup, shard,
         first, count, backend) {
     if (backend != "cpu") return(NULL)
     list(shard = shard + 1L, first_row = first,
         reference_rows = count, m = state$index$M,
         ef_construction = state$index$efConstruction,
-        ef_search = if ((setup$ef_search %||% 0L) > 0L)
+        ef_search = as.integer(max(if ((setup$ef_search %||% 0L) > 0L)
             setup$ef_search else state$index$efSearch,
+            min(setup$k + 1L, count))),
         tuning_rule = state$index$tuning_rule,
         tuning_benchmark_source =
             state$index$tuning_benchmark_source,
         target_recall = state$index$target_recall,
-        build_threads = state$build_threads)
+        build_threads = state$build_threads,
+        pilot = state$index$pilot)
+}
+
+massive_index_shard_state <- function(x, reference, setup, shard,
+        first, count, method, backend, saved) {
+    if (backend == "cpu" && !is.null(saved$state$active_index)) {
+        return(list(state = massive_hnsw_snapshot_load(x, setup,
+            saved, shard, count),
+            setting = saved$state$active_index$setting,
+            saved = saved))
+    }
+    provider <- setup$cuda_provider %||% "faissR"
+    tuning_k <- as.integer(min(setup$k + (backend != "cpu"), count))
+    state <- massive_knn_reference(reference, tuning_k,
+        method, setup$build_workers %||% setup$workers, backend,
+        hnsw_build = setup$hnsw_build, cuda_provider = provider,
+        target_recall = setup$target_recall %||% 0.99)
+    if (backend == "cuda" && method == "ivf" && provider == "faissR")
+        state <- massive_faissr_ivf_pilot(x, state, setup, count)
+    if (backend == "cpu") state <- massive_hnsw_calibrate_shard(
+        x, state, setup, first, count)
+    setting <- massive_sharded_hnsw_setting(state, setup,
+        shard, first, count, backend)
+    if (backend == "cpu") saved <- massive_hnsw_snapshot_save(
+        x, state, setup, saved, shard, count, setting)
+    list(state = state, setting = setting, saved = saved)
+}
+
+massive_index_shard_finish <- function(saved, shard, setting) {
+    if (is.null(saved)) return(saved)
+    snapshot <- saved$state$active_index$file %||% NULL
+    saved$state$hnsw_settings <- massive_hnsw_add_setting(
+        saved$state$hnsw_settings %||% list(), setting)
+    saved$state$shard <- shard + 1L
+    saved$state$completed_rows <- 0
+    saved$state$pilot_signature <- NULL
+    saved$state$active_index <- NULL
+    massive_checkpoint_write(saved$state, saved$path)
+    if (!is.null(snapshot) && !file.remove(snapshot)) stop(
+        "Completed HNSW snapshot could not be removed.", call. = FALSE)
+    saved
 }
 
 massive_index_shard <- function(x, setup, parts, shard,
@@ -1726,21 +1970,13 @@ massive_index_shard <- function(x, setup, parts, shard,
     first <- 1 + shard * base + min(shard, x$nrow %% setup$resources$n_shards)
     count <- base + as.integer(shard < x$nrow %% setup$resources$n_shards)
     reference <- massive_matrix_rows(x, first, count)
-    tuning_k <- as.integer(min(setup$k + (backend != "cpu"), count))
     method <- if (setup$method == "ivf_sharded") "ivf" else if
         (backend == "cpu") "faiss_hnsw" else "exact"
-    provider <- setup$cuda_provider %||% "faissR"
-    state <- massive_knn_reference(reference, tuning_k,
-        method, setup$build_workers %||% setup$workers, backend,
-        hnsw_build = setup$hnsw_build, cuda_provider = provider,
-        target_recall = setup$target_recall %||% 0.99)
-    if (backend == "cuda" && method == "ivf" && provider == "faissR")
-        state <- massive_faissr_ivf_pilot(x, state, setup, count)
-    if (backend == "cpu" &&
-        state$index$method != "faissr_hnsw_persistent") stop(
-            "Expected CPU HNSW index was not built.", call. = FALSE)
-    hnsw_settings <- massive_sharded_hnsw_setting(state, setup,
-        shard, first, count, backend)
+    prepared <- massive_index_shard_state(x, reference, setup,
+        shard, first, count, method, backend, saved)
+    state <- prepared$state
+    hnsw_settings <- prepared$setting
+    saved <- prepared$saved
     ivf_setting <- massive_saved_ivf_setting(saved, shard)
     massive_sharded_probe(x, state, setup, saved, method, backend, count)
     if (shard == 0L && !is.null(saved)) massive_sharded_restore_first(
@@ -1758,22 +1994,16 @@ massive_index_shard <- function(x, setup, parts, shard,
         query_first <- query_first + batch$rows
     }
     if (method == "ivf" && is.null(ivf_setting)) stop("Missing IVF settings.")
-    if (!is.null(saved)) {
-        saved$state$hnsw_settings <- massive_hnsw_add_setting(
-            saved$state$hnsw_settings %||% list(), hnsw_settings)
-        saved$state$shard <- shard + 1L
-        saved$state$completed_rows <- 0
-        saved$state$pilot_signature <- NULL
-        massive_checkpoint_write(saved$state, saved$path)
-    }
+    saved <- massive_index_shard_finish(saved, shard, hnsw_settings)
     message("KNN shard ", shard + 1L, "/", setup$resources$n_shards)
-    list(build_seconds = state$build_seconds, saved = saved,
+    list(build_seconds = state$build_seconds,
+        load_seconds = state$load_seconds %||% 0, saved = saved,
         hnsw_settings = hnsw_settings, ivf_setting = ivf_setting)
 }
 
 massive_sharded_result <- function(x, paths, setup, backend,
         identity, build_seconds, started, audit_rows, checkpoint,
-        resume, hnsw_settings, ivf_settings) {
+        resume, hnsw_settings, ivf_settings, load_seconds = 0) {
     graph <- massive_knn_graph(sub("\\.indices\\.u32$", "",
         paths[["indices"]]), x$nrow, setup$k)
     graph$backend <- backend
@@ -1804,8 +2034,10 @@ massive_sharded_result <- function(x, paths, setup, backend,
     graph$residency <- massive_knn_residency(x, x)
     graph$resources <- setup$resources
     graph$build_seconds <- build_seconds
+    graph$index_load_seconds <- load_seconds
     graph$total_seconds <- unname(proc.time()[[3L]] - started)
-    graph$search_seconds <- graph$total_seconds - build_seconds
+    graph$search_seconds <- graph$total_seconds -
+        build_seconds - load_seconds
     graph$checkpoint <- checkpoint
     graph$checkpoint_every <- setup$checkpoint_every
     graph$resumed <- resume
@@ -1836,12 +2068,11 @@ massive_sharded_graph <- function(x, k, output, n.cores,
     setup <- list(k = k, workers = normalize_nn_threads(n.cores),
         resources = resources, method = method, ef_search = ef_search,
         hnsw_build = hnsw_build, checkpoint_every = checkpoint_every,
-        target_recall = target_recall,
+        target_recall = target_recall, audit_rows = audit_rows,
         cuda_provider = if (backend == "cuda" &&
             method %in% c("exact", "ivf_sharded"))
             "faissR" else NULL,
-        build_workers = if (checkpoint && backend == "cpu") 1L else
-            normalize_nn_threads(n.cores))
+        build_workers = normalize_nn_threads(n.cores))
     saved <- if (checkpoint) massive_sharded_checkpoint(
         x, setup, paths, backend, resume) else NULL
     identity <- massive_checkpoint_source_identity(x)
@@ -1849,6 +2080,7 @@ massive_sharded_graph <- function(x, k, output, n.cores,
     on.exit(if (!completed && is.null(saved)) unlink(parts))
     started <- proc.time()[[3L]]
     build_seconds <- 0
+    load_seconds <- 0
     hnsw <- saved$state$hnsw_settings %||% list()
     ivf <- saved$state$ivf_settings %||% list()
     start_shard <- saved$state$shard %||% 0L
@@ -1857,6 +2089,7 @@ massive_sharded_graph <- function(x, k, output, n.cores,
             step <- massive_index_shard(x, setup, parts, shard,
                 identity, backend, saved)
             build_seconds <- build_seconds + step$build_seconds
+            load_seconds <- load_seconds + step$load_seconds
             hnsw <- massive_hnsw_add_setting(hnsw, step$hnsw_settings)
             if (length(step$ivf_setting)) ivf[[shard + 1L]] <- step$ivf_setting
             saved <- step$saved
@@ -1867,7 +2100,8 @@ massive_sharded_graph <- function(x, k, output, n.cores,
     completed <- TRUE
     if (!is.null(saved)) unlink(saved$path)
     massive_sharded_result(x, paths, setup, backend, identity,
-        build_seconds, started, audit_rows, checkpoint, resume, hnsw, ivf)
+        build_seconds, started, audit_rows, checkpoint, resume, hnsw, ivf,
+        load_seconds)
 }
 
 massive_full_knn_audit_reference_rows <- function(x, setup) {
@@ -1934,19 +2168,103 @@ massive_full_knn_audit <- function(graph, x, audit_rows, setup, rows = NULL) {
 
 massive_full_exact_resources <- function(x, k, chunk_rows,
         reference_chunk_rows, memory_limit, backend) {
+    if (backend == "cuda") return(massive_cuda_sharded_resources(
+        x, k, chunk_rows, reference_chunk_rows, memory_limit,
+        method = "exact"))
     if (backend == "metal") return(massive_metal_sharded_resources(
         x, k, chunk_rows, reference_chunk_rows, memory_limit))
     massive_full_knn_resources(x, k, chunk_rows,
         reference_chunk_rows, memory_limit)
 }
 
+massive_full_exact_graph <- function(x, setup, measurement,
+        stats, checkpoint, resume, checkpoint_every) {
+    graph <- massive_knn_graph(setup$output, x$nrow, setup$k)
+    graph$backend <- setup$backend
+    graph$method <- setup$backend_used
+    graph$knn_provider <- "faissR"
+    graph$residency <- massive_knn_residency(x, x)
+    graph$device_ids <- if (setup$backend == "metal") 0L else
+        if (setup$backend == "cuda") setup$devices %||%
+            stats$device else integer()
+    graph$query_storage <- if (setup$backend == "metal")
+        "R_float32" else "file_backed_float32"
+    graph$build_seconds <- stats$build
+    graph$exact <- TRUE
+    graph$target_recall <- setup$target_recall
+    graph$source_identity <- massive_checkpoint_source_identity(x)
+    graph$implementation_identity <-
+        massive_checkpoint_implementation_identity()
+    graph$faissr_identity <- massive_faissr_identity()
+    graph$resources <- setup$resources
+    graph$resources$peak_device_bytes <- stats$peak_device
+    graph$resources$device_memory_model <- stats$device_model
+    if (setup$backend == "cuda") {
+        graph$resources$peak_device_bytes_by_id <-
+            stats$per_device_peak
+    } else if (setup$backend == "metal") {
+        graph$resources$peak_device_bytes_by_id <- stats$peak_device
+    }
+    graph$search_seconds <- if (setup$backend %in% c("cuda", "metal"))
+        stats$search else measurement$seconds
+    graph$total_seconds <- measurement$seconds
+    graph$checkpoint <- checkpoint
+    graph$resumed <- resume
+    graph$checkpoint_every <- checkpoint_every
+    graph
+}
+
+massive_full_exact_batch <- function(x, first, rows, setup, stats) {
+    row_ids <- as.double(seq.int(first, length.out = rows))
+    resources <- setup$resources
+    devices <- setup$devices
+    found <- if (setup$backend == "cuda" && !is.null(devices)) {
+        faissr_matrix_knn_batch_devices_cpp(x, x, row_ids,
+            setup$k, resources$reference_chunk_rows,
+            resources$memory_limit_bytes, TRUE, devices)
+    } else faissr_matrix_knn_batch_cpp(x, x, row_ids, setup$k,
+        setup$backend, "stream_exact", resources$reference_chunk_rows,
+        resources$memory_limit_bytes, setup$workers, TRUE)
+    if (setup$backend == "metal") {
+        if (!identical(found$device_ids, 0L) ||
+            !identical(found$device_memory_model,
+                "unified_shared_estimate") ||
+            length(found$peak_device_bytes) != 1L ||
+            !is.finite(found$peak_device_bytes) ||
+            found$peak_device_bytes <= 0) stop(
+                "faissR file-backed Metal omitted device memory.",
+                call. = FALSE)
+        stats$build <- stats$build + found$index_build_seconds
+        stats$search <- stats$search + found$search_seconds
+        stats$peak_device <- max(stats$peak_device,
+            found$peak_device_bytes)
+        stats$device_model <- found$device_memory_model
+    }
+    if (setup$backend == "cuda") {
+        if (!identical(found$device_ids, setup$device)) stop(
+            "faissR file-backed CUDA changed device.", call. = FALSE)
+        stats$build <- stats$build + found$index_build_seconds
+        stats$search <- stats$search + found$search_seconds
+        stats$peak_device <- max(stats$peak_device,
+            found$peak_device_bytes)
+        if (length(found$peak_device_bytes_by_id) !=
+            length(setup$device)) stop(
+            "faissR file-backed CUDA omitted per-device memory.",
+            call. = FALSE)
+        stats$per_device_peak <- pmax(stats$per_device_peak,
+            found$peak_device_bytes_by_id)
+        stats$device_model <- found$device_memory_model
+    }
+    found
+}
+
 massive_full_knn_exact <- function(x, k, output, n.cores,
         chunk_rows, reference_chunk_rows, memory_limit,
         checkpoint, resume, audit_rows, checkpoint_every,
-        target_recall, backend = "cpu") {
+        target_recall, backend = "cpu", devices = NULL) {
     workers <- normalize_nn_threads(n.cores)
-    if (backend == "metal" && workers != 1L) stop(
-        "Metal full KNN requires `n.cores = 1`.", call. = FALSE)
+    if (backend %in% c("metal", "cuda") && workers != 1L) stop(
+        "GPU full KNN requires `n.cores = 1`.", call. = FALSE)
     resources <- massive_full_exact_resources(x, k, chunk_rows,
         reference_chunk_rows, memory_limit, backend)
     paths <- massive_knn_paths(output, resources$output_bytes, resume)
@@ -1954,39 +2272,28 @@ massive_full_knn_exact <- function(x, k, output, n.cores,
         paths = paths, k = k, workers = workers, resources = resources,
         checkpoint_every = checkpoint_every, method = "exact",
         backend = backend,
-        backend_used = if (backend == "metal")
-            "faissr_native_metal_exact_file_batch" else
-            "faiss_cpu_stream_exact", exact = TRUE,
-        target_recall = target_recall)
-    setup$search_batch <- function(first, rows) {
-        faissr_matrix_knn_batch_cpp(x, x,
-            as.double(seq.int(first, length.out = rows)), k,
-            backend, "stream_exact", resources$reference_chunk_rows,
-            resources$memory_limit_bytes, workers, TRUE)
-    }
+        backend_used = if (backend == "metal") {
+            "faissr_native_metal_exact_file_batch"
+        } else if (backend == "cuda" && length(devices) > 1L) {
+            "faiss_gpu_flat_file_shards"
+        } else if (backend == "cuda") {
+            "faiss_gpu_flat_file_batch"
+        } else "faiss_cpu_stream_exact", exact = TRUE,
+        target_recall = target_recall, devices = devices)
+    stats <- new.env(parent = emptyenv())
+    stats$build <- stats$search <- stats$peak_device <- 0
+    stats$device_model <- "none"
+    stats$device <- if (backend == "cuda")
+        massive_cuda_memory_cpp()$device else NULL
+    setup$device <- devices %||% stats$device
+    stats$per_device_peak <- rep(0, length(setup$device))
+    setup$search_batch <- function(first, rows)
+        massive_full_exact_batch(x, first, rows, setup, stats)
     saved <- if (checkpoint) massive_full_knn_checkpoint(
         x, setup, resume) else NULL
     measurement <- massive_full_knn_stream(x, setup, saved)
-    graph <- massive_knn_graph(setup$output, x$nrow, k)
-    graph$backend <- backend
-    graph$method <- setup$backend_used
-    graph$knn_provider <- "faissR"
-    graph$residency <- massive_knn_residency(x, x)
-    graph$device_ids <- if (backend == "metal") 0L else integer()
-    graph$query_storage <- if (backend == "metal")
-        "R_float32" else "file_backed_float32"
-    graph$build_seconds <- 0
-    graph$exact <- TRUE
-    graph$target_recall <- target_recall
-    graph$source_identity <- massive_checkpoint_source_identity(x)
-    graph$implementation_identity <-
-        massive_checkpoint_implementation_identity()
-    graph$faissr_identity <- massive_faissr_identity()
-    graph$resources <- resources
-    graph$search_seconds <- measurement$seconds
-    graph$checkpoint <- checkpoint
-    graph$resumed <- resume
-    graph$checkpoint_every <- checkpoint_every
+    graph <- massive_full_exact_graph(x, setup, measurement,
+        stats, checkpoint, resume, checkpoint_every)
     massive_full_knn_audit(graph, x, audit_rows, setup)
 }
 
@@ -2058,7 +2365,8 @@ massive_full_knn_target_recall <- function(value, backend, method) {
     value <- fastembedr_target_recall(value)
     supported <- (backend == "cpu" &&
         method %in% c("exact", "hnsw_sharded")) ||
-        (backend == "metal" && method == "exact")
+        (backend == "metal" && method == "exact") ||
+        (backend == "cuda" && method %in% c("exact", "ivf_sharded"))
     if (value != 0.99 && !supported)
         stop("This full KNN route does not yet tune recall tiers ",
             "below 0.99.", call. = FALSE)
@@ -2073,9 +2381,11 @@ massive_full_knn_target_recall <- function(value, backend, method) {
 #' candidates into the file-backed output. It is approximate; its target
 #' recall is not measured unless `audit_rows` is positive. Multiple shard
 #' passes can be I/O-heavy.
-#' Checkpointed HNSW builds each shard with one thread for reproducible
-#' resume; queries still use `n.cores` threads. Each shard records the
-#' effective build thread count in `hnsw_settings`.
+#' Checkpointed HNSW builds each shard with `n.cores` threads and saves
+#' its native faissR index until that shard is complete. Resume checks
+#' the index file hash and a fixed search probe before reusing it.
+#' The result records build threads in `hnsw_settings` and the time to
+#' reload an index in `index_load_seconds`.
 #' CUDA `method = "exact"` builds and queries bounded faissR GPU Flat shards.
 #' It also scans the full query source per shard, so this exact route is a
 #' correctness baseline rather than a billion-row ANN solution. A CUDA
@@ -2125,20 +2435,23 @@ massive_full_knn_target_recall <- function(value, backend, method) {
 #'   samples only untouched rows.
 #'   Defaults to zero. Reported recall covers only sampled rows, not
 #'   the full graph. Strict ID `sample_target_met` requires every sampled
-#'   row to meet 0.99. `distance_equivalent_recall` also accepts exact
-#'   kth-distance ties; the CUDA IVF pilot additionally gates strict IDs.
-#' @param ef_search CPU HNSW search effort per shard. Zero uses the tuned
-#'   shape-based default. A positive value must be at least `k + 1` and
+#'   row to meet the selected tier. `distance_equivalent_recall` also accepts
+#'   exact kth-distance ties; the CUDA IVF pilot additionally gates strict IDs.
+#' @param ef_search CPU HNSW search effort per shard. Zero starts from the
+#'   shape-based setting and increases effort until a separate, full-reference
+#'   pilot meets the selected recall guard. A positive value is checked by
+#'   that pilot and must be at least `k + 1`; it
 #'   cannot exceed the smallest reference shard. Other methods reject it.
 #' @param hnsw_build Optional named list with `m` and `ef_construction` for
 #'   an explicitly calibrated CPU HNSW build. `NULL` uses faissR's
-#'   shape-based policy. Other methods and backends reject this setting.
+#'   shape-based build policy. Other methods and backends reject this setting.
 #' @param devices Optional CUDA device indices. Two or more devices require
 #'   exact or IVF sharded search and a file-backed source. CPU and Metal
 #'   requests fail explicitly; the graph is never moved to another route.
 #' @param target_recall Requested recall tier (`0.9`, `0.95`, or `0.99`).
-#'   Exact CPU and Metal search are unchanged by the tier and remain exact
-#'   by construction. Other file-backed routes currently require `0.99`.
+#'   Exact CPU, CUDA, and Metal search are unchanged by the tier and remain
+#'   exact by construction. CPU HNSW and CUDA IVF use the tier in sampled
+#'   pilots. Other file-backed routes currently require `0.99`.
 #' @return A validated `fastEmbedR_massive_graph` descriptor.
 #' @export
 #' @keywords internal
@@ -2156,8 +2469,8 @@ massive_full_knn_graph <- function(x, k, output, backend = "cpu",
     k <- controls$k
     backend <- controls$backend
     method <- controls$method
-    target_recall <- massive_full_knn_target_recall(
-        target_recall, backend, method)
+    target_recall <- massive_full_knn_target_recall(target_recall,
+        backend, method)
     audit_rows <- controls$audit_rows
     ef_search <- controls$ef_search
     hnsw_build <- controls$hnsw_build
@@ -2180,9 +2493,8 @@ massive_full_knn_graph <- function(x, k, output, backend = "cpu",
     if (!is.null(devices)) return(massive_full_knn_device_request(
         x, k, output, backend, n.cores, chunk_rows,
         reference_chunk_rows, memory_limit, checkpoint, resume,
-        audit_rows, checkpoint_every, devices, method))
-    if (method %in% c("hnsw_sharded", "ivf_sharded") ||
-        backend == "cuda") {
+        audit_rows, checkpoint_every, devices, method, target_recall))
+    if (method %in% c("hnsw_sharded", "ivf_sharded")) {
         return(massive_sharded_graph(x, k, output, n.cores,
             chunk_rows, reference_chunk_rows, memory_limit, audit_rows,
             backend, method, checkpoint, resume, checkpoint_every,

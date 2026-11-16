@@ -23,6 +23,7 @@ massive_cgroup_number <- function(path) {
 }
 
 massive_linux_cgroup_v2_available <- function(v2, cgroup) {
+    if (!file.exists(cgroup)) return(NA_real_)
     lines <- tryCatch(readLines(cgroup, warn = FALSE),
         error = function(e) character())
     found <- grep("^0::/", lines, value = TRUE)

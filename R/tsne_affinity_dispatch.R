@@ -86,8 +86,9 @@ prepare_opentsne_materialized_run <- function(request) {
     if (!is.null(request$devices)) {
         request$devices <- massive_validate_devices(request$devices,
             request$optimizer_backend, request$n)
-        if (length(request$devices) < 2L ||
-            request$gpu_resident_knn || isTRUE(request$record_costs)) {
+        if (length(request$devices) > 1L &&
+            (request$gpu_resident_knn ||
+                isTRUE(request$record_costs))) {
             stop("Resident multi-GPU t-SNE requires at least two CUDA ",
                 "devices, host KNN, and `record_costs = FALSE`.",
                 call. = FALSE)

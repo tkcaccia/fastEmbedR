@@ -130,7 +130,7 @@ int normalize_device_init_3d(float* values, double* stats,
                     "umap_normalize_init_3d launch");
 }
 
-__device__ void update_umap_row_atomic_3d(
+static __device__ __forceinline__ void update_umap_row_atomic_3d(
     float* layout, const int* neighbors, const float* weights,
     EmbedParams p, unsigned int epoch, int width, int head, int lane) {
   float alpha = p.learning_rate * (1.0f -

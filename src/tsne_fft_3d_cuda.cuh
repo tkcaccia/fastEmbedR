@@ -27,7 +27,7 @@ struct CudaTsneBounds3d {
   float sum[3];
 };
 
-__device__ float cuda_tsne_smooth_q_3d(
+static __device__ __forceinline__ float cuda_tsne_smooth_q_3d(
     float d2, const CudaTsneGrid3d& g) {
   if (d2 >= g.cutoff2) return 1.0f / (1.0f + d2);
   const float delta = d2 - g.cutoff2;
@@ -35,7 +35,8 @@ __device__ float cuda_tsne_smooth_q_3d(
                    g.qcut * g.qcut * delta * delta);
 }
 
-__device__ void cuda_tsne_cubic_3d(float t, float* w,
+static __device__ __forceinline__ void cuda_tsne_cubic_3d(
+                                   float t, float* w,
                                    float* d) {
   const float t2 = t * t;
   w[0] = -t * (t - 1.0f) * (t - 2.0f) / 6.0f;
@@ -48,7 +49,7 @@ __device__ void cuda_tsne_cubic_3d(float t, float* w,
   d[3] = (3.0f * t2 - 1.0f) / 6.0f;
 }
 
-__device__ void cuda_tsne_point_weights_3d(
+static __device__ __forceinline__ void cuda_tsne_point_weights_3d(
     const float* y, int row, const CudaTsneGrid3d& g,
     int* start, float w[3][4], float d[3][4]) {
   for (int axis = 0; axis < 3; ++axis) {
