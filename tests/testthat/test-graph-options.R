@@ -63,6 +63,8 @@ test_that("native projection weights use exact local double radii", {
             tolerance = 1e-12)
         expect_identical(result$parameters$projection$distance_precision,
             "double")
+        expect_identical(result$parameters$projection$radius_provider,
+            "faissR")
         expect_identical(result$parameters$projection$implementation,
             "native_exact_2d_edge_penalty")
         controls$layout <- cbind(-layout[, 2L], layout[, 1L]) * 3 + 50

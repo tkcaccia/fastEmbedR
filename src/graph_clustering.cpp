@@ -11,6 +11,7 @@
  */
 
 #include <Rcpp.h>
+#include <faissR_api_v1.h>
 
 #include <algorithm>
 #include <cmath>
@@ -20,7 +21,6 @@
 #include <limits>
 #include <numeric>
 #include <random>
-#include <queue>
 #include <set>
 #include <thread>
 #include <unordered_map>
