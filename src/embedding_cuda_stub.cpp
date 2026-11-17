@@ -234,14 +234,6 @@ NumericMatrix interpolate_landmark_layout_cuda_impl(NumericMatrix,
   Rcpp::stop("CUDA landmark interpolation is available only when the package is built with CUDA support.");
 }
 
-List landmark_project_interpolate_knn_confidence_cuda_impl(NumericMatrix,
-                                                           NumericMatrix,
-                                                           NumericMatrix,
-                                                           IntegerVector,
-                                                           int) {
-  Rcpp::stop("CUDA fused landmark projection is available only when the package is built with CUDA support.");
-}
-
 List transform_tsne_cuda_impl(NumericMatrix,
                               IntegerMatrix,
                               NumericMatrix,

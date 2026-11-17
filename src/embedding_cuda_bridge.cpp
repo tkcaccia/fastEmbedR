@@ -158,11 +158,6 @@ NumericMatrix interpolate_landmark_layout_cuda_impl(NumericMatrix landmark_layou
                                                     IntegerMatrix projection_indices,
                                                     NumericMatrix projection_distances,
                                                     int n);
-List landmark_project_interpolate_knn_confidence_cuda_impl(NumericMatrix landmark_data,
-                                                           NumericMatrix query_data,
-                                                           NumericMatrix landmark_layout,
-                                                           IntegerVector landmark_indices,
-                                                           int k);
 List transform_tsne_cuda_impl(NumericMatrix reference_layout,
                               IntegerMatrix indices,
                               NumericMatrix distances,
@@ -873,21 +868,6 @@ NumericMatrix interpolate_landmark_layout_cuda_cpp(NumericMatrix landmark_layout
     projection_indices,
     projection_distances,
     n
-  );
-}
-
-// [[Rcpp::export]]
-List landmark_project_interpolate_knn_confidence_cuda_cpp(NumericMatrix landmark_data,
-                                                          NumericMatrix query_data,
-                                                          NumericMatrix landmark_layout,
-                                                          IntegerVector landmark_indices,
-                                                          int k) {
-  return landmark_project_interpolate_knn_confidence_cuda_impl(
-    landmark_data,
-    query_data,
-    landmark_layout,
-    landmark_indices,
-    k
   );
 }
 

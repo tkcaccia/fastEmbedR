@@ -380,58 +380,6 @@ test_that(paste(
     )
     expect_equal(metal_interp, cpu_interp, tolerance = 1e-5)
 
-    x_query <- matrix(rnorm(36L * 5L), nrow = 36L, ncol = 5L)
-    fused_landmark_indices <- c(1L, 4L, 9L, 13L, 18L, 22L, 29L, 35L)
-    x_landmarks <- x_query[fused_landmark_indices, , drop = FALSE]
-    fused_layout_reference <- cbind(
-        rnorm(length(fused_landmark_indices)),
-        rnorm(length(fused_landmark_indices))
-    )
-    fused_projection <- test_exact_knn(
-        x_landmarks, x_query, k = 4L, backend = "cpu"
-    )
-    cpu_fused_reference <- fastEmbedR:::interpolate_landmark_layout_cpp(
-        fused_layout_reference,
-        as.integer(fused_landmark_indices),
-        fused_projection$indices,
-        fused_projection$distances,
-        nrow(x_query)
-    )
-    metal_fused <- fastEmbedR:::landmark_project_interpolate_metal_cpp(
-        x_landmarks,
-        x_query,
-        fused_layout_reference,
-        as.integer(fused_landmark_indices),
-        4L
-    )
-    expect_equal(metal_fused, cpu_fused_reference, tolerance = 1e-4)
-
-    fused_name <- paste0(
-        "landmark_project_interpolate_",
-        "knn_confidence_metal_cpp"
-    )
-    metal_fused_fun <- getFromNamespace(fused_name, "fastEmbedR")
-    metal_fused_knn <- metal_fused_fun(
-        x_landmarks,
-        x_query,
-        fused_layout_reference,
-        as.integer(fused_landmark_indices),
-        4L
-    )
-    expect_equal(metal_fused_knn$layout, cpu_fused_reference, tolerance = 1e-4)
-    expect_equal(metal_fused_knn$indices, fused_projection$indices)
-    expect_equal(
-        metal_fused_knn$distances, fused_projection$distances,
-        tolerance = 1e-4
-    )
-    expect_equal(length(metal_fused_knn$confidence), nrow(x_query))
-    expect_true(all(is.finite(metal_fused_knn$confidence)))
-    expect_true(all(
-        metal_fused_knn$confidence >= 0 &
-            metal_fused_knn$confidence <= 1
-    ))
-    expect_true(all(metal_fused_knn$confidence[fused_landmark_indices] > 0.99))
-
     layout <- cbind(rnorm(30L), rnorm(30L))
     labels <- rep(1:3, each = 10L)
     knn <- test_exact_knn(layout, layout, k = 7L, backend = "cpu")

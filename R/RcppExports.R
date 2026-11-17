@@ -81,10 +81,6 @@ interpolate_landmark_layout_cuda_cpp <- function(landmark_layout, landmark_indic
     .Call(`_fastEmbedR_interpolate_landmark_layout_cuda_cpp`, landmark_layout, landmark_indices, projection_indices, projection_distances, n)
 }
 
-landmark_project_interpolate_knn_confidence_cuda_cpp <- function(landmark_data, query_data, landmark_layout, landmark_indices, k) {
-    .Call(`_fastEmbedR_landmark_project_interpolate_knn_confidence_cuda_cpp`, landmark_data, query_data, landmark_layout, landmark_indices, k)
-}
-
 transform_tsne_cuda_cpp <- function(reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, seed) {
     .Call(`_fastEmbedR_transform_tsne_cuda_cpp`, reference_layout, indices, distances, y_init, init, initialization, perplexity, n_iter, early_exaggeration_iter, learning_rate, early_exaggeration, exaggeration, initial_momentum, final_momentum, max_grad_norm, max_step_norm, n_negatives, exact_repulsion_threshold, seed)
 }
@@ -143,14 +139,6 @@ project_embedding_affine_metal_cpp <- function(reference_data, query_data, refer
 
 interpolate_landmark_layout_metal_cpp <- function(landmark_layout, landmark_indices, projection_indices, projection_distances, n) {
     .Call(`_fastEmbedR_interpolate_landmark_layout_metal_cpp`, landmark_layout, landmark_indices, projection_indices, projection_distances, n)
-}
-
-landmark_project_interpolate_metal_cpp <- function(landmark_data, query_data, landmark_layout, landmark_indices, k) {
-    .Call(`_fastEmbedR_landmark_project_interpolate_metal_cpp`, landmark_data, query_data, landmark_layout, landmark_indices, k)
-}
-
-landmark_project_interpolate_knn_confidence_metal_cpp <- function(landmark_data, query_data, landmark_layout, landmark_indices, k) {
-    .Call(`_fastEmbedR_landmark_project_interpolate_knn_confidence_metal_cpp`, landmark_data, query_data, landmark_layout, landmark_indices, k)
 }
 
 knn_structure_score_metal_cpp <- function(layout, indices, keep, preserve_k, labels, n_label_levels) {

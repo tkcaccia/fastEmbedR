@@ -370,21 +370,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// landmark_project_interpolate_knn_confidence_cuda_cpp
-List landmark_project_interpolate_knn_confidence_cuda_cpp(NumericMatrix landmark_data, NumericMatrix query_data, NumericMatrix landmark_layout, IntegerVector landmark_indices, int k);
-RcppExport SEXP _fastEmbedR_landmark_project_interpolate_knn_confidence_cuda_cpp(SEXP landmark_dataSEXP, SEXP query_dataSEXP, SEXP landmark_layoutSEXP, SEXP landmark_indicesSEXP, SEXP kSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericMatrix >::type landmark_data(landmark_dataSEXP);
-    Rcpp::traits::input_parameter< NumericMatrix >::type query_data(query_dataSEXP);
-    Rcpp::traits::input_parameter< NumericMatrix >::type landmark_layout(landmark_layoutSEXP);
-    Rcpp::traits::input_parameter< IntegerVector >::type landmark_indices(landmark_indicesSEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    rcpp_result_gen = Rcpp::wrap(landmark_project_interpolate_knn_confidence_cuda_cpp(landmark_data, query_data, landmark_layout, landmark_indices, k));
-    return rcpp_result_gen;
-END_RCPP
-}
 // transform_tsne_cuda_cpp
 List transform_tsne_cuda_cpp(NumericMatrix reference_layout, IntegerMatrix indices, NumericMatrix distances, NumericMatrix y_init, bool init, std::string initialization, double perplexity, int n_iter, int early_exaggeration_iter, double learning_rate, double early_exaggeration, double exaggeration, double initial_momentum, double final_momentum, double max_grad_norm, double max_step_norm, int n_negatives, int exact_repulsion_threshold, int seed);
 RcppExport SEXP _fastEmbedR_transform_tsne_cuda_cpp(SEXP reference_layoutSEXP, SEXP indicesSEXP, SEXP distancesSEXP, SEXP y_initSEXP, SEXP initSEXP, SEXP initializationSEXP, SEXP perplexitySEXP, SEXP n_iterSEXP, SEXP early_exaggeration_iterSEXP, SEXP learning_rateSEXP, SEXP early_exaggerationSEXP, SEXP exaggerationSEXP, SEXP initial_momentumSEXP, SEXP final_momentumSEXP, SEXP max_grad_normSEXP, SEXP max_step_normSEXP, SEXP n_negativesSEXP, SEXP exact_repulsion_thresholdSEXP, SEXP seedSEXP) {
@@ -660,36 +645,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericMatrix >::type projection_distances(projection_distancesSEXP);
     Rcpp::traits::input_parameter< int >::type n(nSEXP);
     rcpp_result_gen = Rcpp::wrap(interpolate_landmark_layout_metal_cpp(landmark_layout, landmark_indices, projection_indices, projection_distances, n));
-    return rcpp_result_gen;
-END_RCPP
-}
-// landmark_project_interpolate_metal_cpp
-NumericMatrix landmark_project_interpolate_metal_cpp(SEXP landmark_data, SEXP query_data, SEXP landmark_layout, IntegerVector landmark_indices, int k);
-RcppExport SEXP _fastEmbedR_landmark_project_interpolate_metal_cpp(SEXP landmark_dataSEXP, SEXP query_dataSEXP, SEXP landmark_layoutSEXP, SEXP landmark_indicesSEXP, SEXP kSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type landmark_data(landmark_dataSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type query_data(query_dataSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type landmark_layout(landmark_layoutSEXP);
-    Rcpp::traits::input_parameter< IntegerVector >::type landmark_indices(landmark_indicesSEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    rcpp_result_gen = Rcpp::wrap(landmark_project_interpolate_metal_cpp(landmark_data, query_data, landmark_layout, landmark_indices, k));
-    return rcpp_result_gen;
-END_RCPP
-}
-// landmark_project_interpolate_knn_confidence_metal_cpp
-List landmark_project_interpolate_knn_confidence_metal_cpp(SEXP landmark_data, SEXP query_data, SEXP landmark_layout, IntegerVector landmark_indices, int k);
-RcppExport SEXP _fastEmbedR_landmark_project_interpolate_knn_confidence_metal_cpp(SEXP landmark_dataSEXP, SEXP query_dataSEXP, SEXP landmark_layoutSEXP, SEXP landmark_indicesSEXP, SEXP kSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type landmark_data(landmark_dataSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type query_data(query_dataSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type landmark_layout(landmark_layoutSEXP);
-    Rcpp::traits::input_parameter< IntegerVector >::type landmark_indices(landmark_indicesSEXP);
-    Rcpp::traits::input_parameter< int >::type k(kSEXP);
-    rcpp_result_gen = Rcpp::wrap(landmark_project_interpolate_knn_confidence_metal_cpp(landmark_data, query_data, landmark_layout, landmark_indices, k));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3502,7 +3457,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_cuda_projector_batch_cpp", (DL_FUNC) &_fastEmbedR_massive_cuda_projector_batch_cpp, 3},
     {"_fastEmbedR_massive_cuda_projector_release_cpp", (DL_FUNC) &_fastEmbedR_massive_cuda_projector_release_cpp, 1},
     {"_fastEmbedR_interpolate_landmark_layout_cuda_cpp", (DL_FUNC) &_fastEmbedR_interpolate_landmark_layout_cuda_cpp, 5},
-    {"_fastEmbedR_landmark_project_interpolate_knn_confidence_cuda_cpp", (DL_FUNC) &_fastEmbedR_landmark_project_interpolate_knn_confidence_cuda_cpp, 5},
     {"_fastEmbedR_transform_tsne_cuda_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_cuda_cpp, 19},
     {"_fastEmbedR_landmark_tsne_transform_cuda_gpu_cpp", (DL_FUNC) &_fastEmbedR_landmark_tsne_transform_cuda_gpu_cpp, 20},
     {"_fastEmbedR_landmark_tsne_transform_cuda_devices_cpp", (DL_FUNC) &_fastEmbedR_landmark_tsne_transform_cuda_devices_cpp, 19},
@@ -3518,8 +3472,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_project_embedding_knn_metal_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_knn_metal_cpp, 3},
     {"_fastEmbedR_project_embedding_affine_metal_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_metal_cpp, 8},
     {"_fastEmbedR_interpolate_landmark_layout_metal_cpp", (DL_FUNC) &_fastEmbedR_interpolate_landmark_layout_metal_cpp, 5},
-    {"_fastEmbedR_landmark_project_interpolate_metal_cpp", (DL_FUNC) &_fastEmbedR_landmark_project_interpolate_metal_cpp, 5},
-    {"_fastEmbedR_landmark_project_interpolate_knn_confidence_metal_cpp", (DL_FUNC) &_fastEmbedR_landmark_project_interpolate_knn_confidence_metal_cpp, 5},
     {"_fastEmbedR_knn_structure_score_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_structure_score_metal_cpp, 6},
     {"_fastEmbedR_silhouette_score_metal_cpp", (DL_FUNC) &_fastEmbedR_silhouette_score_metal_cpp, 3},
     {"_fastEmbedR_knn_embed_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_embed_metal_cpp, 9},

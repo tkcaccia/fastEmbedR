@@ -398,19 +398,6 @@ int fastembedr_cuda_interpolate_landmark_layout(const double* landmark_layout,
                                                 int k,
                                                 int n_components,
                                                 double* out);
-int fastembedr_cuda_landmark_project_interpolate_knn_confidence(const double* landmark_data,
-                                                                const double* query_data,
-                                                                const double* landmark_layout,
-                                                                const int* landmark_indices,
-                                                                int n_landmarks,
-                                                                int n,
-                                                                int n_features,
-                                                                int k,
-                                                                int n_components,
-                                                                double* out,
-                                                                int* projection_indices,
-                                                                double* projection_distances,
-                                                                double* confidence);
 int fastembedr_cuda_knn_structure_score(const double* layout,
                                         const int* indices,
                                         const int* keep,
@@ -1321,70 +1308,6 @@ NumericMatrix interpolate_landmark_layout_cuda_impl(NumericMatrix landmark_layou
     Rcpp::stop("CUDA landmark interpolation failed: %s", cuda_embedding_error_message());
   }
   return out;
-}
-
-List landmark_project_interpolate_knn_confidence_cuda_impl(NumericMatrix landmark_data,
-                                                           NumericMatrix query_data,
-                                                           NumericMatrix landmark_layout,
-                                                           IntegerVector landmark_indices,
-                                                           int k) {
-  const int n_landmarks = landmark_data.nrow();
-  const int n = query_data.nrow();
-  const int n_features = landmark_data.ncol();
-  const int n_components = landmark_layout.ncol();
-  if (n_landmarks < 1) Rcpp::stop("landmark_data must have at least one row");
-  if (n < 1) Rcpp::stop("query_data must have at least one row");
-  if (n_features < 1) Rcpp::stop("landmark_data must have at least one column");
-  if (query_data.ncol() != n_features) {
-    Rcpp::stop("landmark_data and query_data must have the same number of columns");
-  }
-  if (landmark_layout.nrow() != n_landmarks) {
-    Rcpp::stop("landmark_layout rows must match landmark_data rows");
-  }
-  if (n_components < 1) Rcpp::stop("landmark_layout must have at least one column");
-  if (landmark_indices.size() != n_landmarks) {
-    Rcpp::stop("landmark_indices length must match landmark_data rows");
-  }
-  if (k < 1) Rcpp::stop("k must be positive");
-  if (k > n_landmarks) Rcpp::stop("k cannot exceed the number of landmarks");
-  if (k > kMaxCudaProjectionNeighbors) {
-    Rcpp::stop("CUDA fused landmark projection currently supports at most %d neighbors.", kMaxCudaProjectionNeighbors);
-  }
-  for (int i = 0; i < landmark_indices.size(); ++i) {
-    if (landmark_indices[i] < 1 || landmark_indices[i] > n) {
-      Rcpp::stop("landmark indices out of range");
-    }
-  }
-  if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
-
-  NumericMatrix layout(n, n_components);
-  IntegerMatrix indices(n, k);
-  NumericMatrix distances(n, k);
-  NumericVector confidence(n);
-  const int status = fastembedr_cuda_landmark_project_interpolate_knn_confidence(
-    landmark_data.begin(),
-    query_data.begin(),
-    landmark_layout.begin(),
-    landmark_indices.begin(),
-    n_landmarks,
-    n,
-    n_features,
-    k,
-    n_components,
-    layout.begin(),
-    indices.begin(),
-    distances.begin(),
-    confidence.begin()
-  );
-  if (status != 0) {
-    Rcpp::stop("CUDA fused landmark projection failed: %s", cuda_embedding_error_message());
-  }
-  return List::create(
-    Rcpp::Named("layout") = layout,
-    Rcpp::Named("indices") = indices,
-    Rcpp::Named("distances") = distances,
-    Rcpp::Named("confidence") = confidence
-  );
 }
 
 NumericVector knn_structure_score_cuda_impl(NumericMatrix layout,

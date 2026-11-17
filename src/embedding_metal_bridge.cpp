@@ -41,16 +41,6 @@ NumericMatrix interpolate_landmark_layout_metal_impl(NumericMatrix landmark_layo
                                                      IntegerMatrix projection_indices,
                                                      NumericMatrix projection_distances,
                                                      int n);
-NumericMatrix landmark_project_interpolate_metal_impl(SEXP landmark_data,
-                                                      SEXP query_data,
-                                                      SEXP landmark_layout,
-                                                      IntegerVector landmark_indices,
-                                                      int k);
-List landmark_project_interpolate_knn_confidence_metal_impl(SEXP landmark_data,
-                                                            SEXP query_data,
-                                                            SEXP landmark_layout,
-                                                            IntegerVector landmark_indices,
-                                                            int k);
 NumericVector knn_structure_score_metal_impl(NumericMatrix layout,
                                              IntegerMatrix indices,
                                              IntegerVector keep,
@@ -225,36 +215,6 @@ NumericMatrix interpolate_landmark_layout_metal_cpp(NumericMatrix landmark_layou
     projection_indices,
     projection_distances,
     n
-  );
-}
-
-// [[Rcpp::export]]
-NumericMatrix landmark_project_interpolate_metal_cpp(SEXP landmark_data,
-                                                     SEXP query_data,
-                                                     SEXP landmark_layout,
-                                                     IntegerVector landmark_indices,
-                                                     int k) {
-  return landmark_project_interpolate_metal_impl(
-    landmark_data,
-    query_data,
-    landmark_layout,
-    landmark_indices,
-    k
-  );
-}
-
-// [[Rcpp::export]]
-List landmark_project_interpolate_knn_confidence_metal_cpp(SEXP landmark_data,
-                                                           SEXP query_data,
-                                                           SEXP landmark_layout,
-                                                           IntegerVector landmark_indices,
-                                                           int k) {
-  return landmark_project_interpolate_knn_confidence_metal_impl(
-    landmark_data,
-    query_data,
-    landmark_layout,
-    landmark_indices,
-    k
   );
 }
 
