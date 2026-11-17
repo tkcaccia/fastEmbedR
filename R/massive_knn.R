@@ -1905,7 +1905,7 @@ massive_hnsw_calibrate_shard <- function(x, state, setup,
         if (requested > 0L) requested else setup$k,
         max_ef,
         setup$build_workers %||% setup$workers)
-    if (!identical(pilot$pilot_reference, "full_cpu_flat") ||
+    if (!identical(pilot$pilot_reference, "full_cpu_double_l2") ||
         !isTRUE(pilot$target_met) ||
         pilot$pilot_rows != length(rows) ||
         pilot$max_ef_search != max_ef ||

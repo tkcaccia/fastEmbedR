@@ -608,7 +608,7 @@ Rcpp::List faissr_hnsw_index_calibrate_cpp(SEXP index, SEXP query,
   if (faissR_c_api_version() != 1) {
     Rcpp::stop("Unsupported faissR C API version");
   }
-  return faissR_get_hnsw_index_calibrate_v2()(
+  return faissR_get_hnsw_index_calibrate_v3()(
       index, query, self_ids, Rcpp::wrap(k),
       Rcpp::wrap(target_recall), Rcpp::wrap(initial_ef),
       Rcpp::wrap(max_ef), Rcpp::wrap(n_threads));
