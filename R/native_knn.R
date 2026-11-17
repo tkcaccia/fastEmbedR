@@ -404,6 +404,10 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #'   `0.95`, or `0.99` (default). When omitted, uses
 #'   `options(fastEmbedR.target_recall = ...)`. This is a tuning target,
 #'   not a guarantee of measured recall. Exact search remains exact.
+#' @param audit_rows Number of fixed file-backed query rows to compare with
+#'   an exact full-reference search (default zero). At most 10,000 rows.
+#'   The returned graph reports measured sampled recall separately from
+#'   `target_recall`. This control is unavailable for resident input.
 #'
 #' @details
 #' CPU uses faissR Flat exact search below 5,000 observations and
@@ -455,7 +459,8 @@ precompute_knn <- function(data, k = 30L,
         backend = NULL, n.cores = NULL, storage = NULL,
         output = NULL, memory_limit = NULL, devices = NULL,
         checkpoint = FALSE, resume = FALSE,
-        checkpoint_every = 100L, target_recall = NULL) {
+        checkpoint_every = 100L, target_recall = NULL,
+        audit_rows = 0L) {
     massive_checkpoint_validate_controls(checkpoint, resume)
     target_recall <- fastembedr_target_recall(target_recall)
     if (inherits(data, "fastEmbedR_massive_graph")) stop(
@@ -467,21 +472,19 @@ precompute_knn <- function(data, k = 30L,
     if (fastembedr_file_backed_input(data)) return(
         precompute_knn_backed(data, k, metric, backend, n.cores,
             output, memory_limit, devices, checkpoint, resume,
-            checkpoint_every, target_recall))
+            checkpoint_every, target_recall, audit_rows))
     if (inherits(data, "fastEmbedR_massive_matrix")) stop(
         "A memory-backed massive_matrix() is not a disk-backed source; ",
         "pass its resident matrix to precompute_knn().", call. = FALSE)
+    if (!is.numeric(audit_rows) || length(audit_rows) != 1L ||
+        !is.finite(audit_rows) || audit_rows != 0) stop(
+        "`audit_rows` requires file-backed input.", call. = FALSE)
     if (!is.null(output) || !is.null(memory_limit) ||
         checkpoint || resume || !identical(checkpoint_every, 100L)) stop(
         "File-backed KNN controls require a disk-backed massive_matrix().",
         call. = FALSE)
-    prepared <- prepare_embedding_data(
-        data,
-        standardize = FALSE,
-        pca_dims = NULL,
-        seed = 4L,
-        backend = backend
-    )
+    prepared <- prepare_embedding_data(data, standardize = FALSE,
+        pca_dims = NULL, seed = 4L, backend = backend)
     x <- prepared$data
     devices <- massive_validate_devices(devices, backend, nrow(x))
     n <- nrow(x)
@@ -503,7 +506,7 @@ precompute_knn <- function(data, k = 30L,
 
 precompute_knn_backed <- function(data, k, metric, backend, n.cores,
         output, memory_limit, devices, checkpoint, resume,
-        checkpoint_every, target_recall) {
+        checkpoint_every, target_recall, audit_rows) {
     if (!identical(metric, "euclidean")) stop(
         "File-backed KNN currently supports Euclidean distance only.",
         call. = FALSE)
@@ -534,7 +537,7 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
         memory_limit = limit, method = method, devices = devices,
         checkpoint = checkpoint, resume = resume,
         checkpoint_every = checkpoint_every,
-        target_recall = target_recall)
+        target_recall = target_recall, audit_rows = audit_rows)
 }
 
 prepare_query_knn_inputs <- function(reference, query, backend) {

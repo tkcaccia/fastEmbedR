@@ -17,7 +17,8 @@ precompute_knn(
   checkpoint = FALSE,
   resume = FALSE,
   checkpoint_every = 100L,
-  target_recall = NULL
+  target_recall = NULL,
+  audit_rows = 0L
 )
 }
 \arguments{
@@ -59,6 +60,11 @@ disjoint query ranges.}
 \code{0.95}, or \code{0.99} (default). When omitted, uses
 \code{options(fastEmbedR.target_recall = ...)}. This is a tuning target,
 not a guarantee of measured recall. Exact search remains exact.}
+
+\item{audit_rows}{Number of fixed file-backed query rows to compare with
+an exact full-reference search (default zero). At most 10,000 rows.
+The returned graph reports measured sampled recall separately from
+\code{target_recall}. This control is unavailable for resident input.}
 }
 \value{
 A resident \code{fastEmbedR_knn} object, or a file-backed

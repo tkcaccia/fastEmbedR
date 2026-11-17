@@ -14,13 +14,18 @@ test_that("file-backed KNN uses the public route and session budget", {
     on.exit(options(previous), add = TRUE)
     graph <- precompute_knn(input, k = 2L,
         output = file.path(directory, "knn"),
-        checkpoint = TRUE, checkpoint_every = 1L)
+        checkpoint = TRUE, checkpoint_every = 1L,
+        audit_rows = 3L)
     expect_s3_class(graph, "fastEmbedR_massive_graph")
     expect_equal(graph$n_vertices, nrow(x))
     expect_equal(graph$k, 2L)
     expect_true(isTRUE(graph$exact))
     expect_true(isTRUE(graph$checkpoint))
     expect_identical(graph$checkpoint_every, 1L)
+    expect_true(isTRUE(graph$recall_audited))
+    expect_identical(graph$audit_rows, 3L)
+    expect_equal(graph$observed_recall, 1)
+    expect_true(isTRUE(graph$sample_target_met))
     expect_true(file.exists(file.path(directory, "knn.indices.u32")))
     expect_true(file.exists(file.path(directory, "knn.distances.f32")))
     indices <- matrix(readBin(graph$indices_path, integer(),
@@ -65,7 +70,12 @@ test_that("exact file-backed KNN records recall tier without retuning", {
     expect_error(precompute_knn(source, 2L, backend = "cpu",
         target_recall = 0.97,
         output = file.path(directory, "invalid")), "target_recall")
+    expect_error(precompute_knn(source, 2L, backend = "cpu",
+        audit_rows = 1.5,
+        output = file.path(directory, "invalid-audit")), "audit_rows")
     expect_false(file.exists(file.path(directory, "invalid.indices.u32")))
+    expect_false(file.exists(file.path(directory,
+        "invalid-audit.indices.u32")))
 })
 
 test_that("file-backed exact checkpoint locks the requested tier", {
@@ -144,6 +154,8 @@ test_that("storage options fail before hidden conversion", {
     resident <- precompute_knn(x, k = 2L, backend = "cpu",
         storage = "resident")
     expect_s3_class(resident, "fastEmbedR_knn")
+    expect_error(precompute_knn(x, k = 2L, backend = "cpu",
+        storage = "resident", audit_rows = 2L), "file-backed input")
     expect_error(pca(x, storage = "typo"), "Storage must")
     expect_error(tsne(x, storage = "typo"), "Storage must")
     expect_error(umap(x, storage = "typo"), "Storage must")
@@ -250,15 +262,18 @@ test_that("file-backed CPU dispatch forwards approximate recall tier", {
     testthat::local_mocked_bindings(
         massive_full_knn_graph = function(data, k, output, backend,
                 n.cores, memory_limit, method, devices, checkpoint,
-                resume, checkpoint_every, target_recall) {
+                resume, checkpoint_every, target_recall, audit_rows) {
             observed$method <- method
             observed$target_recall <- target_recall
-            list(method = method, target_recall = target_recall)
+            observed$audit_rows <- audit_rows
+            list(method = method, target_recall = target_recall,
+                audit_rows = audit_rows)
         }, .package = "fastEmbedR")
     result <- fastEmbedR:::precompute_knn_backed(source, 5L,
         "euclidean", "cpu", 1L, tempfile(), "256MB", NULL,
-        FALSE, FALSE, 100L, 0.95)
+        FALSE, FALSE, 100L, 0.95, 7L)
     expect_identical(observed$method, "hnsw_sharded")
     expect_identical(observed$target_recall, 0.95)
+    expect_identical(observed$audit_rows, 7L)
     expect_identical(result$target_recall, 0.95)
 })
