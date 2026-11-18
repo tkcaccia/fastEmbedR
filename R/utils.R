@@ -77,11 +77,7 @@ set_local_seed <- function(seed) {
     } else {
         NULL
     }
-    seeded_state <- withr::with_seed(
-        as.integer(seed),
-        get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
-    )
-    assign(".Random.seed", seeded_state, envir = .GlobalEnv)
+    base::set.seed(as.integer(seed))
     function() {
         if (had_seed) {
             assign(".Random.seed", old_seed, envir = .GlobalEnv)
