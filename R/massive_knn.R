@@ -2221,6 +2221,8 @@ massive_full_exact_graph <- function(x, setup, measurement,
             stats$per_device_peak
     } else if (setup$backend == "metal") {
         graph$resources$peak_device_bytes_by_id <- stats$peak_device
+        graph$resources$observed_metal_owned_buffer_peak_bytes <-
+            stats$metal_owned_peak
     }
     graph$search_seconds <- if (setup$backend %in% c("cuda", "metal"))
         stats$search else measurement$seconds
@@ -2248,13 +2250,18 @@ massive_full_exact_batch <- function(x, first, rows, setup, stats) {
                 "unified_shared_estimate") ||
             length(found$peak_device_bytes) != 1L ||
             !is.finite(found$peak_device_bytes) ||
-            found$peak_device_bytes <= 0) stop(
+            found$peak_device_bytes <= 0 ||
+            length(found$observed_metal_owned_live_buffer_bytes) != 1L ||
+            !is.finite(found$observed_metal_owned_live_buffer_bytes) ||
+            found$observed_metal_owned_live_buffer_bytes <= 0) stop(
                 "faissR file-backed Metal omitted device memory.",
                 call. = FALSE)
         stats$build <- stats$build + found$index_build_seconds
         stats$search <- stats$search + found$search_seconds
         stats$peak_device <- max(stats$peak_device,
             found$peak_device_bytes)
+        stats$metal_owned_peak <- max(stats$metal_owned_peak,
+            found$observed_metal_owned_live_buffer_bytes)
         stats$device_model <- found$device_memory_model
     }
     if (setup$backend == "cuda") {
@@ -2299,6 +2306,7 @@ massive_full_knn_exact <- function(x, k, output, n.cores,
         target_recall = target_recall, devices = devices)
     stats <- new.env(parent = emptyenv())
     stats$build <- stats$search <- stats$peak_device <- 0
+    stats$metal_owned_peak <- 0
     stats$device_model <- "none"
     stats$device <- if (backend == "cuda")
         massive_cuda_memory_cpp()$device else NULL
