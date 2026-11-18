@@ -42,9 +42,9 @@
 #'   File-backed full-graph Metal UMAP runs its main optimizer on Metal,
 #'   followed by a bounded one-thread CPU refinement: 25 epochs in 2D or
 #'   50 epochs in 3D. Both stages and their times are recorded in the fit.
-#'   Above 5,000 rows, its one-call file-backed route prepares neighbors
-#'   with CPU HNSW; `fit$pipeline$stage_backend` and `knn_method` record
-#'   this mixed-stage computation explicitly.
+#'   Its one-call file-backed route prepares exact neighbors with faissR's
+#'   native Metal batches. `fit$pipeline$stage_backend` and `knn_method`
+#'   record the KNN and optimizer stages separately.
 #' @param n.cores Requested CPU core count. For matrix input, the value is
 #'   passed to CPU PCA preprocessing, KNN, and UMAP. UMAP accepts up to 32
 #'   workers and records both requested and configured values; individual

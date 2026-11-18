@@ -1,4 +1,4 @@
-test_that("large one-call Metal graph preparation is explicit", {
+test_that("large one-call Metal graph preparation stays on Metal", {
     source <- structure(list(nrow = 70000L, ncol = 96L),
         class = "fastEmbedR_massive_matrix")
     paths <- list(knn = tempfile("metal-one-call-knn-"))
@@ -6,24 +6,24 @@ test_that("large one-call Metal graph preparation is explicit", {
     testthat::local_mocked_bindings(
         precompute_knn = function(..., backend, n.cores) {
             called <<- list(backend = backend, workers = n.cores)
-            list(backend = backend, method = "hnsw_sharded",
+            list(backend = backend, method = "exact",
                 resources = list(peak_ram_bytes = 123))
         },
         .package = "fastEmbedR")
     stage <- fastEmbedR:::full_backed_knn_stage(source, 30L,
         "metal", 16L, paths, "8GB", NULL, NULL)
     expect_identical(called,
-        list(backend = "cpu", workers = 16L))
+        list(backend = "metal", workers = 1L))
     fit <- fastEmbedR:::full_backed_pipeline_record(
         list(resources = list(estimated_peak_ram_bytes = 456)),
         source, stage$object, list(resources = list()),
         list(layout = NULL, fit = NULL, backend = "cpu",
             resources = list()), 1, 2, 3, 4, 16L, 1L,
         "metal", FALSE, "8GB")
-    expect_identical(fit$pipeline$stage_backend[["knn"]], "cpu")
+    expect_identical(fit$pipeline$stage_backend[["knn"]], "metal")
     expect_identical(fit$pipeline$stage_backend[["optimize"]],
         "metal")
-    expect_identical(fit$pipeline$knn_method, "hnsw_sharded")
+    expect_identical(fit$pipeline$knn_method, "exact")
     expect_identical(fit$pipeline$stage_resources$knn$peak_ram_bytes,
         123)
     fit$method <- "umap"
@@ -33,11 +33,21 @@ test_that("large one-call Metal graph preparation is explicit", {
 })
 
 test_that("small one-call Metal KNN uses one native worker", {
-    source <- structure(list(nrow = 5000L),
-        class = "fastEmbedR_massive_matrix")
-    route <- fastEmbedR:::full_backed_knn_route(source,
-        "metal", 16L)
+    route <- fastEmbedR:::full_backed_knn_route("metal", 16L)
     expect_identical(route, list(backend = "metal", workers = 1L))
+})
+
+test_that("Metal reference shards use admitted memory on flow18", {
+    source <- structure(list(nrow = 1000021L, ncol = 11L,
+        format = "f32"), class = "fastEmbedR_massive_matrix")
+    testthat::local_mocked_bindings(
+        fastembedr_metal_knn_available = function() TRUE,
+        .package = "fastEmbedR")
+    plan <- fastEmbedR:::massive_metal_sharded_resources(
+        source, 30L, NULL, NULL, "8GB")
+    expect_equal(plan$n_shards, 1L)
+    expect_equal(plan$reference_chunk_rows, 1000021L)
+    expect_lte(plan$metal_buffer_bytes_estimate, 128 * 1024^2)
 })
 
 test_that("one-call KNN stage forwards selected recall tier", {

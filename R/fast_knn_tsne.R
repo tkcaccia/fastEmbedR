@@ -779,8 +779,8 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #'   threshold. Neighbor results are materialized in host RAM before the
 #'   CUDA optimizer; multiple devices request FAISS GPU replicas.
 #'   Unsupported GPU requests fail clearly and are not relabelled CPU runs.
-#'   Above 5,000 rows, one-call file-backed Metal t-SNE prepares neighbors
-#'   with CPU HNSW; the returned pipeline records that stage separately.
+#'   One-call file-backed Metal t-SNE prepares exact neighbors with
+#'   faissR's native Metal batches; the pipeline records that stage.
 #'   Metal bounds graph uploads, but keeps coordinates and optimizer state
 #'   resident and reserves space for the FFT workspace. It rejects fits
 #'   outside the device working-set budget; it is not fully streamed.

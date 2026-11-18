@@ -140,12 +140,11 @@ fuzzy graph; t-SNE uses PCA. It records the KNN, graph, initialization,
 and optimization times separately. The KNN policy may choose approximate
 search for larger inputs; all rows are still optimized. Set
 `checkpoint = TRUE` to record completed stages and native progress.
-For a Metal one-call full fit above 5,000 rows, CPU HNSW prepares KNN
-before the Metal optimizer. This is an explicit mixed-stage route:
-`fit$pipeline$stage_backend`, `knn_method`, and `stage_resources`
-record the work and memory estimates for each stage. A requested Metal
-optimizer does not imply Metal KNN or an all-GPU pipeline. Check sampled
-KNN recall and embedding quality on each large dataset.
+For a Metal one-call full fit, faissR's exact Metal batches prepare KNN
+before the Metal optimizer. `fit$pipeline$stage_backend`, `knn_method`,
+and `stage_resources` record the work and memory estimates for each stage.
+Exact file-backed KNN can be much slower than approximate resident KNN;
+compare measured quality and timing on each dataset.
 Metal t-SNE bounds graph uploads when graph streaming is selected, but
 keeps coordinates and optimizer state in memory and reserves FFT space.
 The device working-set admission rejects oversized fits before graph

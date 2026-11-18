@@ -1459,7 +1459,7 @@ massive_metal_sharded_resources <- function(x, k, chunk_rows,
     if (x$ncol > 16384L || k > 127L) stop(
         "Metal exact KNN needs at most 16,384 columns and k <= 127.",
         call. = FALSE)
-    requested <- reference_chunk_rows %||% min(x$nrow, 250000L)
+    requested <- reference_chunk_rows %||% x$nrow
     query <- chunk_rows %||% 8192L
     if (is.na(integer_scalar(requested)) || requested < 2L ||
         is.na(integer_scalar(query)) || query < 1L) stop(
