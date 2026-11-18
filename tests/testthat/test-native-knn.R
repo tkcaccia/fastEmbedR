@@ -169,7 +169,8 @@ test_that("precompute_knn preserves the float32 host path", {
 
 test_that("KNN recall tier accepts an explicit argument and session option", {
     x <- matrix(seq_len(80), nrow = 20L)
-    withr::local_options(fastEmbedR.target_recall = 0.90)
+    old_options <- options(fastEmbedR.target_recall = 0.90)
+    on.exit(options(old_options), add = TRUE)
     for (backend in c("cpu", "cuda", "metal")) {
         expect_equal(fastembedr_embedding_nn_policy(backend, 200000L,
             16L)$target_recall, 0.90)
@@ -207,7 +208,8 @@ test_that("Euclidean IVF audit counts ties and checks distances", {
 
 test_that("one-call embedding recall reaches metadata and rejects bypasses", {
     x <- scale(as.matrix(iris[1:40, 1:4]))
-    withr::local_options(fastEmbedR.target_recall = 0.90)
+    old_options <- options(fastEmbedR.target_recall = 0.90)
+    on.exit(options(old_options), add = TRUE)
     fit_tsne <- tsne(x, perplexity = 5, backend = "cpu", n.cores = 1L,
         early_exaggeration_iter = 0L, n_iter = 1L,
         auto_config = FALSE, target_recall = 0.95)

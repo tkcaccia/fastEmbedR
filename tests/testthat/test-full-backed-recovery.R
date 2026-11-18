@@ -1,6 +1,7 @@
 test_that("one-call full UMAP resumes after graph-stage failure", {
     skip_on_os("windows")
-    withr::local_options(fastEmbedR.target_recall = 0.90)
+    old_options <- options(fastEmbedR.target_recall = 0.90)
+    on.exit(options(old_options), add = TRUE)
     x <- as.matrix(iris[, 1:4])
     work <- tempfile("full-umap-recovery-")
     dir.create(work)

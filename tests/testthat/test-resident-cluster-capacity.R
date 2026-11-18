@@ -21,7 +21,8 @@ test_that("KNN graph admission happens before neighbor search", {
     expect_equal(plan$max_csr_edges, 60)
     expect_error(check(x, 3L, "cpu", "1MB", 2 * 1024^3),
         "exceeds the RAM budget")
-    withr::local_options(memory_limit = "1MB")
+    old_options <- options(memory_limit = "1MB")
+    on.exit(options(old_options), add = TRUE)
     expect_error(knn_graph(x, k = 3L, backend = "cpu"),
         "exceeds the RAM budget")
 })

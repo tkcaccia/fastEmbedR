@@ -51,7 +51,8 @@ test_that("exact file-backed KNN records recall tier without retuning", {
     path <- file.path(directory, "input.f32")
     writeBin(as.numeric(t(x)), path, size = 4L, endian = "little")
     source <- massive_matrix(path, nrow(x), ncol(x))
-    withr::local_options(fastEmbedR.target_recall = 0.90)
+    old_options <- options(fastEmbedR.target_recall = 0.90)
+    on.exit(options(old_options), add = TRUE)
     option <- precompute_knn(source, 2L, backend = "cpu",
         output = file.path(directory, "option"))
     explicit <- precompute_knn(source, 2L, backend = "cpu",

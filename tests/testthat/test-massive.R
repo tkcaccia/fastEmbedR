@@ -222,12 +222,13 @@ test_that("public landmark UMAP resumes without repeating completed stages", {
 
 test_that("landmark fit resumes from saved selection", {
     skip_if_not_installed("float")
-    withr::local_options(n.cores = 2L)
+    old_options <- options(n.cores = 2L)
+    on.exit(options(old_options), add = TRUE)
     set.seed(614)
     input <- make_massive_fixture(matrix(rnorm(45L * 4L), ncol = 4L))
     directory <- tempfile()
     dir.create(directory)
-    on.exit(unlink(c(input, directory), recursive = TRUE))
+    on.exit(unlink(c(input, directory), recursive = TRUE), add = TRUE)
     source <- massive_matrix(input, 45L, 4L)
     output <- file.path(directory, "umap.f32")
     run <- function(resume = FALSE) umap(source, massive = "landmark",

@@ -7,9 +7,18 @@ test_that("CUDA t-SNE checkpoint identity includes the FFT grid", {
     make_plan <- function() fastEmbedR:::massive_tsne_optimize_plan(
         graph, init, output, 2L, 3L, 12, 1, 1, 0.8, 0.8,
         0.01, Inf, "1GB", "cuda", 1L, c(0L, 1L))
+    old_grid <- Sys.getenv("FASTEMBEDR_TSNE_FFT_GRID",
+        unset = NA_character_)
+    Sys.setenv(FASTEMBEDR_TSNE_FFT_GRID = "128")
+    on.exit({
+        if (is.na(old_grid)) {
+            Sys.unsetenv("FASTEMBEDR_TSNE_FFT_GRID")
+        } else {
+            Sys.setenv(FASTEMBEDR_TSNE_FFT_GRID = old_grid)
+        }
+    }, add = TRUE)
     with_mocked_bindings(
         {
-            withr::local_envvar(FASTEMBEDR_TSNE_FFT_GRID = "128")
             first <- make_plan()
             expect_identical(first$fft_grid_size, 128L)
             expect_identical(first$parameters$fft_grid_size, 128L)
@@ -44,7 +53,16 @@ test_that("CUDA t-SNE uses and verifies its planned FFT grid", {
         fft_grid_size = 128L)
     saved <- list(iteration = 0L, state_path = "", every = 0L,
         progress = NULL, sidecar = NULL)
-    withr::local_envvar(FASTEMBEDR_TSNE_FFT_GRID = "256")
+    old_grid <- Sys.getenv("FASTEMBEDR_TSNE_FFT_GRID",
+        unset = NA_character_)
+    Sys.setenv(FASTEMBEDR_TSNE_FFT_GRID = "256")
+    on.exit({
+        if (is.na(old_grid)) {
+            Sys.unsetenv("FASTEMBEDR_TSNE_FFT_GRID")
+        } else {
+            Sys.setenv(FASTEMBEDR_TSNE_FFT_GRID = old_grid)
+        }
+    }, add = TRUE)
     with_mocked_bindings(
         {
             result <- massive_tsne_optimize(graph, init,

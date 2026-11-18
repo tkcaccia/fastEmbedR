@@ -31,7 +31,8 @@ test_that("graph_cluster distinguishes data from prepared graphs", {
 test_that("knn_graph uses the requested tier only for computed KNN", {
     set.seed(72)
     x <- matrix(rnorm(80L), ncol = 2L)
-    withr::local_options(fastEmbedR.target_recall = 0.90)
+    old_options <- options(fastEmbedR.target_recall = 0.90)
+    on.exit(options(old_options), add = TRUE)
     option <- knn_graph(x, k = 4L, backend = "cpu")
     explicit <- knn_graph(x, k = 4L, backend = "cpu",
         target_recall = 0.95)

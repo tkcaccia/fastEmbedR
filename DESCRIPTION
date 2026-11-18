@@ -48,8 +48,7 @@ Suggests:
     knitr,
     RhpcBLASctl,
     rmarkdown,
-    testthat,
-    withr
+    testthat
 LinkingTo:
     faissR (>= 0.1),
     Rcpp (>= 1.0.13)

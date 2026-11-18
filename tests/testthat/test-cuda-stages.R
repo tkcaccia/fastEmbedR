@@ -196,7 +196,16 @@ test_that("CUDA PCA selects rSVD for wide low-rank input", {
         skip("CUDA embedding backend is not available in this build.")
     }
 
-    withr::local_envvar(FASTEMBEDR_CUDA_GRAPH_CAPTURE = "1")
+    old_capture <- Sys.getenv("FASTEMBEDR_CUDA_GRAPH_CAPTURE",
+        unset = NA_character_)
+    Sys.setenv(FASTEMBEDR_CUDA_GRAPH_CAPTURE = "1")
+    on.exit({
+        if (is.na(old_capture)) {
+            Sys.unsetenv("FASTEMBEDR_CUDA_GRAPH_CAPTURE")
+        } else {
+            Sys.setenv(FASTEMBEDR_CUDA_GRAPH_CAPTURE = old_capture)
+        }
+    }, add = TRUE)
     set.seed(73)
     left <- matrix(rnorm(320L * 5L), nrow = 320L)
     right <- matrix(rnorm(1536L * 5L), nrow = 1536L)
@@ -275,7 +284,16 @@ test_that("CUDA UMAP reports pooled allocation and graph capture", {
         skip("Native CUDA KNN is not available in this build.")
     }
 
-    withr::local_envvar(FASTEMBEDR_CUDA_GRAPH_CAPTURE = "1")
+    old_capture <- Sys.getenv("FASTEMBEDR_CUDA_GRAPH_CAPTURE",
+        unset = NA_character_)
+    Sys.setenv(FASTEMBEDR_CUDA_GRAPH_CAPTURE = "1")
+    on.exit({
+        if (is.na(old_capture)) {
+            Sys.unsetenv("FASTEMBEDR_CUDA_GRAPH_CAPTURE")
+        } else {
+            Sys.setenv(FASTEMBEDR_CUDA_GRAPH_CAPTURE = old_capture)
+        }
+    }, add = TRUE)
     set.seed(74)
     x <- matrix(rnorm(256L * 8L), nrow = 256L)
     fit <- fastEmbedR::umap(
@@ -296,7 +314,7 @@ test_that("CUDA UMAP reports pooled allocation and graph capture", {
     )
     expect_identical(fit$parameters$knn_residency, "cuda_device")
 
-    withr::local_envvar(FASTEMBEDR_CUDA_GRAPH_CAPTURE = "0")
+    Sys.setenv(FASTEMBEDR_CUDA_GRAPH_CAPTURE = "0")
     ordinary <- fastEmbedR::umap(
         x,
         n_neighbors = 10L,
