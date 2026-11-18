@@ -1363,7 +1363,7 @@ massive_hnsw_sharded_resources <- function(x, k, chunk_rows,
     per_reference <- 16 * x$ncol + 2048
     max_reference <- floor((0.7 * limit - 64 * 1024^2) /
         per_reference)
-    requested <- reference_chunk_rows %||% min(x$nrow, 250000L)
+    requested <- reference_chunk_rows %||% min(x$nrow, max_reference)
     if (is.na(integer_scalar(requested)) || requested < 2L ||
         max_reference < 2) stop(
         "HNSW reference shard exceeds `memory_limit`.", call. = FALSE)

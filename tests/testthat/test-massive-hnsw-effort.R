@@ -10,6 +10,22 @@ test_that("sharded HNSW uses a memory-bounded query batch", {
     expect_lt(default$peak_ram_bytes, default$memory_limit_bytes)
 })
 
+test_that("default HNSW shard size uses the available RAM budget", {
+    source <- list(nrow = 1000021L, ncol = 11L, format = "f32")
+    roomy <- fastEmbedR:::massive_hnsw_sharded_resources(
+        source, 30L, NULL, NULL, "8GB")
+    tight <- fastEmbedR:::massive_hnsw_sharded_resources(
+        source, 30L, NULL, NULL, "512MB")
+    capped <- fastEmbedR:::massive_hnsw_sharded_resources(
+        source, 30L, NULL, 250000L, "8GB")
+    expect_identical(roomy$n_shards, 1L)
+    expect_equal(roomy$reference_chunk_rows, 1000021)
+    expect_gt(tight$n_shards, 1L)
+    expect_lte(tight$peak_ram_bytes, tight$memory_limit_bytes)
+    expect_identical(capped$n_shards, 5L)
+    expect_lte(capped$reference_chunk_rows, 250000L)
+})
+
 test_that("sharded HNSW tunes for output k, not the self candidate", {
     set.seed(215)
     reference <- matrix(rnorm(90L * 6L), ncol = 6L)
