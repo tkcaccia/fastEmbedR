@@ -1477,7 +1477,8 @@ massive_metal_sharded_resources <- function(x, k, chunk_rows,
     if (shard_rows > min(requested, max_ref)) stop(
         "Balanced Metal shards exceed the RAM budget.", call. = FALSE)
     per_query <- 20 * x$ncol + 32 * (k + 1)
-    rows <- as.integer(min(query, floor((0.7 * limit - fixed -
+    # faissR's native file-backed entry point accepts at most 10,000 rows.
+    rows <- as.integer(min(query, 10000L, floor((0.7 * limit - fixed -
         20 * shard_rows * x$ncol) / per_query),
         floor(64 * 1024^2 / per_query)))
     if (is.na(rows) || rows < 1L) stop(

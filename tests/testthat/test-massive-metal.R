@@ -48,6 +48,19 @@ test_that("file-backed Metal exact KNN matches streamed CPU search", {
         tolerance = 1e-3)
 })
 
+test_that("Metal exact query batches respect faissR's native limit", {
+    with_mocked_bindings(
+        fastembedr_metal_knn_available = function() TRUE,
+        {
+            source <- list(format = "file", nrow = 100000L, ncol = 32L)
+            plan <- fastEmbedR:::massive_metal_sharded_resources(
+                source, 30L, 65536L, 8192L, "32GB")
+            expect_identical(plan$chunk_rows, 10000L)
+            expect_identical(plan$metal_memory_model, "unified_shared")
+        },
+        .package = "fastEmbedR")
+})
+
 test_that("file-backed Metal KNN rejects unsupported routes", {
     source <- massive_matrix(matrix(as.double(seq_len(20L)),
         ncol = 2L))
