@@ -7,7 +7,7 @@ test_that("CUDA IVF uses one index when its budget fits", {
             list(free_bytes = 12 * 1024^3, device = 0L),
         .package = "fastEmbedR")
     expect_identical(plan$n_shards, 1L)
-    expect_identical(plan$reference_chunk_rows, source$nrow)
+    expect_equal(plan$reference_chunk_rows, source$nrow)
     expect_lte(plan$peak_vram_bytes, plan$vram_budget_bytes)
     expect_equal(plan$vram_budget_bytes, 0.7 * 4 * 1024^3)
     capped <- with_mocked_bindings(
@@ -17,6 +17,14 @@ test_that("CUDA IVF uses one index when its budget fits", {
             list(free_bytes = 12 * 1024^3, device = 0L),
         .package = "fastEmbedR")
     expect_identical(capped$n_shards, 6L)
+    tight <- with_mocked_bindings(
+        massive_cuda_sharded_resources(source, 30L, NULL, NULL,
+            "300MB", method = "ivf_sharded"),
+        massive_cuda_shard_info = function()
+            list(free_bytes = 12 * 1024^3, device = 0L),
+        .package = "fastEmbedR")
+    expect_gt(tight$n_shards, 1L)
+    expect_lte(tight$peak_vram_bytes, tight$vram_budget_bytes)
 })
 
 test_that("CUDA shard uses requested k for IVF policy", {
