@@ -309,8 +309,7 @@ fails rather than falling back to CPU. Neither
 # PCA and reproducible t-SNE initialization
 
 `pca()` exposes the backend-native truncated PCA used for initialization. It
-deliberately omits an SVD-method menu: randomized SVD is the supported
-decomposition family. For `backend = "cpu"`,
+deliberately omits a decomposition-method menu. For `backend = "cpu"`,
 `n.cores` sets the CPU BLAS/OpenMP thread limit for the call.
 `tsne_init = FALSE` is the default; request it when the t-SNE-ready layout
 is needed. `irlba` is not used by the package implementation and appears only
@@ -354,8 +353,12 @@ layout_tsne_fixed_init <- tsne(
 )
 ```
 
-CPU PCA uses float32 blocked rSVD. Its matrix products use OpenBLAS when R is
-linked to it. `pca_fit$gemm_backend` reports that route. Metal uses a native
+CPU PCA uses float32 blocked rSVD for most shapes and bounded covariance for
+resident float32 input with at most 64 columns and at least five million
+elements. The returned `method` and `backend` identify the selected route.
+Randomized matrix products use OpenBLAS when R is linked to it;
+`pca_fit$gemm_backend` reports that route when rSVD is selected. Metal uses a
+native
 float32 block-subspace rSVD with Metal Performance Shaders matrix products.
 CUDA always provides package-native rSVD and may select RAPIDS RAFT TSVD for
 narrower or less-truncated problems when that optional route is enabled. No

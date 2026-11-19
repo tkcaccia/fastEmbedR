@@ -33,7 +33,8 @@ The public package surface is deliberately small:
 - `tsne()` and `umap()` select CPU, faissR Metal, or faissR CUDA KNN and
   then call the corresponding KNN entry point.
 - `pca()` computes backend-native truncated PCA scores and loadings. CPU uses
-  fastEmbedR's native blocked rSVD implementation, Metal uses a resident
+  blocked rSVD or bounded covariance for narrow resident float32 input;
+  Metal uses a resident
   float32 MPS block-subspace rSVD, and CUDA uses package-native rSVD with an
   optional RAPIDS RAFT TSVD route. Float32 CUDA input is passed to the native
   fit without an intermediate R double matrix; unavailable required CUDA
@@ -226,7 +227,7 @@ use hardware-appropriate execution:
 
 | Backend | PCA implementation |
 | --- | --- |
-| CPU | Float32 blocked rSVD. Centering/scaling runs in C++; large matrix products use Accelerate SGEMM on Apple systems, OpenBLAS SGEMM when its probe succeeds on Linux, or the native kernel otherwise. `gemm_backend` reports the route, and `n.cores` limits its threads. |
+| CPU | Float32 blocked rSVD for most shapes; bounded covariance and projection for resident float32 matrices with at most 64 columns and at least five million elements. The rSVD matrix products use Accelerate SGEMM on Apple systems, OpenBLAS SGEMM when available on Linux, or the native kernel. `method` and `backend` report the selected algorithm; `gemm_backend` reports the rSVD product route. `n.cores` limits the workers. |
 | Metal | Package-native float32 block-subspace rSVD using MPS matrix multiplication and a resident unified-memory workspace. |
 | CUDA | Package-native float32 rSVD, with optional RAPIDS RAFT TSVD selected for suitable matrix shapes when RAFT is enabled. Float32 input is read from its payload without constructing an R double matrix; scores and loadings remain float32 until the requested R return boundary. |
 

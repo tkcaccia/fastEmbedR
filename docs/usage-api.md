@@ -273,9 +273,11 @@ enabled. It fails loudly if the requested CUDA backend is unavailable.
 Float32 CUDA input is passed to the native fit without materializing an R
 double matrix, and float32 scores/loadings are returned. Metal uses a native
 float32 block-subspace rSVD with MPS matrix products and a resident workspace.
-CPU uses fastEmbedR's native
-float32 blocked rSVD, with a seeded Gaussian sketch, quality-preserving
-oversampling, and one or two subspace iterations according to requested rank.
+CPU uses fastEmbedR's native float32 blocked rSVD with a seeded Gaussian
+sketch and subspace iterations for most shapes. Resident float32 matrices
+with at most 64 columns and at least five million elements use bounded
+centered covariance and projection. The result reports `method` and
+`backend` so the route is visible.
 
 For `backend = "cpu"`, `n.cores` is a positive integer that temporarily
 sets the BLAS/OpenMP thread limit. The result records

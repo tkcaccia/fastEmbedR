@@ -1,8 +1,23 @@
 test_that("large resident CPU PCA selects bounded covariance", {
-    expect_true(fastEmbedR:::fastembedr_cpu_needs_blocking(
-        c(100000000L, 96L)))
-    expect_false(fastEmbedR:::fastembedr_cpu_needs_blocking(
-        c(1000000L, 96L)))
+    route <- fastEmbedR:::fastembedr_cpu_covariance_route
+    expect_true(route(c(100000000L, 96L), TRUE))
+    expect_true(route(c(500000L, 32L), TRUE))
+    expect_true(route(c(300000L, 64L), TRUE))
+    expect_false(route(c(200000L, 128L), TRUE))
+    expect_false(route(c(40000L, 512L), TRUE))
+    expect_false(route(c(500000L, 32L), FALSE))
+    expect_false(route(c(1000L, 32L), TRUE))
+})
+
+test_that("public resident float32 PCA uses narrow covariance route", {
+    skip_if_not_installed("float")
+    set.seed(81L)
+    x <- float::fl(matrix(rnorm(5e6), 250000L, 20L))
+    fit <- pca(x, ncomp = 2L, backend = "cpu", n.cores = 2L)
+    expect_identical(fit$method, "blocked_covariance")
+    expect_identical(fit$backend, "cpu_covariance")
+    expect_s4_class(fit$scores, "float32")
+    expect_equal(dim(fit$scores), c(250000L, 2L))
 })
 
 test_that("blocked CPU PCA keeps 16 workers and covariance parity", {

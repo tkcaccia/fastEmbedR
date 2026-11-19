@@ -123,16 +123,19 @@ float32. CPU results also record the worker and BLAS limits.
 }
 \description{
 \code{pca()} computes principal component scores with a backend-native truncated
-decomposition. CPU uses a package-native float32 blocked randomized SVD
-(rSVD). Metal uses a package-native float32 block-subspace rSVD whose large
+decomposition. CPU uses float32 blocked randomized SVD (rSVD) or bounded
+covariance for suitable narrow inputs. Metal uses a package-native float32
+block-subspace rSVD whose large
 matrix products are executed with Metal Performance Shaders. CUDA selects
 between package-native float32 rSVD and, when enabled, RAPIDS RAFT TSVD
 from the matrix shape, requested rank, and estimated arithmetic cost.
 Wide, low-rank problems favor rSVD; smaller, narrower, or less-truncated
 problems favor TSVD. Without RAFT, CUDA uses native rSVD. CUDA requests
 fail explicitly when CUDA is unavailable; they never fall back to CPU PCA.
-For very tall resident float32 matrices beyond the native rSVD matrix-size
-limit, CPU and Metal use bounded-block covariance and projection. CPU
+For resident float32 CPU matrices with at most 64 columns and at least
+five million elements, bounded-block covariance and projection are used.
+This route also handles very tall matrices beyond the native rSVD size
+limit. Metal uses bounded blocks beyond its safe matrix-size limit. CPU
 covariance and projection use native parallel workers; Metal covariance
 and projection use native Metal blocks. The small covariance eigensystem is
 solved on CPU. Scores and loadings remain float32 without writing to disk.

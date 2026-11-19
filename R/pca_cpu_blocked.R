@@ -1,6 +1,7 @@
-fastembedr_cpu_needs_blocking <- function(dimensions) {
-    as.double(dimensions[[1L]]) * dimensions[[2L]] >
-        .Machine$integer.max
+fastembedr_cpu_covariance_route <- function(dimensions, float32) {
+    elements <- as.double(dimensions[[1L]]) * dimensions[[2L]]
+    elements > .Machine$integer.max ||
+        (float32 && dimensions[[2L]] <= 64L && elements >= 5e6)
 }
 
 resident_pca_float_loadings <- function(loadings) {
