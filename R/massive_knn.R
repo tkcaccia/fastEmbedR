@@ -32,13 +32,20 @@ massive_knn_resources <- function(x, reference, k, method,
         memory_limit_bytes = limit)
 }
 
+massive_cuda_knn_budget <- function(info) {
+    if (isTRUE(getOption("fastEmbedR.knn.use_available_vram", FALSE))) {
+        return(max(0, info$free_bytes - 512 * 1024^2))
+    }
+    0.65 * info$free_bytes
+}
+
 massive_knn_cuda_resources <- function(resources, reference, k,
                                         method, info) {
     reference_items <- as.double(reference$nrow) * reference$ncol
     fixed <- 128 * 1024^2 + reference_items *
         if (method == "ivf") 12 else 8
     per_row <- 4 * reference$ncol + 20 * k
-    budget <- 0.65 * info$free_bytes
+    budget <- massive_cuda_knn_budget(info)
     maximum <- floor((budget - fixed) / per_row)
     if (!is.finite(maximum) || maximum < 1) {
         stop("Estimated CUDA index and query buffers exceed the ",
@@ -1414,7 +1421,7 @@ massive_cuda_sharded_resources <- function(x, k, chunk_rows,
     fixed <- 128 * 1024^2
     index_bytes <- if (method == "ivf_sharded") 12 else 8
     host_max <- floor((0.7 * limit - fixed) / (16 * x$ncol))
-    gpu_budget <- min(0.65 * info$free_bytes, 0.7 * limit)
+    gpu_budget <- min(massive_cuda_knn_budget(info), 0.7 * limit)
     gpu_max <- floor((gpu_budget - fixed) /
         (index_bytes * x$ncol))
     shard_rows <- min(requested, host_max, gpu_max, x$nrow)
@@ -1703,8 +1710,9 @@ massive_sharded_result_valid <- function(found, method, backend,
             isTRUE(found$index_reused) &&
             (method != "ivf" || isTRUE(
                 found$pilot_target_recall == target_recall &&
-                found$pilot_min_row_recall >= target_recall &&
-                found$pilot_id_recall >= target_recall))
+                (keep_knn_recall_miss() ||
+                    (found$pilot_min_row_recall >= target_recall &&
+                    found$pilot_id_recall >= target_recall))))
     } else identical(found$backend, "cpu") &&
         identical(found$method,
             ifelse(method == "exact", "faissr_flat_query_reused",
@@ -1766,11 +1774,12 @@ massive_sharded_ivf_setting <- function(found, shard, first, count,
         values$nlist < 1L || values$nprobe < 1L ||
         values$nprobe > values$nlist ||
         length(minimum) != 1L || !is.numeric(minimum) ||
-        !is.finite(minimum) || minimum < target_recall || minimum > 1 ||
+        !is.finite(minimum) || minimum < 0 || minimum > 1 ||
         length(found$pilot_id_recall) != 1L ||
         !is.numeric(found$pilot_id_recall) ||
         !is.finite(found$pilot_id_recall) ||
-        found$pilot_id_recall < target_recall ||
+        (!keep_knn_recall_miss() && (minimum < target_recall ||
+            found$pilot_id_recall < target_recall)) ||
         !identical(found$pilot_target_recall, target_recall)) stop(
         "Sharded IVF query omitted effective tuning settings.",
         call. = FALSE)
@@ -1852,7 +1861,7 @@ massive_faissr_ivf_pilot <- function(x, state, setup, count) {
         faissr_gpu_index_set_nprobe_cpp(state$index$pointer, probe)
         state$index$nprobe <- probe
     }
-    if (!passed) stop(sprintf(
+    if (!passed && !keep_knn_recall_miss()) stop(sprintf(
         "IVF pilot missed %.2f: mean IDs %.4f, min tie-aware %.4f, ",
         target, mean(score$id), min(score$effective)),
         "tie rows ", sum(score$tie), ", nprobe ", probe,
@@ -1910,10 +1919,11 @@ massive_hnsw_calibrate_shard <- function(x, state, setup,
         max_ef,
         setup$build_workers %||% setup$workers)
     if (!identical(pilot$pilot_reference, "full_cpu_double_l2") ||
-        !isTRUE(pilot$target_met) ||
+        (!keep_knn_recall_miss() && (!isTRUE(pilot$target_met) ||
+            pilot$pilot_recall < pilot$pilot_guard_recall)) ||
+        !is.finite(pilot$pilot_recall) ||
         pilot$pilot_rows != length(rows) ||
         pilot$max_ef_search != max_ef ||
-        pilot$pilot_recall < pilot$pilot_guard_recall ||
         pilot$target_recall != (setup$target_recall %||% 0.99)) stop(
             "faissR HNSW pilot changed its recall reference or target.",
             call. = FALSE)

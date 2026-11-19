@@ -1,5 +1,12 @@
 # fastEmbedR 0.1
 
+* Honor the private `faissR.knn.report_recall_miss` option for KNN
+  benchmarking. Valid graphs can be retained after a recall miss, with
+  the selected target and actual audit result recorded separately.
+* Allow an explicit `fastEmbedR.knn.use_available_vram` option to plan
+  file-backed CUDA KNN from live free VRAM with 512 MiB of headroom.
+  The host-memory and index-capacity checks still apply.
+
 * Select faissR's capacity-checked native Metal IVF route for file-backed
   KNN when its host and device budgets fit. Otherwise use the existing
   bounded exact Metal search. Record the actual route and recall audit.

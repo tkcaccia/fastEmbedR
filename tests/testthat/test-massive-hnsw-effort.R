@@ -40,8 +40,10 @@ test_that("sharded HNSW tunes for output k, not the self candidate", {
     testthat::local_mocked_bindings(
         massive_knn_reference = function(reference, k, method,
                 n.cores, backend, hnsw_build = NULL,
-                cuda_provider = "faissR", target_recall = 0.99) {
+                cuda_provider = "faissR", target_recall = 0.99,
+                policy_k = k) {
             observed$k <- k
+            observed$policy_k <- policy_k
             observed$method <- method
             observed$hnsw_build <- hnsw_build
             stop("captured index build")
@@ -50,6 +52,7 @@ test_that("sharded HNSW tunes for output k, not the self candidate", {
         source, setup, NULL, 0L, NULL, "cpu", NULL),
         "captured index build")
     expect_identical(observed$k, 30L)
+    expect_identical(observed$policy_k, 30L)
     expect_identical(observed$method, "faiss_hnsw")
     expect_null(observed$hnsw_build)
 })
@@ -106,4 +109,18 @@ test_that("sharded CPU k30 default retains recall with shared tuning", {
         item$indices_path, item$distances_path, item$n_vertices,
         item$k, item$n_vertices, 1L, 90L, 128e6)
     expect_equal(read_graph(graph), read_graph(small))
+})
+
+test_that("recall reporting retains a measured miss after explicit opt-in", {
+    pilot <- list(recall_audited = TRUE, target_met = FALSE,
+        recall_status = "pilot_exact_reference_missed_guard",
+        pilot_recall = 0.97, target_recall = 0.99)
+    check <- fastEmbedR:::faissr_hnsw_recall_check
+    old <- options(faissR.knn.report_recall_miss = FALSE)
+    on.exit(options(old))
+    expect_error(check(pilot, "euclidean"), "did not meet the recall")
+    options(faissR.knn.report_recall_miss = TRUE)
+    expect_identical(check(pilot, "euclidean"), pilot)
+    pilot$recall_audited <- FALSE
+    expect_error(check(pilot, "euclidean"), "did not meet the recall")
 })

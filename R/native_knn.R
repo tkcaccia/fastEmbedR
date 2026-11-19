@@ -770,7 +770,7 @@ fastembedr_audit_resident_ivf <- function(data, knn, k, metric,
         sum(ids %in% truth) / k
     }, numeric(1L))
     mean_recall <- mean(row_recall)
-    if (mean_recall < target_recall) stop(
+    if (mean_recall < target_recall && !keep_knn_recall_miss()) stop(
         "faissR resident IVF pilot recall ",
         format(mean_recall, digits = 5L), " is below target ",
         target_recall, ".", call. = FALSE)
@@ -782,6 +782,10 @@ fastembedr_audit_resident_ivf <- function(data, knn, k, metric,
         rows = rows, mean = mean_recall, minimum = min(row_recall),
         reference_backend = reference$backend_used, tie = tie
     )
+}
+
+keep_knn_recall_miss <- function() {
+    isTRUE(getOption("faissR.knn.report_recall_miss", FALSE))
 }
 
 fastembedr_cuda_ivf_probe_reference <- function(data, rows, k) {
@@ -848,6 +852,7 @@ fastembedr_cuda_ivf_tune_persistent <- function(data, k, params,
         trace[[length(trace) + 1L]] <- c(nprobe = nprobe,
             measured_recall = pilot$mean)
         if (pilot$mean >= pilot_guard) break
+        if (nprobe >= params$nlist && keep_knn_recall_miss()) break
         if (nprobe >= params$nlist) stop(
             "faissR IVF missed recall even at full probe width.",
             call. = FALSE)
@@ -914,7 +919,7 @@ run_faissr_cuda_resident_ivf <- function(data, k, metric, target_recall,
         pilot$tie$max_relative_distance_error %||% NA_real_
     out$recall_audited <- TRUE
     out$recall_status <- "fixed_rows_exact_reference"
-    out$target_met <- TRUE
+    out$target_met <- pilot$mean >= target_recall
     if (isTRUE(retain_data)) {
         out <- faissr_gpu_knn_retain_data_cpp(out, data)
     }
@@ -977,7 +982,8 @@ fastembedr_cuda_multi_recall_result <- function(out, data, k, method,
         fastembedr_audit_resident_ivf(data, out, k, metric, target_recall)
     } else NULL
     if (!is.null(pilot) && (length(pilot$mean) != 1L ||
-        !is.finite(pilot$mean) || pilot$mean < target_recall)) stop(
+        !is.finite(pilot$mean) ||
+        (pilot$mean < target_recall && !keep_knn_recall_miss()))) stop(
         "faissR CUDA IVF pilot recall is below target.", call. = FALSE)
     out$target_recall <- target_recall
     out$pilot_recall <- pilot$mean %||% NA_real_
@@ -991,7 +997,8 @@ fastembedr_cuda_multi_recall_result <- function(out, data, k, method,
     out$recall_audited <- !is.null(pilot)
     out$recall_status <- if (identical(method, "flat")) {
         "exact_by_construction"
-    } else "runtime_audited_target_met"
+    } else if (out$target_met) "runtime_audited_target_met"
+    else "runtime_audited_target_missed"
     out
 }
 
@@ -1030,6 +1037,7 @@ fastembedr_cuda_tune_host_index <- function(data, k, params,
         trace[[length(trace) + 1L]] <- c(nprobe = nprobe,
             measured_recall = measured)
         if (measured >= target_recall) break
+        if (nprobe >= params$nlist && keep_knn_recall_miss()) break
         if (nprobe >= params$nlist) stop(
             "faissR CUDA IVF missed target at full probe width.",
             call. = FALSE)
@@ -1110,8 +1118,11 @@ faissr_hnsw_recall_check <- function(out, metric) {
             "calibration_informed_not_runtime_audited"
         return(out)
     }
-    if (!isTRUE(out$recall_audited) || !isTRUE(out$target_met) ||
-        !identical(out$recall_status, "pilot_exact_reference_passed")) {
+    pilot_ok <- isTRUE(out$target_met) &&
+        identical(out$recall_status, "pilot_exact_reference_passed")
+    pilot_reported <- keep_knn_recall_miss() &&
+        identical(out$recall_status, "pilot_exact_reference_missed_guard")
+    if (!isTRUE(out$recall_audited) || !(pilot_ok || pilot_reported)) {
         stop("faissR CPU HNSW pilot did not meet the recall target.",
             call. = FALSE)
     }
@@ -1243,12 +1254,14 @@ validate_faissr_metal_knn <- function(out, target_recall) {
     if (identical(out$method, "native_metal_ivf")) {
         measured <- out$pilot_recall
         if (!is.numeric(measured) || length(measured) != 1L ||
-            !is.finite(measured) || measured < target_recall ||
-            !isTRUE(out$target_met)) stop(
+            !is.finite(measured) ||
+            (!keep_knn_recall_miss() && (measured < target_recall ||
+                !isTRUE(out$target_met)))) stop(
             "Native Metal IVF did not meet the requested recall target; ",
             "no fallback was used.", call. = FALSE)
         out$recall_audited <- TRUE
-        out$recall_status <- "runtime_audited_target_met"
+        out$recall_status <- if (isTRUE(out$target_met))
+            "runtime_audited_target_met" else "runtime_audited_target_missed"
         out$exact_recall_by_construction <- FALSE
     } else {
         if (!isTRUE(out$exact) || !isTRUE(out$target_met)) stop(
@@ -1415,7 +1428,7 @@ fastembedr_check_metal_query_knn <- function(out, n_reference,
         stop("faissR did not return the requested Metal query KNN.",
             call. = FALSE)
     }
-    if (!isTRUE(out$target_met)) stop(
+    if (!isTRUE(out$target_met) && !keep_knn_recall_miss()) stop(
         "Native Metal query IVF missed the requested recall target; ",
         "no fallback was used.", call. = FALSE)
     invisible(out)
@@ -1430,11 +1443,11 @@ fastembedr_check_cuda_query_knn <- function(out, n_query, k, method,
         stop("faissR did not return CUDA query KNN.", call. = FALSE)
     }
     if (identical(method, "ivf") &&
-        (!isTRUE(out$target_met) ||
-            !is.numeric(out$pilot_recall) ||
+        (!is.numeric(out$pilot_recall) ||
             length(out$pilot_recall) != 1L ||
             !is.finite(out$pilot_recall) ||
-            out$pilot_recall < target_recall)) stop(
+            (!keep_knn_recall_miss() && (!isTRUE(out$target_met) ||
+                out$pilot_recall < target_recall)))) stop(
         "faissR CUDA query IVF missed the requested recall target.",
         call. = FALSE)
     attr(out, "backend") <- "cuda"
