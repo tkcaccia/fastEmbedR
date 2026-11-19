@@ -18,3 +18,16 @@ test_that("CUDA IVF uses one index when its budget fits", {
         .package = "fastEmbedR")
     expect_identical(capped$n_shards, 6L)
 })
+
+test_that("CUDA shard uses requested k for IVF policy", {
+    observed <- with_mocked_bindings(
+        massive_knn_reference(list(format = "file"), 31L,
+            "ivf", 1L, "cuda", policy_k = 30L),
+        massive_knn_reference_input = function(...)
+            list(data = matrix(0, 40L, 3L), storage = "R_float32"),
+        massive_faissr_cuda_reference = function(data, k, method,
+                started, storage, target_recall, policy_k)
+            c(build_k = k, policy_k = policy_k),
+        .package = "fastEmbedR")
+    expect_equal(observed, c(build_k = 31L, policy_k = 30L))
+})

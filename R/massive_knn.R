@@ -94,7 +94,7 @@ massive_knn_paths <- function(output, output_bytes, resume = FALSE,
 massive_knn_reference <- function(reference, k, method,
         n.cores, backend, resources = NULL, hnsw_build = NULL,
         ef_search = 0L, cuda_provider = "faissR",
-        target_recall = 0.99) {
+        target_recall = 0.99, policy_k = k) {
     if (backend == "cpu" && method == "exact" &&
         !requireNamespace("float", quietly = TRUE)) stop(
         "Persistent faissR Flat KNN requires `float`.", call. = FALSE)
@@ -118,7 +118,8 @@ massive_knn_reference <- function(reference, k, method,
     storage <- input$storage
     if (backend == "cuda") {
         return(massive_faissr_cuda_reference(
-            matrix, k, method, started, storage, target_recall))
+            matrix, k, method, started, storage, target_recall,
+            policy_k))
     }
     if (method == "exact") {
         index <- faissr_flat_index_build_cpp(matrix, n.cores)
@@ -151,13 +152,13 @@ massive_knn_reference_input <- function(reference, backend, method,
 }
 
 massive_faissr_cuda_reference <- function(data, k, method,
-        started, storage, target_recall) {
+        started, storage, target_recall, policy_k = k) {
     if (!method %in% c("exact", "ivf")) stop(
         "faissR CUDA landmark KNN requires exact or IVF search.",
         call. = FALSE)
     params <- if (method == "ivf") {
         utils::getFromNamespace("cuda_ivf_params", "faissR")(
-            nrow(data), ncol(data), k, "euclidean", target_recall)
+            nrow(data), ncol(data), policy_k, "euclidean", target_recall)
     } else list(nlist = 1L, nprobe = 1L,
         tuning_benchmark_source = "exact_by_construction")
     device <- as.integer(massive_cuda_memory_cpp()$device)
@@ -1956,7 +1957,8 @@ massive_index_shard_state <- function(x, reference, setup, shard,
     state <- massive_knn_reference(reference, tuning_k,
         method, setup$build_workers %||% setup$workers, backend,
         hnsw_build = setup$hnsw_build, cuda_provider = provider,
-        target_recall = setup$target_recall %||% 0.99)
+        target_recall = setup$target_recall %||% 0.99,
+        policy_k = setup$k)
     if (backend == "cuda" && method == "ivf" && provider == "faissR")
         state <- massive_faissr_ivf_pilot(x, state, setup, count)
     if (backend == "cpu") state <- massive_hnsw_calibrate_shard(
