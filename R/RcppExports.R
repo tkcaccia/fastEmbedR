@@ -289,6 +289,14 @@ faissr_matrix_knn_batch_devices_cpp <- function(query, reference, row_ids, k, re
     .Call(`_fastEmbedR_faissr_matrix_knn_batch_devices_cpp`, query, reference, row_ids, k, reference_chunk, memory_limit, exclude_self, devices)
 }
 
+faissr_metal_file_ivf_plan_cpp <- function(source, k, memory_limit) {
+    .Call(`_fastEmbedR_faissr_metal_file_ivf_plan_cpp`, source, k, memory_limit)
+}
+
+faissr_metal_file_ivf_cpp <- function(source, k, target_recall, memory_limit) {
+    .Call(`_fastEmbedR_faissr_metal_file_ivf_cpp`, source, k, target_recall, memory_limit)
+}
+
 faissr_posting_search_cpp <- function(query, feature_path, ids_path, offsets_path, centers, first_row, count, k, nprobe, reference_chunk, workers, exclude_self, posting_rows, verbose) {
     .Call(`_fastEmbedR_faissr_posting_search_cpp`, query, feature_path, ids_path, offsets_path, centers, first_row, count, k, nprobe, reference_chunk, workers, exclude_self, posting_rows, verbose)
 }

@@ -1254,6 +1254,33 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// faissr_metal_file_ivf_plan_cpp
+Rcpp::List faissr_metal_file_ivf_plan_cpp(SEXP source, int k, double memory_limit);
+RcppExport SEXP _fastEmbedR_faissr_metal_file_ivf_plan_cpp(SEXP sourceSEXP, SEXP kSEXP, SEXP memory_limitSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type source(sourceSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type memory_limit(memory_limitSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_metal_file_ivf_plan_cpp(source, k, memory_limit));
+    return rcpp_result_gen;
+END_RCPP
+}
+// faissr_metal_file_ivf_cpp
+Rcpp::List faissr_metal_file_ivf_cpp(SEXP source, int k, double target_recall, double memory_limit);
+RcppExport SEXP _fastEmbedR_faissr_metal_file_ivf_cpp(SEXP sourceSEXP, SEXP kSEXP, SEXP target_recallSEXP, SEXP memory_limitSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type source(sourceSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type target_recall(target_recallSEXP);
+    Rcpp::traits::input_parameter< double >::type memory_limit(memory_limitSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_metal_file_ivf_cpp(source, k, target_recall, memory_limit));
+    return rcpp_result_gen;
+END_RCPP
+}
 // faissr_posting_search_cpp
 Rcpp::List faissr_posting_search_cpp(SEXP query, std::string feature_path, std::string ids_path, std::string offsets_path, Rcpp::NumericMatrix centers, double first_row, int count, int k, int nprobe, int reference_chunk, int workers, bool exclude_self, double posting_rows, bool verbose);
 RcppExport SEXP _fastEmbedR_faissr_posting_search_cpp(SEXP querySEXP, SEXP feature_pathSEXP, SEXP ids_pathSEXP, SEXP offsets_pathSEXP, SEXP centersSEXP, SEXP first_rowSEXP, SEXP countSEXP, SEXP kSEXP, SEXP nprobeSEXP, SEXP reference_chunkSEXP, SEXP workersSEXP, SEXP exclude_selfSEXP, SEXP posting_rowsSEXP, SEXP verboseSEXP) {
@@ -3509,6 +3536,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_project_embedding_affine_parallel_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_parallel_cpp, 9},
     {"_fastEmbedR_faissr_matrix_knn_batch_cpp", (DL_FUNC) &_fastEmbedR_faissr_matrix_knn_batch_cpp, 10},
     {"_fastEmbedR_faissr_matrix_knn_batch_devices_cpp", (DL_FUNC) &_fastEmbedR_faissr_matrix_knn_batch_devices_cpp, 8},
+    {"_fastEmbedR_faissr_metal_file_ivf_plan_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_file_ivf_plan_cpp, 3},
+    {"_fastEmbedR_faissr_metal_file_ivf_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_file_ivf_cpp, 4},
     {"_fastEmbedR_faissr_posting_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_posting_search_cpp, 14},
     {"_fastEmbedR_massive_merge_knn_shard_cpp", (DL_FUNC) &_fastEmbedR_massive_merge_knn_shard_cpp, 12},
     {"_fastEmbedR_massive_posting_distant_rows_cpp", (DL_FUNC) &_fastEmbedR_massive_posting_distant_rows_cpp, 6},

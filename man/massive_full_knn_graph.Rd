@@ -36,7 +36,7 @@ massive_full_knn_graph(
 \item{output}{New prefix for graph files.}
 
 \item{backend}{\code{"cpu"}, \code{"cuda"}, or \code{"metal"}. Metal supports exact
-shards only and never falls back to CPU.}
+shards or capacity-checked IVF and never falls back to CPU.}
 
 \item{n.cores}{CPU workers for each query block.}
 
@@ -56,7 +56,7 @@ Multi-GPU IVF checkpoints completed GPU query shards only.}
 \item{resume}{Continue a matching checkpoint and partial graph.
 An interrupted multi-GPU IVF shard restarts from its first query row.}
 
-\item{method}{\code{"exact"}, \code{"hnsw_sharded"}, \code{"ivf_sharded"}, or
+\item{method}{\code{"exact"}, \code{"metal_ivf"}, \code{"hnsw_sharded"}, \code{"ivf_sharded"}, or
 \code{"coarse_postings"}. The posting route requires the original
 file-backed source, \code{postings}, and matching \code{centers}.}
 
@@ -130,5 +130,8 @@ Metal exact search reads bounded float32 reference and query batches,
 executes the existing native Metal query kernel, and merges global IDs
 into the same file-backed graph. It re-uploads each reference shard for
 every query batch; this is a correctness route, not an ANN index.
+Metal \code{method = "metal_ivf"} reads a float32 file once and builds a
+transient native IVF index when conservative RAM and Metal budgets fit.
+It fails rather than switching algorithms if the budget or pilot misses.
 }
 \keyword{internal}

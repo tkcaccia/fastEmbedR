@@ -101,8 +101,10 @@ A file-backed descriptor uses bounded KNN graph construction and writes
 indices and distances under \code{output}. CPU selects exact search up to 5,000
 rows when estimated pair-feature work is at most 125 billion, and sharded
 HNSW otherwise. CUDA selects exact search below 100,000 rows under the same
-work limit and sharded IVF-Flat otherwise. Metal selects bounded exact
-search. File-backed KNN currently supports Euclidean distance only. The
+work limit and sharded IVF-Flat otherwise. Metal selects native IVF when
+faissR's host and Metal capacity check passes; it otherwise selects
+bounded exact search. An IVF pilot miss is an error, not a silent switch
+to exact search. File-backed KNN supports Euclidean distance only. The
 result is a \code{fastEmbedR_massive_graph} descriptor; construct UMAP fuzzy
 weights or t-SNE affinities from it before full-graph fitting.
 

@@ -2322,6 +2322,81 @@ massive_full_knn_exact <- function(x, k, output, n.cores,
     massive_full_knn_audit(graph, x, audit_rows, setup)
 }
 
+massive_full_metal_ivf_result <- function(x, output, setup,
+        found, measurement, identity) {
+    graph <- massive_knn_graph(output, x$nrow, setup$k)
+    graph$backend <- "metal"
+    graph$method <- found$backend_used
+    graph$knn_provider <- "faissR"
+    graph$residency <- "file-backed"
+    graph$index_residency <- found$index_residency
+    graph$index_reused <- TRUE
+    graph$query_storage <- "file_backed_float32"
+    graph$device_ids <- 0L
+    graph$exact <- FALSE
+    graph$target_recall <- setup$target_recall
+    graph$pilot_recall <- found$pilot_recall
+    graph$pilot_guard_recall <- found$pilot_guard_recall
+    graph$pilot_rows <- found$pilot_rows
+    graph$pilot_min_recall <- found$pilot_min_recall
+    graph$nlist <- found$nlist
+    graph$nprobe <- found$nprobe
+    graph$source_identity <- identity
+    graph$implementation_identity <-
+        massive_checkpoint_implementation_identity()
+    graph$faissr_identity <- massive_faissr_identity()
+    graph$resources <- setup$resources
+    graph$resources$peak_ram_bytes_estimate <-
+        found$peak_ram_bytes_estimate
+    graph$resources$peak_device_bytes <-
+        found$peak_device_bytes_estimate
+    graph$resources$observed_metal_owned_buffer_peak_bytes <-
+        found$metal_live_buffer_bytes_after_search
+    graph$resources$device_memory_model <-
+        "unified_shared_estimate"
+    graph$build_seconds <- found$index_build_seconds
+    graph$build_seconds_scope <- found$index_build_seconds_scope
+    graph$search_seconds <- found$search_seconds
+    graph$search_seconds_scope <- found$search_seconds_scope
+    graph$source_read_seconds <- found$source_read_seconds
+    graph$total_seconds <- measurement$seconds + found$total_seconds
+    graph
+}
+
+massive_full_knn_metal_ivf <- function(x, k, output,
+        chunk_rows, memory_limit, audit_rows, target_recall) {
+    if (x$format == "memory") stop(
+        "File-backed Metal IVF requires a float32 file source.")
+    limit <- massive_memory_bytes(memory_limit)
+    chunk_rows <- integer_scalar(chunk_rows %||% 4096L)
+    if (is.na(chunk_rows) || chunk_rows < 1L)
+        stop("`chunk_rows` must be a positive integer.")
+    resources <- list(memory_limit_bytes = limit,
+        chunk_rows = as.integer(min(chunk_rows, x$nrow)),
+        reference_chunk_rows = as.integer(min(x$nrow,
+            floor(192000000 / (4 * x$ncol)))),
+        output_bytes = 8 * as.double(x$nrow) * k)
+    paths <- massive_knn_paths(output, resources$output_bytes)
+    identity <- massive_checkpoint_source_identity(x)
+    found <- faissr_metal_file_ivf_cpp(x, k, target_recall, limit)
+    if (!identical(identity, massive_checkpoint_source_identity(x)))
+        stop("File-backed Metal IVF source changed during search.")
+    setup <- list(k = k, backend = "metal", workers = 1L,
+        target_recall = target_recall,
+        backend_used = found$backend_used, exact = FALSE,
+        resources = resources, paths = paths, checkpoint_every = 1L)
+    setup$search_batch <- function(first, rows) list(
+        indices = found$indices[seq.int(first, length.out = rows), ,
+            drop = FALSE],
+        distances = found$distances[seq.int(first,
+            length.out = rows), , drop = FALSE],
+        backend_used = found$backend_used, exact = FALSE)
+    measurement <- massive_full_knn_stream(x, setup, NULL)
+    graph <- massive_full_metal_ivf_result(x, output, setup,
+        found, measurement, identity)
+    massive_full_knn_audit(graph, x, audit_rows, setup)
+}
+
 massive_hnsw_build_controls <- function(value, backend, method) {
     if (is.null(value)) return(NULL)
     if (backend != "cpu" || method != "hnsw_sharded") stop(
@@ -2340,8 +2415,8 @@ massive_full_knn_controls <- function(x, k, backend, method,
         audit_rows, checkpoint_every, checkpoint, resume,
         query_order, ef_search, hnsw_build = NULL) {
     massive_checkpoint_validate_controls(checkpoint, resume)
-    method <- match.arg(method, c("exact", "hnsw_sharded",
-        "ivf_sharded", "coarse_postings"))
+    method <- match.arg(method, c("exact", "metal_ivf",
+        "hnsw_sharded", "ivf_sharded", "coarse_postings"))
     query_order <- match.arg(query_order, c("original", "posting"))
     backend <- match.arg(backend, c("cpu", "cuda", "metal"))
     k <- integer_scalar(k)
@@ -2370,19 +2445,20 @@ massive_full_knn_controls <- function(x, k, backend, method,
         "`ef_search` must be zero or at least `k + 1`.")
     if (ef_search > 0L && method != "hnsw_sharded") stop(
         "`ef_search` requires CPU HNSW sharded search.")
-    hnsw_build <- massive_hnsw_build_controls(
-        hnsw_build, backend, method)
+    hnsw_build <- massive_hnsw_build_controls(hnsw_build, backend, method)
     if (backend == "cuda" && method == "hnsw_sharded")
         stop("CUDA HNSW unavailable; no CPU fallback.", call. = FALSE)
     if (backend == "cpu" && method == "ivf_sharded")
         stop("IVF-Flat needs CUDA; no CPU fallback.", call. = FALSE)
-    if (backend == "metal" && method != "exact") stop(
-        "File-backed Metal KNN supports exact shards only; ",
+    if (method == "metal_ivf" && backend != "metal") stop(
+        "File-backed Metal IVF requires Metal; ",
+        "no algorithm fallback was used.", call. = FALSE)
+    if (backend == "metal" && !method %in% c("exact", "metal_ivf")) stop(
+        "File-backed Metal KNN supports exact or IVF; ",
         "no algorithm fallback was used.", call. = FALSE)
     list(k = k, backend = backend, method = method,
         audit_rows = audit_rows, ef_search = ef_search,
-        hnsw_build = hnsw_build,
-        checkpoint_every = checkpoint_every,
+        hnsw_build = hnsw_build, checkpoint_every = checkpoint_every,
         query_order = query_order)
 }
 
@@ -2390,12 +2466,54 @@ massive_full_knn_target_recall <- function(value, backend, method) {
     value <- fastembedr_target_recall(value)
     supported <- (backend == "cpu" &&
         method %in% c("exact", "hnsw_sharded")) ||
-        (backend == "metal" && method == "exact") ||
+        (backend == "metal" && method %in% c("exact", "metal_ivf")) ||
         (backend == "cuda" && method %in% c("exact", "ivf_sharded"))
     if (value != 0.99 && !supported)
         stop("This full KNN route does not yet tune recall tiers ",
             "below 0.99.", call. = FALSE)
     value
+}
+
+massive_full_knn_dispatch <- function(x, k, output, backend, n.cores,
+        chunk_rows, reference_chunk_rows, memory_limit, checkpoint,
+        resume, method, audit_rows, checkpoint_every, postings, centers,
+        nprobe, query_order, ef_search, hnsw_build, devices,
+        target_recall) {
+    if (!is.null(devices) &&
+        !method %in% c("exact", "ivf_sharded")) stop(
+        "Full KNN devices require exact or IVF search; no fallback.",
+        call. = FALSE)
+    if (method == "coarse_postings") {
+        if (backend != "cpu") stop("Posting KNN is CPU-only; no CUDA fallback.")
+        return(massive_full_knn_postings(x, k, output, n.cores,
+            chunk_rows, reference_chunk_rows, memory_limit, checkpoint,
+            resume, audit_rows, checkpoint_every, postings, centers,
+            nprobe, query_order))
+    }
+    if (query_order != "original") stop("Order requires posting search.")
+    if (!is.null(postings) || !is.null(centers) || !is.null(nprobe))
+        stop("Posting controls require `coarse_postings`.", call. = FALSE)
+    if (!is.null(devices)) return(massive_full_knn_device_request(
+        x, k, output, backend, n.cores, chunk_rows,
+        reference_chunk_rows, memory_limit, checkpoint, resume,
+        audit_rows, checkpoint_every, devices, method, target_recall))
+    if (method == "metal_ivf") {
+        if (checkpoint || resume || !is.null(reference_chunk_rows) ||
+            n.cores != 1L) stop(paste0(
+                "Metal IVF requires one GPU, one CPU worker, ",
+                "and no checkpoint or reference sharding."))
+        return(massive_full_knn_metal_ivf(x, k, output, chunk_rows,
+            memory_limit, audit_rows, target_recall))
+    }
+    if (method %in% c("hnsw_sharded", "ivf_sharded")) {
+        return(massive_sharded_graph(x, k, output, n.cores,
+            chunk_rows, reference_chunk_rows, memory_limit, audit_rows,
+            backend, method, checkpoint, resume, checkpoint_every,
+            ef_search, hnsw_build, target_recall))
+    }
+    massive_full_knn_exact(x, k, output, n.cores, chunk_rows,
+        reference_chunk_rows, memory_limit, checkpoint, resume,
+        audit_rows, checkpoint_every, target_recall, backend)
 }
 
 #' Build an experimental file-backed full KNN graph
@@ -2424,12 +2542,15 @@ massive_full_knn_target_recall <- function(value, backend, method) {
 #' executes the existing native Metal query kernel, and merges global IDs
 #' into the same file-backed graph. It re-uploads each reference shard for
 #' every query batch; this is a correctness route, not an ANN index.
+#' Metal `method = "metal_ivf"` reads a float32 file once and builds a
+#' transient native IVF index when conservative RAM and Metal budgets fit.
+#' It fails rather than switching algorithms if the budget or pilot misses.
 #'
 #' @param x A `massive_matrix()` descriptor.
 #' @param k Number of non-self neighbors, at most 65,536.
 #' @param output New prefix for graph files.
 #' @param backend `"cpu"`, `"cuda"`, or `"metal"`. Metal supports exact
-#'   shards only and never falls back to CPU.
+#'   shards or capacity-checked IVF and never falls back to CPU.
 #' @param n.cores CPU workers for each query block.
 #' @param chunk_rows Maximum query rows per block; reduced if needed to
 #'   respect `memory_limit`. Posting search defaults to at most 65,536
@@ -2438,7 +2559,7 @@ massive_full_knn_target_recall <- function(value, backend, method) {
 #'   For sharded CPU HNSW or CUDA exact/IVF search, the requested maximum
 #'   resident index-shard size.
 #' @param memory_limit Conservative RAM budget.
-#' @param method `"exact"`, `"hnsw_sharded"`, `"ivf_sharded"`, or
+#' @param method `"exact"`, `"metal_ivf"`, `"hnsw_sharded"`, `"ivf_sharded"`, or
 #'   `"coarse_postings"`. The posting route requires the original
 #'   file-backed source, `postings`, and matching `centers`.
 #' @param postings Physical posting descriptor for `"coarse_postings"`.
@@ -2483,7 +2604,8 @@ massive_full_knn_target_recall <- function(value, backend, method) {
 massive_full_knn_graph <- function(x, k, output, backend = "cpu",
         n.cores = 1L, chunk_rows = NULL, reference_chunk_rows = NULL,
         memory_limit = "8GB", checkpoint = FALSE, resume = FALSE,
-        method = c("exact", "hnsw_sharded", "ivf_sharded", "coarse_postings"),
+        method = c("exact", "metal_ivf", "hnsw_sharded",
+            "ivf_sharded", "coarse_postings"),
         audit_rows = 0L, checkpoint_every = 100L,
         postings = NULL, centers = NULL, nprobe = NULL,
         query_order = c("original", "posting"), ef_search = 0L,
@@ -2501,31 +2623,9 @@ massive_full_knn_graph <- function(x, k, output, backend = "cpu",
     hnsw_build <- controls$hnsw_build
     checkpoint_every <- controls$checkpoint_every
     query_order <- controls$query_order
-    if (!is.null(devices) &&
-        !method %in% c("exact", "ivf_sharded")) stop(
-        "Full KNN devices require exact or IVF search; no fallback.",
-        call. = FALSE)
-    if (method == "coarse_postings") {
-        if (backend != "cpu") stop("Posting KNN is CPU-only; no CUDA fallback.")
-        return(massive_full_knn_postings(x, k, output, n.cores,
-            chunk_rows, reference_chunk_rows, memory_limit, checkpoint,
-            resume, audit_rows, checkpoint_every, postings, centers,
-            nprobe, query_order))
-    }
-    if (query_order != "original") stop("Order requires posting search.")
-    if (!is.null(postings) || !is.null(centers) || !is.null(nprobe))
-        stop("Posting controls require `coarse_postings`.", call. = FALSE)
-    if (!is.null(devices)) return(massive_full_knn_device_request(
-        x, k, output, backend, n.cores, chunk_rows,
-        reference_chunk_rows, memory_limit, checkpoint, resume,
-        audit_rows, checkpoint_every, devices, method, target_recall))
-    if (method %in% c("hnsw_sharded", "ivf_sharded")) {
-        return(massive_sharded_graph(x, k, output, n.cores,
-            chunk_rows, reference_chunk_rows, memory_limit, audit_rows,
-            backend, method, checkpoint, resume, checkpoint_every,
-            ef_search, hnsw_build, target_recall))
-    }
-    massive_full_knn_exact(x, k, output, n.cores, chunk_rows,
-        reference_chunk_rows, memory_limit, checkpoint, resume,
-        audit_rows, checkpoint_every, target_recall, backend)
+    massive_full_knn_dispatch(x, k, output, backend, n.cores,
+        chunk_rows, reference_chunk_rows, memory_limit, checkpoint,
+        resume, method, audit_rows, checkpoint_every, postings, centers,
+        nprobe, query_order, ef_search, hnsw_build, devices,
+        target_recall)
 }

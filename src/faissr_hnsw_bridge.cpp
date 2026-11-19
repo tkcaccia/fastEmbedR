@@ -95,6 +95,51 @@ Rcpp::List faissr_matrix_knn_batch_devices_cpp(SEXP query, SEXP reference,
 }
 
 // [[Rcpp::export]]
+Rcpp::List faissr_metal_file_ivf_plan_cpp(SEXP source, int k,
+    double memory_limit) {
+  Rcpp::Function load_namespace =
+    Rcpp::Environment::base_env()["loadNamespace"];
+  load_namespace("faissR");
+  if (faissR_c_api_version() != 1) {
+    Rcpp::stop("Unsupported faissR C API version");
+  }
+  return faissR_get_metal_file_ivf_plan_v1()(
+    source, Rcpp::wrap(k), Rcpp::wrap(memory_limit));
+}
+
+// [[Rcpp::export]]
+Rcpp::List faissr_metal_file_ivf_cpp(SEXP source, int k,
+    double target_recall, double memory_limit) {
+  Rcpp::Function load_namespace =
+    Rcpp::Environment::base_env()["loadNamespace"];
+  load_namespace("faissR");
+  if (faissR_c_api_version() != 1) {
+    Rcpp::stop("Unsupported faissR C API version");
+  }
+  Rcpp::List result = faissR_get_metal_file_ivf_v1()(
+    source, Rcpp::wrap(k), Rcpp::wrap(target_recall),
+    Rcpp::wrap(memory_limit));
+  Rcpp::List spec(source);
+  const int rows = Rcpp::as<int>(spec["nrow"]);
+  Rcpp::IntegerMatrix ids(result["indices"]);
+  Rcpp::NumericMatrix distances(result["distances"]);
+  if (Rcpp::as<std::string>(result["provider"]) != "faissR" ||
+      Rcpp::as<std::string>(result["backend_used"]) !=
+        "faissr_native_metal_ivf_file" ||
+      Rcpp::as<std::string>(result["method"]) != "metal_ivf" ||
+      Rcpp::as<std::string>(result["residency"]) !=
+        "file-backed" ||
+      Rcpp::as<bool>(result["exact"]) ||
+      !Rcpp::as<bool>(result["target_met"]) ||
+      Rcpp::as<double>(result["target_recall"]) != target_recall ||
+      ids.nrow() != rows || ids.ncol() != k ||
+      distances.nrow() != rows || distances.ncol() != k) {
+    Rcpp::stop("faissR file-backed Metal IVF changed route or shape");
+  }
+  return result;
+}
+
+// [[Rcpp::export]]
 Rcpp::List faissr_posting_search_cpp(SEXP query,
     std::string feature_path, std::string ids_path,
     std::string offsets_path, Rcpp::NumericMatrix centers,

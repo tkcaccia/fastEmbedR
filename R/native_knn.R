@@ -431,8 +431,10 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' indices and distances under `output`. CPU selects exact search up to 5,000
 #' rows when estimated pair-feature work is at most 125 billion, and sharded
 #' HNSW otherwise. CUDA selects exact search below 100,000 rows under the same
-#' work limit and sharded IVF-Flat otherwise. Metal selects bounded exact
-#' search. File-backed KNN currently supports Euclidean distance only. The
+#' work limit and sharded IVF-Flat otherwise. Metal selects native IVF when
+#' faissR's host and Metal capacity check passes; it otherwise selects
+#' bounded exact search. An IVF pilot miss is an error, not a silent switch
+#' to exact search. File-backed KNN supports Euclidean distance only. The
 #' result is a `fastEmbedR_massive_graph` descriptor; construct UMAP fuzzy
 #' weights or t-SNE affinities from it before full-graph fitting.
 #'
@@ -524,10 +526,15 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
     } else if (backend == "cuda") {
         if (data$nrow < 100000L && bounded_exact)
             "exact" else "ivf_sharded"
-    } else "exact"
+    } else {
+        fit <- if (!checkpoint && !resume)
+            faissr_metal_file_ivf_plan_cpp(data, as.integer(k),
+                massive_memory_bytes(limit))$fits else FALSE
+        if (isTRUE(fit)) "metal_ivf" else "exact"
+    }
     supports_tier <- (backend == "cpu" &&
         method %in% c("exact", "hnsw_sharded")) ||
-        (backend == "metal" && method == "exact") ||
+        (backend == "metal" && method %in% c("exact", "metal_ivf")) ||
         (backend == "cuda" && method %in% c("exact", "ivf_sharded"))
     if (target_recall != 0.99 && !supports_tier) stop(
         "This file-backed KNN route does not yet tune recall tiers ",

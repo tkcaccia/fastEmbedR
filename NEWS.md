@@ -1,5 +1,9 @@
 # fastEmbedR 0.1
 
+* Select faissR's capacity-checked native Metal IVF route for file-backed
+  KNN when its host and device budgets fit. Otherwise use the existing
+  bounded exact Metal search. Record the actual route and recall audit.
+
 * Project tall resident Metal PCA scores from contiguous column-major
   float32 blocks, avoiding the row-major packing step. Keep the
   file-backed row-major projection route unchanged.
