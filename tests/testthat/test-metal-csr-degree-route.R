@@ -17,7 +17,7 @@ test_that("Metal CSR rows over 256 edges use complete tiled traversal", {
         expect_identical(attr(out, "metal_truncated_edges"), 0L)
         expect_identical(attr(out, "metal_graph_input"),
             "resident_csr_int32_edge_tiles")
-        reported <- fastEmbedR:::record_metal_tiled_policy(cfg, out)
+        reported <- fastEmbedR:::record_metal_optimizer_policy(cfg, out)
         expect_identical(reported$gpu_optimizer_mode,
             "csr_edge_tiles")
         expect_identical(reported$gpu_optimizer_schedule,

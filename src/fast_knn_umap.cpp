@@ -5021,118 +5021,134 @@ NumericMatrix fast_knn_umap_csr_clean_atomic_cpp(IntegerVector offsets,
   const float repulsion_strength_f = static_cast<float>(repulsion_strength);
   const float eps = 1.1920928955078125e-7f;
 
-  std::vector<std::atomic<float>> layout(static_cast<std::size_t>(n) * 2u);
-  for (int i = 0; i < n; ++i) {
-    layout[static_cast<std::size_t>(i) * 2u].store(
-      static_cast<float>(init_embedding(i, 0)), std::memory_order_relaxed
-    );
-    layout[static_cast<std::size_t>(i) * 2u + 1u].store(
-      static_cast<float>(init_embedding(i, 1)), std::memory_order_relaxed
-    );
+  for (int row = 0; row < n; ++row) {
+    for (int pos = offsets[row]; pos < offsets[row + 1]; ++pos) {
+      const int tail = neighbors[pos] - index_offset;
+      float& weight = weights_f[static_cast<std::size_t>(pos)];
+      weight = tail >= 0 && tail < n && tail != row &&
+        std::isfinite(weight) && weight > 0.0f ? weight / max_weight : -1.0f;
+    }
   }
-
   const int threads = effective_cpu_threads(n_threads, n_edges);
   ReusableBarrier barrier(threads);
-  auto run_worker = [&](const int thread_id) {
-    const int begin_row = n * thread_id / threads;
-    const int end_row = n * (thread_id + 1) / threads;
+  auto optimize = [&](auto& layout, auto load, auto add, auto store) {
+    for (int row = 0; row < n; ++row) {
+      const auto base = static_cast<std::size_t>(row) * 2u;
+      store(layout[base], static_cast<float>(init_embedding(row, 0)));
+      store(layout[base + 1u], static_cast<float>(init_embedding(row, 1)));
+    }
+    auto run_worker = [&](const int thread_id) {
+      const int begin_row = n * thread_id / threads;
+      const int end_row = n * (thread_id + 1) / threads;
 
-    for (int epoch = start_epoch; epoch < start_epoch + n_epochs; ++epoch) {
-      const float progress = static_cast<float>(epoch) /
-        std::max(1.0f, static_cast<float>(total_epochs - 1));
-      float decay = 1.0f - progress;
-      if (decay_mode == 1) {
-        constexpr float pi_f = 3.14159265358979323846f;
-        decay = 0.5f * (1.0f + std::cos(pi_f * progress));
-      } else if (decay_mode == 2) {
-        decay = std::sqrt(std::max(0.0f, 1.0f - progress));
-      }
-      const float alpha = learning_rate_f * decay;
-      for (int head = begin_row; head < end_row; ++head) {
-        int gid = active_row_offsets[static_cast<std::size_t>(head)];
-        for (int pos = offsets[head]; pos < offsets[head + 1]; ++pos) {
-          const int tail = neighbors[pos] - index_offset;
-          const float edge_weight = weights_f[static_cast<std::size_t>(pos)];
-          if (tail < 0 || tail >= n || tail == head ||
-              !std::isfinite(edge_weight) || edge_weight <= 0.0f) {
-            continue;
-          }
-          const int edge_id = gid++;
-          const float edge_prob = std::min(1.0f, edge_weight / max_weight);
-          if (edge_prob < 1.0f &&
-              clean_uniform01(
-                seed, epoch, head, tail, static_cast<std::size_t>(edge_id), 0, 3ULL
-              ) >= edge_prob) {
-            continue;
-          }
+      for (int epoch = start_epoch; epoch < start_epoch + n_epochs; ++epoch) {
+        const float progress = static_cast<float>(epoch) /
+          std::max(1.0f, static_cast<float>(total_epochs - 1));
+        float decay = 1.0f - progress;
+        if (decay_mode == 1) {
+          constexpr float pi_f = 3.14159265358979323846f;
+          decay = 0.5f * (1.0f + std::cos(pi_f * progress));
+        } else if (decay_mode == 2) {
+          decay = std::sqrt(std::max(0.0f, 1.0f - progress));
+        }
+        const float alpha = learning_rate_f * decay;
+        for (int head = begin_row; head < end_row; ++head) {
+          int gid = active_row_offsets[static_cast<std::size_t>(head)];
+          for (int pos = offsets[head]; pos < offsets[head + 1]; ++pos) {
+            const int tail = neighbors[pos] - index_offset;
+            const float edge_prob = weights_f[static_cast<std::size_t>(pos)];
+            if (edge_prob < 0.0f) continue;
+            const int edge_id = gid++;
+            if (edge_prob < 1.0f &&
+                clean_uniform01(
+                  seed, epoch, head, tail, static_cast<std::size_t>(edge_id), 0, 3ULL
+                ) >= edge_prob) {
+              continue;
+            }
 
-          const std::size_t head_base = static_cast<std::size_t>(head) * 2u;
-          const std::size_t tail_base = static_cast<std::size_t>(tail) * 2u;
-          const float head_x = layout[head_base].load(std::memory_order_relaxed);
-          const float head_y = layout[head_base + 1u].load(std::memory_order_relaxed);
-          const float tail_x = layout[tail_base].load(std::memory_order_relaxed);
-          const float tail_y = layout[tail_base + 1u].load(std::memory_order_relaxed);
-          const float dx = head_x - tail_x;
-          const float dy = head_y - tail_y;
-          const float d2 = std::max(eps, dx * dx + dy * dy);
-          const float d2b = umap_powf_fast(d2, bf);
-          const float coeff = -2.0f * af * bf * (d2b / d2) / (af * d2b + 1.0f);
-          const float gx = clip4f(coeff * dx) * alpha;
-          const float gy = clip4f(coeff * dy) * alpha;
-          atomic_add_float(layout[head_base], gx);
-          atomic_add_float(layout[head_base + 1u], gy);
-          atomic_add_float(layout[tail_base], -gx);
-          atomic_add_float(layout[tail_base + 1u], -gy);
+            const std::size_t head_base = static_cast<std::size_t>(head) * 2u;
+            const std::size_t tail_base = static_cast<std::size_t>(tail) * 2u;
+            const float head_x = load(layout[head_base]);
+            const float head_y = load(layout[head_base + 1u]);
+            const float tail_x = load(layout[tail_base]);
+            const float tail_y = load(layout[tail_base + 1u]);
+            const float dx = head_x - tail_x;
+            const float dy = head_y - tail_y;
+            const float d2 = std::max(eps, dx * dx + dy * dy);
+            const float d2b = umap_powf_fast(d2, bf);
+            const float coeff = -2.0f * af * bf * (d2b / d2) / (af * d2b + 1.0f);
+            const float gx = clip4f(coeff * dx) * alpha;
+            const float gy = clip4f(coeff * dy) * alpha;
+            add(layout[head_base], gx);
+            add(layout[head_base + 1u], gy);
+            add(layout[tail_base], -gx);
+            add(layout[tail_base + 1u], -gy);
 
-          for (int s = 0; s < negative_sample_rate; ++s) {
-            const int neg = clean_negative_vertex(
-              n, seed, epoch, head, tail, static_cast<std::size_t>(edge_id), s
-            );
-            if (neg == head || neg == tail) continue;
-            const std::size_t neg_base = static_cast<std::size_t>(neg) * 2u;
-            const float current_head_x = layout[head_base].load(std::memory_order_relaxed);
-            const float current_head_y = layout[head_base + 1u].load(std::memory_order_relaxed);
-            const float neg_x = layout[neg_base].load(std::memory_order_relaxed);
-            const float neg_y = layout[neg_base + 1u].load(std::memory_order_relaxed);
-            const float ndx = current_head_x - neg_x;
-            const float ndy = current_head_y - neg_y;
-            const float nd2 = std::max(eps, ndx * ndx + ndy * ndy);
-            const float nd2b = umap_powf_fast(nd2, bf);
-            const float rcoeff = repulsion_strength_f * 2.0f * bf /
-              ((0.001f + nd2) * (af * nd2b + 1.0f));
-            atomic_add_float(layout[head_base], clip4f(rcoeff * ndx) * alpha);
-            atomic_add_float(layout[head_base + 1u], clip4f(rcoeff * ndy) * alpha);
+            for (int s = 0; s < negative_sample_rate; ++s) {
+              const int neg = clean_negative_vertex(
+                n, seed, epoch, head, tail, static_cast<std::size_t>(edge_id), s
+              );
+              if (neg == head || neg == tail) continue;
+              const std::size_t neg_base = static_cast<std::size_t>(neg) * 2u;
+              const float current_head_x = load(layout[head_base]);
+              const float current_head_y = load(layout[head_base + 1u]);
+              const float neg_x = load(layout[neg_base]);
+              const float neg_y = load(layout[neg_base + 1u]);
+              const float ndx = current_head_x - neg_x;
+              const float ndy = current_head_y - neg_y;
+              const float nd2 = std::max(eps, ndx * ndx + ndy * ndy);
+              const float nd2b = umap_powf_fast(nd2, bf);
+              const float rcoeff = repulsion_strength_f * 2.0f * bf /
+                ((0.001f + nd2) * (af * nd2b + 1.0f));
+              add(layout[head_base], clip4f(rcoeff * ndx) * alpha);
+              add(layout[head_base + 1u], clip4f(rcoeff * ndy) * alpha);
+            }
           }
         }
-      }
 
-      barrier.wait();
-      if (thread_id == 0 &&
-          verbose &&
-          (epoch == 0 || epoch == n_epochs - 1 || (epoch + 1) % 50 == 0)) {
-        Rcpp::Rcout << "clean epoch " << (epoch + 1) << "/" << n_epochs << "\n";
+        if (threads == 1) Rcpp::checkUserInterrupt();
+        barrier.wait();
+        if (thread_id == 0 &&
+            verbose &&
+            (epoch == 0 || epoch == n_epochs - 1 || (epoch + 1) % 50 == 0)) {
+          Rcpp::Rcout << "clean epoch " << (epoch + 1) << "/" << n_epochs << "\n";
+        }
+        barrier.wait();
       }
-      barrier.wait();
+    };
+
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(std::max(0, threads - 1)));
+    for (int t = 1; t < threads; ++t) {
+      workers.emplace_back(run_worker, t);
     }
+    run_worker(0);
+    for (auto& worker : workers) {
+      worker.join();
+    }
+
+    NumericMatrix out(n, 2);
+    for (int i = 0; i < n; ++i) {
+      const std::size_t base = static_cast<std::size_t>(i) * 2u;
+      out(i, 0) = static_cast<double>(load(layout[base]));
+      out(i, 1) = static_cast<double>(load(layout[base + 1u]));
+    }
+    return out;
   };
-
-  std::vector<std::thread> workers;
-  workers.reserve(static_cast<std::size_t>(std::max(0, threads - 1)));
-  for (int t = 1; t < threads; ++t) {
-    workers.emplace_back(run_worker, t);
+  const auto size = static_cast<std::size_t>(n) * 2u;
+  // Ordered execution has no competing writers.
+  if (threads == 1) {
+    std::vector<float> layout(size);
+    return optimize(layout, [](float value) { return value; },
+      [](float& value, float delta) { value += delta; },
+      [](float& value, float initial) { value = initial; });
   }
-  run_worker(0);
-  for (auto& worker : workers) {
-    worker.join();
-  }
-
-  NumericMatrix out(n, 2);
-  for (int i = 0; i < n; ++i) {
-    const std::size_t base = static_cast<std::size_t>(i) * 2u;
-    out(i, 0) = static_cast<double>(layout[base].load(std::memory_order_relaxed));
-    out(i, 1) = static_cast<double>(layout[base + 1u].load(std::memory_order_relaxed));
-  }
-  return out;
+  std::vector<std::atomic<float>> layout(size);
+  return optimize(layout, [](const std::atomic<float>& value) {
+      return value.load(std::memory_order_relaxed);
+    }, atomic_add_float, [](std::atomic<float>& value, float initial) {
+      value.store(initial, std::memory_order_relaxed);
+    });
 }
 
 // [[Rcpp::export]]

@@ -132,11 +132,12 @@ from the matrix shape, requested rank, and estimated arithmetic cost.
 Wide, low-rank problems favor rSVD; smaller, narrower, or less-truncated
 problems favor TSVD. Without RAFT, CUDA uses native rSVD. CUDA requests
 fail explicitly when CUDA is unavailable; they never fall back to CPU PCA.
-For resident float32 CPU matrices with at most 64 columns and at least
-five million elements, bounded-block covariance and projection are used.
-This route also handles very tall matrices beyond the native rSVD size
-limit. Metal uses bounded blocks beyond its safe matrix-size limit. CPU
-covariance and projection use native parallel workers; Metal covariance
+For resident float32 CPU and CUDA matrices with at most 64 columns and
+at least five million elements, PCA uses bounded covariance and projection.
+The CPU route also handles matrices beyond the native rSVD size limit.
+Metal uses bounded blocks beyond its safe matrix-size limit. CPU
+covariance and projection use native parallel workers. CUDA uses cuBLAS
+for covariance and projection. Metal covariance
 and projection use native Metal blocks. The small covariance eigensystem is
 solved on CPU. Scores and loadings remain float32 without writing to disk.
 }

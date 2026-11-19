@@ -348,6 +348,10 @@ fastembedr_cuda_pca <- function(data,
                                 method = c("auto", "rsvd", "tsvd")) {
     method <- match.arg(method)
     dimensions <- fastembedr_matrix_dimensions(data)
+    if (method == "auto" && is_float32_matrix(data) &&
+        fastembedr_narrow_covariance_route(dimensions))
+        return(fastembedr_blocked_pca(data, ncomp, isTRUE(center),
+            isTRUE(scale), seed, 1L, backend = "cuda"))
     tuning <- fastembedr_rsvd_tuning(
         dimensions[[1L]], dimensions[[2L]], as.integer(ncomp), "cuda"
     )
@@ -375,11 +379,8 @@ fastembedr_cuda_pca <- function(data,
         backend = fit$backend,
         selection = fit$selection,
         backend_reason = NA_character_,
-        engine = if (identical(fit$method, "rsvd")) {
-            "native_cuda_rsvd"
-        } else {
-            "native_cuda_raft"
-        },
+        engine = if (fit$method == "rsvd") "native_cuda_rsvd" else
+            "native_cuda_raft",
         precision = fit$precision,
         oversample = fit$oversample,
         power = fit$power,
@@ -668,7 +669,7 @@ fastembedr_cpu_rsvd_pca <- function(data,
     input <- prepare_cpu_pca_input(data, ncomp)
     if (fastembedr_cpu_covariance_route(input$dimensions,
             is_float32_matrix(input$data))) return(
-        fastembedr_cpu_blocked_pca(input$data, input$rank,
+        fastembedr_blocked_pca(input$data, input$rank,
             center, scale, seed, n.cores))
     sketch <- cpu_pca_sketch(input, seed)
     fit <- pca_rsvd_cpu_cpp(
@@ -731,11 +732,12 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' Wide, low-rank problems favor rSVD; smaller, narrower, or less-truncated
 #' problems favor TSVD. Without RAFT, CUDA uses native rSVD. CUDA requests
 #' fail explicitly when CUDA is unavailable; they never fall back to CPU PCA.
-#' For resident float32 CPU matrices with at most 64 columns and at least
-#' five million elements, bounded-block covariance and projection are used.
-#' This route also handles very tall matrices beyond the native rSVD size
-#' limit. Metal uses bounded blocks beyond its safe matrix-size limit. CPU
-#' covariance and projection use native parallel workers; Metal covariance
+#' For resident float32 CPU and CUDA matrices with at most 64 columns and
+#' at least five million elements, PCA uses bounded covariance and projection.
+#' The CPU route also handles matrices beyond the native rSVD size limit.
+#' Metal uses bounded blocks beyond its safe matrix-size limit. CPU
+#' covariance and projection use native parallel workers. CUDA uses cuBLAS
+#' for covariance and projection. Metal covariance
 #' and projection use native Metal blocks. The small covariance eigensystem is
 #' solved on CPU. Scores and loadings remain float32 without writing to disk.
 #'

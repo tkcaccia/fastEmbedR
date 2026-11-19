@@ -78,10 +78,12 @@ Metal KNN uses faissR's native exact or IVF-Flat route. CUDA matrix KNN
 uses faissR FAISS GPU Flat below 100,000 rows or IVF-Flat above that
 threshold, then passes host neighbors to graph construction.
 Multiple devices request FAISS GPU replicas.
-A resident 2D Metal fit uses one CPU thread for the first half of the
-optimizer epochs, then a native Metal kernel for the remaining epochs.
-The stage counts are recorded in \code{fit$parameters}. Resident 3D Metal
-UMAP runs its optimizer on Metal. Other GPU requests must resolve to a
+Resident 2D Metal fits with at least 100,000 rows and integer CSR
+offsets optimize a compact edge list on Metal for all epochs.
+Smaller 2D fits with ordinary CSR rows use one CPU thread for the
+first half of the epochs, then Metal for the remaining epochs.
+Stage counts are recorded in \code{fit$parameters}. Resident 3D Metal UMAP
+runs its optimizer on Metal. Other GPU requests must resolve to a
 native backend; the package does not relabel CPU work as GPU.
 File-backed full-graph Metal UMAP runs its main optimizer on Metal,
 followed by a bounded one-thread CPU refinement: 25 epochs in 2D or
@@ -95,8 +97,8 @@ passed to CPU PCA preprocessing, KNN, and UMAP. UMAP accepts up to 32
 workers and records both requested and configured values; individual
 stages may use fewer workers when their inputs are small. With \code{NULL},
 PCA uses \code{options(n.cores)} (one by default); KNN and UMAP use their
-stage defaults. The ordered CPU stage of a 2D Metal fit uses one thread;
-native GPU stages ignore this argument.}
+stage defaults. The ordered CPU warm-up, when used by a 2D Metal
+fit, uses one thread. Native GPU stages ignore this argument.}
 
 \item{keep_knn}{Keep KNN matrices or file-backed KNN files in the returned
 pipeline. One-call file-backed fits release KNN files after graph

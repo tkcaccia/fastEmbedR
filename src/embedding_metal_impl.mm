@@ -219,6 +219,7 @@ struct MetalEmbeddingState {
   id<MTLComputePipelineState> embed_pipeline;
   id<MTLComputePipelineState> embed_atomic_inplace_pipeline;
   id<MTLComputePipelineState> embed_clean_atomic_inplace_pipeline;
+  id<MTLComputePipelineState> umap_compact_edge_pipeline;
   id<MTLComputePipelineState> embed_clean_snapshot_pipeline;
   id<MTLComputePipelineState> embed_apply_delta_pipeline;
   id<MTLComputePipelineState> massive_umap_batch_pipeline;
@@ -430,6 +431,7 @@ MetalEmbeddingState& metal_embedding_state() {
   if (state.device != nil && state.embed_pipeline != nil &&
       state.embed_atomic_inplace_pipeline != nil &&
       state.embed_clean_atomic_inplace_pipeline != nil &&
+      state.umap_compact_edge_pipeline != nil &&
       state.embed_clean_snapshot_pipeline != nil &&
       state.embed_apply_delta_pipeline != nil &&
       state.massive_umap_batch_pipeline != nil &&
@@ -491,6 +493,8 @@ MetalEmbeddingState& metal_embedding_state() {
   state.embed_pipeline = make_pipeline(state, "embed_epoch");
   state.embed_atomic_inplace_pipeline = make_pipeline(state, "embed_epoch_atomic_inplace");
   state.embed_clean_atomic_inplace_pipeline = make_pipeline(state, "embed_epoch_clean_atomic_inplace");
+  state.umap_compact_edge_pipeline =
+    make_pipeline(state, "umap_epoch_compact_edges");
   state.embed_clean_snapshot_pipeline = make_pipeline(
     state, "embed_epoch_clean_snapshot");
   state.embed_apply_delta_pipeline = make_pipeline(
@@ -1672,6 +1676,70 @@ kernel void embed_epoch_clean_atomic_inplace(
       atomic_fetch_add_explicit(&layout[head_base + 1u], fixed_delta(repulsive.y), memory_order_relaxed);
     }
   }
+}
+
+struct UmapCompactEdge {
+  uint head;
+  uint tail;
+  float period;
+};
+
+float2 umap_compact_point(device atomic_int* layout, uint v) {
+  return float2(
+    atomic_load_explicit(layout + 2u * v, memory_order_relaxed),
+    atomic_load_explicit(layout + 2u * v + 1u, memory_order_relaxed)
+  ) * (1.0f / 65536.0f);
+}
+
+void umap_compact_add(device atomic_int* layout, uint v, int2 delta) {
+  atomic_fetch_add_explicit(layout + 2u * v, delta.x, memory_order_relaxed);
+  atomic_fetch_add_explicit(layout + 2u * v + 1u, delta.y,
+                            memory_order_relaxed);
+}
+
+kernel void umap_epoch_compact_edges(
+  device atomic_int* layout [[buffer(0)]],
+  device const UmapCompactEdge* edges [[buffer(1)]],
+  constant EmbedParams& p [[buffer(2)]],
+  constant uint& epoch [[buffer(3)]],
+  uint gid [[thread_position_in_grid]]
+) {
+  const UmapCompactEdge edge = edges[gid];
+  const float period = edge.period;
+  const int sample = int(floor(float(epoch) / period));
+  if (sample == int(floor(float(epoch - 1u) / period))) return;
+
+  const float alpha = p.learning_rate *
+    (1.0f - float(epoch) / float(p.n_epochs));
+  constexpr float eps = 1.1920928955078125e-7f;
+  constexpr float inv_scale = 1.0f / 65536.0f;
+  float2 head = umap_compact_point(layout, edge.head);
+  const float2 diff = head - umap_compact_point(layout, edge.tail);
+  const float attraction = attractive_coeff(max(eps, dot(diff, diff)), 1, p);
+  const float2 change = clamp(attraction * diff, -4.0f, 4.0f) * alpha;
+  int2 delta = int2(fixed_delta(change.x), fixed_delta(change.y));
+  umap_compact_add(layout, edge.tail, -delta);
+  head += float2(delta) * inv_scale;
+
+  if (p.negative_sample_rate > 0u) {
+    const float neg_period = period / float(p.negative_sample_rate);
+    const int count = int(floor((float(epoch) - neg_period) / neg_period));
+    const float prev = ceil(float(sample - 1) * period);
+    const int previous = sample == 1 ? 0 :
+      int(floor((prev - neg_period) / neg_period));
+    for (int j = 0; j < count - previous; ++j) {
+      const uint other = deterministic_vertex(
+        p.n, p.seed, epoch, edge.head, edge.tail, uint(j));
+      if (other == edge.head || other == edge.tail) continue;
+      const float2 d = head - umap_compact_point(layout, other);
+      const float repulsion = repulsive_coeff(max(eps, dot(d, d)), p);
+      const float2 move = clamp(repulsion * d, -4.0f, 4.0f) * alpha;
+      const int2 step = int2(fixed_delta(move.x), fixed_delta(move.y));
+      delta += step;
+      head += float2(step) * inv_scale;
+    }
+  }
+  umap_compact_add(layout, edge.head, delta);
 }
 
 kernel void embed_epoch_clean_snapshot(
@@ -8282,6 +8350,143 @@ void pack_umap_csr_for_metal(const IntegerVector& offsets,
   }
 }
 
+namespace {
+
+struct UmapCompactEdge {
+  std::uint32_t head;
+  std::uint32_t tail;
+  float period;
+};
+static_assert(sizeof(UmapCompactEdge) == 12, "Metal edge layout");
+
+struct MetalBufferRelease {
+  using pointer = id<MTLBuffer>;
+  void operator()(id<MTLBuffer> buffer) const { [buffer release]; }
+};
+
+NumericMatrix metal_umap_compact_fit(const IntegerVector& offsets,
+    const IntegerVector& neighbors, SEXP weights, const NumericMatrix& init,
+    const EmbedParams& params) {
+  const auto started = std::chrono::steady_clock::now();
+  const int n = init.nrow();
+  const int nnz = neighbors.size();
+  if (offsets.size() != static_cast<R_xlen_t>(n) + 1 ||
+      offsets[0] != 0 || offsets[n] != nnz) {
+    Rcpp::stop("Invalid offsets for compact Metal UMAP.");
+  }
+  const auto w = metal_copy_float_vector(weights, "CSR weights");
+  if (w.size() != static_cast<std::size_t>(nnz)) {
+    Rcpp::stop("Compact Metal UMAP edge and weight counts differ.");
+  }
+  const float threshold = params.max_weight / params.n_epochs;
+  const int* ids = INTEGER(neighbors);
+  const int* starts = INTEGER(offsets);
+  std::vector<UmapCompactEdge> edges;
+  edges.reserve(nnz);
+  for (int row = 0; row < n; ++row) {
+    const int first = starts[row];
+    const int last = starts[row + 1];
+    if (first < 0 || last < first || last > nnz) {
+      Rcpp::stop("Invalid compact Metal UMAP CSR row.");
+    }
+    for (int i = first; i < last; ++i) {
+      const int tail = ids[i];
+      if (tail < 0 || tail >= n || !std::isfinite(w[i])) {
+        Rcpp::stop("Invalid compact Metal UMAP edge.");
+      }
+      if (tail == row || w[i] <= 0 || w[i] < threshold) continue;
+      edges.push_back({static_cast<std::uint32_t>(row),
+        static_cast<std::uint32_t>(tail),
+        std::max(1.0f, params.max_weight / std::max(w[i], 1e-6f))});
+    }
+  }
+  if (edges.empty()) Rcpp::stop("No compact Metal UMAP edges are sampled.");
+  std::vector<std::int32_t> initial(static_cast<std::size_t>(n) * 2u);
+  for (int col = 0; col < 2; ++col) {
+    for (int row = 0; row < n; ++row) {
+      const double v = init(row, col);
+      if (!std::isfinite(v)) Rcpp::stop("Nonfinite Metal UMAP coordinates.");
+      initial[static_cast<std::size_t>(row) * 2 + col] =
+        static_cast<std::int32_t>(
+          std::clamp(v * 65536.0, -2140000000.0, 2140000000.0));
+    }
+  }
+
+  MetalEmbeddingState& state = metal_embedding_state();
+  using Buffer = std::unique_ptr<void, MetalBufferRelease>;
+  const std::size_t edge_bytes = edges.size() * sizeof(UmapCompactEdge);
+  const std::size_t layout_bytes = initial.size() * sizeof(std::int32_t);
+  if (edge_bytes > state.device.maxBufferLength ||
+      layout_bytes > state.device.maxBufferLength) {
+    Rcpp::stop("Compact Metal UMAP graph or layout exceeds device limits.");
+  }
+  Buffer graph_ptr, layout_ptr;
+  const auto grid = MTLSizeMake(edges.size(), 1, 1);
+  id<MTLBuffer> graph = [state.device newBufferWithBytes:edges.data()
+    length:edge_bytes options:MTLResourceStorageModeShared];
+  graph_ptr.reset(graph);
+  id<MTLBuffer> layout = [state.device newBufferWithBytes:initial.data()
+    length:layout_bytes options:MTLResourceStorageModeShared];
+  layout_ptr.reset(layout);
+  if (graph == nil || layout == nil) {
+    Rcpp::stop("Unable to allocate compact Metal UMAP buffers.");
+  }
+  std::vector<UmapCompactEdge>().swap(edges);
+  const auto pipeline = state.umap_compact_edge_pipeline;
+  const auto threads = MTLSizeMake(bounded_threads(pipeline), 1, 1);
+  const auto device_started = std::chrono::steady_clock::now();
+  // Bound each submission to permit interrupt checks on large graphs.
+  const std::uint32_t batch = 16u;
+  for (std::uint32_t first = 1; first < params.n_epochs; first += batch) {
+    @autoreleasepool {
+      id<MTLCommandBuffer> command = [state.queue commandBuffer];
+      if (command == nil) Rcpp::stop("Failed to create Metal UMAP command.");
+      const auto last = std::min(first + batch, params.n_epochs);
+      for (auto epoch = first; epoch < last; ++epoch) {
+        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+        if (encoder == nil) Rcpp::stop("Failed to encode Metal UMAP epoch.");
+        [encoder setComputePipelineState:pipeline];
+        [encoder setBuffer:layout offset:0 atIndex:0];
+        [encoder setBuffer:graph offset:0 atIndex:1];
+        [encoder setBytes:&params length:sizeof(params) atIndex:2];
+        [encoder setBytes:&epoch length:sizeof(epoch) atIndex:3];
+        [encoder dispatchThreads:grid threadsPerThreadgroup:threads];
+        [encoder endEncoding];
+      }
+      [command commit];
+      [command waitUntilCompleted];
+      if (command.status != MTLCommandBufferStatusCompleted) {
+        Rcpp::stop("Metal UMAP command failed: %s",
+          ns_error_message(command.error).c_str());
+      }
+    }
+    Rcpp::checkUserInterrupt();
+  }
+  const auto done = std::chrono::steady_clock::now();
+  const auto* coordinates =
+    static_cast<const std::int32_t*>([layout contents]);
+  NumericMatrix out(n, 2);
+  for (int col = 0; col < 2; ++col) {
+    for (int row = 0; row < n; ++row) {
+      out(row, col) = coordinates[static_cast<std::size_t>(row) * 2 + col] /
+        65536.0;
+    }
+  }
+  out.attr("metal_optimizer") = "compact_edges_atomic_head_aggregated";
+  out.attr("metal_graph_input") = "resident_compact_edges";
+  out.attr("metal_truncated_edges") = 0;
+  out.attr("metal_allocated_bytes_observed") =
+    static_cast<double>(graph.allocatedSize + layout.allocatedSize);
+  out.attr("metal_optimizer_seconds") = NumericVector::create(
+    Rcpp::Named("prepare") =
+      std::chrono::duration<double>(device_started - started).count(),
+    Rcpp::Named("device_epochs") =
+      std::chrono::duration<double>(done - device_started).count());
+  return out;
+}
+
+}  // namespace
+
 NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
                                        IntegerVector csr_neighbors,
                                        SEXP csr_weights,
@@ -8315,8 +8520,25 @@ NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
   @autoreleasepool {
     MetalEmbeddingState& state = metal_embedding_state();
 
+    if (sampler_mode == 3) {
+      if (n_components != 2 || start_epoch != 0 || total_epochs != n_epochs ||
+          !std::isfinite(max_weight_input) || max_weight_input <= 0.0) {
+        Rcpp::stop("Compact Metal UMAP requires a full 2D epoch schedule.");
+      }
+      const auto ab = find_ab_params(1.0, min_dist);
+      const EmbedParams params{
+        static_cast<std::uint32_t>(n), 0u,
+        static_cast<std::uint32_t>(n_epochs),
+        static_cast<std::uint32_t>(negative_sample_rate), kObjectiveUmap,
+        static_cast<std::uint32_t>(seed), static_cast<float>(learning_rate),
+        static_cast<float>(ab.first), static_cast<float>(ab.second),
+        static_cast<float>(max_weight_input),
+        static_cast<float>(repulsion_strength)};
+      return metal_umap_compact_fit(offsets, csr_neighbors,
+        csr_weights, init, params);
+    }
     if (sampler_mode < 0 || sampler_mode > 2) {
-      Rcpp::stop("Metal UMAP sampler mode must be 0, 1, or 2.");
+      Rcpp::stop("Metal UMAP sampler mode must be between 0 and 3.");
     }
     const bool snapshot_sampler = sampler_mode == 2;
     const bool clean_sampler = sampler_mode != 0;

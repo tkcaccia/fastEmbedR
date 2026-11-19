@@ -746,7 +746,7 @@ massive_pca_project_cpp <- function(spec, output, loadings, center, scale, chunk
 }
 
 massive_pca_project_cuda_cpp <- function(spec, output, loadings, center, scale, chunk_rows, start_row = 0, progress = NULL, resume = FALSE) {
-    invisible(.Call(`_fastEmbedR_massive_pca_project_cuda_cpp`, spec, output, loadings, center, scale, chunk_rows, start_row, progress, resume))
+    .Call(`_fastEmbedR_massive_pca_project_cuda_cpp`, spec, output, loadings, center, scale, chunk_rows, start_row, progress, resume)
 }
 
 massive_landmark_sample_cpp <- function(spec, landmarks, seed, chunk_rows, output, method) {

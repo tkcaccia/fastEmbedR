@@ -8280,7 +8280,8 @@ List massive_pca_covariance_cuda_cpp(List spec,
     }
     Rcpp::checkUserInterrupt();
   }
-  Rcpp::Rcout << "  CUDA PCA covariance pass: 100%\n";
+  if (Rcpp::as<std::string>(spec["format"]) != "memory_float32")
+    Rcpp::Rcout << "  CUDA PCA covariance pass: 100%\n";
   NumericMatrix covariance(p, p);
   for (int col = 0; col < p; ++col) {
     for (int other = col; other < p; ++other) {
@@ -8446,7 +8447,7 @@ void massive_pca_project_cpp(List spec,
 }
 
 // [[Rcpp::export]]
-void massive_pca_project_cuda_cpp(List spec,
+SEXP massive_pca_project_cuda_cpp(List spec,
                                    std::string output,
                                    NumericMatrix loadings,
                                    NumericVector center,
@@ -8465,6 +8466,11 @@ void massive_pca_project_cuda_cpp(List spec,
       (first != n && first % chunk_rows != 0) ||
       (first > 0 && !resume) || (resume && progress == R_NilValue)) {
     Rcpp::stop("Invalid streamed CUDA PCA projection dimensions.");
+  }
+  const bool resident = output.empty();
+  if (resident && (Rcpp::as<std::string>(spec["format"]) != "memory_float32" ||
+      resume || progress != R_NilValue || n > INT_MAX)) {
+    Rcpp::stop("Resident CUDA PCA needs float32 input and no checkpoint.");
   }
   const auto expected = checked_product(checked_product(n, rank), 4);
   std::vector<float> center_float(p), scale_float(p);
@@ -8488,8 +8494,18 @@ void massive_pca_project_cuda_cpp(List spec,
   if (!context) Rcpp::stop(fastembedr_massive_pca_cuda_error());
   std::vector<float> block(checked_product(chunk_rows, p));
   std::vector<float> scores(checked_product(chunk_rows, rank));
-  Float32Sink sink(output,
-    checked_product(checked_product(first, rank), 4), expected, resume);
+  std::unique_ptr<Float32Sink> sink;
+  Rcpp::RObject result;
+  int* payload = nullptr;
+  if (resident) {
+    result = resident_float32_score_matrix_cpp(static_cast<int>(n), rank);
+    Rcpp::S4 matrix(result);
+    Rcpp::IntegerMatrix values(matrix.slot("Data"));
+    payload = INTEGER(values);
+  } else {
+    sink.reset(new Float32Sink(output,
+      checked_product(checked_product(first, rank), 4), expected, resume));
+  }
   for (std::uint64_t start = first; start < n; start += chunk_rows) {
     const int count = static_cast<int>(std::min<std::uint64_t>(
       chunk_rows, n - start
@@ -8499,12 +8515,27 @@ void massive_pca_project_cuda_cpp(List spec,
           context.get(), block.data(), count, scores.data())) {
       Rcpp::stop(fastembedr_massive_pca_cuda_error());
     }
-    sink.append(scores.data(), checked_product(count, rank));
-    checkpoint_output(sink, progress, start + count);
+    if (resident) {
+      for (int col = 0; col < rank; ++col) {
+        for (int row = 0; row < count; ++row) {
+          const float value = scores[static_cast<std::size_t>(row) * rank +
+            col];
+          if (!std::isfinite(value)) Rcpp::stop("CUDA scores are nonfinite.");
+          const auto index = static_cast<std::uint64_t>(col) * n + start + row;
+          std::memcpy(payload + index, &value, sizeof(value));
+        }
+      }
+    } else {
+      sink->append(scores.data(), checked_product(count, rank));
+      checkpoint_output(*sink, progress, start + count);
+    }
     Rcpp::checkUserInterrupt();
   }
-  Rcpp::Rcout << "  CUDA PCA projection pass: 100%\n";
-  sink.finish(expected);
+  if (sink) {
+    Rcpp::Rcout << "  CUDA PCA projection pass: 100%\n";
+    sink->finish(expected);
+  }
+  return result;
 }
 
 // [[Rcpp::export]]

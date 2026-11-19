@@ -3239,9 +3239,10 @@ BEGIN_RCPP
 END_RCPP
 }
 // massive_pca_project_cuda_cpp
-void massive_pca_project_cuda_cpp(List spec, std::string output, NumericMatrix loadings, NumericVector center, NumericVector scale, int chunk_rows, double start_row, SEXP progress, bool resume);
+SEXP massive_pca_project_cuda_cpp(List spec, std::string output, NumericMatrix loadings, NumericVector center, NumericVector scale, int chunk_rows, double start_row, SEXP progress, bool resume);
 RcppExport SEXP _fastEmbedR_massive_pca_project_cuda_cpp(SEXP specSEXP, SEXP outputSEXP, SEXP loadingsSEXP, SEXP centerSEXP, SEXP scaleSEXP, SEXP chunk_rowsSEXP, SEXP start_rowSEXP, SEXP progressSEXP, SEXP resumeSEXP) {
 BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< List >::type spec(specSEXP);
     Rcpp::traits::input_parameter< std::string >::type output(outputSEXP);
@@ -3252,8 +3253,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type start_row(start_rowSEXP);
     Rcpp::traits::input_parameter< SEXP >::type progress(progressSEXP);
     Rcpp::traits::input_parameter< bool >::type resume(resumeSEXP);
-    massive_pca_project_cuda_cpp(spec, output, loadings, center, scale, chunk_rows, start_row, progress, resume);
-    return R_NilValue;
+    rcpp_result_gen = Rcpp::wrap(massive_pca_project_cuda_cpp(spec, output, loadings, center, scale, chunk_rows, start_row, progress, resume));
+    return rcpp_result_gen;
 END_RCPP
 }
 // massive_landmark_sample_cpp

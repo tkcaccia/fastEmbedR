@@ -643,9 +643,18 @@ metal_csr_needs_edge_tiles <- function(graph) {
     any(diff(graph$offsets) > 256L)
 }
 
-record_metal_tiled_policy <- function(cfg, layout) {
-    if (!identical(attr(layout, "metal_optimizer_pipeline"),
-        "metal_wide_edge_tiles")) return(cfg)
+record_metal_optimizer_policy <- function(cfg, layout) {
+    pipeline <- attr(layout, "metal_optimizer_pipeline")
+    if (identical(pipeline, "metal_compact_edges")) {
+        cfg$graph_storage <- "metal_resident_compact_edges"
+        cfg$gpu_optimizer_mode <- "compact_edge_parallel"
+        cfg$gpu_optimizer_update_rule <- "metal_head_aggregated_atomic_tail"
+        cfg$gpu_optimizer_schedule <- "coo_epochs_per_sample"
+        cfg$gpu_epochs_per_command <- 16L
+        cfg$metal_optimizer_seconds <- attr(layout, "metal_optimizer_seconds")
+        return(cfg)
+    }
+    if (!identical(pipeline, "metal_wide_edge_tiles")) return(cfg)
     cfg$graph_storage <- "cpu_csr_uploaded_to_metal_tiles"
     cfg$gpu_optimizer_mode <- "csr_edge_tiles"
     cfg$gpu_optimizer_update_rule <- "native_metal_csr_edge_tiles"
@@ -672,10 +681,12 @@ optimize_prepared_umap_metal <- function(graph, init, cfg, seed) {
     }
     if (identical(graph$offset_dtype, "uint64"))
         return(optimize_prepared_umap_metal_wide(graph, init, cfg, seed))
-    if (metal_csr_needs_edge_tiles(graph))
+    compact <- cfg$n_components == 2L && nrow(init) >= 100000L
+    if (!compact && metal_csr_needs_edge_tiles(graph))
         return(optimize_prepared_umap_metal_tiled(graph, init, cfg, seed))
-    warm_epochs <- if (cfg$n_components == 2L)
-        as.integer(cfg$n_epochs %/% 2L) else 0L
+    warm_epochs <- 0L
+    if (!compact && cfg$n_components == 2L)
+        warm_epochs <- as.integer(cfg$n_epochs %/% 2L)
     if (warm_epochs > 0L) {
         init <- fast_knn_umap_csr_clean_atomic_cpp(
             graph$offsets, graph$neighbors, graph$weights,
@@ -700,17 +711,15 @@ optimize_prepared_umap_metal <- function(graph, init, cfg, seed) {
         as.numeric(graph$max_weight),
         cfg$repulsion_strength,
         as.integer(seed),
-        1L,
+        if (compact) 3L else 1L,
         start_epoch = warm_epochs,
         total_epochs = as.integer(cfg$n_epochs)
     )
     attr(layout, "metal_cpu_warm_epochs") <- warm_epochs
     attr(layout, "metal_gpu_epochs") <- gpu_epochs
-    attr(layout, "metal_optimizer_pipeline") <- if (warm_epochs > 0L) {
-        "cpu_ordered_warm_metal_parallel"
-    } else {
-        "metal_parallel"
-    }
+    attr(layout, "metal_optimizer_pipeline") <- if (compact)
+        "metal_compact_edges" else if (warm_epochs > 0L)
+        "cpu_ordered_warm_metal_parallel" else "metal_parallel"
     layout
 }
 
@@ -802,6 +811,9 @@ finalize_prepared_umap <- function(layout, graph, init, cfg) {
             attr(layout, "metal_allocated_bytes_observed")
         cfg$metal_effective_learning_rate <-
             attr(layout, "metal_effective_learning_rate")
+    }
+    if (cfg$backend == "metal") {
+        cfg <- record_metal_optimizer_policy(cfg, layout)
     }
     layout <- finalize_embedding_layout(
         layout,
