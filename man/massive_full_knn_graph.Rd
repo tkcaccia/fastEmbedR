@@ -15,7 +15,7 @@ massive_full_knn_graph(
   memory_limit = "8GB",
   checkpoint = FALSE,
   resume = FALSE,
-  method = c("exact", "hnsw_sharded", "ivf_sharded", "coarse_postings"),
+  method = c("exact", "metal_ivf", "hnsw_sharded", "ivf_sharded", "coarse_postings"),
   audit_rows = 0L,
   checkpoint_every = 100L,
   postings = NULL,
@@ -48,7 +48,8 @@ rows per block to reduce repeated posting scans.}
 For sharded CPU HNSW or CUDA exact/IVF search, the requested maximum
 resident index-shard size.}
 
-\item{memory_limit}{Conservative RAM budget.}
+\item{memory_limit}{Conservative RAM budget. For CUDA sharded search,
+estimated VRAM is also capped at 70\% of this limit and 65\% of free VRAM.}
 
 \item{checkpoint}{Save completed query blocks, including sharded search.
 Multi-GPU IVF checkpoints completed GPU query shards only.}

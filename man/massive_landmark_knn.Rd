@@ -50,8 +50,8 @@ reference). Sharded IVF is approximate and needs a recall audit.}
 \code{"stream_exact"}, \code{"sharded_exact"}, or \code{"sharded_ivf"};
 otherwise must be \code{NULL}.}
 
-\item{memory_limit}{Conservative RAM budget. CUDA also caps batches to a
-conservative fraction of currently free VRAM.}
+\item{memory_limit}{Conservative RAM budget. For CUDA, the planner also
+caps estimated VRAM use at 70\% of this limit and 65\% of free VRAM.}
 
 \item{checkpoint}{Save completed KNN batches to a sidecar file.
 Multi-GPU \code{"sharded_ivf"} checkpoints only completed GPU query shards.

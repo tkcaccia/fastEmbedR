@@ -42,8 +42,9 @@ silently copied to disk.}
 
 \item{output}{New file prefix required for a file-backed KNN result.}
 
-\item{memory_limit}{Host working-memory budget for file-backed KNN. When
-omitted, \code{options(memory_limit = ...)} is used, or \code{"8GB"}.}
+\item{memory_limit}{Working-memory budget for file-backed KNN. CUDA also
+uses it to cap estimated VRAM. When omitted,
+\code{options(memory_limit = ...)} is used, or \code{"8GB"}.}
 
 \item{devices}{Optional distinct CUDA device indices. For resident input,
 explicit devices use faissR Flat or IVF and return host KNN matrices;

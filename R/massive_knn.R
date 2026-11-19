@@ -718,8 +718,8 @@ massive_knn_query_storage <- function(x, setup, state) {
 #' @param reference_chunk_rows Maximum reference rows per batch for
 #'   `"stream_exact"`, `"sharded_exact"`, or `"sharded_ivf"`;
 #'   otherwise must be `NULL`.
-#' @param memory_limit Conservative RAM budget. CUDA also caps batches to a
-#'   conservative fraction of currently free VRAM.
+#' @param memory_limit Conservative RAM budget. For CUDA, the planner also
+#'   caps estimated VRAM use at 70% of this limit and 65% of free VRAM.
 #' @param checkpoint Save completed KNN batches to a sidecar file.
 #'   Multi-GPU `"sharded_ivf"` checkpoints only completed GPU query shards.
 #'   Single-GPU `"sharded_ivf"` does not support checkpointing.
@@ -1403,7 +1403,7 @@ massive_cuda_sharded_resources <- function(x, k, chunk_rows,
     info <- massive_cuda_shard_info()
     if (exclude_self && k > 255L) stop("CUDA k exceeds 255.", call. = FALSE)
     limit <- massive_memory_bytes(memory_limit)
-    requested <- reference_chunk_rows %||% min(x$nrow, 250000L)
+    requested <- reference_chunk_rows %||% x$nrow
     requested_query <- chunk_rows %||% 8192L
     if (is.na(integer_scalar(requested)) || requested < 2L ||
         is.na(integer_scalar(requested_query)) ||
@@ -1413,7 +1413,8 @@ massive_cuda_sharded_resources <- function(x, k, chunk_rows,
     fixed <- 128 * 1024^2
     index_bytes <- if (method == "ivf_sharded") 12 else 8
     host_max <- floor((0.7 * limit - fixed) / (16 * x$ncol))
-    gpu_max <- floor((0.65 * info$free_bytes - fixed) /
+    gpu_budget <- min(0.65 * info$free_bytes, 0.7 * limit)
+    gpu_max <- floor((gpu_budget - fixed) /
         (index_bytes * x$ncol))
     shard_rows <- min(requested, host_max, gpu_max, x$nrow)
     if (!is.finite(shard_rows) || shard_rows < 2L) stop(
@@ -1424,7 +1425,7 @@ massive_cuda_sharded_resources <- function(x, k, chunk_rows,
     if (shard_rows > min(requested, host_max, gpu_max))
         stop("Balanced CUDA shards exceed the limit.", call. = FALSE)
     host_free <- 0.7 * limit - fixed - 16 * shard_rows * x$ncol
-    gpu_free <- 0.65 * info$free_bytes - fixed -
+    gpu_free <- gpu_budget - fixed -
         index_bytes * shard_rows * x$ncol
     per_query <- 12 * x$ncol + 32 * (k + 1)
     rows <- as.integer(min(requested_query, floor(host_free / per_query),
@@ -1439,7 +1440,8 @@ massive_cuda_sharded_resources <- function(x, k, chunk_rows,
         peak_ram_bytes = fixed + 16 * shard_rows * x$ncol + rows * per_query,
         peak_vram_bytes = fixed + index_bytes * shard_rows * x$ncol +
             rows * per_query,
-        free_vram_bytes = info$free_bytes, gpu_device = info$device,
+        free_vram_bytes = info$free_bytes,
+        vram_budget_bytes = gpu_budget, gpu_device = info$device,
         output_bytes = query_rows * k * 8, memory_limit_bytes = limit)
 }
 
@@ -2558,7 +2560,8 @@ massive_full_knn_dispatch <- function(x, k, output, backend, n.cores,
 #' @param reference_chunk_rows Maximum reference rows per block.
 #'   For sharded CPU HNSW or CUDA exact/IVF search, the requested maximum
 #'   resident index-shard size.
-#' @param memory_limit Conservative RAM budget.
+#' @param memory_limit Conservative RAM budget. For CUDA sharded search,
+#'   estimated VRAM is also capped at 70% of this limit and 65% of free VRAM.
 #' @param method `"exact"`, `"metal_ivf"`, `"hnsw_sharded"`, `"ivf_sharded"`, or
 #'   `"coarse_postings"`. The posting route requires the original
 #'   file-backed source, `postings`, and matching `centers`.

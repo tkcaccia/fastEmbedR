@@ -391,8 +391,9 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #'   a disk-backed [massive_matrix()] descriptor; a resident matrix is never
 #'   silently copied to disk.
 #' @param output New file prefix required for a file-backed KNN result.
-#' @param memory_limit Host working-memory budget for file-backed KNN. When
-#'   omitted, `options(memory_limit = ...)` is used, or `"8GB"`.
+#' @param memory_limit Working-memory budget for file-backed KNN. CUDA also
+#'   uses it to cap estimated VRAM. When omitted,
+#'   `options(memory_limit = ...)` is used, or `"8GB"`.
 #' @param devices Optional distinct CUDA device indices. For resident input,
 #'   explicit devices use faissR Flat or IVF and return host KNN matrices;
 #'   multiple devices use a replicated index. File-backed input uses
