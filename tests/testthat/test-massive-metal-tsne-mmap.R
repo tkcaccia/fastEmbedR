@@ -1,3 +1,12 @@
+test_that("CUDA t-SNE graph mapping respects the host memory limit", {
+    graph <- list(n_vertices = 1000021, n_edges = 42823470,
+        access = "stream")
+    choose <- function(limit) fastEmbedR:::massive_tsne_graph_access(
+        graph, "cuda", "auto", 8388608L, limit)$mode
+    expect_identical(choose("8GB"), "mmap")
+    expect_identical(choose("512MB"), "stream")
+})
+
 test_that("file-backed Metal t-SNE runs a 3D graph without fallback", {
     if (!isTRUE(fastEmbedR:::embedding_metal_available_cpp()))
         skip("Metal is unavailable")
