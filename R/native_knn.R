@@ -432,8 +432,9 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' rows when estimated pair-feature work is at most 125 billion, and sharded
 #' HNSW otherwise. CUDA selects exact search below 100,000 rows under the same
 #' work limit and sharded IVF-Flat otherwise. Metal selects native IVF when
-#' faissR's host and Metal capacity check passes; it otherwise selects
-#' bounded exact search. An IVF pilot miss is an error, not a silent switch
+#' faissR's host and Metal capacity check passes and checkpointing is off;
+#' it otherwise selects bounded exact search. An IVF pilot miss is an error,
+#' not a silent switch
 #' to exact search. File-backed KNN supports Euclidean distance only. The
 #' result is a `fastEmbedR_massive_graph` descriptor; construct UMAP fuzzy
 #' weights or t-SNE affinities from it before full-graph fitting.
