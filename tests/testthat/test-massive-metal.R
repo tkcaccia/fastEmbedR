@@ -36,7 +36,7 @@ test_that("file-backed Metal exact KNN matches streamed CPU search", {
     expect_identical(metal$knn_provider, "faissR")
     expect_identical(metal$residency, "file-backed")
     expect_identical(metal$device_ids, 0L)
-    expect_identical(metal$query_storage, "R_float32")
+    expect_identical(metal$query_storage, "file_backed_float32")
     expect_identical(metal$resources$metal_memory_model,
         "unified_shared")
     expect_gt(metal$resources$n_shards, 1L)

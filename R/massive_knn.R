@@ -1495,11 +1495,13 @@ massive_metal_sharded_resources <- function(x, k, chunk_rows,
         floor(64 * 1024^2 / per_query)))
     if (is.na(rows) || rows < 1L) stop(
         "Metal query batch exceeds the RAM budget.", call. = FALSE)
+    input_bytes <- as.double(x$nrow) * x$ncol * 4
+    batches <- ceiling(x$nrow / rows)
     list(chunk_rows = rows, reference_chunk_rows = shard_rows,
         n_shards = as.integer(shards),
-        query_batches = ceiling(x$nrow / rows) * shards,
-        minimum_query_read_bytes = as.double(x$nrow) * x$ncol *
-            4 * shards,
+        query_batches = batches * shards,
+        minimum_query_read_bytes = input_bytes,
+        minimum_reference_read_bytes = input_bytes * batches,
         peak_ram_bytes = fixed + 20 * shard_rows * x$ncol +
             rows * per_query,
         metal_buffer_bytes_estimate = 4 * shard_rows * x$ncol +
@@ -2220,8 +2222,7 @@ massive_full_exact_graph <- function(x, setup, measurement,
     graph$device_ids <- if (setup$backend == "metal") 0L else
         if (setup$backend == "cuda") setup$devices %||%
             stats$device else integer()
-    graph$query_storage <- if (setup$backend == "metal")
-        "R_float32" else "file_backed_float32"
+    graph$query_storage <- "file_backed_float32"
     graph$build_seconds <- stats$build
     graph$exact <- TRUE
     graph$target_recall <- setup$target_recall
