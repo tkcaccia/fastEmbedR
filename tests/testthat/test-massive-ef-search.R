@@ -48,8 +48,14 @@ test_that("massive UMAP forwards HNSW effort without fallback", {
     dir.create(directory)
     on.exit(unlink(c(input, directory), recursive = TRUE))
     source <- massive_matrix(input, 80L, 8L)
+    select <- fastEmbedR:::faissr_knn_select_cpp
     result <- with_mocked_bindings(
-        fastembedr_cpu_knn_method = function(...) "hnsw",
+        faissr_knn_select_cpp = function(specification) {
+            policy <- select(specification)
+            if (specification$file_backed && !specification$self_query)
+                policy$method <- "hnsw"
+            policy
+        },
         umap(source, massive = "landmark", landmarks = 30L,
             output = file.path(directory, "layout.f32"),
             backend = "cpu", n.cores = 2L, n_neighbors = 5L,

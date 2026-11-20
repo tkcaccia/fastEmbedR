@@ -495,7 +495,8 @@ massive_cluster_landmark_request <- function(x, method, massive,
             resolution, n_iterations, n_runs, steps, seed, plan$estimate,
             plan$devices, parallel.mode, target_recall))
     }
-    massive_knn_method(knn_method, backend, plan$count, k)
+    massive_knn_method(knn_method, backend, plan$count, x$ncol, x$nrow,
+        k, target_recall)
     paths <- massive_cluster_output_plan(x, plan$count, k, output,
         resume, checkpoint, !is.null(reused))
     result <- massive_cluster_workflow(x, plan, paths, k, method,

@@ -98,7 +98,8 @@ IVF also requires tie-aware \code{pilot_min_row_recall} and mean strict
 \code{pilot_id_recall} to meet the target. \code{pilot_min_strict_row_recall}
 and \code{pilot_tied_rows} expose boundary-tie effects. Stricter probing
 can increase query time substantially.
-CPU uses exact search by default below 5,000 landmarks.
+With \code{method = "auto"}, faissR selects an available search method
+using the input shape, query count, \code{k}, and recall target.
 Output files contain row-major, one-based \code{uint32} landmark indices and
 float32 distances. File-backed CPU HNSW streams reference chunks through
 faissR into a resident index; the index itself is not disk resident.

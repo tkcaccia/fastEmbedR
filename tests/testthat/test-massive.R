@@ -2854,13 +2854,25 @@ test_that("CUDA landmark KNN resumes on CUDA without fallback", {
         tolerance = 1e-5)
 })
 
-test_that("massive CUDA search selects IVF without CPU fallback", {
+test_that("landmark auto search uses the faissR shape policy", {
     choose <- fastEmbedR:::massive_knn_method
-    expect_identical(choose("auto", "cuda", 99999, 10L), "exact")
-    expect_identical(choose("auto", "cuda", 100000, 10L), "ivf")
-    expect_error(choose("ivf", "cpu", 100000, 10L),
+    expect_identical(choose("auto", "cuda", 100000, 64, 32L,
+        10L, 0.99), "exact")
+    expect_identical(choose("auto", "cuda", 100000, 64, 100000,
+        10L, 0.99), "ivf")
+    for (backend in c("cuda", "metal")) {
+        for (recall in c(0.90, 0.95, 0.99)) {
+            expect_identical(choose("auto", backend, 1281167L, 1024L,
+                1281167L, 30L, recall), "exact")
+        }
+    }
+    expect_identical(choose("auto", "metal", 100000, 64, 100000,
+        10L, 0.99), "exact")
+    expect_identical(choose("ivf", "cuda", 1281167L, 1024L, 1281167L,
+        30L, 0.99), "ivf")
+    expect_error(choose("ivf", "cpu", 100000, 64, 100000, 10L, 0.99),
         "no algorithm fallback")
-    expect_error(choose("hnsw", "cuda", 100000, 10L),
+    expect_error(choose("hnsw", "cuda", 100000, 64, 100000, 10L, 0.99),
         "no algorithm fallback")
 })
 

@@ -503,14 +503,15 @@ massive_knn_stream <- function(x, state, k, method, n.cores, backend,
         massive_knn_metadata(neighbors))
 }
 
-massive_knn_method <- function(method, backend, reference_rows, k) {
+massive_knn_method <- function(method, backend, reference_rows, features,
+        query_rows, k, target_recall) {
     method <- match.arg(method,
         c("auto", "exact", "stream_exact", "hnsw", "ivf"))
     if (method == "auto") {
-        method <- if (backend == "metal") "exact" else if (
-                backend == "cuda") {
-            if (reference_rows < 100000) "exact" else "ivf"
-        } else fastembedr_cpu_knn_method(reference_rows)
+        method <- fastembedr_knn_selection(backend, reference_rows, features,
+            k, "euclidean", target_recall, n_query = query_rows,
+            self_query = FALSE, file_backed = TRUE,
+            allow_ivf = backend != "metal")$method
     }
     if (backend == "metal" && method != "exact") stop(
         "EXPERIMENTAL Metal landmark KNN supports exact search only.",
@@ -571,17 +572,17 @@ massive_knn_setup <- function(x, reference, k, output, backend,
         reference$nrow > .Machine$integer.max) stop(
         "Reference dimensions must match and fit R integer IDs.", call. = FALSE)
     backend <- match.arg(backend, c("cpu", "cuda", "metal"))
-    cuda_info <- if (backend == "cuda")
-        massive_knn_cuda_info(cuda_provider) else NULL
+    cuda_info <- if (backend == "cuda") massive_knn_cuda_info(cuda_provider)
     if (backend == "metal" &&
         (!fastembedr_metal_knn_available() || x$ncol > 16384L))
         stop("Metal KNN needs Metal and <=16,384 columns.", call. = FALSE)
     k <- integer_scalar(k)
     if (is.na(k) || k < 1L || k > reference$nrow)
         stop("`k` must be a positive landmark count.", call. = FALSE)
-    method <- massive_knn_method(method, backend, reference$nrow, k)
-    ef_search <- massive_landmark_ef_search(ef_search,
-        method, backend, k, reference$nrow)
+    method <- massive_knn_method(method, backend, reference$nrow, x$ncol,
+        x$nrow, k, target_recall)
+    ef_search <- massive_landmark_ef_search(ef_search, method, backend, k,
+        reference$nrow)
     if (!is.null(reference_chunk_rows) && method != "stream_exact")
         stop("`reference_chunk_rows` requires `stream_exact`.", call. = FALSE)
     if (method == "stream_exact" &&
@@ -600,8 +601,8 @@ massive_knn_setup <- function(x, reference, k, output, backend,
         metal_memory_model = "unified_shared",
         metal_buffer_bytes_estimate = 8 * reference$nrow * reference$ncol +
             8 * resources$chunk_rows * x$ncol))
-    paths <- massive_knn_paths(output, resources$output_bytes,
-        resume, allow_final_resume)
+    paths <- massive_knn_paths(
+        output, resources$output_bytes, resume, allow_final_resume)
     list(reference = reference, k = k, backend = backend,
         method = method, workers = workers, resources = resources,
         paths = paths, ef_search = ef_search, target_recall = target_recall,
@@ -698,7 +699,8 @@ massive_knn_query_storage <- function(x, setup, state) {
 #' `pilot_id_recall` to meet the target. `pilot_min_strict_row_recall`
 #' and `pilot_tied_rows` expose boundary-tie effects. Stricter probing
 #' can increase query time substantially.
-#' CPU uses exact search by default below 5,000 landmarks.
+#' With `method = "auto"`, faissR selects an available search method
+#' using the input shape, query count, `k`, and recall target.
 #' Output files contain row-major, one-based `uint32` landmark indices and
 #' float32 distances. File-backed CPU HNSW streams reference chunks through
 #' faissR into a resident index; the index itself is not disk resident.
