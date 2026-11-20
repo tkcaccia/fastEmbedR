@@ -66,10 +66,10 @@ test_that("file-backed Metal KNN rejects unsupported routes", {
         ncol = 2L))
     expect_error(massive_full_knn_graph(source, 2L, tempfile(),
         backend = "metal", method = "hnsw_sharded"),
-        "Metal KNN supports exact shards only")
+        "Metal KNN supports exact or IVF")
     expect_error(massive_full_knn_graph(source, 2L, tempfile(),
         backend = "metal", method = "ivf_sharded"),
-        "Metal KNN supports exact shards only")
+        "Metal KNN supports exact or IVF")
     expect_error(massive_full_knn_graph(source, 2L, tempfile(),
         backend = "metal", method = "exact", devices = 0L),
         "requires CUDA")

@@ -93,12 +93,8 @@ fastembedr_convert_knn_distances <- function(knn, output) {
 }
 
 fastembedr_cpu_knn_method <- function(n) {
-    n <- integer_scalar(n %||% NA_integer_)
-    if (length(n) == 1L && !is.na(n) && n < 5000L) {
-        "exact"
-    } else {
-        "hnsw"
-    }
+    fastembedr_knn_selection("cpu", n, NA_integer_, 30L,
+        "euclidean", 0.99)$method
 }
 
 fastembedr_target_recall <- function(value = NULL) {
@@ -144,131 +140,48 @@ fastembedr_one_call_target_recall <- function(value, massive,
     value
 }
 
-fastembedr_embedding_nn_policy <- function(embedding_backend, n = NULL,
-                                            p = NULL,
-                                            target_recall = NULL) {
-    embedding_backend <- resolve_embedding_backend(embedding_backend)
-    target_recall <- fastembedr_target_recall(target_recall)
-    n <- integer_scalar(n %||% NA_integer_)
-    p <- integer_scalar(p %||% NA_integer_)
-    small_enough_for_exact <- length(n) == 1L && !is.na(n) && n < 100000L
-    method <- if (isTRUE(small_enough_for_exact)) "exact" else "ivf"
-    if (identical(embedding_backend, "cuda")) {
-        return(list(
-            backend = "cuda", method = method, tuning = "auto",
-            target_recall = target_recall
-        ))
-    }
-    if (identical(embedding_backend, "metal")) {
-        bounded_exact <- !is.na(n) && !is.na(p) &&
-            n <= 50000L && p <= 16384L &&
-            as.double(n) * n * p <= 1.25e11
-        return(list(
-            backend = "metal",
-            method = if ((!is.na(n) && n < 4096L) || bounded_exact) {
-                "exact"
-            } else {
-                "ivf"
-            },
-            tuning = "auto",
-            target_recall = target_recall
-        ))
-    }
-    method <- fastembedr_cpu_knn_method(n)
-    list(
-        backend = "cpu", method = method,
-        target_recall = target_recall,
-        recall_status = if (identical(method, "exact")) {
+fastembedr_knn_selection <- function(backend, n, p, k, metric,
+        target_recall, n_query = n, self_query = TRUE,
+        file_backed = FALSE, allow_ivf = TRUE) {
+    faissr_knn_select_cpp(list(
+        backend = resolve_embedding_backend(backend), metric = metric,
+        n_reference = integer_scalar(n %||% NA_integer_),
+        n_features = integer_scalar(p %||% NA_integer_),
+        n_query = integer_scalar(n_query %||% NA_integer_),
+        k = integer_scalar(k), self_query = self_query,
+        file_backed = file_backed, allow_ivf = allow_ivf,
+        target_recall = fastembedr_target_recall(target_recall)
+    ))
+}
+
+fastembedr_resident_knn_policy <- function(selection) {
+    policy <- selection[c("backend", "method", "target_recall")]
+    if (identical(policy$backend, "cpu")) {
+        policy$recall_status <- if (identical(policy$method, "exact")) {
             "exact_by_construction"
         } else {
             "calibration_informed_not_runtime_audited"
         }
-    )
+    } else {
+        policy$tuning <- "auto"
+        policy <- policy[c("backend", "method", "tuning", "target_recall")]
+    }
+    policy
 }
 
-fastembedr_metal_query_method <- function(n_reference, n_query, p) {
-    complete <- all(vapply(
-        list(n_reference, n_query, p),
-        function(x) length(x) == 1L && !is.na(x),
-        logical(1L)
-    ))
-    work <- if (complete) {
-        as.double(n_reference) * as.double(n_query) * as.double(p)
-    } else {
-        NA_real_
-    }
-    use_ivf <- if (is.finite(work)) {
-        n_reference >= 4096L && work >= 5e9
-    } else {
-        length(n_reference) == 1L &&
-            !is.na(n_reference) &&
-            n_reference >= 20000L
-    }
-    if (isTRUE(use_ivf)) "ivf" else "exact"
-}
-
-fastembedr_cuda_query_method <- function(n_reference, n_query, p) {
-    complete <- all(vapply(
-        list(n_reference, n_query, p),
-        function(x) length(x) == 1L && !is.na(x),
-        logical(1L)
-    ))
-    if (!complete) {
-        return(if (
-            length(n_reference) == 1L &&
-                !is.na(n_reference) &&
-                n_reference >= 100000L
-        ) "ivf" else "exact")
-    }
-    work <- as.double(n_reference) * as.double(n_query) * as.double(p)
-    use_ivf <- n_reference >= 100000L && n_query > 64L && work >= 5e9
-    if (isTRUE(use_ivf)) "ivf" else "exact"
+fastembedr_embedding_nn_policy <- function(embedding_backend, n = NULL,
+        p = NULL, target_recall = NULL, k = 30L, metric = "euclidean") {
+    fastembedr_resident_knn_policy(fastembedr_knn_selection(
+        embedding_backend, n, p, k, metric, target_recall))
 }
 
 fastembedr_query_nn_policy <- function(embedding_backend,
-                                        n_reference = NULL,
-                                        n_query = NULL,
-                                        p = NULL,
-                                        target_recall = NULL) {
-    embedding_backend <- resolve_embedding_backend(embedding_backend)
-    target_recall <- fastembedr_target_recall(target_recall)
-    n_reference <- integer_scalar(n_reference %||% NA_integer_)
-    n_query <- integer_scalar(n_query %||% NA_integer_)
-    p <- integer_scalar(p %||% NA_integer_)
-    if (identical(embedding_backend, "cuda")) {
-        return(list(
-            backend = "cuda",
-            method = fastembedr_cuda_query_method(
-                n_reference,
-                n_query,
-                p
-            ),
-            tuning = "auto",
-            target_recall = target_recall
-        ))
-    }
-    if (identical(embedding_backend, "metal")) {
-        return(list(
-            backend = "metal",
-            method = fastembedr_metal_query_method(
-                n_reference,
-                n_query,
-                p
-            ),
-            tuning = "auto",
-            target_recall = target_recall
-        ))
-    }
-    method <- fastembedr_cpu_knn_method(n_reference)
-    list(
-        backend = "cpu", method = method,
-        target_recall = target_recall,
-        recall_status = if (identical(method, "exact")) {
-            "exact_by_construction"
-        } else {
-            "calibration_informed_not_runtime_audited"
-        }
-    )
+        n_reference = NULL, n_query = NULL, p = NULL,
+        target_recall = NULL, k = 30L, metric = "euclidean",
+        allow_ivf = TRUE) {
+    fastembedr_resident_knn_policy(fastembedr_knn_selection(
+        embedding_backend, n_reference, p, k, metric, target_recall, n_query,
+        self_query = FALSE, allow_ivf = allow_ivf))
 }
 
 fastembedr_nn_policy_engine <- function(policy, keep_gpu = FALSE,
@@ -495,7 +408,7 @@ precompute_knn <- function(data, k = 30L,
     k <- validate_precompute_k(k, n - 1L, "nrow(data) - 1")
     policy <- fastembedr_embedding_nn_policy(
         backend, n = n, p = ncol(x),
-        target_recall = target_recall)
+        target_recall = target_recall, k = k, metric = metric)
     keep_gpu <- identical(backend, "cuda") && is.null(devices)
     result <- timed_do_call(run_precompute_knn, list(
         x, k, metric, policy, n.cores, keep_gpu, devices
@@ -519,34 +432,26 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
         call. = FALSE)
     limit <- if (is.null(memory_limit))
         fastembedr_memory_option("8GB") else memory_limit
-    massive_memory_bytes(limit)
-    pair_work <- as.double(data$nrow) * data$nrow * data$ncol
-    bounded_exact <- is.finite(pair_work) && pair_work <= 125e9
-    method <- if (backend == "cpu") {
-        if (data$nrow <= 5000L && bounded_exact)
-            "exact" else "hnsw_sharded"
-    } else if (backend == "cuda") {
-        if (data$nrow < 100000L && bounded_exact)
-            "exact" else "ivf_sharded"
-    } else {
-        fit <- if (!checkpoint && !resume)
-            faissr_metal_file_ivf_plan_cpp(data, as.integer(k),
-                massive_memory_bytes(limit))$fits else FALSE
-        if (isTRUE(fit)) "metal_ivf" else "exact"
-    }
-    supports_tier <- (backend == "cpu" &&
-        method %in% c("exact", "hnsw_sharded")) ||
-        (backend == "metal" && method %in% c("exact", "metal_ivf")) ||
-        (backend == "cuda" && method %in% c("exact", "ivf_sharded"))
-    if (target_recall != 0.99 && !supports_tier) stop(
-        "This file-backed KNN route does not yet tune recall tiers ",
-        "below 0.99.", call. = FALSE)
-    massive_full_knn_graph(data, k = k, output = output,
-        backend = backend, n.cores = resolve_n_cores(n.cores),
+    memory_bytes <- massive_memory_bytes(limit)
+    workers <- resolve_n_cores(n.cores)
+    allow_ivf <- backend != "metal" || (!checkpoint && !resume && workers == 1L)
+    select <- function(allow) fastembedr_knn_selection(backend, data$nrow,
+        data$ncol, k, metric, target_recall, file_backed = TRUE,
+        allow_ivf = allow)
+    selection <- select(allow_ivf)
+    if (backend == "metal" && selection$method == "ivf" &&
+        !isTRUE(faissr_metal_file_ivf_plan_cpp(data, as.integer(k),
+            memory_bytes)$fits)) selection <- select(FALSE)
+    method <- switch(selection$method, exact = "exact", hnsw = "hnsw_sharded",
+        ivf = if (backend == "metal") "metal_ivf" else "ivf_sharded")
+    graph <- massive_full_knn_graph(data, k = k, output = output,
+        backend = backend, n.cores = workers,
         memory_limit = limit, method = method, devices = devices,
         checkpoint = checkpoint, resume = resume,
         checkpoint_every = checkpoint_every,
         target_recall = target_recall, audit_rows = audit_rows)
+    graph$knn_selection <- selection
+    graph
 }
 
 prepare_query_knn_inputs <- function(reference, query, backend) {
@@ -645,7 +550,8 @@ precompute_query_knn <- function(reference,
         n_reference = nrow(reference),
         n_query = nrow(query),
         p = ncol(reference),
-        target_recall = target_recall
+        target_recall = target_recall, k = k, metric = metric,
+        allow_ivf = backend != "cuda"
     )
     keep_gpu <- identical(backend, "cuda")
     result <- timed_do_call(run_precompute_query_knn, list(
@@ -671,8 +577,11 @@ run_faissr_cuda_resident_knn <- function(data, k, method, metric,
             call. = FALSE
         )
     }
-    exact <- method %in% c("exact", "flat", "bruteforce") ||
-        (method == "auto" && nrow(data) < 100000L)
+    if (method == "auto") {
+        method <- fastembedr_embedding_nn_policy("cuda", nrow(data),
+            ncol(data), target_recall, k, metric)$method
+    }
+    exact <- method %in% c("exact", "flat", "bruteforce")
     if (exact) {
         return(run_faissr_cuda_resident_exact(
             data, k, metric, target_recall, retain_data))
@@ -1327,7 +1236,8 @@ fastembedr_nn_without_self <- function(data,
                 "`retain_data` requires `keep_gpu = TRUE`.",
                 call. = FALSE)
             resolved <- if (method == "auto") {
-                fastembedr_embedding_nn_policy("cuda", nrow(data))$method
+                fastembedr_embedding_nn_policy("cuda", nrow(data),
+                    ncol(data), target_recall, k, metric)$method
             } else if (method == "bruteforce") "exact" else method
             run_faissr_cuda_embedding_knn(
                 data, k, resolved, metric, output, target_recall
@@ -1338,9 +1248,10 @@ fastembedr_nn_without_self <- function(data,
         cpu = run_native_cpu_knn(
             data, k, method, metric, output, target_recall, n_threads
         ),
-        metal = run_faissr_metal_knn(
-            data, k, method, metric, output, target_recall
-        ),
+        metal = run_faissr_metal_knn(data, k,
+            if (method == "auto") fastembedr_embedding_nn_policy(
+                "metal", nrow(data), ncol(data), target_recall, k,
+                metric)$method else method, metric, output, target_recall),
         stop("Unknown native KNN backend: ", backend, call. = FALSE)
     )
 }
@@ -1378,6 +1289,11 @@ fastembedr_native_query_knn <- function(data, query, k,
     k <- integer_scalar(k)
     if (is.na(k) || k < 1L) {
         stop("`k` must be a positive integer.", call. = FALSE)
+    }
+    if (method == "auto") {
+        method <- fastembedr_query_nn_policy(backend, nrow(data), nrow(query),
+            ncol(data), target_recall, k, metric,
+            allow_ivf = backend != "cuda" || !keep_gpu)$method
     }
     if (identical(backend, "cuda")) {
         return(run_faissr_cuda_query_knn(
@@ -1463,9 +1379,8 @@ run_faissr_cuda_query_knn <- function(data, query, k, method, metric,
             call. = FALSE)
     }
     if (identical(method, "auto")) {
-        method <- fastembedr_cuda_query_method(
-            nrow(data), nrow(query), ncol(data)
-        )
+        method <- fastembedr_query_nn_policy("cuda", nrow(data), nrow(query),
+            ncol(data), target_recall, k, metric, allow_ivf = !keep_gpu)$method
     }
     if (!method %in% c("exact", "flat", "bruteforce", "ivf")) {
         stop("Unsupported faissR CUDA query KNN method.", call. = FALSE)

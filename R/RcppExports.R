@@ -281,6 +281,10 @@ project_embedding_affine_parallel_cpp <- function(reference_data_sexp, query_dat
     .Call(`_fastEmbedR_project_embedding_affine_parallel_cpp`, reference_data_sexp, query_data_sexp, reference_layout_sexp, projection_indices, projection_distances_sexp, max_neighbors, ridge, max_extrapolation, n_threads)
 }
 
+faissr_knn_select_cpp <- function(request) {
+    .Call(`_fastEmbedR_faissr_knn_select_cpp`, request)
+}
+
 faissr_matrix_knn_batch_cpp <- function(query, reference, row_ids, k, backend, method, reference_chunk, memory_limit, n_threads, exclude_self) {
     .Call(`_fastEmbedR_faissr_matrix_knn_batch_cpp`, query, reference, row_ids, k, backend, method, reference_chunk, memory_limit, n_threads, exclude_self)
 }

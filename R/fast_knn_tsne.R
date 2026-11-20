@@ -460,7 +460,7 @@ compute_tsne_matrix_knn <- function(
     if (is.null(nn)) {
         policy <- fastembedr_embedding_nn_policy(
             backend, n = n, p = ncol(x),
-            target_recall = target_recall)
+            target_recall = target_recall, k = n_neighbors, metric = metric)
         if (identical(policy$backend, "cuda")) {
             nn <- run_faissr_cuda_embedding_knn(
                 x, n_neighbors, policy$method, metric,

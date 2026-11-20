@@ -55,7 +55,8 @@ compute_graph_input_knn <- function(x, source, settings) {
     }
     policy <- fastembedr_embedding_nn_policy(
         settings$backend,
-        nrow(x), ncol(x), settings$target_recall
+        nrow(x), ncol(x), settings$target_recall,
+        k = min(settings$k, nrow(x) - 1L), metric = settings$metric
     )
     found <- graph_data_knn(x, settings, policy)
     list(

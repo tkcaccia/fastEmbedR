@@ -1216,6 +1216,17 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// faissr_knn_select_cpp
+Rcpp::List faissr_knn_select_cpp(Rcpp::List request);
+RcppExport SEXP _fastEmbedR_faissr_knn_select_cpp(SEXP requestSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::List >::type request(requestSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_knn_select_cpp(request));
+    return rcpp_result_gen;
+END_RCPP
+}
 // faissr_matrix_knn_batch_cpp
 Rcpp::List faissr_matrix_knn_batch_cpp(SEXP query, SEXP reference, Rcpp::NumericVector row_ids, int k, std::string backend, std::string method, int reference_chunk, double memory_limit, int n_threads, bool exclude_self);
 RcppExport SEXP _fastEmbedR_faissr_matrix_knn_batch_cpp(SEXP querySEXP, SEXP referenceSEXP, SEXP row_idsSEXP, SEXP kSEXP, SEXP backendSEXP, SEXP methodSEXP, SEXP reference_chunkSEXP, SEXP memory_limitSEXP, SEXP n_threadsSEXP, SEXP exclude_selfSEXP) {
@@ -3535,6 +3546,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_project_embedding_knn_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_knn_cpp, 3},
     {"_fastEmbedR_project_embedding_affine_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_cpp, 8},
     {"_fastEmbedR_project_embedding_affine_parallel_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_parallel_cpp, 9},
+    {"_fastEmbedR_faissr_knn_select_cpp", (DL_FUNC) &_fastEmbedR_faissr_knn_select_cpp, 1},
     {"_fastEmbedR_faissr_matrix_knn_batch_cpp", (DL_FUNC) &_fastEmbedR_faissr_matrix_knn_batch_cpp, 10},
     {"_fastEmbedR_faissr_matrix_knn_batch_devices_cpp", (DL_FUNC) &_fastEmbedR_faissr_matrix_knn_batch_devices_cpp, 8},
     {"_fastEmbedR_faissr_metal_file_ivf_plan_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_file_ivf_plan_cpp, 3},

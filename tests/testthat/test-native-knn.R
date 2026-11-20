@@ -644,6 +644,30 @@ test_that("one-call routing uses native CPU and Metal KNN", {
     )
 })
 
+test_that("faissR selects Flat for large wide GPU inputs", {
+    for (backend in c("cuda", "metal")) {
+        for (file_backed in c(FALSE, TRUE)) {
+            for (recall in c(0.90, 0.95, 0.99)) {
+                tuned <- fastembedr_knn_selection(backend, 1281167L, 1024L,
+                    30L, "euclidean", recall, file_backed = file_backed)
+                expect_identical(tuned$provider, "faissR")
+                expect_identical(tuned$method, "exact")
+                expect_identical(tuned$reason, "wide_gpu_flat")
+                expect_identical(tuned$target_recall, recall)
+            }
+        }
+        narrow <- fastembedr_knn_selection(backend, 1000000L, 64L, 30L,
+            "euclidean", 0.99, file_backed = TRUE)
+        expect_identical(narrow$method, "ivf")
+        resident <- fastembedr_embedding_nn_policy(
+            backend, 1281167L, 1024L, 0.99, k = 30L)
+        expect_identical(resident$method, "exact")
+    }
+    few <- fastembedr_embedding_nn_policy("cuda", 1000000L, 64L,
+        0.99, k = 8L)
+    expect_identical(few$method, "exact")
+})
+
 test_that("CUDA resident KNN never silently falls back", {
     expect_type(fastembedr_cuda_knn_available(), "logical")
     if (!isTRUE(fastembedr_cuda_knn_available()) &&

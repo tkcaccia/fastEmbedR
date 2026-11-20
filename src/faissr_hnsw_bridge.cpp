@@ -50,6 +50,14 @@ void validate_faissr_batch(Rcpp::List result, int rows, int k,
 }  // namespace
 
 // [[Rcpp::export]]
+Rcpp::List faissr_knn_select_cpp(Rcpp::List request) {
+  Rcpp::Function load_namespace =
+      Rcpp::Environment::base_env()["loadNamespace"];
+  load_namespace("faissR");
+  return faissR_get_knn_select_v1()(request);
+}
+
+// [[Rcpp::export]]
 Rcpp::List faissr_matrix_knn_batch_cpp(SEXP query, SEXP reference,
     Rcpp::NumericVector row_ids, int k, std::string backend,
     std::string method, int reference_chunk, double memory_limit,

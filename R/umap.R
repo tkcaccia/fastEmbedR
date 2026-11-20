@@ -238,7 +238,7 @@ compute_umap_matrix_knn <- function(x, nn, n_neighbors, metric, state,
         result <- if (is.null(nn)) {
             policy <- fastembedr_embedding_nn_policy(
                 state$backend, nrow(x), ncol(x),
-                state$target_recall)
+                state$target_recall, k = n_neighbors, metric = metric)
             if (identical(policy$backend, "cuda")) {
                 result <- run_faissr_cuda_embedding_knn(
                     x, as.integer(n_neighbors), policy$method, metric,

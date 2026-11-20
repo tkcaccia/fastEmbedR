@@ -168,7 +168,7 @@ prepare_tsne_transform_projection <- function(request, reference_layout) {
     k <- transform_embedding_k(k, nrow(data$reference))
     policy <- fastembedr_query_nn_policy(
         request$optimizer_backend, nrow(data$reference),
-        nrow(data$query), ncol(data$reference)
+        nrow(data$query), ncol(data$reference), k = k
     )
     raw <- fastembedr_native_query_knn(
         data$reference, data$query, k = k, metric = "euclidean",
@@ -529,7 +529,7 @@ landmark_projection_knn <- function(x_landmarks,
         n_reference = nrow(x_landmarks),
         n_query = nrow(x_query),
         p = ncol(x_landmarks),
-        target_recall = target_recall
+        target_recall = target_recall, k = k, metric = metric
     )
     result <- fastembedr_native_query_knn(
         x_landmarks,
