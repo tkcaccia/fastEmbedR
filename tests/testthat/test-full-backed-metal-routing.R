@@ -50,8 +50,7 @@ test_that("Metal reference shards use admitted memory on flow18", {
     expect_lte(plan$metal_buffer_bytes_estimate, 128 * 1024^2)
     bytes <- as.double(source$nrow) * source$ncol * 4
     expect_equal(plan$minimum_query_read_bytes, bytes)
-    expect_equal(plan$minimum_reference_read_bytes,
-        bytes * ceiling(source$nrow / plan$chunk_rows))
+    expect_equal(plan$minimum_reference_read_bytes, bytes)
 })
 
 test_that("one-call KNN stage forwards selected recall tier", {

@@ -293,6 +293,14 @@ faissr_matrix_knn_batch_devices_cpp <- function(query, reference, row_ids, k, re
     .Call(`_fastEmbedR_faissr_matrix_knn_batch_devices_cpp`, query, reference, row_ids, k, reference_chunk, memory_limit, exclude_self, devices)
 }
 
+faissr_metal_file_flat_build_cpp <- function(source, query_capacity, k, memory_limit) {
+    .Call(`_fastEmbedR_faissr_metal_file_flat_build_cpp`, source, query_capacity, k, memory_limit)
+}
+
+faissr_metal_file_flat_search_cpp <- function(pointer, query, k) {
+    .Call(`_fastEmbedR_faissr_metal_file_flat_search_cpp`, pointer, query, k)
+}
+
 faissr_metal_file_ivf_plan_cpp <- function(source, k, memory_limit) {
     .Call(`_fastEmbedR_faissr_metal_file_ivf_plan_cpp`, source, k, memory_limit)
 }

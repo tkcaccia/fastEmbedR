@@ -1265,6 +1265,33 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// faissr_metal_file_flat_build_cpp
+Rcpp::List faissr_metal_file_flat_build_cpp(SEXP source, int query_capacity, int k, double memory_limit);
+RcppExport SEXP _fastEmbedR_faissr_metal_file_flat_build_cpp(SEXP sourceSEXP, SEXP query_capacitySEXP, SEXP kSEXP, SEXP memory_limitSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type source(sourceSEXP);
+    Rcpp::traits::input_parameter< int >::type query_capacity(query_capacitySEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type memory_limit(memory_limitSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_metal_file_flat_build_cpp(source, query_capacity, k, memory_limit));
+    return rcpp_result_gen;
+END_RCPP
+}
+// faissr_metal_file_flat_search_cpp
+Rcpp::List faissr_metal_file_flat_search_cpp(SEXP pointer, SEXP query, int k);
+RcppExport SEXP _fastEmbedR_faissr_metal_file_flat_search_cpp(SEXP pointerSEXP, SEXP querySEXP, SEXP kSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type pointer(pointerSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type query(querySEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_metal_file_flat_search_cpp(pointer, query, k));
+    return rcpp_result_gen;
+END_RCPP
+}
 // faissr_metal_file_ivf_plan_cpp
 Rcpp::List faissr_metal_file_ivf_plan_cpp(SEXP source, int k, double memory_limit);
 RcppExport SEXP _fastEmbedR_faissr_metal_file_ivf_plan_cpp(SEXP sourceSEXP, SEXP kSEXP, SEXP memory_limitSEXP) {
@@ -3549,6 +3576,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_faissr_knn_select_cpp", (DL_FUNC) &_fastEmbedR_faissr_knn_select_cpp, 1},
     {"_fastEmbedR_faissr_matrix_knn_batch_cpp", (DL_FUNC) &_fastEmbedR_faissr_matrix_knn_batch_cpp, 10},
     {"_fastEmbedR_faissr_matrix_knn_batch_devices_cpp", (DL_FUNC) &_fastEmbedR_faissr_matrix_knn_batch_devices_cpp, 8},
+    {"_fastEmbedR_faissr_metal_file_flat_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_file_flat_build_cpp, 4},
+    {"_fastEmbedR_faissr_metal_file_flat_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_file_flat_search_cpp, 3},
     {"_fastEmbedR_faissr_metal_file_ivf_plan_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_file_ivf_plan_cpp, 3},
     {"_fastEmbedR_faissr_metal_file_ivf_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_file_ivf_cpp, 4},
     {"_fastEmbedR_faissr_posting_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_posting_search_cpp, 14},

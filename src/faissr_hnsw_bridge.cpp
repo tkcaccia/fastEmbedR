@@ -103,6 +103,25 @@ Rcpp::List faissr_matrix_knn_batch_devices_cpp(SEXP query, SEXP reference,
 }
 
 // [[Rcpp::export]]
+Rcpp::List faissr_metal_file_flat_build_cpp(SEXP source, int query_capacity,
+    int k, double memory_limit) {
+  Rcpp::List result = faissR_get_metal_file_flat_build_v1()(source,
+    Rcpp::wrap(query_capacity), Rcpp::wrap(k), Rcpp::wrap(memory_limit));
+  if (Rcpp::as<std::string>(result["backend_used"]) !=
+        "faissr_native_metal_flat_index" ||
+      !std::isfinite(Rcpp::as<double>(result["owned_buffer_bytes"])) ||
+      Rcpp::as<double>(result["owned_buffer_bytes"]) <= 0) {
+    Rcpp::stop("faissR did not build the native Metal Flat reference");
+  }
+  return result;
+}
+
+// [[Rcpp::export]]
+Rcpp::List faissr_metal_file_flat_search_cpp(SEXP pointer, SEXP query, int k) {
+  return faissR_get_metal_file_flat_search_v1()(pointer, query, Rcpp::wrap(k));
+}
+
+// [[Rcpp::export]]
 Rcpp::List faissr_metal_file_ivf_plan_cpp(SEXP source, int k,
     double memory_limit) {
   Rcpp::Function load_namespace =

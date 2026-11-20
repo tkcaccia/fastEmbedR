@@ -107,7 +107,7 @@ pilots. Other file-backed routes currently require \code{0.99}.}
 A validated \code{fastEmbedR_massive_graph} descriptor.
 }
 \description{
-Exact CPU and Metal search scans all reference blocks for each query block.
+Exact CPU search scans all reference blocks for each query block.
 \code{method = "hnsw_sharded"} builds one persistent faissR CPU HNSW index
 per reference shard, searches all query blocks against it, and merges
 candidates into the file-backed output. It is approximate; its target
@@ -127,10 +127,9 @@ shards; request \code{audit_rows} to measure sampled full-graph ID recall.
 Each shard pilot compares up to 256 fixed query rows with a faissR
 CPU Flat reference and gates distance and minimum row ID recall.
 It does not guarantee untouched rows. CUDA search never falls back.
-Metal exact search reads bounded float32 reference and query batches,
-executes the existing native Metal query kernel, and merges global IDs
-into the same file-backed graph. It streams reference shards into a
-shared Metal buffer for each query batch.
+Metal exact search reads each reference shard once into Metal shared
+memory and searches it against successive float32 query blocks.
+It merges global IDs into the same file-backed graph.
 Metal \code{method = "metal_ivf"} reads a float32 file once and builds a
 transient native IVF index when conservative RAM and Metal budgets fit.
 It fails rather than switching algorithms if the budget or pilot misses.

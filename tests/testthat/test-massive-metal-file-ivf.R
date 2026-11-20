@@ -28,14 +28,14 @@ test_that("file-backed Metal IVF completes one native graph", {
         4096 * 5 * 4)
     expect_equal(file.info(graph$distances_path)$size,
         4096 * 5 * 4)
-    automatic <- precompute_knn(source, k = 5L,
+    automatic <- precompute_knn(source, k = 9L,
         backend = "metal", output = file.path(directory, "automatic"),
         memory_limit = "512MB", target_recall = 0.9)
     expect_identical(automatic$method,
         "faissr_native_metal_ivf_file")
-    bounded <- precompute_knn(source, k = 5L,
+    bounded <- precompute_knn(source, k = 9L,
         backend = "metal", output = file.path(directory, "bounded"),
         memory_limit = "256MB", target_recall = 0.9)
     expect_identical(bounded$method,
-        "faissr_native_metal_exact_file_batch")
+        "faissr_native_metal_flat_sharded")
 })

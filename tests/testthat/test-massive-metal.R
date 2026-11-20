@@ -14,25 +14,38 @@ test_that("file-backed Metal exact KNN matches streamed CPU search", {
     input <- tempfile(fileext = ".f32")
     cpu_prefix <- tempfile()
     metal_prefix <- tempfile()
+    resume_prefix <- tempfile()
     suffix <- c(".indices.u32", ".distances.f32")
     on.exit(unlink(c(input, paste0(cpu_prefix, suffix),
         paste0(metal_prefix, suffix),
-        paste0(metal_prefix, ".checkpoint.rds"))))
+        paste0(metal_prefix, ".checkpoint.rds"),
+        paste0(resume_prefix, suffix), paste0(resume_prefix, suffix, ".part"),
+        paste0(resume_prefix, ".checkpoint.rds"))))
     writeBin(as.numeric(t(values)), input, size = 4L,
         endian = "little")
     source <- massive_matrix(input, nrow(values), ncol(values))
     cpu <- massive_full_knn_graph(source, 4L, cpu_prefix,
         backend = "cpu", method = "exact", chunk_rows = 7L,
         reference_chunk_rows = 11L, memory_limit = "256MB")
-    metal <- massive_full_knn_graph(source, 4L, metal_prefix,
+    builds <- 0L
+    build <- fastEmbedR:::faissr_metal_file_flat_build_cpp
+    metal <- testthat::with_mocked_bindings(massive_full_knn_graph(
+        source, 4L, metal_prefix,
         backend = "metal", method = "exact", chunk_rows = 7L,
         reference_chunk_rows = 11L, memory_limit = "256MB",
-        checkpoint = TRUE, audit_rows = 8L)
+        checkpoint = TRUE, audit_rows = 8L),
+        faissr_metal_file_flat_build_cpp = function(...) {
+            builds <<- builds + 1L
+            build(...)
+        }, .package = "fastEmbedR")
     observed <- massive_read_graph_edges(metal, 1L, nrow(values))
     expected <- massive_read_graph_edges(cpu, 1L, nrow(values))
     expect_identical(metal$backend, "metal")
     expect_identical(metal$method,
-        "faissr_native_metal_exact_file_batch")
+        "faissr_native_metal_flat_sharded")
+    expect_identical(builds, metal$resources$n_shards)
+    expect_true(metal$index_reused)
+    expect_gt(metal$resources$observed_metal_owned_buffer_peak_bytes, 0)
     expect_identical(metal$knn_provider, "faissR")
     expect_identical(metal$residency, "file-backed")
     expect_identical(metal$device_ids, 0L)
@@ -46,6 +59,25 @@ test_that("file-backed Metal exact KNN matches streamed CPU search", {
     expect_identical(observed$to, expected$to)
     expect_equal(observed$distance, expected$distance,
         tolerance = 1e-3)
+    run <- function(resume) massive_full_knn_graph(source, 4L, resume_prefix,
+        backend = "metal", method = "exact", chunk_rows = 7L,
+        reference_chunk_rows = 11L, memory_limit = "256MB",
+        checkpoint = TRUE, checkpoint_every = 1L, resume = resume)
+    calls <- 0L
+    batch <- fastEmbedR:::massive_sharded_batch
+    expect_error(testthat::with_mocked_bindings(run(FALSE),
+        massive_sharded_batch = function(...) {
+            calls <<- calls + 1L
+            if (calls == 8L) stop("injected interruption")
+            batch(...)
+        }, .package = "fastEmbedR"), "injected interruption")
+    saved <- readRDS(paste0(resume_prefix, ".checkpoint.rds"))
+    expect_equal(saved$shard, 1L)
+    expect_equal(saved$completed_rows, 7L)
+    resumed <- run(TRUE)
+    expect_true(resumed$resumed)
+    expect_equal(massive_read_graph_edges(resumed, 1L, nrow(values)),
+        observed)
 })
 
 test_that("Metal exact query batches respect faissR's native limit", {
