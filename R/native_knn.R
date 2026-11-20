@@ -117,6 +117,7 @@ fastembedr_knn_provenance <- function(nn) {
         provider = field("knn_provider") %||% field("provider"),
         backend_used = field("backend_used") %||%
             field("execution_backend") %||% field("backend"),
+        selection = field("knn_selection"),
         target_recall = field("target_recall"),
         measured_recall = field("measured_recall"),
         recall_status = field("recall_status"),
@@ -166,6 +167,7 @@ fastembedr_resident_knn_policy <- function(selection) {
         policy$tuning <- "auto"
         policy <- policy[c("backend", "method", "tuning", "target_recall")]
     }
+    policy$selection <- selection
     policy
 }
 
@@ -235,6 +237,7 @@ finish_precomputed_knn <- function(out, metadata, policy, elapsed) {
     out$backend_requested <- metadata$backend
     out$execution_backend <- metadata$backend
     out$knn_provider <- "faissR"
+    out$knn_selection <- policy$selection
     out$engine <- fastembedr_nn_policy_engine(
         policy, keep_gpu, metadata$metric
     )
@@ -361,6 +364,8 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #'   `indices` and `distances`; resident CUDA results additionally inherit
 #'   from `fastEmbedR_gpu_knn` and own device-resident buffers. Resident
 #'   results record `knn_provider = "faissR"` and the selected engine.
+#'   Both storage modes return `knn_selection` with the method, selection
+#'   reason, shape group, and requested recall tier reported by faissR.
 #' @examples
 #' x <- scale(as.matrix(iris[, 1:4]))
 #' knn <- precompute_knn(x, k = 15, backend = "cpu", n.cores = 2)
@@ -511,7 +516,8 @@ run_precompute_query_knn <- function(reference, query, k, metric,
 #' by landmark UMAP and t-SNE transformations.
 #'
 #' @return A `fastEmbedR_knn` object with one row per query observation and
-#'   one-based indices into `reference`.
+#'   one-based indices into `reference`. Its `knn_selection` field records
+#'   the method, selection reason, shape group, and requested recall tier.
 #' @examples
 #' x <- scale(as.matrix(iris[, 1:4]))
 #' ref <- x[1:100, , drop = FALSE]

@@ -73,6 +73,8 @@ A resident \code{fastEmbedR_knn} object, or a file-backed
 \code{indices} and \code{distances}; resident CUDA results additionally inherit
 from \code{fastEmbedR_gpu_knn} and own device-resident buffers. Resident
 results record \code{knn_provider = "faissR"} and the selected engine.
+Both storage modes return \code{knn_selection} with the method, selection
+reason, shape group, and requested recall tier reported by faissR.
 }
 \description{
 \code{precompute_knn()} exposes the same nearest-neighbor search

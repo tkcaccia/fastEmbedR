@@ -37,7 +37,8 @@ not a guarantee of measured recall. Exact search remains exact.}
 }
 \value{
 A \code{fastEmbedR_knn} object with one row per query observation and
-one-based indices into \code{reference}.
+one-based indices into \code{reference}. Its \code{knn_selection} field records
+the method, selection reason, shape group, and requested recall tier.
 }
 \description{
 \code{precompute_query_knn()} searches a fixed reference matrix for every row of
