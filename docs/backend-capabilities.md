@@ -138,9 +138,9 @@ exposes complete read-only CSR files as Metal buffers. Streamed mode maps
 the files on the host and uploads bounded graph chunks to Metal; its
 layout, optimizer state, and FFT workspace remain in memory. This is
 bounded graph upload, not a fully streamed fit. Large file-backed Metal
-one-call UMAP and t-SNE use CPU HNSW for KNN preparation above 5,000 rows;
-the public result records the actual backend, method, and resource estimates
-by stage. File-backed UMAP quality must be tested separately from the
+one-call UMAP and t-SNE prepare neighbors on Metal. The public result records
+the backend, method, and resource estimates by stage. File-backed UMAP
+quality must be tested separately from the
 resident 2D UMAP repair. A 70,000-row Mac
 mapped/streamed comparison and small checkpoint-resume tests passed;
 the 2D route also passed paired 5,000-row quality checks on three seeds;
@@ -160,8 +160,11 @@ checks. Resident wide UMAP has no optimizer checkpoint or mid-fit resume;
 the separate file-backed route supports validated recovery. No Metal
 multi-GPU path is claimed on this single-GPU Mac.
 
-Metal one-call KNN uses exact search below the internal size threshold and
-IVF-Flat above it. Large, high-dimensional IVF searches use a 128-dimensional
+Metal one-call KNN uses the faissR selector to choose Flat or IVF-Flat.
+The selector accounts for the data dimensions, neighbor count, recall tier,
+and supported Metal routes. File-backed Flat holds one shared-memory
+reference shard across query blocks. Metal IVF needs a passing capacity
+check for file-backed input. Large IVF searches use a 128-dimensional
 signed float32 projection, four native centroid passes, a four-SIMD-group
 projected shortlist, and full-dimensional exact reranking. The shortlist grows
 internally from 288 to 384 or 512 candidates when needed. Four deterministic
@@ -170,10 +173,9 @@ safety fallback. Failure to reach the requested pilot recall is reported
 instead of silently switching to CPU.
 
 Exact Metal search caches rows in threadgroup memory through 1,024 dimensions.
-For small data with up to 16,384 dimensions, a mathematically identical
-global-memory kernel avoids that fixed cache; Metal IVF remains limited to
-1,024 input dimensions. These routes fail explicitly outside their supported
-domain.
+The global-memory Flat kernel supports up to 16,384 columns. Metal IVF
+supports up to 1,024 columns and uses 32-bit buffer offsets. Flat addresses
+buffers with 64-bit offsets. Unsupported shapes raise an error.
 
 Resident 2D Metal UMAP uses an ordered, single-thread CPU warm stage followed
 by the native `atomic_inplace` Metal optimizer. The public result records both

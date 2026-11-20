@@ -76,37 +76,32 @@ results record \code{knn_provider = "faissR"} and the selected engine.
 }
 \description{
 \code{precompute_knn()} exposes the same nearest-neighbor search
-used internally by \code{\link[=umap]{umap()}} and \code{\link[=tsne]{tsne()}}. The search algorithm is chosen
-by fastEmbedR for the requested backend and is deliberately not a user
-parameter.
+used internally by \code{\link[=umap]{umap()}} and \code{\link[=tsne]{tsne()}}. The native faissR selector
+chooses the search method for the requested backend.
 }
 \details{
-CPU uses faissR Flat exact search below 5,000 observations and
-faissR's compiled FAISS HNSW interface for Euclidean distance otherwise.
-Euclidean resident HNSW audits a full-reference pilot and increases
-search effort when needed; it fails if the pilot misses the target.
-Cosine and correlation use faissR HNSW with shape-based tuning and
-report recall as unaudited. Metal uses native exact
-search below
-4,096 rows and for inputs with at most 50,000 rows, 16,384 columns, and
-125 billion row-pair feature operations; otherwise it uses recall-tuned
-IVF-Flat. CUDA uses faissR's native FAISS GPU exact search below 100,000
-observations and IVF-Flat above that threshold. Approximate Metal and CUDA
-routes use an internal
-recall tier and report whether their pilot audit met it.
-File-backed approximate CPU HNSW and CUDA IVF use the selected recall
-tier for tuning; exact routes report exact search by construction.
-A requested tier is not a measured recall guarantee.
+For resident inputs, CPU uses Flat below 5,000 observations and
+HNSW for larger inputs. Euclidean HNSW checks a full-reference pilot.
+Cosine and correlation use shape-based HNSW tuning and report recall as
+unaudited. CUDA and Metal choose between Flat and IVF-Flat according to
+the input shape, search effort, and backend limits. The policy uses \code{k}
+and \code{target_recall} where they affect the available search. For GPU
+inputs with at least 500,000 rows and 256 columns, a target of 0.99
+selects Flat. Inputs with at least 500,000 rows and 1,024 columns select
+Flat at all three tiers.
+
+Approximate search uses the requested tier to tune search effort. Pilot
+and sampled recall refer to the rows checked. Exact routes report exact
+search by construction.
 
 A file-backed descriptor uses bounded KNN graph construction and writes
-indices and distances under \code{output}. CPU selects exact search up to 5,000
-rows when estimated pair-feature work is at most 125 billion, and sharded
-HNSW otherwise. CUDA selects exact search below 100,000 rows under the same
-work limit and sharded IVF-Flat otherwise. Metal selects native IVF when
-faissR's host and Metal capacity check passes and checkpointing is off;
-it otherwise selects bounded exact search. An IVF pilot miss is an error,
-not a silent switch
-to exact search. File-backed KNN supports Euclidean distance only. The
+indices and distances under \code{output}. CPU uses Flat up to 5,000 rows if
+estimated pair-feature work is at most 125 billion, and sharded HNSW
+otherwise. CUDA and Metal use the native selector. On one GPU, file-backed
+Flat holds one reference shard at a time and reuses it across query
+batches. Metal IVF requires a passing capacity check and checkpointing to
+be off. A failed IVF pilot raises an error. File-backed KNN supports
+Euclidean distance. The
 result is a \code{fastEmbedR_massive_graph} descriptor; construct UMAP fuzzy
 weights or t-SNE affinities from it before full-graph fitting.
 

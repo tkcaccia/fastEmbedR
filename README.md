@@ -86,16 +86,13 @@ UMAP graph starts a new fit; it does not resume an interrupted optimizer.
 
 For the one-call functions `tsne()` and `umap()`, the embedding backend is
 deliberately limited to `backend = "cpu"`, `"metal"`, or `"cuda"`. Internal
-CPU one-call embeddings use faissR Flat exact search below
-5,000 observations and HNSW otherwise. The HNSW route uses a metric-, shape-,
-and `k`-aware target-0.99 tuning policy. Metal uses native exact search below
-4,096 rows and for inputs up to 50,000 rows and 16,384 columns when the
-estimated search work is at most 125 billion row-pair feature operations.
-It uses recall-tuned IVF-Flat otherwise.
-One-call CUDA matrix KNN uses faissR FAISS GPU Flat below 100,000 rows and
-IVF-Flat above that threshold; its host neighbors feed UMAP or t-SNE.
-Resident `precompute_knn()` uses faissR's device-resident FAISS GPU route.
-No unavailable GPU backend is silently relabelled as CPU.
+CPU one-call embeddings use faissR Flat below 5,000 observations and HNSW
+otherwise. The native faissR selector chooses Flat or IVF-Flat for CUDA
+and Metal using the input shape, neighbor count, recall tier, and backend
+limits. The default 0.99 tier selects Flat for GPU inputs with at least
+500,000 rows and 256 columns. The 1,024-feature ImageNet input selects Flat
+at every supported tier. Single-GPU file-backed Flat reuses each reference
+shard across query batches. An unavailable GPU backend raises an error.
 
 ## Quick Start
 

@@ -150,26 +150,23 @@ The native result reports mean and minimum identity recall across the pilot
 rows and the largest approximate-to-exact kth-distance ratio. The requested
 recall target applies to the pilot mean; it does not certify every row.
 
-For reproducibility, the one-call API fixes only the requested KNN device class
-and a small/large data policy:
+The one-call API delegates method selection to a private native faissR
+interface. The selector receives the requested backend, reference and query
+dimensions, `k`, recall tier, metric, and eligible storage routes.
 
-- CPU one-call embeddings use faissR Flat KNN below 5,000 observations and
-  faissR HNSW otherwise. Metal uses native exact KNN below 4,096 observations,
-  or up to 50,000 rows and 16,384 columns when the exhaustive work is
-  at most 125 billion row-pair feature operations. It uses recall-tuned
-  IVF-Flat otherwise.
-- CUDA one-call embeddings use faissR FAISS GPU Flat below 100,000 samples
-  and IVF-Flat at or above 100,000 samples. Input is converted
-  once to the row-major float32 layout expected by cuVS. IVF starts from a
-  deterministic shape rule, compares evenly spaced pilot queries against a
-  cuVS exact oracle, and expands `nprobe` until it reaches the requested recall
-  tier with a small safety margin. It records pilot recall, `nlist`, `nprobe`,
-  and the number of tuning attempts.
-- cuVS writes int64 row-major search output on the device. One package CUDA
-  kernel removes self-neighbors, converts indices to int32/one-based form,
-  transforms squared distances, and packs the result directly into the
-  column-major device layout consumed by UMAP and t-SNE. No KNN matrix is
-  materialized in R during a one-call CUDA embedding.
+- Resident CPU uses faissR Flat below 5,000 observations and HNSW otherwise.
+- CUDA and Metal use native Flat or IVF-Flat. At 0.99 recall, inputs with
+  at least 500,000 rows and 256 columns select Flat. Inputs with at least
+  500,000 rows and 1,024 columns select Flat at every supported tier.
+  Approximate routes record the tuning settings and the scope of their
+  recall checks.
+- Single-GPU file-backed Flat builds each reference shard once and reuses it
+  across bounded query batches. The graph records the actual backend and
+  method. Metal IVF requires sufficient shared memory and a run without
+  checkpointing.
+- Resident `precompute_knn()` on CUDA retains device-resident neighbor
+  buffers when the device is selected implicitly. The result records its
+  storage and the downstream KNN interface can reuse it.
 - KNN-input functions accept the index and distance matrices as already
   measured data and do not repeat neighbor search.
 

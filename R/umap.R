@@ -30,10 +30,8 @@
 #' @param backend Execution backend: `"cpu"`, `"cuda"`, or `"metal"`. CPU KNN
 #'   uses faissR Flat exact search below 5,000 rows, FAISS HNSW for larger
 #'   Euclidean searches, and faissR HNSW for other supported metrics.
-#'   Metal KNN uses faissR's native exact or IVF-Flat route. CUDA matrix KNN
-#'   uses faissR FAISS GPU Flat below 100,000 rows or IVF-Flat above that
-#'   threshold, then passes host neighbors to graph construction.
-#'   Multiple devices request FAISS GPU replicas.
+#'   For Metal and CUDA, faissR selects native Flat or IVF-Flat as described
+#'   in [precompute_knn()]. Resident CUDA fits can request multiple devices.
 #'   Resident 2D Metal fits with at least 100,000 rows and integer CSR
 #'   offsets optimize a compact edge list on Metal for all epochs.
 #'   Smaller 2D fits with ordinary CSR rows use one CPU thread for the
@@ -44,8 +42,8 @@
 #'   File-backed full-graph Metal UMAP runs its main optimizer on Metal,
 #'   followed by a bounded one-thread CPU refinement: 25 epochs in 2D or
 #'   50 epochs in 3D. Both stages and their times are recorded in the fit.
-#'   Its one-call file-backed route prepares exact neighbors with faissR's
-#'   native Metal batches. `fit$pipeline$stage_backend` and `knn_method`
+#'   Its one-call file-backed route prepares neighbors with faissR's
+#'   native Metal search. `fit$pipeline$stage_backend` and `knn_method`
 #'   record the KNN and optimizer stages separately.
 #' @param n.cores Requested CPU core count. For matrix input, the value is
 #'   passed to CPU PCA preprocessing, KNN, and UMAP. UMAP accepts up to 32

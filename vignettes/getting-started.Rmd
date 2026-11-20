@@ -664,10 +664,10 @@ par(old_par)
 
 CPU uses exhaustive exact query-to-reference search below 5,000 reference
 rows and compiled faissR HNSW for larger Euclidean searches. Other CPU
-metrics use native HNSW. Metal uses native exact search for small
-references and recall-tuned IVF-Flat for larger references, followed by
-fixed-reference transforms. CUDA uses native exact or IVF-Flat query search
-and keeps KNN, layouts, and refinement buffers resident on the GPU. The result
+metrics use native HNSW. On Metal and CUDA the native faissR selector uses the
+reference dimensions, query count, neighbor count, and recall tier to choose
+an available search method. Metal file-backed landmark projection uses Flat
+search. The result
 records landmark count, fraction, projection backend, and
 separate reference, query-KNN, and transform timings so a landmark
 approximation cannot be mistaken for a full embedding.
