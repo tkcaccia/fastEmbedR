@@ -32,7 +32,7 @@ jobs:
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           extra-packages: |
-            github::tkcaccia/faissR@c1bc810b234940de38a9eae86d800d4b26bdbf72
+            github::tkcaccia/faissR@66bc7652451e8a54c3af27e6794def9cbfec39e1
             any::pkgdown
             local::.
           needs: website

@@ -17,6 +17,12 @@ correlation HNSW remain package-native.
 
 Install faissR first, following its
 [installation guide](https://github.com/tkcaccia/faissR/blob/main/docs/installation.md).
+The development checks use
+[`66bc765`](https://github.com/tkcaccia/faissR/commit/66bc7652451e8a54c3af27e6794def9cbfec39e1),
+which provides the private C++ selector and file-backed Flat interfaces.
+Use this revision for a matched development installation even when an
+older build has the same package version.
+
 The required faissR release must be available in the Bioconductor software
 repository or CRAN before submitting fastEmbedR to CRAN. A Bioconductor
 submission under review does not yet satisfy this requirement.

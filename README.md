@@ -216,10 +216,13 @@ fixed seed; the result reports this in `repeatability`.
 
 ## Installation
 
-For the development version:
+For the development version, install the faissR revision used in package checks.
+For an accelerator build, follow the backend setup in [Installation][installation]
+before installing the packages.
 
 ```r
 install.packages("remotes")
+remotes::install_github("tkcaccia/faissR@66bc7652451e8a54c3af27e6794def9cbfec39e1")
 remotes::install_github("tkcaccia/fastEmbedR")
 ```
 
