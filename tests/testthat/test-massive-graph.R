@@ -1017,8 +1017,8 @@ test_that("faissR CUDA exact KNN matches the streamed CPU graph", {
         backend = "cuda", chunk_rows = 7L,
         reference_chunk_rows = 13L, memory_limit = "512MB")
     expect_identical(gpu$backend, "cuda")
-    expect_identical(gpu$method, "faiss_gpu_flat_file_batch")
-    expect_identical(gpu$query_storage, "file_backed_float32")
+    expect_identical(gpu$method, "faiss_gpu_flat_sharded")
+    expect_identical(gpu$query_storage, "R_float32")
     expect_identical(gpu$knn_provider, "faissR")
     expect_true(gpu$exact)
     expect_gt(gpu$resources$n_shards, 1L)
@@ -1028,14 +1028,14 @@ test_that("faissR CUDA exact KNN matches the streamed CPU graph", {
     expect_identical(observed$to, reference$to)
     expect_equal(observed$distance, reference$distance,
         tolerance = 1e-4)
-    batch <- fastEmbedR:::faissr_matrix_knn_batch_cpp
+    batch <- fastEmbedR:::massive_sharded_batch
     calls <- 0L
     expect_error(testthat::with_mocked_bindings(
         massive_full_knn_graph(source, 5L, resumed_prefix,
             backend = "cuda", chunk_rows = 7L,
             reference_chunk_rows = 13L, memory_limit = "512MB",
             checkpoint = TRUE, checkpoint_every = 1L),
-        faissr_matrix_knn_batch_cpp = function(...) {
+        massive_sharded_batch = function(...) {
             calls <<- calls + 1L
             if (calls > 1L) stop("injected interruption")
             batch(...)
@@ -1047,6 +1047,7 @@ test_that("faissR CUDA exact KNN matches the streamed CPU graph", {
         reference_chunk_rows = 13L, memory_limit = "512MB",
         checkpoint = TRUE, resume = TRUE, checkpoint_every = 1L)
     expect_identical(resumed$backend, "cuda")
+    expect_true(resumed$index_reused)
     expect_identical(resumed$checkpoint_every, 1L)
     expect_true(resumed$resumed)
     expect_equal(massive_read_graph_edges(resumed, 1L, nrow(x)),

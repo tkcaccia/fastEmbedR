@@ -230,16 +230,24 @@ test_that("full-graph exact CUDA KNN uses faissR and excludes self", {
     on.exit(unlink(directory, recursive = TRUE))
     path <- file.path(directory, "data.f32")
     writeBin(as.vector(t(data)), path, size = 4L, endian = "little")
-    graph <- massive_full_knn_graph(
+    index_builds <- 0L
+    build <- fastEmbedR:::faissr_gpu_index_build_cpp
+    graph <- testthat::with_mocked_bindings(massive_full_knn_graph(
         massive_matrix(path, 43L, 5L), k = 5L,
         output = file.path(directory, "graph"), backend = "cuda",
         method = "exact", chunk_rows = 9L,
         reference_chunk_rows = 11L, memory_limit = "256MB",
         audit_rows = 5L
-    )
-    expect_identical(graph$method, "faiss_gpu_flat_file_batch")
+    ), faissr_gpu_index_build_cpp = function(...) {
+        index_builds <<- index_builds + 1L
+        build(...)
+    }, .package = "fastEmbedR")
+    expect_identical(graph$method, "faiss_gpu_flat_sharded")
+    expect_identical(index_builds, graph$resources$n_shards)
+    expect_true(graph$index_reused)
+    expect_equal(graph$resources$minimum_reference_read_bytes, 43 * 5 * 4)
     expect_identical(graph$knn_provider, "faissR")
-    expect_identical(graph$query_storage, "file_backed_float32")
+    expect_identical(graph$query_storage, "R_float32")
     expect_true(graph$exact)
     expect_true(graph$recall_audited)
     expect_equal(graph$observed_recall, 1)

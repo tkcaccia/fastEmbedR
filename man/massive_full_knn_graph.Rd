@@ -107,7 +107,7 @@ pilots. Other file-backed routes currently require \code{0.99}.}
 A validated \code{fastEmbedR_massive_graph} descriptor.
 }
 \description{
-Exact search scans all reference blocks for each query block.
+Exact CPU and Metal search scans all reference blocks for each query block.
 \code{method = "hnsw_sharded"} builds one persistent faissR CPU HNSW index
 per reference shard, searches all query blocks against it, and merges
 candidates into the file-backed output. It is approximate; its target
@@ -118,10 +118,10 @@ its native faissR index until that shard is complete. Resume checks
 the index file hash and a fixed search probe before reusing it.
 The result records build threads in \code{hnsw_settings} and the time to
 reload an index in \code{index_load_seconds}.
-CUDA \code{method = "exact"} builds and queries bounded faissR GPU Flat shards.
-It also scans the full query source per shard, so this exact route is a
-correctness baseline rather than a billion-row ANN solution. A CUDA
-\code{method = "ivf_sharded"} uses a persistent faissR GPU IVF-Flat index
+CUDA \code{method = "exact"} on one device builds one persistent faissR GPU
+Flat index per reference shard and reuses it across all query blocks.
+Multiple CUDA devices build sharded Flat indexes for each query block.
+CUDA \code{method = "ivf_sharded"} uses a persistent faissR GPU IVF-Flat index
 within each shard on one device. It remains approximate across
 shards; request \code{audit_rows} to measure sampled full-graph ID recall.
 Each shard pilot compares up to 256 fixed query rows with a faissR
@@ -129,8 +129,8 @@ CPU Flat reference and gates distance and minimum row ID recall.
 It does not guarantee untouched rows. CUDA search never falls back.
 Metal exact search reads bounded float32 reference and query batches,
 executes the existing native Metal query kernel, and merges global IDs
-into the same file-backed graph. It re-uploads each reference shard for
-every query batch; this is a correctness route, not an ANN index.
+into the same file-backed graph. It streams reference shards into a
+shared Metal buffer for each query batch.
 Metal \code{method = "metal_ivf"} reads a float32 file once and builds a
 transient native IVF index when conservative RAM and Metal budgets fit.
 It fails rather than switching algorithms if the budget or pilot misses.

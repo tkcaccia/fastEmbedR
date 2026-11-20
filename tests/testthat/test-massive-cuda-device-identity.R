@@ -118,7 +118,8 @@ test_that("exact file-backed CUDA KNN uses faissR on one device", {
         target_recall = 0.90, chunk_rows = 16L,
         reference_chunk_rows = 40L, memory_limit = "512MB",
         audit_rows = 12L)
-    expect_identical(graph$method, "faiss_gpu_flat_file_batch")
+    expect_identical(graph$method, "faiss_gpu_flat_sharded")
+    expect_true(graph$index_reused)
     expect_identical(graph$knn_provider, "faissR")
     expect_identical(graph$device_ids, 0L)
     expect_true(graph$exact)

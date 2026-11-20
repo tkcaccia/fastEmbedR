@@ -1116,7 +1116,8 @@ massive_full_knn_device_request <- function(x, k, output, backend,
     previous <- massive_cuda_memory_cpp()$device
     on.exit(massive_cuda_select_cpp(previous), add = TRUE)
     massive_cuda_select_cpp(devices[[1L]])
-    graph <- if (method == "exact") massive_full_knn_exact(
+    graph <- if (method == "exact" && length(devices) > 1L)
+        massive_full_knn_exact(
         x, k, output, n.cores, chunk_rows, reference_chunk_rows,
         memory_limit, checkpoint, resume, audit_rows,
         checkpoint_every, target_recall, "cuda",
