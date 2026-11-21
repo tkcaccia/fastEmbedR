@@ -668,6 +668,63 @@ test_that("faissR selects Flat for large wide GPU inputs", {
     expect_identical(few$method, "exact")
 })
 
+test_that("CAGRA selection is explicit and limited to wide CUDA self KNN", {
+    previous <- options(fastEmbedR.cuda_knn_method = "cagra")
+    on.exit(options(previous))
+    select <- function(backend = "cuda", n = 1281167L,
+            method_metric = "euclidean", file_backed = FALSE) {
+        fastembedr_knn_selection(backend, n, 1024L, 30L, method_metric,
+            0.95, file_backed = file_backed)
+    }
+    expect_identical(select()$method, "cagra")
+    expect_identical(select()$provider, "faissR")
+    expect_identical(select(file_backed = TRUE)$method, "cagra")
+    expect_identical(select(backend = "metal")$method, "exact")
+    expect_error(select(n = 4096L), "at least 500,000 rows")
+    expect_error(select(method_metric = "cosine"), "Euclidean")
+    options(fastEmbedR.cuda_knn_method = "cagra_width4")
+    expect_identical(select()$method, "cagra_width4")
+    expect_error(run_faissr_cuda_embedding_knn(matrix(1), 1L,
+        "cagra_width4", "euclidean", "float", 0.95, devices = 1L),
+        "requires CUDA device 0")
+})
+
+test_that("resident CAGRA directs explicit multiple devices to faissR", {
+    local_mocked_bindings(
+        faissr_cuvs_multi_cagra_cpp = function(request) {
+            expect_identical(request$devices, c(0L, 1L))
+            expect_identical(request$width, 4L)
+            expect_identical(request$queue, 512L)
+            expect_false(request$nn_descent)
+            list(backend_used = "cuda_cuvs_multi_cagra",
+                devices = request$devices, exact = FALSE,
+                indices = matrix(c(2L, 1L), 2L),
+                distances = matrix(c(1, 1), 2L))
+        },
+        .package = "fastEmbedR"
+    )
+    out <- run_faissr_cuda_embedding_knn(matrix(c(1, 2), 2L), 1L,
+        "cagra_width4", "euclidean", "double", 0.95, devices = c(1L, 0L))
+    expect_identical(out$backend_used, "cuda_cuvs_multi_cagra")
+    expect_identical(out$target_recall, 0.95)
+    expect_false(out$recall_audited)
+    expect_true(is.na(out$target_met))
+})
+
+test_that("Metal CAGRA selection covers resident and file-backed self KNN", {
+    previous <- options(fastEmbedR.metal_knn_method = "cagra")
+    on.exit(options(previous))
+    select <- function(file, p = 32L, metric = "euclidean") {
+        fastembedr_knn_selection("metal", 4097L, p, 30L, metric,
+            0.95, file_backed = file)
+    }
+    expect_identical(select(FALSE)$method, "cagra")
+    expect_identical(select(TRUE)$method, "cagra")
+    expect_identical(select(TRUE)$provider, "faissR")
+    expect_error(select(TRUE, 1025L), "up to 1024 features")
+    expect_error(select(FALSE, metric = "cosine"), "Euclidean")
+})
+
 test_that("CUDA resident KNN never silently falls back", {
     expect_type(fastembedr_cuda_knn_available(), "logical")
     if (!isTRUE(fastembedr_cuda_knn_available()) &&

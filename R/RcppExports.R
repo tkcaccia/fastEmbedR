@@ -369,6 +369,10 @@ faissr_gpu_index_set_nprobe_cpp <- function(index, nprobe) {
     .Call(`_fastEmbedR_faissr_gpu_index_set_nprobe_cpp`, index, nprobe)
 }
 
+faissr_cuvs_multi_cagra_cpp <- function(arguments) {
+    .Call(`_fastEmbedR_faissr_cuvs_multi_cagra_cpp`, arguments)
+}
+
 faissr_metal_knn_cpp <- function(data, k, method, metric, target_recall) {
     .Call(`_fastEmbedR_faissr_metal_knn_cpp`, data, k, method, metric, target_recall)
 }

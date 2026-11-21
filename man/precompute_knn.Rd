@@ -70,8 +70,8 @@ The returned graph reports measured sampled recall separately from
 \value{
 A resident \code{fastEmbedR_knn} object, or a file-backed
 \code{fastEmbedR_massive_graph} descriptor. Resident host results contain
-\code{indices} and \code{distances}; resident CUDA results additionally inherit
-from \code{fastEmbedR_gpu_knn} and own device-resident buffers. Resident
+\code{indices} and \code{distances}. CUDA results with device-resident buffers
+also inherit from \code{fastEmbedR_gpu_knn}. Resident
 results record \code{knn_provider = "faissR"} and the selected engine.
 Both storage modes return \code{knn_selection} with the method, selection
 reason, shape group, and requested recall tier reported by faissR.
@@ -107,9 +107,25 @@ Euclidean distance. The
 result is a \code{fastEmbedR_massive_graph} descriptor; construct UMAP fuzzy
 weights or t-SNE affinities from it before full-graph fitting.
 
-A resident CUDA result without explicit \code{devices} remains on the GPU and
-can be passed directly to \code{\link[=umap_knn]{umap_knn()}} or \code{\link[=tsne_knn]{tsne_knn()}} with
+Resident CUDA Flat and IVF results stay on the device when \code{devices} is
+omitted and can be passed directly to \code{\link[=umap_knn]{umap_knn()}} or \code{\link[=tsne_knn]{tsne_knn()}} with
 \code{backend = "cuda"}. An explicit device selection returns host matrices.
+Set \code{options(fastEmbedR.cuda_knn_method = "cagra")} to use faissR's
+cuVS CAGRA settings for the requested recall tier, or use
+\code{"cagra_width4"} to request a width-four graph search. These options
+apply to CUDA Euclidean KNN with at least 500,000 rows and
+256 columns and require a cuVS-enabled faissR build with CAGRA support.
+Resident CAGRA returns host neighbor matrices. File-backed CAGRA stages
+the source in batches, keeps one index on the GPU, and writes neighbors
+to disk. This route requires a capacity check and checkpointing off.
+Two or more explicit \code{devices} select sharded resident CUDA CAGRA
+with cuVS tree merging.
+The target tier describes the settings used. Supply audit rows to
+measure recall for a file-backed fit.
+Set \code{options(fastEmbedR.metal_knn_method = "cagra")} for native Metal
+CAGRA on resident or file-backed Euclidean input. This route requires
+at least 129 rows, up to 1,024 features, and up to 128 neighbors.
+A file-backed Metal CAGRA index uses shared memory on one device.
 CPU and Metal
 results contain one-based \code{indices} and \code{distances} matrices. Every result
 excludes the observation itself. An unavailable requested backend raises an

@@ -1569,6 +1569,17 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// faissr_cuvs_multi_cagra_cpp
+SEXP faissr_cuvs_multi_cagra_cpp(Rcpp::List arguments);
+RcppExport SEXP _fastEmbedR_faissr_cuvs_multi_cagra_cpp(SEXP argumentsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::List >::type arguments(argumentsSEXP);
+    rcpp_result_gen = Rcpp::wrap(faissr_cuvs_multi_cagra_cpp(arguments));
+    return rcpp_result_gen;
+END_RCPP
+}
 // faissr_metal_knn_cpp
 SEXP faissr_metal_knn_cpp(SEXP data, int k, std::string method, std::string metric, double target_recall);
 RcppExport SEXP _fastEmbedR_faissr_metal_knn_cpp(SEXP dataSEXP, SEXP kSEXP, SEXP methodSEXP, SEXP metricSEXP, SEXP target_recallSEXP) {
@@ -3595,6 +3606,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_faissr_gpu_index_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_index_build_cpp, 7},
     {"_fastEmbedR_faissr_gpu_index_search_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_index_search_cpp, 4},
     {"_fastEmbedR_faissr_gpu_index_set_nprobe_cpp", (DL_FUNC) &_fastEmbedR_faissr_gpu_index_set_nprobe_cpp, 2},
+    {"_fastEmbedR_faissr_cuvs_multi_cagra_cpp", (DL_FUNC) &_fastEmbedR_faissr_cuvs_multi_cagra_cpp, 1},
     {"_fastEmbedR_faissr_metal_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_knn_cpp, 5},
     {"_fastEmbedR_faissr_metal_query_knn_cpp", (DL_FUNC) &_fastEmbedR_faissr_metal_query_knn_cpp, 6},
     {"_fastEmbedR_faissr_hnsw_index_build_cpp", (DL_FUNC) &_fastEmbedR_faissr_hnsw_index_build_cpp, 8},

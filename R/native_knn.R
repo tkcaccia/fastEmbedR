@@ -144,8 +144,24 @@ fastembedr_one_call_target_recall <- function(value, massive,
 fastembedr_knn_selection <- function(backend, n, p, k, metric,
         target_recall, n_query = n, self_query = TRUE,
         file_backed = FALSE, allow_ivf = TRUE) {
-    faissr_knn_select_cpp(list(
-        backend = resolve_embedding_backend(backend), metric = metric,
+    backend <- resolve_embedding_backend(backend)
+    cuda_method <- if (backend == "cuda" && self_query) {
+        getOption("fastEmbedR.cuda_knn_method", "auto")
+    } else "auto"
+    metal_method <- if (backend == "metal" && self_query) {
+        getOption("fastEmbedR.metal_knn_method", "auto")
+    } else "auto"
+    if (!is.character(cuda_method) || length(cuda_method) != 1L ||
+        !cuda_method %in% c("auto", "cagra", "cagra_width4")) {
+        stop("Invalid `fastEmbedR.cuda_knn_method` option.", call. = FALSE)
+    }
+    if (!is.character(metal_method) || length(metal_method) != 1L ||
+        !metal_method %in% c("auto", "cagra")) {
+        stop("Invalid `fastEmbedR.metal_knn_method` option.", call. = FALSE)
+    }
+    selection <- faissr_knn_select_cpp(list(
+        backend = backend, metric = metric, cuda_method = cuda_method,
+        metal_method = metal_method,
         n_reference = integer_scalar(n %||% NA_integer_),
         n_features = integer_scalar(p %||% NA_integer_),
         n_query = integer_scalar(n_query %||% NA_integer_),
@@ -153,6 +169,12 @@ fastembedr_knn_selection <- function(backend, n, p, k, metric,
         file_backed = file_backed, allow_ivf = allow_ivf,
         target_recall = fastembedr_target_recall(target_recall)
     ))
+    requested <- if (backend == "cuda") cuda_method else metal_method
+    if (requested != "auto" && !identical(selection$method, requested)) {
+        stop("The installed faissR does not support CAGRA selection.",
+            call. = FALSE)
+    }
+    selection
 }
 
 fastembedr_resident_knn_policy <- function(selection) {
@@ -189,6 +211,9 @@ fastembedr_query_nn_policy <- function(embedding_backend,
 fastembedr_nn_policy_engine <- function(policy, keep_gpu = FALSE,
                                         metric = "euclidean") {
     if (is.list(policy) && identical(policy$backend, "cuda")) {
+        if ((policy$method %||% "auto") %in% c("cagra", "cagra_width4")) {
+            return("cuda_cuvs_cagra")
+        }
         prefix <- if (isTRUE(keep_gpu)) {
             "faissr_cuda_gpu_"
         } else {
@@ -206,6 +231,9 @@ fastembedr_nn_policy_engine <- function(policy, keep_gpu = FALSE,
         return(paste0("native_cpu_", policy$method %||% "exact"))
     }
     if (is.list(policy) && identical(policy$backend, "metal")) {
+        if (identical(policy$method, "cagra")) {
+            return("faissr_native_metal_cagra")
+        }
         return(paste0("faissr_metal_", policy$method %||% "ivf"))
     }
     "native_unavailable"
@@ -241,6 +269,9 @@ finish_precomputed_knn <- function(out, metadata, policy, elapsed) {
     out$engine <- fastembedr_nn_policy_engine(
         policy, keep_gpu, metadata$metric
     )
+    if (identical(out$backend_used, "cuda_cuvs_multi_cagra")) {
+        out$engine <- out$backend_used
+    }
     out$elapsed_sec <- unname(elapsed[["elapsed"]])
     if (identical(policy$backend, "cpu") &&
         !identical(policy$method, "exact") &&
@@ -269,6 +300,12 @@ finish_precomputed_knn <- function(out, metadata, policy, elapsed) {
 
 run_precompute_knn <- function(x, k, metric, policy, n_threads,
                                 keep_gpu, devices = NULL) {
+    if (identical(policy$backend, "cuda") &&
+        policy$method %in% c("cagra", "cagra_width4")) {
+        return(run_faissr_cuda_embedding_knn(x, k, policy$method, metric,
+            fastembedr_knn_output_type(x, policy$backend),
+            policy$target_recall, devices))
+    }
     if (!is.null(devices)) return(run_faissr_cuda_multi_knn(
         x, k, policy$method, metric,
         fastembedr_knn_output_type(x, policy$backend),
@@ -351,9 +388,25 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' result is a `fastEmbedR_massive_graph` descriptor; construct UMAP fuzzy
 #' weights or t-SNE affinities from it before full-graph fitting.
 #'
-#' A resident CUDA result without explicit `devices` remains on the GPU and
-#' can be passed directly to [umap_knn()] or [tsne_knn()] with
+#' Resident CUDA Flat and IVF results stay on the device when `devices` is
+#' omitted and can be passed directly to [umap_knn()] or [tsne_knn()] with
 #' `backend = "cuda"`. An explicit device selection returns host matrices.
+#' Set `options(fastEmbedR.cuda_knn_method = "cagra")` to use faissR's
+#' cuVS CAGRA settings for the requested recall tier, or use
+#' `"cagra_width4"` to request a width-four graph search. These options
+#' apply to CUDA Euclidean KNN with at least 500,000 rows and
+#' 256 columns and require a cuVS-enabled faissR build with CAGRA support.
+#' Resident CAGRA returns host neighbor matrices. File-backed CAGRA stages
+#' the source in batches, keeps one index on the GPU, and writes neighbors
+#' to disk. This route requires a capacity check and checkpointing off.
+#' Two or more explicit `devices` select sharded resident CUDA CAGRA
+#' with cuVS tree merging.
+#' The target tier describes the settings used. Supply audit rows to
+#' measure recall for a file-backed fit.
+#' Set `options(fastEmbedR.metal_knn_method = "cagra")` for native Metal
+#' CAGRA on resident or file-backed Euclidean input. This route requires
+#' at least 129 rows, up to 1,024 features, and up to 128 neighbors.
+#' A file-backed Metal CAGRA index uses shared memory on one device.
 #' CPU and Metal
 #' results contain one-based `indices` and `distances` matrices. Every result
 #' excludes the observation itself. An unavailable requested backend raises an
@@ -361,8 +414,8 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #'
 #' @return A resident `fastEmbedR_knn` object, or a file-backed
 #'   `fastEmbedR_massive_graph` descriptor. Resident host results contain
-#'   `indices` and `distances`; resident CUDA results additionally inherit
-#'   from `fastEmbedR_gpu_knn` and own device-resident buffers. Resident
+#'   `indices` and `distances`. CUDA results with device-resident buffers
+#'   also inherit from `fastEmbedR_gpu_knn`. Resident
 #'   results record `knn_provider = "faissR"` and the selected engine.
 #'   Both storage modes return `knn_selection` with the method, selection
 #'   reason, shape group, and requested recall tier reported by faissR.
@@ -409,7 +462,8 @@ precompute_knn <- function(data, k = 30L,
     policy <- fastembedr_embedding_nn_policy(
         backend, n = n, p = ncol(x),
         target_recall = target_recall, k = k, metric = metric)
-    keep_gpu <- identical(backend, "cuda") && is.null(devices)
+    keep_gpu <- identical(backend, "cuda") && is.null(devices) &&
+        !policy$method %in% c("cagra", "cagra_width4")
     result <- timed_do_call(run_precompute_knn, list(
         x, k, metric, policy, n.cores, keep_gpu, devices
     ))
@@ -439,6 +493,11 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
         data$ncol, k, metric, target_recall, file_backed = TRUE,
         allow_ivf = allow)
     selection <- select(allow_ivf)
+    if (selection$method %in% c("cagra", "cagra_width4")) {
+        return(precompute_knn_file_cagra(data, k, output,
+            memory_bytes, selection, audit_rows, devices,
+            checkpoint || resume))
+    }
     if (backend == "metal" && selection$method == "ivf" &&
         !isTRUE(faissr_metal_file_ivf_plan_cpp(data, as.integer(k),
             memory_bytes)$fits)) selection <- select(FALSE)
@@ -836,20 +895,78 @@ run_faissr_cuda_resident_ivf <- function(data, k, metric, target_recall,
     out
 }
 
+run_faissr_cuda_cagra <- function(data, k, method, metric, output,
+        target_recall, devices) {
+    if (!identical(metric, "euclidean")) {
+        stop("Resident CAGRA currently requires Euclidean distance.",
+            call. = FALSE)
+    }
+    if (length(devices) > 1L) {
+        return(run_faissr_cuda_multi_cagra(data, k, method, output,
+            target_recall, devices))
+    }
+    if (!is.null(devices) && !identical(as.integer(devices), 0L)) {
+        stop("A single-device CAGRA request requires CUDA device 0.",
+            call. = FALSE)
+    }
+    runner <- get0("cuvs_cagra_wide_self", envir = asNamespace("faissR"),
+        inherits = FALSE)
+    if (!is.function(runner)) {
+        stop("The installed faissR build lacks the CAGRA presets.",
+            call. = FALSE)
+    }
+    runner(data, k = k, target_recall = target_recall, output = output,
+        width4 = identical(method, "cagra_width4"))
+}
+
+run_faissr_cuda_multi_cagra <- function(data, k, method, output,
+        target_recall, devices) {
+    preset <- get0("cuvs_cagra_wide_params", envir = asNamespace("faissR"),
+        inherits = FALSE)
+    if (!is.function(preset)) stop(
+        "The installed faissR build lacks the CAGRA presets.", call. = FALSE)
+    params <- preset(target_recall, identical(method, "cagra_width4"))
+    devices <- sort(as.integer(devices))
+    out <- faissr_cuvs_multi_cagra_cpp(list(
+        data = data, k = as.integer(k), devices = devices, output = output,
+        width = params$width, queue = params$queue,
+        nn_descent = params$builder == "nn_descent"
+    ))
+    expected <- c(nrow(data), as.integer(k))
+    if (!identical(out$backend_used, "cuda_cuvs_multi_cagra") ||
+        !identical(out$devices, devices) || !identical(out$exact, FALSE) ||
+        !identical(dim(out$indices), expected) ||
+        !identical(dim(out$distances), expected)) stop(
+        "faissR returned incompatible multi-GPU CAGRA KNN.", call. = FALSE)
+    out$backend <- "cuda"
+    out$accelerator <- "cuda"
+    out$index_base <- 1L
+    out$exclude_self <- TRUE
+    out$knn_provider <- "faissR"
+    out$result_residency <- "host"
+    out$target_recall <- target_recall
+    out$target_met <- NA
+    out$recall_audited <- FALSE
+    out$recall_status <- "preset_not_runtime_audited"
+    out$cagra_settings <- params
+    out
+}
+
 run_faissr_cuda_embedding_knn <- function(data, k, method, metric, output,
         target_recall, devices = NULL, prefer_resident = FALSE,
         retain_data = FALSE) {
+    if (method %in% c("cagra", "cagra_width4")) {
+        return(run_faissr_cuda_cagra(data, k, method, metric, output,
+            target_recall, devices))
+    }
     if (isTRUE(prefer_resident) && is.null(devices) &&
         method %in% c("exact", "flat")) {
         return(run_faissr_cuda_resident_knn(
             data, k, method, metric, target_recall, retain_data))
     }
-    if (identical(metric, "euclidean")) {
-        return(run_faissr_cuda_multi_knn(
-            data, k, method, metric, output, target_recall,
-            if (is.null(devices)) 0L else devices
-        ))
-    }
+    if (identical(metric, "euclidean")) return(run_faissr_cuda_multi_knn(
+        data, k, method, metric, output, target_recall, devices %||% 0L
+    ))
     if (!is.null(devices) && !identical(as.integer(devices), 0L)) {
         stop("Non-Euclidean faissR CUDA KNN currently uses GPU 0.",
             call. = FALSE)
@@ -1155,7 +1272,8 @@ fastembedr_metal_knn_available <- function() {
 }
 
 validate_faissr_metal_knn <- function(out, target_recall) {
-    if (!out$method %in% c("native_metal_exact", "native_metal_ivf") ||
+    if (!out$method %in% c("native_metal_exact", "native_metal_ivf",
+            "native_metal_cagra") ||
         !identical(out$backend_used, paste0("faissr_", out$method)) ||
         !identical(out$accelerator, "metal") ||
         !identical(out$target_recall, target_recall)) stop(
@@ -1173,6 +1291,12 @@ validate_faissr_metal_knn <- function(out, target_recall) {
         out$recall_status <- if (isTRUE(out$target_met))
             "runtime_audited_target_met" else "runtime_audited_target_missed"
         out$exact_recall_by_construction <- FALSE
+    } else if (identical(out$method, "native_metal_cagra")) {
+        if (!identical(out$exact, FALSE) || !is.na(out$target_met)) stop(
+            "faissR Metal CAGRA omitted its unaudited search status.",
+            call. = FALSE)
+        out$recall_audited <- FALSE
+        out$recall_status <- "preset_not_runtime_audited"
     } else {
         if (!isTRUE(out$exact) || !isTRUE(out$target_met)) stop(
             "faissR Metal exact KNN changed method or result status.",
@@ -1187,8 +1311,8 @@ validate_faissr_metal_knn <- function(out, target_recall) {
 
 run_faissr_metal_knn <- function(data, k, method, metric, output,
                                     target_recall) {
-    if (!method %in% c("auto", "exact", "ivf")) {
-        stop("Native Metal KNN supports `auto`, `exact`, and `ivf`.",
+    if (!method %in% c("auto", "exact", "ivf", "cagra")) {
+        stop("Native Metal KNN supports `auto`, `exact`, `ivf`, and `cagra`.",
             call. = FALSE
         )
     }
