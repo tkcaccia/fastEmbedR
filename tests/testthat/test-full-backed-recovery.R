@@ -75,6 +75,11 @@ test_that("streamed graph spectral initialization is bounded and stable", {
     expect_identical(first$backend_used,
         "native_cpu_streamed_spectral")
     expect_identical(first$graph_passes, 12L)
+    expect_identical(names(first$stage_seconds), c("degree_scan",
+        "graph_multiply", "orthogonalization", "ritz_projection",
+        "layout_write"))
+    expect_true(all(is.finite(first$stage_seconds) &
+        first$stage_seconds >= 0))
     read_all <- function(path) readBin(path, "raw",
         n = file.info(path)$size)
     expect_identical(read_all(file.path(work, "first.f32")),

@@ -1,6 +1,7 @@
 #include <Rcpp.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <climits>
@@ -7335,53 +7336,71 @@ void spectral_stream_scan(CsrGraphSource& graph, int chunk_rows,
   }
 }
 
+template <typename Reference>
+void spectral_stream_project(std::vector<double>& q, std::uint64_t n,
+                             int block, int first, int last,
+                             Reference reference) {
+  std::array<double, 9> dots{};
+  for (std::uint64_t row = 0; row < n; ++row) {
+    const double direction = reference(row);
+    const double* values = q.data() + row * block;
+    for (int col = first; col < last; ++col) {
+      dots[col] += values[col] * direction;
+    }
+  }
+  for (std::uint64_t row = 0; row < n; ++row) {
+    const double direction = reference(row);
+    double* values = q.data() + row * block;
+    for (int col = first; col < last; ++col) {
+      values[col] -= dots[col] * direction;
+    }
+  }
+}
+
 void spectral_stream_orthogonalize(std::vector<double>& q,
                                    std::uint64_t n, int block,
                                    const std::vector<double>& inv_degree,
                                    double inv_sqrt_volume,
                                    std::mt19937& rng) {
+  const auto trivial = [&](std::uint64_t row) {
+    const double inv = inv_degree[row];
+    return inv > 0.0 ? inv_sqrt_volume / inv : 0.0;
+  };
+  // Apply each projection in the original order for every column.
+  spectral_stream_project(q, n, block, 0, block, trivial);
   std::normal_distribution<double> normal(0.0, 1.0);
   for (int col = 0; col < block; ++col) {
-    bool ready = false;
-    for (int attempt = 0; attempt < 2 && !ready; ++attempt) {
-      double dot = 0.0;
-      for (std::uint64_t row = 0; row < n; ++row) {
-        const double inv = inv_degree[row];
-        const double trivial = inv > 0.0 ? inv_sqrt_volume / inv : 0.0;
-        dot += q[row * block + col] * trivial;
-      }
-      for (std::uint64_t row = 0; row < n; ++row) {
-        const double inv = inv_degree[row];
-        const double trivial = inv > 0.0 ? inv_sqrt_volume / inv : 0.0;
-        q[row * block + col] -= dot * trivial;
-      }
-      for (int prior = 0; prior < col; ++prior) {
-        dot = 0.0;
-        for (std::uint64_t row = 0; row < n; ++row) {
-          dot += q[row * block + col] * q[row * block + prior];
-        }
-        for (std::uint64_t row = 0; row < n; ++row) {
-          q[row * block + col] -= dot * q[row * block + prior];
-        }
-      }
+    const auto norm_squared = [&]() {
       double norm = 0.0;
       for (std::uint64_t row = 0; row < n; ++row) {
         const double value = q[row * block + col];
         norm += value * value;
       }
-      ready = std::isfinite(norm) && norm > 1e-20;
-      if (ready) {
-        const double scale = 1.0 / std::sqrt(norm);
-        for (std::uint64_t row = 0; row < n; ++row) {
-          q[row * block + col] *= scale;
-        }
-      } else if (attempt == 0) {
-        for (std::uint64_t row = 0; row < n; ++row) {
-          q[row * block + col] = normal(rng);
-        }
+      return norm;
+    };
+    double norm = norm_squared();
+    if (!std::isfinite(norm) || norm <= 1e-20) {
+      for (std::uint64_t row = 0; row < n; ++row) {
+        q[row * block + col] = normal(rng);
+      }
+      spectral_stream_project(q, n, block, col, col + 1, trivial);
+      for (int prior = 0; prior < col; ++prior) {
+        spectral_stream_project(q, n, block, col, col + 1,
+          [&](std::uint64_t row) { return q[row * block + prior]; });
+      }
+      norm = norm_squared();
+      if (!std::isfinite(norm) || norm <= 1e-20) {
+        Rcpp::stop("Streamed spectral basis lost rank.");
       }
     }
-    if (!ready) Rcpp::stop("Streamed spectral basis lost rank.");
+    const double scale = 1.0 / std::sqrt(norm);
+    for (std::uint64_t row = 0; row < n; ++row) {
+      q[row * block + col] *= scale;
+    }
+    if (col + 1 < block) {
+      spectral_stream_project(q, n, block, col + 1, block,
+        [&](std::uint64_t row) { return q[row * block + col]; });
+    }
   }
 }
 
@@ -7477,6 +7496,11 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
       std::filesystem::exists(output + ".part")) {
     Rcpp::stop("Spectral initialization output already exists.");
   }
+  using Clock = std::chrono::steady_clock;
+  const auto seconds_since = [](Clock::time_point start) {
+    return std::chrono::duration<double>(Clock::now() - start).count();
+  };
+  const auto degree_started = Clock::now();
   std::vector<double> inv_degree(n, 0.0);
   spectral_stream_scan(graph, chunk_rows,
     [&](std::uint64_t source, std::uint32_t, double weight,
@@ -7491,15 +7515,24 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
   for (double& degree : inv_degree) {
     degree = degree > 0.0 ? 1.0 / std::sqrt(degree) : 0.0;
   }
+  const double degree_seconds = seconds_since(degree_started);
   std::mt19937 rng(static_cast<std::uint32_t>(seed));
   std::normal_distribution<double> normal(0.0, 1.0);
   std::vector<double> q(values), z(values);
   for (double& value : q) value = normal(rng);
   const double inv_sqrt_volume = 1.0 / std::sqrt(volume);
-  spectral_stream_orthogonalize(q, n, block, inv_degree,
-                                 inv_sqrt_volume, rng);
+  double project_seconds = 0.0;
+  const auto orthogonalize = [&](std::vector<double>& basis) {
+    const auto started = Clock::now();
+    spectral_stream_orthogonalize(basis, n, block, inv_degree,
+                                   inv_sqrt_volume, rng);
+    project_seconds += seconds_since(started);
+  };
+  orthogonalize(q);
+  double multiply_seconds = 0.0;
   auto multiply = [&](const std::vector<double>& input,
                       std::vector<double>& result) {
+    const auto started = Clock::now();
     std::fill(result.begin(), result.end(), 0.0);
     spectral_stream_scan(graph, chunk_rows,
       [&](std::uint64_t source, std::uint32_t target, double weight,
@@ -7513,14 +7546,15 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
             scaled * input[neighbor * block + col];
         }
       });
+    multiply_seconds += seconds_since(started);
   };
   for (int iter = 0; iter < spectral_n_iter; ++iter) {
     multiply(q, z);
-    spectral_stream_orthogonalize(z, n, block, inv_degree,
-                                   inv_sqrt_volume, rng);
+    orthogonalize(z);
     q.swap(z);
   }
   multiply(q, z);
+  const auto ritz_started = Clock::now();
   std::vector<double> projected(block * block, 0.0);
   for (std::uint64_t row = 0; row < n; ++row) {
     for (int a = 0; a < block; ++a) {
@@ -7563,6 +7597,8 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
   if (!std::isfinite(max_abs) || max_abs <= 0.0) {
     Rcpp::stop("Streamed spectral initialization collapsed.");
   }
+  const double ritz_seconds = seconds_since(ritz_started);
+  const auto write_started = Clock::now();
   Float32Sink sink(output);
   std::normal_distribution<double> jitter(0.0, 1e-4);
   std::vector<float> buffer(checked_product(chunk_rows, n_components));
@@ -7594,6 +7630,12 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
     Rcpp::Named("graph_passes") = spectral_n_iter + 2,
     Rcpp::Named("memory_bytes_estimate") =
       static_cast<double>(estimated),
+    Rcpp::Named("stage_seconds") = Rcpp::NumericVector::create(
+      Rcpp::Named("degree_scan") = degree_seconds,
+      Rcpp::Named("graph_multiply") = multiply_seconds,
+      Rcpp::Named("orthogonalization") = project_seconds,
+      Rcpp::Named("ritz_projection") = ritz_seconds,
+      Rcpp::Named("layout_write") = seconds_since(write_started)),
     Rcpp::Named("output") = output);
 }
 
