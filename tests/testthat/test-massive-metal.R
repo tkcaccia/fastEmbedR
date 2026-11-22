@@ -336,6 +336,10 @@ test_that("full-graph Metal UMAP streams a prepared fuzzy graph", {
     expect_identical(fit$resources$metal_memory_model,
         "unified_shared")
     expect_equal(fit$resources$edge_batch_capacity, 65536L)
+    expect_gt(fit$resources$observed_metal_owned_buffer_peak_bytes,
+        2 * rows * 8L)
+    expect_identical(fit$resources$metal_memory_measurement_scope,
+        "peak_owned_optimizer_buffers")
     expect_gt(fit$updates$positive_updates, 0)
     expect_gt(fit$updates$negative_updates, 0)
     expect_equal(dim(massive_read_rows(fit, 1L, rows)), c(rows, 2L))
@@ -366,6 +370,8 @@ test_that("full-graph Metal UMAP streams a prepared fuzzy graph", {
     expect_false(file.exists(paste0(mapped_path, ".part")))
     expect_true(all(is.finite(massive_read_rows(mapped, 1L, rows))))
     expect_equal(mapped$updates, fit$updates)
+    expect_equal(mapped$resources$observed_metal_owned_buffer_peak_bytes,
+        fit$resources$observed_metal_owned_buffer_peak_bytes)
     expect_gt(sum(abs(massive_read_rows(mapped, 1L, rows) - initial)),
         0)
     fbin_path <- file.path(directory, "init.fbin")

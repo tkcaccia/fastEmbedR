@@ -238,6 +238,9 @@ massive_umap_metal_result <- function(result, plan, built) {
         list(metal_memory_model = "unified_shared",
             metal_buffer_bytes_estimate = 2 * plan$layout_bytes +
                 24 * plan$edge_capacity,
+            observed_metal_owned_buffer_peak_bytes =
+                built$observed_metal_owned_buffer_peak_bytes,
+            metal_memory_measurement_scope = "peak_owned_optimizer_buffers",
             edge_batch_capacity = plan$edge_capacity,
             peak_vram_bytes = NA_real_))
     result

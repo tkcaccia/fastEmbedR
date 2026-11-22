@@ -6338,6 +6338,8 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
     }
   }
   fastembedr_massive_umap_metal_download(context.get(), layout);
+  const auto peak_buffers =
+    fastembedr_massive_umap_metal_peak_buffers(context.get());
   context.reset();
   const double metal_seconds = std::chrono::duration<double>(
     std::chrono::steady_clock::now() - metal_started).count();
@@ -6373,7 +6375,9 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
     Rcpp::Named("metal_epochs") = n_epochs,
     Rcpp::Named("cpu_tail_epochs") = tail_epochs,
     Rcpp::Named("metal_seconds") = metal_seconds,
-    Rcpp::Named("cpu_tail_seconds") = cpu_tail_seconds);
+    Rcpp::Named("observed_metal_owned_buffer_peak_bytes") =
+      static_cast<double>(peak_buffers),
+        Rcpp::Named("cpu_tail_seconds") = cpu_tail_seconds);
 }
 
 #ifdef FASTEMBEDR_HAS_CUDA

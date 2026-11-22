@@ -9116,6 +9116,8 @@ struct MassiveMetalUmapContext {
   id<MTLBuffer> delta;
   EmbedParams params;
   int dimensions;
+  std::uint64_t resident_buffer_bytes;
+  std::uint64_t peak_buffer_bytes;
 };
 
 extern "C" void* fastembedr_massive_umap_metal_create(
@@ -9159,6 +9161,9 @@ extern "C" void* fastembedr_massive_umap_metal_create(
       fixed[i] = static_cast<std::int32_t>(init[i] * 65536.0f);
     }
     context->dimensions = dimensions;
+    context->resident_buffer_bytes =
+      [context->layout length] + [context->delta length];
+    context->peak_buffer_bytes = context->resident_buffer_bytes;
     context->params = EmbedParams{
       static_cast<std::uint32_t>(vertices), 1u,
       static_cast<std::uint32_t>(epochs),
@@ -9199,6 +9204,10 @@ extern "C" std::uint64_t fastembedr_massive_umap_metal_step(
       [done release];
       Rcpp::stop("Metal UMAP edge-buffer allocation failed.");
     }
+    const std::uint64_t live_buffer_bytes = context->resident_buffer_bytes +
+      [h length] + [t length] + [neg length] + [edge length] + [done length];
+    context->peak_buffer_bytes = std::max(
+      context->peak_buffer_bytes, live_buffer_bytes);
     const auto epoch_u = static_cast<std::uint32_t>(epoch);
     const auto count_u = static_cast<std::uint32_t>(count);
     id<MTLCommandBuffer> command = [state.queue commandBuffer];
@@ -9264,6 +9273,11 @@ extern "C" void fastembedr_massive_umap_metal_download(
   for (std::size_t i = 0; i < elements; ++i) {
     output[i] = static_cast<float>(fixed[i]) / 65536.0f;
   }
+}
+
+extern "C" std::uint64_t fastembedr_massive_umap_metal_peak_buffers(
+    const void* raw) {
+  return static_cast<const MassiveMetalUmapContext*>(raw)->peak_buffer_bytes;
 }
 
 extern "C" void fastembedr_massive_umap_metal_destroy(void* raw) {

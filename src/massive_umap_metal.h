@@ -13,6 +13,7 @@ std::uint64_t fastembedr_massive_umap_metal_step(void* context,
     const std::uint64_t* edge_ordinals, int count, int epoch);
 void fastembedr_massive_umap_metal_download(void* context,
     float* output);
+std::uint64_t fastembedr_massive_umap_metal_peak_buffers(const void* context);
 void fastembedr_massive_umap_metal_destroy(void* context);
 }
 

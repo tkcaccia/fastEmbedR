@@ -24,6 +24,10 @@ extern "C" void fastembedr_massive_umap_metal_download(
   Rcpp::stop("Full-graph Metal UMAP requires macOS Metal.");
 }
 
+extern "C" std::uint64_t fastembedr_massive_umap_metal_peak_buffers(
+    const void*) {
+  Rcpp::stop("Native Metal full-graph UMAP is unavailable.");
+}
 extern "C" void fastembedr_massive_umap_metal_destroy(void*) {}
 
 bool embedding_metal_available_impl() {
