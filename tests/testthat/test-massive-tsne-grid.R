@@ -129,3 +129,16 @@ test_that("CUDA t-SNE refuses a checkpoint made with another grid", {
     expect_error(fastEmbedR:::massive_tsne_checkpoint_prepare(
         changed, TRUE, TRUE, 1L), "does not match")
 })
+
+test_that("CPU file-backed t-SNE budgets the per-row FFT workspace", {
+    graph <- list(n_vertices = 100000000, n_edges = 6000000000)
+    testthat::local_mocked_bindings(
+        massive_disk_available_cpp = function(...) 1e12,
+        massive_available_ram_bytes = function() 32 * 1024^3,
+        .package = "fastEmbedR")
+    budget <- function(dims, limit) fastEmbedR:::massive_tsne_resource_plan(
+        graph, list(ncol = dims), "output.f32", limit, "cpu", NULL)
+    expect_equal(budget(2L, "8GB")$peak_ram, 4e9 + 512 * 1024^2)
+    expect_equal(budget(3L, "8GB")$peak_ram, 5.2e9 + 512 * 1024^2)
+    expect_error(budget(2L, "4.8GB"), "exceeds .memory_limit")
+})

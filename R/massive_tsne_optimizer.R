@@ -508,9 +508,8 @@ massive_tsne_resource_plan <- function(graph, init, path,
             coords * 24 + graph$n_vertices * 8 +
             1024 * 1024^2
     } else {
-        coords * 16 +
-            as.integer(init$ncol == 3) * graph$n_vertices * 4 +
-            512 * 1024^2
+        coords * 16 + graph$n_vertices *
+            (if (init$ncol == 2L) 8 else 4) + 512 * 1024^2
     }
     graph_bytes <- graph$n_edges * 8 + (graph$n_vertices + 1) * 8
     if (backend == "cuda" && graph_access == "mmap") peak <- peak + graph_bytes
