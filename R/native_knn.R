@@ -153,7 +153,7 @@ fastembedr_knn_selection <- function(backend, n, p, k, metric,
         getOption("fastEmbedR.metal_knn_method", "auto")
     } else "auto"
     if (!is.character(cuda_method) || length(cuda_method) != 1L ||
-        !cuda_method %in% c("auto", "cagra", "cagra_width4")) {
+        !cuda_method %in% c("auto", "cagra", "cagra_width4", "cagra_sharded")) {
         stop("Invalid `fastEmbedR.cuda_knn_method` option.", call. = FALSE)
     }
     if (!is.character(metal_method) || length(metal_method) != 1L ||
@@ -503,6 +503,10 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
         allow_cuda_profile = identical(data$format, "f32") &&
             is.null(devices) && !checkpoint && !resume)
     selection <- select(allow_ivf)
+    if (selection$method == "cagra_sharded") {
+        return(precompute_knn_file_cagra_sharded(data, k, output, selection,
+            audit_rows, devices, checkpoint || resume))
+    }
     if (selection$method %in% c("cagra", "cagra_width4")) {
         return(precompute_knn_file_cagra(data, k, output,
             memory_bytes, selection, audit_rows, devices,

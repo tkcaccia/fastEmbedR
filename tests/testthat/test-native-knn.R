@@ -689,6 +689,42 @@ test_that("CAGRA selection is explicit and limited to wide CUDA self KNN", {
         "requires CUDA device 0")
 })
 
+test_that("file-backed CUDA sharding reuses faissR indexes and merges rows", {
+    skip_if_not(isTRUE(faissR::cuvs_available()))
+    skip_if_not(isTRUE(faissR::cuda_available()))
+    previous <- options(fastEmbedR.cuda_knn_method = "cagra_sharded",
+        faissR.cuvs_cagra_shard_rows = 256L)
+    on.exit(options(previous))
+    set.seed(42L)
+    n <- 768L
+    k <- 30L
+    points <- matrix(runif(n * 4L), n)
+    work <- tempfile("file-knn-")
+    dir.create(work)
+    on.exit(unlink(work, recursive = TRUE), add = TRUE)
+    input <- file.path(work, "vectors.f32")
+    writeBin(as.numeric(t(points)), input, size = 4L, endian = "little")
+    fit <- precompute_knn(massive_matrix(input, n, 4L), k = k,
+        backend = "cuda", n.cores = 1L, storage = "file_backed",
+        output = file.path(work, "neighbors"), memory_limit = "1GB",
+        target_recall = .99)
+    expect_identical(fit$backend_used %||% fit$method,
+        "cuda_cuvs_cagra_file_sharded")
+    expect_identical(fit$knn_provider, "faissR")
+    expect_true(fit$index_reused && fit$validated)
+    expect_equal(fit$resources$n_shards, 3L)
+    expect_equal(fit$n_vertices, n)
+    observed <- massive_read_knn_rows_cpp(fit$indices_path,
+        fit$distances_path, n, k, n, 1L, n, 2^20)$indices
+    exact <- as.matrix(dist(points))
+    diag(exact) <- Inf
+    recall <- vapply(seq_len(n), function(i) {
+        truth <- order(exact[i, ])[seq_len(k)]
+        mean(observed[i, ] %in% truth)
+    }, numeric(1))
+    expect_gte(mean(recall), .99)
+})
+
 test_that("resident CAGRA directs explicit multiple devices to faissR", {
     local_mocked_bindings(
         faissr_cuvs_multi_cagra_cpp = function(request) {
