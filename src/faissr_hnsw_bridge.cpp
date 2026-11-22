@@ -635,6 +635,9 @@ Rcpp::List faissr_hnsw_file_index_build_cpp(SEXP source, int n, int p,
       Rcpp::Named("efConstruction") =
           fitted.attr("ef_construction"),
       Rcpp::Named("efSearch") = ef_search,
+      Rcpp::Named("file_pilot_offsets") =
+          tuning.containsElementNamed("file_pilot_offsets") ?
+            static_cast<SEXP>(tuning["file_pilot_offsets"]) : R_NilValue,
       Rcpp::Named("tuning_rule") = tuning["rule"],
       Rcpp::Named("target_recall") = target_recall,
       Rcpp::Named("tuning_benchmark_source") =

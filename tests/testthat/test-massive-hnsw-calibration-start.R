@@ -25,6 +25,19 @@ test_that("automatic HNSW calibration starts at k, explicit ef stays fixed", {
         .package = "fastEmbedR")
     expect_identical(received, c(10L, 100L))
     expect_identical(automatic$index$efSearch, 10L)
+    wide <- state
+    wide$index$file_pilot_offsets <- c(0.125, 0.25, 0.625, 0.875)
+    wide$index$efSearch <- 120L
+    wide_x <- list(nrow = 1281167L, ncol = 2L)
+    broad <- with_mocked_bindings(
+        fastEmbedR:::massive_hnsw_calibrate_shard(
+            wide_x, wide, setup, 1L, wide_x$nrow),
+        massive_read_rows_cpp = read_rows,
+        faissr_hnsw_index_calibrate_cpp = calibrate,
+        .package = "fastEmbedR")
+    expect_identical(received, c(120L, 4096L))
+    expect_length(broad$index$pilot$sample_rows, 512L)
+    expect_false(anyDuplicated(broad$index$pilot$sample_rows) != 0L)
     setup$ef_search <- 80L
     explicit <- with_mocked_bindings(
         fastEmbedR:::massive_hnsw_calibrate_shard(

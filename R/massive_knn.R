@@ -1900,11 +1900,12 @@ massive_hnsw_add_setting <- function(settings, observed) {
     c(settings, list(observed))
 }
 
-massive_hnsw_pilot_rows <- function(n, audit_rows) {
+massive_hnsw_pilot_rows <- function(n, audit_rows, offsets = 0.25) {
     count <- as.integer(min(128L, floor(n / 2)))
     if (count < 1L) stop("HNSW calibration needs at least two rows.")
-    pilot <- as.integer(floor((seq_len(count) - 0.25) * n /
-        count) + 1)
+    phases <- lapply(offsets, function(offset)
+        as.integer(floor((seq_len(count) - offset) * n / count) + 1))
+    pilot <- sort(unique(unlist(phases, use.names = FALSE)))
     if (audit_rows > 0L) {
         audited <- as.integer(floor((seq_len(audit_rows) - 0.5) *
             n / audit_rows) + 1)
@@ -1918,8 +1919,8 @@ massive_hnsw_calibrate_shard <- function(x, state, setup,
         first, count) {
     if (state$index$method != "faissr_hnsw_persistent") stop(
         "Expected CPU HNSW index was not built.", call. = FALSE)
-    rows <- massive_hnsw_pilot_rows(x$nrow,
-        setup$audit_rows %||% 0L)
+    offsets <- state$index$file_pilot_offsets %||% 0.25
+    rows <- massive_hnsw_pilot_rows(x$nrow, setup$audit_rows %||% 0L, offsets)
     query <- do.call(rbind, lapply(rows, function(row) {
         massive_read_rows_cpp(x, row, 1L, 4 * x$ncol, TRUE)
     }))
@@ -1928,12 +1929,12 @@ massive_hnsw_calibrate_shard <- function(x, state, setup,
     requested <- setup$ef_search %||% 0L
     max_ef <- if (requested > 0L) requested else
         as.integer(min(count, max(4096L, setup$k)))
+    initial <- if (length(offsets) > 1L) state$index$efSearch else setup$k
+    if (requested > 0L) initial <- requested
     pilot <- faissr_hnsw_index_calibrate_cpp(
         state$index$pointer, query,
-        as.integer(self_ids), setup$k,
-        setup$target_recall %||% 0.99,
-        if (requested > 0L) requested else setup$k,
-        max_ef,
+        as.integer(self_ids), setup$k, setup$target_recall %||% 0.99,
+        initial, max_ef,
         setup$build_workers %||% setup$workers)
     if (!identical(pilot$pilot_reference, "full_cpu_double_l2") ||
         (!keep_knn_recall_miss() && (!isTRUE(pilot$target_met) ||
