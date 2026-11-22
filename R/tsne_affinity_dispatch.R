@@ -2,7 +2,7 @@
 
 normalize_opentsne_knn_input <- function(
     indices, distances = NULL,
-    n_neighbors = NULL
+    n_neighbors = NULL, backend = NULL
 ) {
     knn <- coerce_knn_input(indices, distances)
     n <- nrow(knn$indices)
@@ -24,7 +24,8 @@ normalize_opentsne_knn_input <- function(
             )
         }
     }
-    tsne_check_resident_affinity_capacity(n, n_neighbors)
+    tsne_check_resident_affinity_capacity(n, n_neighbors, backend = backend,
+        distance_bytes = if (is_float32_matrix(knn$distances)) 4L else 8L)
     materialized <- materialize_knn_range(
         knn$indices, knn$distances,
         knn$col_start,
@@ -44,15 +45,15 @@ normalize_opentsne_knn_input <- function(
 
 tsne_check_resident_affinity_capacity <- function(rows, width,
         memory_limit = fastembedr_memory_option("8GB"),
-        available = massive_available_ram_bytes()) {
+        available = massive_available_ram_bytes(), backend = NULL,
+        distance_bytes = 8L) {
     edges <- as.double(rows) * width
-    # The float32 builder keeps one 16-byte directed edge buffer while
-    # allocating at most two 8-byte symmetric edge arrays per input edge.
-    # The 80-byte allowance also covers KNN input, the temporary distance
-    # copy, R materialization and allocator overlap. A full 750-iteration
-    # 10M-row fit used the same peak as a five-iteration fit; the 2D FFT
-    # grid is bounded independently of the number of edges.
-    estimate <- 256 * 1024^2 + 80 * edges + 128 * rows
+    # CPU reads distances directly and stores 12 bytes per sortable edge.
+    # Include two possible KNN inputs and two 8-byte output edges per pair.
+    bytes_per_edge <- if (identical(backend, "cpu")) {
+        2 * (4 + distance_bytes) + 12 + 16
+    } else 80
+    estimate <- 256 * 1024^2 + bytes_per_edge * edges + 128 * rows
     limit <- massive_memory_bytes(memory_limit)
     if (!is.finite(edges) || edges < 1 ||
         !is.finite(available) || available <= 0 ||
@@ -81,8 +82,9 @@ prepare_opentsne_materialized_run <- function(request) {
     } else {
         ncol(request$indices)
     }
-    if (!request$gpu_resident_knn)
-        tsne_check_resident_affinity_capacity(request$n, request$k)
+    if (!request$gpu_resident_knn) tsne_check_resident_affinity_capacity(
+        request$n, request$k, backend = request$optimizer_backend,
+        distance_bytes = if (is_float32_matrix(request$distances)) 4L else 8L)
     if (!is.null(request$devices)) {
         request$devices <- massive_validate_devices(request$devices,
             request$optimizer_backend, request$n)
@@ -197,16 +199,13 @@ fast_knn_opentsne_core <- function(
 ) {
     backend <- resolve_embedding_backend(backend)
     if (inherits(indices, "fastEmbedR_tsne_prepared")) {
-        if (!is.null(distances)) {
-            stop(
-                "Do not pass `distances` when `indices` is a prepared ",
-                "t-SNE object.",
-                call. = FALSE
-            )
-        }
+        if (!is.null(distances)) stop(
+            "Do not pass `distances` when `indices` is a prepared ",
+            "t-SNE object.", call. = FALSE)
         knn <- indices$knn
     } else {
-        knn <- normalize_opentsne_knn_input(indices, distances)
+        knn <- normalize_opentsne_knn_input(
+            indices, distances, backend = backend)
     }
     Y_init <- resolve_opentsne_y_init(Y_init, knn$n, n_components)
     fast_knn_opentsne_materialized(

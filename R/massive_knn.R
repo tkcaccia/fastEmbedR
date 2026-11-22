@@ -1371,40 +1371,17 @@ massive_hnsw_sharded_resources <- function(x, k, chunk_rows,
         reference_chunk_rows, memory_limit) {
     if (x$format == "memory") stop(
         "Sharded HNSW needs a file-backed matrix.", call. = FALSE)
-    limit <- massive_memory_bytes(memory_limit)
-    per_reference <- 16 * x$ncol + 2048
-    max_reference <- floor((0.7 * limit - 64 * 1024^2) /
-        per_reference)
-    requested <- reference_chunk_rows %||% min(x$nrow, max_reference)
-    if (is.na(integer_scalar(requested)) || requested < 2L ||
-        max_reference < 2) stop(
-        "HNSW reference shard exceeds `memory_limit`.", call. = FALSE)
-    shard_rows <- min(requested, max_reference, x$nrow)
-    shards <- min(ceiling(x$nrow / shard_rows), floor(x$nrow / 2))
-    shard_rows <- ceiling(x$nrow / shards)
-    if (shard_rows > min(requested, max_reference)) stop(
-        "Balanced HNSW shards exceed the reference-row limit.",
-        call. = FALSE)
-    fixed <- 64 * 1024^2 + shard_rows * per_reference
-    per_query <- 12 * x$ncol + 16 * (k + 1) + 8 * k
-    maximum <- floor((0.7 * limit - fixed) / per_query)
-    requested <- chunk_rows %||% 8192L
-    if (is.na(integer_scalar(requested)) || requested < 1L ||
-        maximum < 1) stop(
-        "HNSW query buffers exceed `memory_limit`.", call. = FALSE)
-    rows <- as.integer(min(requested, maximum,
-        floor(128e6 / (8 * x$ncol)),
-        floor(128e6 / (12 * (k + 1)))))
-    if (is.na(rows) || rows < 1L) stop(
-        "HNSW query batch cannot fit in R.", call. = FALSE)
-    list(chunk_rows = rows, reference_chunk_rows = shard_rows,
-        n_shards = as.integer(shards),
-        query_batches = ceiling(x$nrow / rows) * shards,
-        minimum_query_read_bytes =
-            x$nrow * x$ncol * 4 * shards,
-        peak_ram_bytes = fixed + rows * per_query,
-        output_bytes = as.double(x$nrow) * k * 8,
-        memory_limit_bytes = limit)
+    plan <- faissr_knn_select_cpp(list(backend = "cpu", metric = "euclidean",
+        cpu_method = "hnsw", n_reference = integer_scalar(x$nrow),
+        n_features = integer_scalar(x$ncol), n_query = integer_scalar(x$nrow),
+        k = integer_scalar(k), self_query = TRUE, file_backed = TRUE,
+        allow_ivf = FALSE, target_recall = 0.99,
+        memory_limit_bytes = massive_memory_bytes(memory_limit),
+        chunk_rows = chunk_rows, reference_chunk_rows = reference_chunk_rows
+    ))$resources
+    if (is.null(plan)) stop("The installed faissR lacks file-backed ",
+        "HNSW resource planning.", call. = FALSE)
+    plan
 }
 
 massive_cuda_sharded_resources <- function(x, k, chunk_rows,

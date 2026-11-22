@@ -84,6 +84,41 @@ test_that("resident CSR admission counts double KNN distances", {
         "distance width")
 })
 
+test_that("the compact resident CPU CSR fits the bounded float32 workload", {
+    available <- 26 * 1024^3
+    needs <- fastEmbedR:::umap_resident_cpu_needs_compact
+    check <- fastEmbedR:::umap_check_resident_csr_capacity
+    expect_false(needs(1000L, 30L, 8L, "26GB", available))
+    expect_true(needs(10000000L, 30L, 8L, "26GB", available))
+    expect_error(check(10000000L, 30L, "26GB", available, 8L), "RAM budget")
+    plan <- check(10000000L, 30L, "26GB", available, 8L,
+        allow_wide = TRUE, compact = TRUE)
+    expect_identical(plan$offset_dtype, "uint64")
+    expect_lt(plan$peak_ram_estimate_bytes, 0.7 * available)
+    expect_error(check(10000000L, 30L, "12GB", available, 8L,
+        allow_wide = TRUE, compact = TRUE), "RAM budget")
+})
+
+test_that("resident CPU UMAP uses the compact plan when RAM is tight", {
+    skip_if_not_installed("float")
+    rows <- 64L
+    width <- 10L
+    bytes <- fastEmbedR:::umap_resident_csr_stage_bytes
+    limit <- mean(c(bytes(rows, width)$peak_ram_estimate_bytes,
+        bytes(rows, width, compact = TRUE)$peak_ram_estimate_bytes)) / 0.7
+    previous <- options(memory_limit = limit)
+    on.exit(options(previous))
+    idx <- outer(seq_len(rows), seq_len(width),
+        function(i, j) (i + j - 1L) %% rows + 1L)
+    dst <- float::fl(matrix(rep(seq_len(width), each = rows), rows))
+    layout <- umap_knn(idx, dst, backend = "cpu", n.cores = 1L, seed = 19L)
+    cfg <- attr(layout, "fastEmbedR_config")
+    expect_identical(cfg$backend, "cpu")
+    expect_identical(cfg$optimizer_schedule, "stateless_edge_tiles")
+    expect_equal(dim(layout), c(rows, 2L))
+    expect_true(all(is.finite(as.numeric(layout))))
+})
+
 test_that("file-backed CSR ownership counts exceed signed 32 bits", {
     path <- tempfile(fileext = ".offsets.u64")
     on.exit(unlink(path))

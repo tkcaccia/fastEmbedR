@@ -106,7 +106,7 @@ run_gpu_tsne_knn <- function(indices, init_data, settings, extra) {
     if (length(settings$devices) > 1L) {
         host <- fastembedr_gpu_knn_to_host(indices)
         resolved <- resolve_host_tsne_knn(host, NULL,
-            settings$n_neighbors, settings$perplexity)
+            settings$n_neighbors, settings$perplexity, settings$backend)
         return(run_host_tsne_knn(resolved, init_data, settings, extra))
     }
     info <- fastembedr_gpu_knn_info(indices)
@@ -141,7 +141,7 @@ run_gpu_tsne_knn <- function(indices, init_data, settings, extra) {
 }
 
 resolve_host_tsne_knn <- function(
-    indices, distances, n_neighbors, perplexity
+    indices, distances, n_neighbors, perplexity, backend
 ) {
     if (inherits(indices, "fastEmbedR_tsne_prepared")) {
         if (!is.null(distances)) {
@@ -169,7 +169,7 @@ resolve_host_tsne_knn <- function(
     n_neighbors <- n_neighbors %||% policy$n_neighbors
     list(
         knn = normalize_opentsne_knn_input(
-            indices, distances, n_neighbors
+            indices, distances, n_neighbors, backend
         ),
         perplexity = perplexity %||%
             min(policy$perplexity, n_neighbors),
@@ -258,7 +258,7 @@ tsne_knn <- function(
         ))
     }
     resolved <- resolve_host_tsne_knn(
-        indices, distances, n_neighbors, perplexity
+        indices, distances, n_neighbors, perplexity, backend
     )
     run_host_tsne_knn(resolved, init_data, settings, extra)
 }
@@ -368,11 +368,11 @@ prepare_tsne_knn_input_run <- function(data, nn, settings) {
             call. = FALSE
         )
     }
-    full <- normalize_opentsne_knn_input(data, NULL, NULL)
-    policy <- opentsne_neighbor_policy(full$n, settings$perplexity,
+    full <- coerce_knn_input(data, NULL)
+    policy <- opentsne_neighbor_policy(nrow(full$indices), settings$perplexity,
         full$n_neighbors, settings$affinity_k)
     knn <- normalize_opentsne_knn_input(
-        data, NULL, policy$n_neighbors
+        data, NULL, policy$n_neighbors, settings$backend
     )
     Y_init <- resolve_opentsne_y_init(
         settings$Y_init, knn$n, settings$n_components

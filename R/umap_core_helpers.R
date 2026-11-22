@@ -246,6 +246,7 @@ build_umap_csr_state <- function(indices,
                                     n_components,
                                     seed,
                                     init = NULL) {
+    started <- proc.time()[[3L]]
     graph <- umap_build_csr_graph(
         indices,
         distances,
@@ -255,9 +256,12 @@ build_umap_csr_state <- function(indices,
         as.integer(cfg$n_threads),
         graph_mode = graph_mode,
         allow_wide = cfg$backend %in% c("cpu", "metal") &&
-            n_components %in% c(2L, 3L)
+            n_components %in% c(2L, 3L),
+        compact_cpu = cfg$backend == "cpu" && n_components %in% c(2L, 3L)
     )
+    cfg$graph_elapsed_sec <- proc.time()[[3L]] - started
     if (is.null(init)) {
+        started <- proc.time()[[3L]]
         init <- umap_init_from_csr_graph(
             graph,
             n_components = n_components,
@@ -265,6 +269,7 @@ build_umap_csr_state <- function(indices,
             seed = seed,
             verbose = FALSE
         )
+        cfg$initialization_elapsed_sec <- proc.time()[[3L]] - started
         cfg$init_backend <- attr(init, "backend")
     }
     cfg$graph_nnz <- as.double(graph$nnz)

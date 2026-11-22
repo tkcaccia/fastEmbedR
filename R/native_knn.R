@@ -509,6 +509,7 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
         checkpoint = checkpoint, resume = resume,
         checkpoint_every = checkpoint_every,
         target_recall = target_recall, audit_rows = audit_rows)
+    selection$reason <- graph$resources$selection_reason %||% selection$reason
     graph$knn_selection <- selection
     graph
 }

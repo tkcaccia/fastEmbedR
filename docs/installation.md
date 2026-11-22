@@ -18,8 +18,9 @@ correlation HNSW remain package-native.
 Install faissR first, following its
 [installation guide](https://github.com/tkcaccia/faissR/blob/main/docs/installation.md).
 The development checks use
-[`66bc765`](https://github.com/tkcaccia/faissR/commit/66bc7652451e8a54c3af27e6794def9cbfec39e1),
-which provides the private C++ selector and file-backed Flat interfaces.
+[`25b55bc`](https://github.com/tkcaccia/faissR/commit/25b55bc08f7070ba435e1a76ea3296cdd39b9a3c),
+which provides the private C++ selector, file-backed HNSW memory planner,
+and file-backed Flat interfaces.
 Use this revision for a matched development installation even when an
 older build has the same package version.
 

@@ -60,22 +60,13 @@ struct SparseProbabilitiesF {
 };
 
 struct PackedEdgeF {
-  std::uint64_t key;
+  int first;
+  int second;
   float value;
 };
 
-std::uint64_t pair_key(int a, int b) {
-  return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(a)) << 32u) |
-    static_cast<std::uint32_t>(b);
-}
-
-int key_first(std::uint64_t key) {
-  return static_cast<int>(key >> 32u);
-}
-
-int key_second(std::uint64_t key) {
-  return static_cast<int>(key & 0xffffffffu);
-}
+static_assert(sizeof(PackedEdgeF) == 12,
+              "The resident affinity plan requires 12-byte edges");
 
 std::uint32_t mix_uint32(std::uint32_t value) {
   value ^= value >> 16u;
@@ -542,29 +533,22 @@ void compute_row_probabilities_float(const std::vector<float>& distances,
                                k, perplexity, row_p);
 }
 
-SparseProbabilitiesF build_tsne_probabilities_float(const IntegerMatrix& indices,
-                                                    const std::vector<float>& distances,
-                                                    const double perplexity,
-                                                    const int n_threads) {
+template <typename ReadRow>
+SparseProbabilitiesF build_tsne_symmetric_probabilities(
+    const IntegerMatrix& indices, const ReadRow& read_row,
+    const double perplexity, const int n_threads) {
   const int n = indices.nrow();
   const int k = indices.ncol();
-  if (static_cast<std::size_t>(n) * k != distances.size()) {
-    Rcpp::stop("float32 KNN distance payload has incompatible dimensions.");
-  }
   const int offset = resolve_index_offset(indices);
 
   if (perplexity > static_cast<double>(k)) {
     Rcpp::warning("Perplexity is larger than the supplied KNN width; results may be unstable.");
   }
   for (int i = 0; i < n; ++i) {
-    const std::size_t row_base = static_cast<std::size_t>(i) * k;
     for (int j = 0; j < k; ++j) {
-      const int nb = indices(i, j) - offset;
-      if (nb < 0 || nb >= n) Rcpp::stop("KNN indices are out of range.");
-      const float d = distances[row_base + j];
-      if (!std::isfinite(d) || d < 0.0f) {
-        Rcpp::stop("KNN distances must be finite and non-negative.");
-      }
+      const int id = indices(i, j);
+      if (id < offset || id - offset >= n)
+        Rcpp::stop("KNN indices are out of range.");
     }
   }
 
@@ -573,30 +557,38 @@ SparseProbabilitiesF build_tsne_probabilities_float(const IntegerMatrix& indices
     Rcpp::stop("t-SNE affinity edge count exceeds host capacity.");
   }
   std::vector<PackedEdgeF> edges(edge_capacity);
-  const std::uint64_t invalid_key = std::numeric_limits<std::uint64_t>::max();
+  constexpr int invalid_row = std::numeric_limits<int>::max();
+  std::atomic<bool> invalid_distance{false};
   parallel_for(n, n_threads, [&](const int begin, const int end, const int) {
     std::vector<float> row_p(static_cast<std::size_t>(k), 0.0f);
+    std::vector<float> scratch(static_cast<std::size_t>(k));
     for (int i = begin; i < end; ++i) {
-      compute_row_probabilities_float(distances, i, k, perplexity, row_p.data());
+      const float* row = read_row(i, scratch.data());
+      for (int j = 0; j < k; ++j) {
+        if (!std::isfinite(row[j]) || row[j] < 0.0f) {
+          invalid_distance.store(true, std::memory_order_relaxed);
+          return;
+        }
+      }
+      tsne_row_probabilities_float(row, k, perplexity, row_p.data());
       for (int j = 0; j < k; ++j) {
         const int nb = indices(i, j) - offset;
         const std::size_t slot = static_cast<std::size_t>(i) * k + j;
-        if (nb == i) {
-          edges[slot] = {invalid_key, 0.0f};
-          continue;
-        }
-        const int a = std::min(i, nb);
-        const int b = std::max(i, nb);
-        edges[slot] = {pair_key(a, b), row_p[static_cast<std::size_t>(j)]};
+        edges[slot] = nb == i ? PackedEdgeF{invalid_row, 0, 0.0f} :
+          PackedEdgeF{std::min(i, nb), std::max(i, nb), row_p[j]};
       }
     }
   });
+  if (invalid_distance.load(std::memory_order_relaxed)) {
+    Rcpp::stop("KNN distances must be finite and non-negative.");
+  }
   edges.erase(std::remove_if(edges.begin(), edges.end(),
-    [&](const PackedEdgeF& edge) { return edge.key == invalid_key; }),
+    [](const PackedEdgeF& edge) { return edge.first == invalid_row; }),
     edges.end());
 
-  std::sort(edges.begin(), edges.end(), [](const PackedEdgeF& a, const PackedEdgeF& b) {
-    return a.key < b.key;
+  std::sort(edges.begin(), edges.end(), [](const PackedEdgeF& a,
+                                           const PackedEdgeF& b) {
+    return a.first < b.first || (a.first == b.first && a.second < b.second);
   });
 
   SparseProbabilitiesF p;
@@ -608,16 +600,16 @@ SparseProbabilitiesF build_tsne_probabilities_float(const IntegerMatrix& indices
   std::size_t write = 0;
   double total_directed_mass = 0.0;
   for (std::size_t read = 0; read < edges.size();) {
-    const std::uint64_t key = edges[read].key;
+    const auto a = edges[read].first;
+    const auto b = edges[read].second;
     double sum = 0.0;
-    while (read < edges.size() && edges[read].key == key) {
+    while (read < edges.size() && edges[read].first == a &&
+           edges[read].second == b) {
       sum += static_cast<double>(edges[read].value);
       ++read;
     }
-    edges[write++] = {key, static_cast<float>(sum)};
+    edges[write++] = {a, b, static_cast<float>(sum)};
     total_directed_mass += sum;
-    const int a = key_first(key);
-    const int b = key_second(key);
     ++p.row_ptr[static_cast<std::size_t>(a + 1)];
     ++p.row_ptr[static_cast<std::size_t>(b + 1)];
   }
@@ -636,8 +628,8 @@ SparseProbabilitiesF build_tsne_probabilities_float(const IntegerMatrix& indices
 
   const float norm = static_cast<float>(0.5 / total_directed_mass);
   for (const PackedEdgeF& edge : edges) {
-    const int a = key_first(edge.key);
-    const int b = key_second(edge.key);
+    const int a = edge.first;
+    const int b = edge.second;
     const float value = edge.value * norm;
 
     std::uint64_t pos = fill[static_cast<std::size_t>(a)]++;
@@ -650,6 +642,48 @@ SparseProbabilitiesF build_tsne_probabilities_float(const IntegerMatrix& indices
   }
 
   return p;
+}
+
+SparseProbabilitiesF build_tsne_probabilities_float(
+    const IntegerMatrix& indices, const std::vector<float>& distances,
+    const double perplexity, const int n_threads) {
+  const int k = indices.ncol();
+  if (static_cast<std::size_t>(indices.nrow()) * k != distances.size()) {
+    Rcpp::stop("float32 KNN distance payload has incompatible dimensions.");
+  }
+  return build_tsne_symmetric_probabilities(indices,
+    [&](int row, float*) {
+      return distances.data() + static_cast<std::size_t>(row) * k;
+    }, perplexity, n_threads);
+}
+
+SparseProbabilitiesF build_tsne_probabilities_borrowed(
+    const IntegerMatrix& indices, SEXP distances,
+    const double perplexity, const int n_threads) {
+  const int n = indices.nrow();
+  const int k = indices.ncol();
+  if (is_float32_s4(distances)) {
+    const IntegerMatrix payload = float32_data_slot(distances);
+    const int* values = payload.begin();
+    return build_tsne_symmetric_probabilities(indices,
+      [&](int row, float* scratch) {
+        for (int j = 0; j < k; ++j) {
+          scratch[j] = int_bits_to_float(values[static_cast<std::size_t>(j) *
+                                                n + row]);
+        }
+        return scratch;
+      }, perplexity, n_threads);
+  }
+  const NumericMatrix matrix(distances);
+  const double* values = matrix.begin();
+  return build_tsne_symmetric_probabilities(indices,
+    [&](int row, float* scratch) {
+      for (int j = 0; j < k; ++j) {
+        scratch[j] = static_cast<float>(values[static_cast<std::size_t>(j) *
+                                               n + row]);
+      }
+      return scratch;
+    }, perplexity, n_threads);
 }
 
 #if defined(FASTEMBEDR_HAS_CUDA) && defined(FASTEMBEDR_HAS_NCCL)
@@ -2319,9 +2353,8 @@ List knn_tsne_opentsne_float_cpp(IntegerMatrix indices,
   }
 
   const auto native_start = std::chrono::steady_clock::now();
-  std::vector<float> distance_values = copy_distances_float_sexp(distances, threads);
-  SparseProbabilitiesF p = build_tsne_probabilities_float(indices, distance_values, perplexity, threads);
-  std::vector<float>().swap(distance_values);
+  SparseProbabilitiesF p = build_tsne_probabilities_borrowed(
+    indices, distances, perplexity, threads);
   const auto affinity_end = std::chrono::steady_clock::now();
 
   const std::string repulsion_mode = tsne_repulsion_mode(

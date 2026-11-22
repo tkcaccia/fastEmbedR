@@ -849,7 +849,7 @@ fast_knn_umap_prepared_core <- function(
 }
 
 umap_resident_csr_stage_bytes <- function(rows, width,
-        n_threads = 1L, distance_bytes = 4L) {
+        n_threads = 1L, distance_bytes = 4L, compact = FALSE) {
     if (length(distance_bytes) != 1L ||
         is.na(distance_bytes) ||
         !distance_bytes %in% c(4L, 8L)) {
@@ -858,7 +858,7 @@ umap_resident_csr_stage_bytes <- function(rows, width,
     }
     directed <- as.double(rows) * width
     symmetric <- 2 * directed
-    offset_width <- if (symmetric > .Machine$integer.max) 8 else 4
+    offset_width <- if (compact || symmetric > .Machine$integer.max) 8 else 4
     offsets <- (as.double(rows) + 1) * offset_width
     input <- (4 + distance_bytes) * directed
     copy <- 4 * directed
@@ -878,21 +878,27 @@ umap_resident_csr_stage_bytes <- function(rows, width,
             12 * as.double(rows) * 3,
         optimizer_active = input + copy +
             44 * symmetric + 24 * as.double(rows),
-        # Per-worker incoming counts are released inside graph construction.
-        # They cannot overlap the later spectral initialization workspace.
         optimizer_spectral = input + copy +
             52 * symmetric + 168 * as.double(rows)
     )
+    if (compact) {
+        # The wide CPU route keeps float32 weights and no per-edge schedule.
+        stages[["r_export"]] <- input + copy + 16 * symmetric + offsets
+        stages[c("optimizer_base", "optimizer_active", "optimizer_spectral")] <-
+            input + 8 * symmetric + offsets + 128 * as.double(rows)
+    }
+    peak <- if (compact) 256 * 1024^2 + max(stages) else
+        max(stages, 256 * 1024^2 + 96 * rows + 128 * directed)
     list(stages = stages, max_edges = symmetric,
         offset_bytes = offsets,
-        offset_dtype = if (symmetric > .Machine$integer.max)
-            "uint64" else "int32")
+        offset_dtype = if (offset_width == 8) "uint64" else "int32",
+        peak_ram_estimate_bytes = peak)
 }
 
 umap_check_resident_csr_capacity <- function(rows, width,
         memory_limit = getOption("memory_limit", "8GB"),
         available = massive_available_ram_bytes(), n_threads = 1L,
-        allow_wide = FALSE, distance_bytes = 4L) {
+        allow_wide = FALSE, distance_bytes = 4L, compact = FALSE) {
     if (!is.finite(rows) || !is.finite(width) || rows < 2 ||
         width < 1 || (!allow_wide && 2 * as.double(rows) * width >
             .Machine$integer.max)) stop(
@@ -901,17 +907,24 @@ umap_check_resident_csr_capacity <- function(rows, width,
         call. = FALSE)
     budget <- massive_memory_bytes(memory_limit)
     stages <- umap_resident_csr_stage_bytes(
-        rows, width, n_threads, distance_bytes)
-    estimate <- max(stages$stages,
-        256 * 1024^2 + 96 * rows +
-            128 * as.double(rows) * width)
+        rows, width, n_threads, distance_bytes, compact)
+    estimate <- stages$peak_ram_estimate_bytes
     if (!is.finite(available) || available <= 0 ||
         !is.finite(estimate) ||
         estimate > 0.7 * min(budget, available)) stop(
         "Resident UMAP graph construction exceeds the RAM budget; ",
         "increase options(memory_limit=...) only when RAM permits, ",
         "or use a file-backed graph.", call. = FALSE)
-    invisible(c(stages, list(peak_ram_estimate_bytes = estimate)))
+    invisible(stages)
+}
+
+umap_resident_cpu_needs_compact <- function(rows, width, n_threads,
+        memory_limit = getOption("memory_limit", "8GB"),
+        available = massive_available_ram_bytes()) {
+    conventional <- umap_resident_csr_stage_bytes(rows, width, n_threads)
+    conventional$offset_dtype == "uint64" ||
+        (is.finite(available) && conventional$peak_ram_estimate_bytes >
+            0.7 * min(massive_memory_bytes(memory_limit), available))
 }
 
 umap_admit_wide_graph <- function(
@@ -942,14 +955,19 @@ umap_build_csr_graph <- function(indices,
                                     n_threads,
                                     graph_mode = c("fuzzy", "binary"),
                                     allow_wide = FALSE,
-                                    force_wide = FALSE) {
+                                    force_wide = FALSE,
+                                    compact_cpu = FALSE) {
     graph_mode <- match.arg(graph_mode)
     rows <- nrow(indices)
     width <- if (identical(graph_mode, "binary")) n_cols else
         min(n_cols, edge_budget)
+    float_input <- is_float32_matrix(distances)
+    compact <- compact_cpu && float_input &&
+        umap_resident_cpu_needs_compact(rows, width, n_threads)
+    force_wide <- force_wide || compact
     umap_check_resident_csr_capacity(rows, width,
         n_threads = n_threads, allow_wide = allow_wide,
-        distance_bytes = if (is_float32_matrix(distances)) 4L else 8L)
+        distance_bytes = if (float_input) 4L else 8L, compact = compact)
     umap_admit_wide_graph(rows, width, distances, graph_mode,
         allow_wide, force_wide)
     if (identical(graph_mode, "binary")) {
