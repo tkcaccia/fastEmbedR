@@ -89,12 +89,19 @@ test_that("CUDA sharded IVF receives and verifies the selected tier", {
     }
     input <- list(nrow = 100000L, ncol = 10L)
     with_mocked_bindings(
+        fastembedr_knn_selection = function(backend, n, p, k, metric,
+                target_recall, ...) {
+            expect_identical(target_recall, 0.95)
+            list(method = "ivf")
+        },
         massive_full_knn_graph = function(..., method, target_recall)
             list(method = method, target_recall = target_recall),
         {
             selected <- fastEmbedR:::precompute_knn_backed(input,
                 10L, "euclidean", "cuda", 1L, tempfile(), "8GB",
-                0L, FALSE, FALSE, 100L, 0.95)
+                devices = NULL, checkpoint = FALSE, resume = FALSE,
+                checkpoint_every = 100L, target_recall = 0.95,
+                audit_rows = 0L)
             expect_identical(selected$method, "ivf_sharded")
             expect_identical(selected$target_recall, 0.95)
         }, .package = "fastEmbedR")

@@ -222,7 +222,7 @@ before installing the packages.
 
 ```r
 install.packages("remotes")
-remotes::install_github("tkcaccia/faissR@66bc7652451e8a54c3af27e6794def9cbfec39e1")
+remotes::install_github("tkcaccia/faissR@25b55bc08f7070ba435e1a76ea3296cdd39b9a3c")
 remotes::install_github("tkcaccia/fastEmbedR")
 ```
 

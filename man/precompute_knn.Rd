@@ -113,8 +113,8 @@ omitted and can be passed directly to \code{\link[=umap_knn]{umap_knn()}} or \co
 Set \code{options(fastEmbedR.cuda_knn_method = "cagra")} to use faissR's
 cuVS CAGRA settings for the requested recall tier, or use
 \code{"cagra_width4"} to request a width-four graph search. These options
-apply to CUDA Euclidean KNN with at least 500,000 rows and
-256 columns and require a cuVS-enabled faissR build with CAGRA support.
+apply to CUDA Euclidean self KNN with at least 500,000 rows and require
+a cuVS-enabled faissR build with CAGRA support.
 Resident CAGRA returns host neighbor matrices. File-backed CAGRA stages
 the source in batches, keeps one index on the GPU, and writes neighbors
 to disk. This route requires a capacity check and checkpointing off.

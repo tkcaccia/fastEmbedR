@@ -26,6 +26,14 @@ test_that("default HNSW shard size uses the available RAM budget", {
     expect_lte(capped$reference_chunk_rows, 250000L)
 })
 
+test_that("file HNSW budgets two vector copies for a single bulk add", {
+    source <- list(nrow = 1000000L, ncol = 1024L, format = "f32")
+    plan <- fastEmbedR:::massive_hnsw_sharded_resources
+    expect_identical(plan(source, 30L, NULL, NULL, "20GB")$n_shards, 1L)
+    expect_gt(plan(source, 30L, NULL, NULL, "10GB")$n_shards, 1L)
+    expect_gt(plan(source, 30L, NULL, 500000L, "20GB")$n_shards, 1L)
+})
+
 test_that("sharded HNSW tunes for output k, not the self candidate", {
     set.seed(215)
     reference <- matrix(rnorm(90L * 6L), ncol = 6L)

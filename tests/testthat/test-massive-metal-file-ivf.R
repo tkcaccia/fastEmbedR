@@ -23,6 +23,9 @@ test_that("file-backed Metal IVF completes one native graph", {
     expect_false(graph$exact)
     expect_true(graph$recall_audited)
     expect_gte(graph$observed_recall, 0.9)
+    expect_true(is.finite(graph$graph_write_seconds))
+    expect_gte(graph$graph_write_seconds, 0)
+    expect_gte(graph$total_seconds, graph$graph_write_seconds)
     expect_gt(graph$resources$observed_metal_owned_buffer_peak_bytes, 0)
     expect_equal(file.info(graph$indices_path)$size,
         4096 * 5 * 4)

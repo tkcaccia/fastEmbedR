@@ -19,8 +19,7 @@ Install faissR first, following its
 [installation guide](https://github.com/tkcaccia/faissR/blob/main/docs/installation.md).
 The development checks use
 [`25b55bc`](https://github.com/tkcaccia/faissR/commit/25b55bc08f7070ba435e1a76ea3296cdd39b9a3c),
-which provides the private C++ selector, file-backed HNSW memory planner,
-and file-backed Flat interfaces.
+which provides the private C++ selector and file-backed Flat interfaces.
 Use this revision for a matched development installation even when an
 older build has the same package version.
 

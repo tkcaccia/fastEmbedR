@@ -798,6 +798,12 @@ test_that("sharded HNSW queries use float32 materialization", {
         reference_chunk_rows = 6L, memory_limit = "256MB")
     expect_identical(graph$query_storage, "R_float32")
     expect_identical(graph$method, "faissr_cpu_hnsw_sharded")
+    expect_true(is.finite(graph$knn_search_seconds))
+    expect_true(is.finite(graph$graph_write_seconds))
+    expect_gte(graph$knn_search_seconds, 0)
+    expect_gte(graph$graph_write_seconds, 0)
+    expect_lte(graph$knn_search_seconds + graph$graph_write_seconds,
+        graph$search_seconds + 0.002)
     edges <- massive_read_graph_edges(graph, 1L, nrow(x))
     expect_length(edges$to, nrow(x) * 2L)
     expect_true(all(is.finite(edges$distance)))

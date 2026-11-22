@@ -140,6 +140,9 @@ massive_knn_reference <- function(reference, k, method,
 massive_knn_reference_input <- function(reference, backend, method,
                                             cuda_provider) {
     faissr_cuda <- backend == "cuda" && cuda_provider == "faissR"
+    if (faissr_cuda && reference$format != "memory" &&
+        !requireNamespace("float", quietly = TRUE)) stop(
+        "File-backed faissR CUDA KNN requires `float`.", call. = FALSE)
     data <- if (faissr_cuda && reference$format == "memory") {
         reference$data
     } else if (reference$format == "memory" &&
@@ -1317,6 +1320,47 @@ massive_full_knn_finish_stream <- function(indices, distances,
         rows, setup$k)
 }
 
+massive_full_knn_stream_batches <- function(x, setup,
+        saved, streams, completed, identity) {
+    started <- proc.time()[[3L]]
+    search_seconds <- write_seconds <- 0
+    posting_bytes <- saved$state$posting_read_bytes %||%
+        if (completed > 0 && !is.null(setup$posting_identity))
+            NA_real_ else 0
+    first <- completed + 1
+    reported <- -1L
+    while (first <= x$nrow) {
+        massive_full_knn_assert_source(x, identity)
+        rows <- as.integer(min(setup$resources$chunk_rows,
+            x$nrow - first + 1))
+        batch_started <- proc.time()[[3L]]
+        batch <- setup$search_batch(first, rows)
+        search_seconds <- search_seconds + proc.time()[[3L]] - batch_started
+        posting_bytes <- posting_bytes +
+            (batch$posting_read_bytes %||% 0)
+        massive_full_knn_assert_source(x, identity)
+        first <- first + rows
+        done <- first - 1
+        save_now <- done == x$nrow ||
+            ceiling(done / setup$resources$chunk_rows) %%
+                setup$checkpoint_every == 0
+        write_started <- proc.time()[[3L]]
+        saved <- massive_full_knn_commit(batch, streams, done,
+            saved, setup, posting_bytes, save_now)
+        write_seconds <- write_seconds + proc.time()[[3L]] - write_started
+        progress <- floor(20 * done / x$nrow)
+        if (progress > reported) {
+            message("EXPERIMENTAL full KNN: ", done, "/",
+                x$nrow, " rows")
+            reported <- progress
+        }
+    }
+    measurement <- list(seconds = proc.time()[[3L]] - started,
+        posting_read_bytes = posting_bytes, search_seconds = search_seconds,
+        graph_write_seconds = write_seconds)
+    list(saved = saved, measurement = measurement)
+}
+
 massive_full_knn_stream <- function(x, setup, saved) {
     parts <- stats::setNames(paste0(unname(setup$paths), ".part"),
         names(setup$paths))
@@ -1330,40 +1374,19 @@ massive_full_knn_stream <- function(x, setup, saved) {
     })
     identity <- if (is.null(x$path)) NULL else
         massive_checkpoint_source_identity(x)
-    started <- proc.time()[[3L]]
-    posting_bytes <- saved$state$posting_read_bytes %||%
-        if (completed > 0 && !is.null(setup$posting_identity))
-            NA_real_ else 0
-    first <- completed + 1
-    reported <- -1L
-    while (first <= x$nrow) {
-        massive_full_knn_assert_source(x, identity)
-        rows <- as.integer(min(setup$resources$chunk_rows,
-            x$nrow - first + 1))
-        batch <- setup$search_batch(first, rows)
-        posting_bytes <- posting_bytes +
-            (batch$posting_read_bytes %||% 0)
-        massive_full_knn_assert_source(x, identity)
-        first <- first + rows
-        done <- first - 1
-        save_now <- done == x$nrow ||
-            ceiling(done / setup$resources$chunk_rows) %%
-                setup$checkpoint_every == 0
-        saved <- massive_full_knn_commit(batch, streams, first - 1,
-            saved, setup, posting_bytes, save_now)
-        progress <- floor(20 * done / x$nrow)
-        if (progress > reported) {
-            message("EXPERIMENTAL full KNN: ", done, "/",
-                x$nrow, " rows")
-            reported <- progress
-        }
-    }
-    measurement <- list(seconds = unname(proc.time()[[3L]] - started),
-        posting_read_bytes = posting_bytes)
+    batches <- massive_full_knn_stream_batches(x, setup,
+        saved, streams, completed, identity)
+    saved <- batches$saved
+    measurement <- batches$measurement
+    finish_started <- proc.time()[[3L]]
     massive_full_knn_finish_stream(streams$indices,
         streams$distances, parts, setup, x$nrow, measurement)
     committed <- TRUE
     if (!is.null(saved)) unlink(saved$path)
+    finish_seconds <- proc.time()[[3L]] - finish_started
+    measurement$seconds <- measurement$seconds + finish_seconds
+    measurement$graph_write_seconds <- measurement$graph_write_seconds +
+        finish_seconds
     measurement
 }
 
@@ -1615,8 +1638,8 @@ massive_hnsw_snapshot_save <- function(x, state, setup, saved,
 massive_hnsw_snapshot_load <- function(x, setup, saved, shard, count) {
     snapshot <- saved$state$active_index
     started <- proc.time()[[3L]]
-    pointer <- faissr_hnsw_index_load_cpp(snapshot$file,
-        setup$build_workers)
+    workers <- setup$build_workers %||% setup$workers
+    pointer <- faissr_hnsw_index_load_cpp(snapshot$file, workers)
     setting <- snapshot$setting
     if (!isTRUE(attr(pointer, "native_persistence_supported")) ||
         !identical(attr(pointer, "n"), as.integer(count)) ||
@@ -1636,8 +1659,7 @@ massive_hnsw_snapshot_load <- function(x, setup, saved, shard, count) {
         target_recall = setting$target_recall, pilot = setting$pilot)
     state <- list(index = index, build_seconds = 0,
         load_seconds = unname(proc.time()[[3L]] - started),
-        reference_storage = "FAISS_native_file",
-        build_threads = setup$build_workers)
+        reference_storage = "FAISS_native_file", build_threads = workers)
     if (!identical(massive_hnsw_snapshot_probe(x, state, setup, count),
             snapshot$probe_signature)) stop(
         "Restored HNSW index changed the checkpoint probe.",
@@ -1717,8 +1739,10 @@ massive_sharded_batch <- function(x, setup, parts, state, shard,
     query <- massive_sharded_query(x, query_first, rows, method,
         backend, setup$cuda_provider %||% "faissR")
     local_k <- as.integer(min(setup$k + 1, count))
+    started <- proc.time()[[3L]]
     found <- massive_knn_query(state, query, local_k,
         method, setup$workers, backend, setup$ef_search %||% 0L)
+    search_seconds <- proc.time()[[3L]] - started
     valid <- massive_sharded_result_valid(found, method, backend,
         setup$cuda_provider %||% "faissR",
         setup$target_recall %||% 0.99)
@@ -1733,9 +1757,11 @@ massive_sharded_batch <- function(x, setup, parts, state, shard,
             stop("Checkpointed IVF settings changed.", call. = FALSE)
         saved$state$ivf_settings[[shard + 1L]] <- ivf_setting
     }
+    started <- proc.time()[[3L]]
     massive_merge_knn_shard_cpp(parts[["indices"]],
         parts[["distances"]], found$indices, found$distances,
         query_first, first, count, x$nrow, setup$k, shard == 0L)
+    timings <- c(search = search_seconds, write = proc.time()[[3L]] - started)
     if (!is.null(saved)) {
         if (is.null(saved$state$pilot_signature)) {
             saved$state$pilot_signature <-
@@ -1749,7 +1775,8 @@ massive_sharded_batch <- function(x, setup, parts, state, shard,
             massive_checkpoint_write(saved$state, saved$path)
         }
     }
-    list(rows = rows, saved = saved, ivf_setting = ivf_setting)
+    list(rows = rows, saved = saved, ivf_setting = ivf_setting,
+        timings = timings)
 }
 
 massive_sharded_ivf_setting <- function(found, shard, first, count,
@@ -2014,6 +2041,7 @@ massive_index_shard <- function(x, setup, parts, shard,
     if (shard == 0L && !is.null(saved)) massive_sharded_restore_first(
         parts, saved$state$completed_rows, setup$k)
     query_first <- (saved$state$completed_rows %||% 0) + 1
+    timings <- c(search = 0, write = 0)
     while (query_first <= x$nrow) {
         if (!identical(source_identity,
             massive_checkpoint_source_identity(x))) stop(
@@ -2022,17 +2050,18 @@ massive_index_shard <- function(x, setup, parts, shard,
         batch <- massive_sharded_batch(x, setup, parts, state,
             shard, first, count, query_first, method, backend, saved)
         saved <- batch$saved
+        timings <- timings + batch$timings
         if (is.null(ivf_setting)) ivf_setting <- batch$ivf_setting
         query_first <- query_first + batch$rows
     }
     if (method == "ivf" && is.null(ivf_setting)) stop("Missing IVF settings.")
     saved <- massive_index_shard_finish(saved, shard, hnsw_settings)
     message("KNN shard ", shard + 1L, "/", setup$resources$n_shards)
-    list(build_seconds = state$build_seconds,
-        load_seconds = state$load_seconds %||% 0, saved = saved,
-        metal_owned_bytes = if (backend == "metal")
+    list(saved = saved, metal_owned_bytes = if (backend == "metal")
             state$index$owned_buffer_bytes else 0,
-        hnsw_settings = hnsw_settings, ivf_setting = ivf_setting)
+        hnsw_settings = hnsw_settings, ivf_setting = ivf_setting,
+        timings = c(build = state$build_seconds,
+            load = state$load_seconds %||% 0, timings))
 }
 
 massive_sharded_flat_metadata <- function(graph, x, backend) {
@@ -2051,7 +2080,8 @@ massive_sharded_flat_metadata <- function(graph, x, backend) {
 
 massive_sharded_result <- function(x, paths, setup, backend,
         identity, build_seconds, started, audit_rows, checkpoint,
-        resume, hnsw_settings, ivf_settings, load_seconds = 0) {
+        resume, hnsw_settings, ivf_settings, load_seconds = 0,
+        timings = NULL) {
     graph <- massive_knn_graph(sub("\\.indices\\.u32$", "",
         paths[["indices"]]), x$nrow, setup$k)
     graph$backend <- backend
@@ -2079,12 +2109,17 @@ massive_sharded_result <- function(x, paths, setup, backend,
     graph$knn_provider <- "faissR"
     graph$residency <- massive_knn_residency(x, x)
     graph$resources <- setup$resources
+    if (backend == "metal" && length(timings))
+        graph$resources$observed_metal_owned_buffer_peak_bytes <-
+            timings[["metal_peak"]]
     if (graph$exact) graph <- massive_sharded_flat_metadata(graph, x, backend)
     graph$build_seconds <- build_seconds
     graph$index_load_seconds <- load_seconds
     graph$total_seconds <- unname(proc.time()[[3L]] - started)
     graph$search_seconds <- graph$total_seconds -
         build_seconds - load_seconds
+    graph$knn_search_seconds <- timings[["search"]]
+    graph$graph_write_seconds <- timings[["write"]]
     graph$checkpoint <- checkpoint
     graph$checkpoint_every <- setup$checkpoint_every
     graph$resumed <- resume
@@ -2126,7 +2161,8 @@ massive_sharded_graph <- function(x, k, output, n.cores,
     completed <- FALSE
     on.exit(if (!completed && is.null(saved)) unlink(parts))
     started <- proc.time()[[3L]]
-    build_seconds <- load_seconds <- metal_peak <- 0
+    metal_peak <- 0
+    timings <- c(build = 0, load = 0, search = 0, write = 0)
     hnsw <- saved$state$hnsw_settings %||% list()
     ivf <- saved$state$ivf_settings %||% list()
     start_shard <- saved$state$shard %||% 0L
@@ -2134,8 +2170,7 @@ massive_sharded_graph <- function(x, k, output, n.cores,
         for (shard in seq.int(start_shard, resources$n_shards - 1L)) {
             step <- massive_index_shard(x, setup, parts, shard,
                 identity, backend, saved)
-            build_seconds <- build_seconds + step$build_seconds
-            load_seconds <- load_seconds + step$load_seconds
+            timings <- timings + step$timings
             metal_peak <- max(metal_peak, step$metal_owned_bytes)
             hnsw <- massive_hnsw_add_setting(hnsw, step$hnsw_settings)
             if (length(step$ivf_setting)) ivf[[shard + 1L]] <- step$ivf_setting
@@ -2143,14 +2178,14 @@ massive_sharded_graph <- function(x, k, output, n.cores,
         }
     if (!identical(identity, massive_checkpoint_source_identity(x)))
         stop("Full-graph source changed during sharded search.")
+    write_started <- proc.time()[[3L]]
     massive_knn_finish(NULL, NULL, parts, paths, x$nrow, k)
+    timings[["write"]] <- timings[["write"]] + proc.time()[[3L]] - write_started
     completed <- TRUE
     if (!is.null(saved)) unlink(saved$path)
-    if (backend == "metal")
-        setup$resources$observed_metal_owned_buffer_peak_bytes <- metal_peak
     massive_sharded_result(x, paths, setup, backend, identity,
-        build_seconds, started, audit_rows, checkpoint, resume, hnsw, ivf,
-        load_seconds)
+        timings[["build"]], started, audit_rows, checkpoint, resume,
+        hnsw, ivf, timings[["load"]], c(timings, metal_peak = metal_peak))
 }
 
 massive_full_knn_audit_reference_rows <- function(x, setup) {
@@ -2249,6 +2284,9 @@ massive_full_exact_graph <- function(x, setup, measurement,
     }
     graph$search_seconds <- if (setup$backend == "cuda")
         stats$search else measurement$seconds
+    graph$knn_search_seconds <- if (setup$backend == "cuda")
+        stats$search else measurement$search_seconds
+    graph$graph_write_seconds <- measurement$graph_write_seconds
     graph$total_seconds <- measurement$seconds
     graph$checkpoint <- checkpoint
     graph$resumed <- resume
@@ -2355,6 +2393,7 @@ massive_full_metal_ivf_result <- function(x, output, setup,
     graph$search_seconds <- found$search_seconds
     graph$search_seconds_scope <- found$search_seconds_scope
     graph$source_read_seconds <- found$source_read_seconds
+    graph$graph_write_seconds <- measurement$seconds
     graph$total_seconds <- measurement$seconds + found$total_seconds
     graph
 }

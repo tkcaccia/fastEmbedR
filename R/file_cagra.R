@@ -18,10 +18,16 @@ precompute_knn_file_cagra <- function(data, k, output, memory_bytes,
         reference_chunk_rows = min(data$nrow, floor(192e6 / (4 * data$ncol))))
     paths <- massive_knn_paths(output, resources$output_bytes)
     identity <- massive_checkpoint_source_identity(data)
-    index <- builder(data, k, resources$chunk_rows, memory_bytes,
+    arguments <- list(data, k, resources$chunk_rows, memory_bytes,
         selection$target_recall, selection$method == "cagra_width4")
+    if (!is.null(selection$cuda_cagra_profile))
+        arguments$profile <- selection$cuda_cagra_profile
+    index <- do.call(builder, arguments)
     live <- TRUE
     on.exit(if (live) index$release(), add = TRUE)
+    resources$chunk_rows <- index$query_batch_rows %||% resources$chunk_rows
+    resources$memory_limit_bytes <- index$params$memory_limit_bytes %||%
+        memory_bytes
     massive_full_knn_assert_source(data, identity)
     setup <- list(paths = paths, k = k, workers = 1L, resources = resources,
         target_recall = selection$target_recall, exact = FALSE,
@@ -59,10 +65,14 @@ massive_file_cagra_graph <- function(data, output, setup,
     graph$resources$device_bytes_estimate <- index$device_bytes_estimate
     graph$resources$host_batch_bytes_estimate <- index$host_batch_bytes_estimate
     graph$resources$owned_metal_bytes <- index$owned_metal_bytes
+    graph$resources$device_free_bytes_at_build <-
+        index$device_free_bytes_at_build
     graph$cagra_settings <- index$params
     graph$source_read_and_upload_seconds <- index$source_read_and_upload_seconds
     graph$build_seconds <- index$build_seconds
     graph$build_timing <- index$build_timing
+    graph$knn_search_seconds <- measurement$search_seconds
+    graph$graph_write_seconds <- measurement$graph_write_seconds
     graph$search_and_write_seconds <- measurement$seconds
     graph$total_seconds <- graph$source_read_and_upload_seconds +
         graph$build_seconds + graph$search_and_write_seconds
