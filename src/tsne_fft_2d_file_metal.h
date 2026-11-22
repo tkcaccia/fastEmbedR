@@ -346,6 +346,10 @@ List run_metal_tsne_2d_file(
                               layout_bytes);
   const double metal_allocated_bytes_observed =
     static_cast<double>(state.device.currentAllocatedSize);
+  // All explicitly allocated buffers coexist through the last iteration.
+  // Mapped graph buffers belong to the caller; streamed tiles are in owned.
+  const auto owned_peak = work.owned.allocated_bytes() +
+    row_ptr.allocatedSize + col.allocatedSize + prob.allocatedSize;
   const double elapsed = std::chrono::duration<double>(
     std::chrono::steady_clock::now() - started).count();
   return List::create(
@@ -355,6 +359,10 @@ List run_metal_tsne_2d_file(
     Rcpp::Named("repulsion") = "fft_grid_2d_metal",
     Rcpp::Named("metal_allocated_bytes_observed") =
       metal_allocated_bytes_observed,
+    Rcpp::Named("observed_metal_owned_buffer_peak_bytes") =
+      static_cast<double>(owned_peak),
+    Rcpp::Named("metal_memory_measurement_scope") =
+      "peak_owned_optimizer_buffers",
     Rcpp::Named("fft_grid_size") = static_cast<int>(work.grid),
     Rcpp::Named("iterations") = early_iter + normal_iter,
     Rcpp::Named("resumed_from_iteration") = start_iter,

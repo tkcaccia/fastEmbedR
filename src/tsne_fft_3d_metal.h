@@ -614,6 +614,11 @@ struct MetalTsne3dBuffers {
   ~MetalTsne3dBuffers() {
     for (id<MTLBuffer> buffer : owned) [buffer release];
   }
+  std::uint64_t allocated_bytes() const {
+    std::uint64_t bytes = 0;
+    for (id<MTLBuffer> buffer : owned) bytes += buffer.allocatedSize;
+    return bytes;
+  }
   id<MTLBuffer> make(std::size_t bytes, const void* data = nullptr) {
     if (bytes == 0 || bytes > device.maxBufferLength) {
       Rcpp::stop("Metal 3D t-SNE buffer exceeds the device limit.");

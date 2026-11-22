@@ -1391,14 +1391,16 @@ massive_full_knn_stream <- function(x, setup, saved) {
 }
 
 massive_hnsw_sharded_resources <- function(x, k, chunk_rows,
-        reference_chunk_rows, memory_limit) {
+        reference_chunk_rows, memory_limit, target_recall = 0.99,
+        hnsw_build = NULL) {
     if (x$format == "memory") stop(
         "Sharded HNSW needs a file-backed matrix.", call. = FALSE)
     plan <- faissr_knn_select_cpp(list(backend = "cpu", metric = "euclidean",
         cpu_method = "hnsw", n_reference = integer_scalar(x$nrow),
         n_features = integer_scalar(x$ncol), n_query = integer_scalar(x$nrow),
         k = integer_scalar(k), self_query = TRUE, file_backed = TRUE,
-        allow_ivf = FALSE, target_recall = 0.99,
+        allow_ivf = FALSE, target_recall = target_recall,
+        hnsw_build_m = hnsw_build$m,
         memory_limit_bytes = massive_memory_bytes(memory_limit),
         chunk_rows = chunk_rows, reference_chunk_rows = reference_chunk_rows
     ))$resources
@@ -2028,7 +2030,7 @@ massive_index_shard <- function(x, setup, parts, shard,
     reference <- massive_matrix_rows(x, first, count)
     method <- if (setup$method == "ivf_sharded") "ivf" else if
         (backend == "cpu") "faiss_hnsw" else "exact"
-    if (backend != "cpu") on.exit({
+    on.exit({
         prepared <- state <- NULL
         invisible(gc(FALSE))
     }, add = TRUE)
@@ -2129,14 +2131,15 @@ massive_sharded_result <- function(x, paths, setup, backend,
 }
 
 massive_full_shard_resources <- function(x, k, chunk_rows,
-        reference_chunk_rows, memory_limit, backend, method) {
+        reference_chunk_rows, memory_limit, backend, method,
+        target_recall, hnsw_build) {
     if (backend == "metal") return(massive_metal_sharded_resources(
         x, k, chunk_rows, reference_chunk_rows, memory_limit))
     if (backend == "cuda") {
         massive_cuda_sharded_resources(x, k, chunk_rows,
             reference_chunk_rows, memory_limit, method = method)
-    } else massive_hnsw_sharded_resources(x, k,
-        chunk_rows, reference_chunk_rows, memory_limit)
+    } else massive_hnsw_sharded_resources(x, k, chunk_rows,
+        reference_chunk_rows, memory_limit, target_recall, hnsw_build)
 }
 
 massive_sharded_graph <- function(x, k, output, n.cores,
@@ -2146,7 +2149,8 @@ massive_sharded_graph <- function(x, k, output, n.cores,
         target_recall = 0.99) {
     workers <- normalize_nn_threads(n.cores)
     resources <- massive_full_shard_resources(x, k, chunk_rows,
-        reference_chunk_rows, memory_limit, backend, method)
+        reference_chunk_rows, memory_limit, backend, method,
+        target_recall, hnsw_build)
     if (ef_search > x$nrow / resources$n_shards)
         stop("`ef_search` exceeds the smallest reference shard.")
     paths <- massive_knn_paths(output, resources$output_bytes, resume)

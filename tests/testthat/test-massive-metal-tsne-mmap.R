@@ -196,6 +196,12 @@ test_that("file-backed Metal t-SNE maps and streams a 2D graph", {
     expect_identical(mapped$fft_grid_size, 128L)
     expect_identical(streamed$resources$graph_access,
         "bounded_stream")
+    for (fit in list(mapped, streamed)) {
+        expect_identical(fit$resources$metal_memory_measurement_scope,
+            "peak_owned_optimizer_buffers")
+        expect_gt(fit$resources$observed_metal_owned_buffer_peak_bytes,
+            16 * 2 * 4)
+    }
     expect_identical(z, y)
     commit <- fastEmbedR:::massive_tsne_checkpoint_commit
     pause <- function(...) {

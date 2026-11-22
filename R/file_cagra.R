@@ -65,6 +65,10 @@ massive_file_cagra_graph <- function(data, output, setup,
     graph$resources$device_bytes_estimate <- index$device_bytes_estimate
     graph$resources$host_batch_bytes_estimate <- index$host_batch_bytes_estimate
     graph$resources$owned_metal_bytes <- index$owned_metal_bytes
+    graph$resources$observed_metal_owned_buffer_peak_bytes <-
+        index$observed_metal_owned_buffer_peak_bytes
+    graph$resources$metal_memory_measurement_scope <-
+        index$metal_memory_measurement_scope
     graph$resources$device_free_bytes_at_build <-
         index$device_free_bytes_at_build
     graph$cagra_settings <- index$params

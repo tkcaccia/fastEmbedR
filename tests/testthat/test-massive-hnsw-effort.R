@@ -34,6 +34,20 @@ test_that("file HNSW budgets two vector copies for a single bulk add", {
     expect_gt(plan(source, 30L, NULL, 500000L, "20GB")$n_shards, 1L)
 })
 
+test_that("file HNSW sends recall and an explicit build degree to faissR", {
+    source <- list(nrow = 10000000L, ncol = 96L, format = "f32")
+    testthat::local_mocked_bindings(
+        faissr_knn_select_cpp = function(request) {
+            expect_identical(request$target_recall, 0.95)
+            expect_identical(request$hnsw_build_m, 128L)
+            list(resources = list(n_shards = 4L))
+        }, .package = "fastEmbedR")
+    plan <- fastEmbedR:::massive_hnsw_sharded_resources(
+        source, 30L, NULL, NULL, "22GB", 0.95,
+        list(m = 128L, ef_construction = 300L))
+    expect_identical(plan$n_shards, 4L)
+})
+
 test_that("sharded HNSW tunes for output k, not the self candidate", {
     set.seed(215)
     reference <- matrix(rnorm(90L * 6L), ncol = 6L)
@@ -63,6 +77,32 @@ test_that("sharded HNSW tunes for output k, not the self candidate", {
     expect_identical(observed$policy_k, 30L)
     expect_identical(observed$method, "faiss_hnsw")
     expect_null(observed$hnsw_build)
+})
+
+test_that("the next CPU shard starts after the previous index is finalized", {
+    released <- 0L
+    finalize_index <- function(index) released <<- released + 1L
+    testthat::local_mocked_bindings(
+        massive_matrix_rows = function(...) NULL,
+        massive_index_shard_state = function(x, reference, setup, shard, ...) {
+            expect_identical(released, shard)
+            pointer <- new.env()
+            reg.finalizer(pointer, finalize_index)
+            list(state = list(index = list(pointer = pointer),
+                build_seconds = 0))
+        },
+        massive_sharded_probe = function(...) NULL,
+        massive_checkpoint_source_identity = function(...) "stable",
+        massive_sharded_batch = function(...) list(rows = 128L,
+            timings = c(search = 0, write = 0)),
+        .package = "fastEmbedR")
+    setup <- list(k = 5L, method = "hnsw_sharded",
+        resources = list(n_shards = 2L))
+    for (shard in 0:1) {
+        fastEmbedR:::massive_index_shard(list(nrow = 128L), setup,
+            NULL, shard, "stable", "cpu", NULL)
+    }
+    expect_identical(released, 2L)
 })
 
 test_that("massive CPU graph honors explicit HNSW search effort", {
