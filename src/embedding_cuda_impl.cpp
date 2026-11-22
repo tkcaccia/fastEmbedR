@@ -33,6 +33,8 @@ int fastembedr_cuda_last_tsne_graph_capture();
 int fastembedr_cuda_last_tsne_stage_times(
     double* affinity, double* optimization, double* total);
 int fastembedr_cuda_last_umap_graph_capture();
+void fastembedr_cuda_last_umap_stage_times(
+    double* graph, double* initialization, double* optimization);
 int fastembedr_cuda_opentsne_fft_grid_size(int n);
 int fastembedr_cuda_embed(const int* neighbors,
                           const float* weights,
@@ -1722,6 +1724,15 @@ NumericMatrix knn_embed_cuda_impl(IntegerMatrix indices,
   return result;
 }
 
+void set_cuda_umap_stage_timing(NumericMatrix& layout) {
+  double graph, initialization, optimization;
+  fastembedr_cuda_last_umap_stage_times(&graph, &initialization, &optimization);
+  layout.attr("cuda_umap_stage_timing") = List::create(
+    Rcpp::Named("graph") = graph,
+    Rcpp::Named("initialization") = initialization,
+    Rcpp::Named("optimization") = optimization);
+}
+
 NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix indices,
                                        NumericMatrix distances,
                                        int n_epochs,
@@ -1787,6 +1798,7 @@ NumericMatrix knn_umap_cuda_fused_impl(IntegerMatrix indices,
       );
     }
   }
+  set_cuda_umap_stage_timing(result);
   return result;
 }
 
@@ -1818,7 +1830,12 @@ NumericMatrix knn_umap_cuda_fused_float_impl(IntegerMatrix indices,
   if (spectral_n_iter < 1) Rcpp::stop("spectral_n_iter must be positive");
   if (!fastembedr_cuda_available()) Rcpp::stop("No CUDA device is available.");
 
-  std::vector<float> distance_float = cuda_copy_float32_payload(distances, n, k);
+  const IntegerMatrix payload = cuda_float32_data_slot(distances);
+  if (payload.nrow() != n || payload.ncol() != k) {
+    Rcpp::stop("CUDA float32 KNN dimensions do not match.");
+  }
+  const float* distance_float =
+    reinterpret_cast<const float*>(INTEGER(payload));
   if (n_components != 2 && n_components != 3) {
     Rcpp::stop("CUDA UMAP requires two or three output components.");
   }
@@ -1828,7 +1845,7 @@ NumericMatrix knn_umap_cuda_fused_float_impl(IntegerMatrix indices,
   const auto ab = find_ab_params(1.0, min_dist);
   const int status = fastembedr_cuda_umap_from_knn_spectral_float(
     indices.begin(),
-    distance_float.data(),
+    distance_float,
     n,
     k,
     n_components,
@@ -1856,6 +1873,7 @@ NumericMatrix knn_umap_cuda_fused_float_impl(IntegerMatrix indices,
       );
     }
   }
+  set_cuda_umap_stage_timing(result);
   return result;
 }
 
@@ -2310,7 +2328,12 @@ List knn_tsne_opentsne_cuda_float_impl(IntegerMatrix indices,
 
   const int n = indices.nrow();
   const int k = indices.ncol();
-  std::vector<float> distance_float = cuda_copy_float32_payload(distances, n, k);
+  const IntegerMatrix payload = cuda_float32_data_slot(distances);
+  if (payload.nrow() != n || payload.ncol() != k) {
+    Rcpp::stop("CUDA float32 KNN dimensions do not match.");
+  }
+  const float* distance_float =
+    reinterpret_cast<const float*>(INTEGER(payload));
   std::vector<float> init_float;
   if (init) {
     init_float = init_to_float_layout(y_init, n_components);
@@ -2322,7 +2345,7 @@ List knn_tsne_opentsne_cuda_float_impl(IntegerMatrix indices,
   std::vector<float> out(init_float.size());
   const int status = fastembedr_cuda_opentsne_fft_from_knn_float(
     indices.begin(),
-    distance_float.data(),
+    distance_float,
     init_float.data(),
     init ? 1 : 0,
     n,

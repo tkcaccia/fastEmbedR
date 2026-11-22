@@ -388,8 +388,9 @@ finish_gpu_host_umap <- function(state, backend, seed, distances) {
     layout
 }
 
-run_umap_cuda_host_3d <- function(indices, distances, cfg,
-                                    graph_mode, seed) {
+run_umap_cuda_host_fused <- function(
+    indices, distances, cfg, graph_mode, seed, n_components
+) {
     fused <- if (is_float32_matrix(distances)) {
         knn_umap_cuda_fused_float_cpp
     } else {
@@ -400,7 +401,7 @@ run_umap_cuda_host_3d <- function(indices, distances, cfg,
         as.integer(cfg$negative_sample_rate), cfg$learning_rate,
         cfg$min_dist, cfg$repulsion_strength,
         as.integer(cfg$spectral_n_iter), as.integer(seed), 0L,
-        3L, identical(graph_mode, "binary")
+        as.integer(n_components), identical(graph_mode, "binary")
     )
     cfg$init_backend <- "cuda_fused_diffusion"
     cfg$optimizer_backend <- "cuda"
@@ -409,6 +410,12 @@ run_umap_cuda_host_3d <- function(indices, distances, cfg,
     )
     cfg$graph_storage <- "native_cuda_device_row_major"
     cfg$gpu_transfer_policy <- "host_knn_uploaded_once"
+    cfg$gpu_umap_path <- "cuda_host_knn_fused_row_warp"
+    cfg$gpu_optimizer_mode <- "row_warp_atomic_tail"
+    timings <- attr(layout, "cuda_umap_stage_timing")
+    cfg$graph_elapsed_sec <- timings$graph
+    cfg$initialization_elapsed_sec <- timings$initialization
+    cfg$optimization_elapsed_sec <- timings$optimization
     layout <- finalize_embedding_layout(
         layout, "UMAP", return_float32 = is_float32_matrix(distances)
     )
@@ -426,11 +433,15 @@ run_umap_gpu_host_knn <- function(
     materialized <- materialize_umap_gpu_knn(
         indices, distances, knn, cfg
     )
-    if (n_components == 3L && cfg$backend == "cuda") {
-        return(run_umap_cuda_host_3d(
-            materialized$indices, materialized$distances,
-            materialized$cfg, graph_mode, seed
-        ))
+    bytes <- if (is_float32_matrix(materialized$distances)) 4L else 8L
+    if (cfg$backend == "cuda" && (n_components == 3L ||
+        !is.finite(cfg$init_scale) &&
+        umap_resident_cpu_needs_compact(nrow(materialized$indices),
+            ncol(materialized$indices), materialized$cfg$n_threads,
+            distance_bytes = bytes))) {
+        return(run_umap_cuda_host_fused(materialized$indices,
+            materialized$distances, materialized$cfg, graph_mode, seed,
+            n_components))
     }
     initialized <- initialize_umap_gpu_host_knn(
         materialized$indices, materialized$distances,

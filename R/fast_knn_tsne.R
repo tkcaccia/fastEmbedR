@@ -106,7 +106,8 @@ run_gpu_tsne_knn <- function(indices, init_data, settings, extra) {
     if (length(settings$devices) > 1L) {
         host <- fastembedr_gpu_knn_to_host(indices)
         resolved <- resolve_host_tsne_knn(host, NULL,
-            settings$n_neighbors, settings$perplexity, settings$backend)
+            settings$n_neighbors, settings$perplexity, settings$backend,
+            settings$devices)
         return(run_host_tsne_knn(resolved, init_data, settings, extra))
     }
     info <- fastembedr_gpu_knn_info(indices)
@@ -141,7 +142,7 @@ run_gpu_tsne_knn <- function(indices, init_data, settings, extra) {
 }
 
 resolve_host_tsne_knn <- function(
-    indices, distances, n_neighbors, perplexity, backend
+    indices, distances, n_neighbors, perplexity, backend, devices = NULL
 ) {
     if (inherits(indices, "fastEmbedR_tsne_prepared")) {
         if (!is.null(distances)) {
@@ -169,7 +170,7 @@ resolve_host_tsne_knn <- function(
     n_neighbors <- n_neighbors %||% policy$n_neighbors
     list(
         knn = normalize_opentsne_knn_input(
-            indices, distances, n_neighbors, backend
+            indices, distances, n_neighbors, backend, devices
         ),
         perplexity = perplexity %||%
             min(policy$perplexity, n_neighbors),
@@ -258,7 +259,7 @@ tsne_knn <- function(
         ))
     }
     resolved <- resolve_host_tsne_knn(
-        indices, distances, n_neighbors, perplexity, backend
+        indices, distances, n_neighbors, perplexity, backend, devices
     )
     run_host_tsne_knn(resolved, init_data, settings, extra)
 }
@@ -372,7 +373,7 @@ prepare_tsne_knn_input_run <- function(data, nn, settings) {
     policy <- opentsne_neighbor_policy(nrow(full$indices), settings$perplexity,
         full$n_neighbors, settings$affinity_k)
     knn <- normalize_opentsne_knn_input(
-        data, NULL, policy$n_neighbors, settings$backend
+        data, NULL, policy$n_neighbors, settings$backend, settings$devices
     )
     Y_init <- resolve_opentsne_y_init(
         settings$Y_init, knn$n, settings$n_components
@@ -393,14 +394,13 @@ prepare_tsne_knn_input_run <- function(data, nn, settings) {
 
 run_knn_input_tsne <- function(data, nn, settings, extra) {
     prepared <- prepare_tsne_knn_input_run(data, nn, settings)
-    overrides <- list(
-        n_neighbors = prepared$knn$n_neighbors,
-        perplexity = prepared$perplexity,
-        Y_init = prepared$Y_init
-    )
+    prepared$n_neighbors <- prepared$knn$n_neighbors
+    class(prepared) <- c("fastEmbedR_tsne_prepared", "list")
+    overrides <- list(n_neighbors = prepared$n_neighbors,
+        perplexity = prepared$perplexity, Y_init = prepared$Y_init)
     result <- timed_do_call(
         tsne_knn,
-        tsne_knn_call_args(data, settings, overrides, extra)
+        tsne_knn_call_args(prepared, settings, overrides, extra)
     )
     layout <- result$value
     cfg <- attr(layout, "fastEmbedR_config")

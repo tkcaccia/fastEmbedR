@@ -69,6 +69,27 @@ test_that("CUDA 3D UMAP reports nonfinite optimizer coordinates", {
     )
 })
 
+test_that("CUDA host UMAP builds a device graph under host pressure", {
+    skip_if_not(embedding_cuda_available_cpp())
+    set.seed(85)
+    x <- float::fl(matrix(rnorm(64L * 4L), nrow = 64L))
+    knn <- precompute_knn(x, k = 8L, backend = "cpu", n.cores = 2L)
+    local_mocked_bindings(
+        umap_resident_cpu_needs_compact = function(...) TRUE,
+        build_umap_csr_state = function(...) stop("Unexpected CPU graph"),
+        .package = "fastEmbedR"
+    )
+    layout <- umap_knn(knn, backend = "cuda", n.cores = 2L)
+    expect_s4_class(layout, "float32")
+    expect_identical(dim(layout), c(64L, 2L))
+    expect_true(all(is.finite(as.matrix(layout))))
+    cfg <- attr(layout, "fastEmbedR_config")
+    expect_identical(cfg$graph_prep_backend, "cuda_fuzzy_union_device")
+    expect_identical(cfg$optimizer_backend, "cuda")
+    expect_true(all(unlist(cfg[c("graph_elapsed_sec",
+        "initialization_elapsed_sec", "optimization_elapsed_sec")]) > 0))
+})
+
 test_that("CUDA landmark UMAP keeps fixed references in three dimensions", {
     skip_if_not(embedding_cuda_available_cpp())
     skip_if_not(fastembedr_cuda_knn_available())

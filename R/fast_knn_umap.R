@@ -920,8 +920,9 @@ umap_check_resident_csr_capacity <- function(rows, width,
 
 umap_resident_cpu_needs_compact <- function(rows, width, n_threads,
         memory_limit = getOption("memory_limit", "8GB"),
-        available = massive_available_ram_bytes()) {
-    conventional <- umap_resident_csr_stage_bytes(rows, width, n_threads)
+        available = massive_available_ram_bytes(), distance_bytes = 4L) {
+    conventional <- umap_resident_csr_stage_bytes(rows, width, n_threads,
+        distance_bytes)
     conventional$offset_dtype == "uint64" ||
         (is.finite(available) && conventional$peak_ram_estimate_bytes >
             0.7 * min(massive_memory_bytes(memory_limit), available))

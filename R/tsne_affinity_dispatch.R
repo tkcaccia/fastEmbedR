@@ -2,7 +2,7 @@
 
 normalize_opentsne_knn_input <- function(
     indices, distances = NULL,
-    n_neighbors = NULL, backend = NULL
+    n_neighbors = NULL, backend = NULL, devices = NULL
 ) {
     knn <- coerce_knn_input(indices, distances)
     n <- nrow(knn$indices)
@@ -24,8 +24,9 @@ normalize_opentsne_knn_input <- function(
             )
         }
     }
+    distance_bytes <- if (is_float32_matrix(knn$distances)) 4L else 8L
     tsne_check_resident_affinity_capacity(n, n_neighbors, backend = backend,
-        distance_bytes = if (is_float32_matrix(knn$distances)) 4L else 8L)
+        devices = devices, distance_bytes = distance_bytes)
     materialized <- materialize_knn_range(
         knn$indices, knn$distances,
         knn$col_start,
@@ -46,12 +47,15 @@ normalize_opentsne_knn_input <- function(
 tsne_check_resident_affinity_capacity <- function(rows, width,
         memory_limit = fastembedr_memory_option("8GB"),
         available = massive_available_ram_bytes(), backend = NULL,
-        distance_bytes = 8L) {
+        distance_bytes = 8L, devices = NULL) {
     edges <- as.double(rows) * width
     # CPU reads distances directly and stores 12 bytes per sortable edge.
     # Include two possible KNN inputs and two 8-byte output edges per pair.
     bytes_per_edge <- if (identical(backend, "cpu")) {
         2 * (4 + distance_bytes) + 12 + 16
+    } else if (identical(backend, "cuda") && length(devices) <= 1L) {
+        # The CUDA kernel constructs affinities in device memory.
+        2 * (4 + distance_bytes)
     } else 80
     estimate <- 256 * 1024^2 + bytes_per_edge * edges + 128 * rows
     limit <- massive_memory_bytes(memory_limit)
@@ -74,17 +78,16 @@ prepare_opentsne_materialized_run <- function(request) {
     request$gpu_resident_knn <- !is.null(request$gpu_knn)
     request$n <- if (request$gpu_resident_knn) {
         as.integer(request$gpu_n)
-    } else {
-        nrow(request$indices)
-    }
+    } else nrow(request$indices)
     request$k <- if (request$gpu_resident_knn) {
         as.integer(request$gpu_k)
-    } else {
-        ncol(request$indices)
+    } else ncol(request$indices)
+    if (!request$gpu_resident_knn) {
+        bytes <- if (is_float32_matrix(request$distances)) 4L else 8L
+        tsne_check_resident_affinity_capacity(request$n, request$k,
+            backend = request$optimizer_backend, devices = request$devices,
+            distance_bytes = bytes)
     }
-    if (!request$gpu_resident_knn) tsne_check_resident_affinity_capacity(
-        request$n, request$k, backend = request$optimizer_backend,
-        distance_bytes = if (is_float32_matrix(request$distances)) 4L else 8L)
     if (!is.null(request$devices)) {
         request$devices <- massive_validate_devices(request$devices,
             request$optimizer_backend, request$n)

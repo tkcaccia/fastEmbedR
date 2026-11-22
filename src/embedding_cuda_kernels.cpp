@@ -90,6 +90,9 @@ struct KnnPrepParams {
 thread_local std::string embedding_last_error;
 thread_local bool last_tsne_cuda_graph_capture = false;
 thread_local bool last_umap_cuda_graph_capture = false;
+thread_local double last_umap_graph_seconds = 0.0;
+thread_local double last_umap_init_seconds = 0.0;
+thread_local double last_umap_optimization_seconds = 0.0;
 thread_local double last_tsne_affinity_seconds =
   std::numeric_limits<double>::quiet_NaN();
 thread_local double last_tsne_optimization_seconds =
@@ -4376,6 +4379,13 @@ extern "C" int fastembedr_cuda_last_umap_graph_capture() {
   return last_umap_cuda_graph_capture ? 1 : 0;
 }
 
+extern "C" void fastembedr_cuda_last_umap_stage_times(
+    double* graph, double* initialization, double* optimization) {
+  *graph = last_umap_graph_seconds;
+  *initialization = last_umap_init_seconds;
+  *optimization = last_umap_optimization_seconds;
+}
+
 extern "C" bool fastembedr_cuda_available() {
   int count = 0;
   cudaError_t code = cudaGetDeviceCount(&count);
@@ -5552,6 +5562,7 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
                                                        float* out) {
   embedding_last_error.clear();
   last_umap_cuda_graph_capture = false;
+  const auto graph_started = std::chrono::steady_clock::now();
   if (d_indices_src == nullptr || d_distances_src == nullptr || out == nullptr) {
     set_embedding_error("null device pointer");
     return 1;
@@ -5676,6 +5687,10 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
     }
   }
 
+  if (check_cuda(cudaDeviceSynchronize(),
+        "cudaDeviceSynchronize(fused UMAP graph)")) return 1;
+  const auto graph_finished = std::chrono::steady_clock::now();
+
   if (n_components == 3) {
     umap_random_init_3d<<<blocks, threads>>>(d_current, n, seed);
   } else {
@@ -5794,6 +5809,7 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
     cleanup();
     return 1;
   }
+  const auto init_finished = std::chrono::steady_clock::now();
   auto encode_epoch = [&](int epoch, bool check_launches) -> int {
     if (optimizer_mode == 1) {
       if (check_cuda(
@@ -5939,6 +5955,13 @@ int fastembedr_cuda_umap_from_device_knn_spectral_impl(const int* d_indices_src,
   }
 
   cleanup();
+  const auto finished = std::chrono::steady_clock::now();
+  last_umap_graph_seconds =
+    std::chrono::duration<double>(graph_finished - graph_started).count();
+  last_umap_init_seconds =
+    std::chrono::duration<double>(init_finished - graph_finished).count();
+  last_umap_optimization_seconds =
+    std::chrono::duration<double>(finished - init_finished).count();
   return 0;
 }
 
@@ -5976,7 +5999,9 @@ int fastembedr_cuda_umap_from_knn_spectral_impl(const int* indices,
     input_items * (sizeof(int) + sizeof(DistanceT)) + 8u * 256u;
   CudaWorkspace workspace;
   auto cleanup = [&]() {};
-  if (workspace.init(workspace_bytes, "fused umap host knn copy")) {
+  if (check_embedding_memory_available(workspace_bytes,
+        "CUDA fused UMAP KNN upload preflight") ||
+      workspace.init(workspace_bytes, "fused umap host knn copy")) {
     cleanup();
     return 1;
   }
