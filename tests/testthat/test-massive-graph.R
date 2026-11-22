@@ -2215,6 +2215,8 @@ test_that("streamed CUDA t-SNE uses its FFT optimizer", {
     observed <- massive_read_rows(cuda, 1L, n)
     expect_identical(cuda$backend, "native_cuda_fft_graph_stream")
     expect_identical(cuda$optimizer, "fft_grid_cuda_cufft")
+    expect_identical(cuda$resources$graph_feeder, "cached_device")
+    expect_equal(cuda$resources$device_graph_cache_bytes, graph$n_edges * 12)
     stages <- unlist(cuda$stage_seconds, use.names = TRUE)
     expect_named(stages, c("repulsion_enqueue", "graph_visit",
         "attraction_sync", "update_sync", "output_write"))

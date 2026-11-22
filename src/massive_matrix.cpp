@@ -7109,6 +7109,10 @@ List massive_tsne_optimize_cuda_cpp(
   }
 #endif
   const auto started = std::chrono::steady_clock::now();
+  const auto graph_edges = graph.edges();
+  const int cache = !multi && total - start_iter > 1 ?
+    fastembedr_massive_tsne_cuda_cache_begin(context.get(), graph_edges) : 0;
+  if (cache < 0) massive_tsne_cuda_check(1);
   for (int iter = start_iter; iter < total; ++iter) {
     const bool early = iter < early_iter;
     const float phase_exag = static_cast<float>(early ?
@@ -7156,7 +7160,15 @@ List massive_tsne_optimize_cuda_cpp(
       Rcpp::checkUserInterrupt();
     } else
 #endif
-    for (std::uint64_t first = 1; first <= graph.vertices();) {
+    if (cache == 1 && iter > start_iter) {
+      const auto begin = std::chrono::steady_clock::now();
+      massive_tsne_cuda_check(fastembedr_massive_tsne_cuda_cache_replay(
+        context.get(), phase_exag));
+      attraction_sync_seconds += std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - begin).count();
+      attraction_edges[0] += graph_edges;
+      Rcpp::checkUserInterrupt();
+    } else for (std::uint64_t first = 1; first <= graph.vertices();) {
       const auto read_started = std::chrono::steady_clock::now();
       const auto rows = graph.bounded_rows(first, 8192,
         edge_capacity, true);
@@ -7238,6 +7250,11 @@ List massive_tsne_optimize_cuda_cpp(
                           total, next_percent);
   }
   std::vector<double> expected_edges(devices.size(), 0.0);
+  if (!multi) {
+    expected_edges[0] = static_cast<double>(graph_edges) * (total - start_iter);
+    if (attraction_edges[0] != expected_edges[0]) Rcpp::stop(
+      "CUDA t-SNE attraction did not visit every graph edge.");
+  }
   if (multi) for (int rank = 0; rank < devices.size(); ++rank) {
     const auto first = static_cast<std::uint64_t>(rank) * owner_rows;
     const auto last = std::min<std::uint64_t>(n, first + owner_rows);
@@ -7270,6 +7287,8 @@ List massive_tsne_optimize_cuda_cpp(
     Rcpp::Named("per_device_attraction_edges") = attraction_edges,
     Rcpp::Named("per_device_expected_edges") = expected_edges,
     Rcpp::Named("owner_wall_seconds") = owner_wall_seconds,
+    Rcpp::Named("device_graph_cache_bytes") =
+      cache == 1 ? static_cast<double>(graph_edges) * 12.0 : 0.0,
     Rcpp::Named("repulsion_gpu_seconds") = repulsion_gpu_seconds,
     Rcpp::Named("stage_seconds") = List::create(
       Rcpp::Named("repulsion_enqueue") = repulsion_enqueue_seconds,

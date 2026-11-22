@@ -7053,6 +7053,10 @@ struct MassiveTsneCudaContext {
   int* heads = nullptr;
   int* tails = nullptr;
   float* weights = nullptr;
+  int* graph_cache = nullptr;
+  std::size_t edge_count = 0;
+  std::size_t edges_uploaded = 0;
+  std::vector<int> graph_batches;
   int n = 0;
   int dimensions = 2;
   int capacity = 0;
@@ -7070,6 +7074,7 @@ struct MassiveTsneCudaContext {
     if (repulsion_start != nullptr) cudaEventDestroy(repulsion_start);
     if (repulsion_end != nullptr) cudaEventDestroy(repulsion_end);
     if (owns_stream && stream != nullptr) cudaStreamDestroy(stream);
+    if (graph_cache != nullptr) cudaFree(graph_cache);
   }
 };
 
@@ -7395,6 +7400,66 @@ extern "C" int fastembedr_massive_tsne_cuda_repulsion_ms(
     "cudaEventElapsedTime(t-SNE repulsion)");
 }
 
+// Return 1 for an admitted cache, 0 for bounded streaming, and -1 on error.
+extern "C" int fastembedr_massive_tsne_cuda_cache_begin(void* raw,
+    std::uint64_t edges) {
+  auto* ctx = static_cast<MassiveTsneCudaContext*>(raw);
+  if (ctx == nullptr || ctx->graph_cache != nullptr) {
+    set_embedding_error("invalid file-backed t-SNE graph cache request");
+    return -1;
+  }
+  constexpr std::size_t reserve = 512u * 1024u * 1024u;
+  constexpr std::size_t edge_bytes = 2 * sizeof(int) + sizeof(float);
+  if (edges == 0 || edges > SIZE_MAX / edge_bytes) return 0;
+  std::size_t free = 0, total = 0;
+  if (check_cuda(cudaMemGetInfo(&free, &total),
+        "cudaMemGetInfo(file-backed t-SNE cache)")) return -1;
+  const auto bytes = static_cast<std::size_t>(edges) * edge_bytes;
+  if (free <= reserve || bytes > (free - reserve) / 2u) return 0;
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&ctx->graph_cache),
+        bytes), "cudaMalloc(file-backed t-SNE graph cache)")) return -1;
+  ctx->edge_count = static_cast<std::size_t>(edges);
+  return 1;
+}
+
+void massive_tsne_cuda_launch_attraction(MassiveTsneCudaContext* ctx,
+    const int* heads, const int* tails, const float* weights, int edges,
+    float exaggeration) {
+  const int blocks = (edges - 1) / 256 + 1;
+  if (ctx->dimensions == 3) {
+    massive_tsne_attractive_3d_kernel<<<blocks, 256, 0, ctx->stream>>>(
+      heads, tails, weights, ctx->current, ctx->gradient, edges, exaggeration);
+  } else {
+    massive_tsne_attractive_kernel<<<blocks, 256, 0, ctx->stream>>>(
+      heads, tails, weights, ctx->current, ctx->gradient, edges, exaggeration);
+  }
+}
+
+extern "C" int fastembedr_massive_tsne_cuda_cache_replay(void* raw,
+    float exaggeration) {
+  auto* ctx = static_cast<MassiveTsneCudaContext*>(raw);
+  if (ctx == nullptr || ctx->graph_cache == nullptr ||
+      ctx->edges_uploaded != ctx->edge_count ||
+      !std::isfinite(exaggeration) || exaggeration <= 0.0f) {
+    set_embedding_error("incomplete file-backed t-SNE graph cache");
+    return 1;
+  }
+  const int* heads = ctx->graph_cache;
+  const int* tails = heads + ctx->edge_count;
+  const float* weights = reinterpret_cast<const float*>(tails + ctx->edge_count);
+  for (int count : ctx->graph_batches) {
+    massive_tsne_cuda_launch_attraction(ctx, heads, tails, weights,
+      count, exaggeration);
+    if (check_cuda(cudaGetLastError(),
+          "file-backed t-SNE cached attraction launch")) return 1;
+    heads += count;
+    tails += count;
+    weights += count;
+  }
+  return check_cuda(cudaStreamSynchronize(ctx->stream),
+    "cudaStreamSynchronize(file-backed t-SNE graph cache)");
+}
+
 extern "C" int fastembedr_massive_tsne_cuda_attract(
     void* raw, const int* heads, const int* tails,
     const float* weights, int edges, float exaggeration) {
@@ -7405,31 +7470,39 @@ extern "C" int fastembedr_massive_tsne_cuda_attract(
     set_embedding_error("invalid massive CUDA t-SNE edge batch");
     return 1;
   }
-  const auto bytes = static_cast<std::size_t>(edges) * sizeof(float);
-  if (check_cuda(cudaMemcpyAsync(ctx->heads, heads, bytes,
+  const auto items = static_cast<std::size_t>(edges);
+  const auto bytes = items * sizeof(float);
+  auto* d_heads = ctx->heads;
+  auto* d_tails = ctx->tails;
+  auto* d_weights = ctx->weights;
+  if (ctx->graph_cache != nullptr) {
+    if (items > ctx->edge_count - ctx->edges_uploaded) {
+      set_embedding_error("file-backed t-SNE graph exceeds cache capacity");
+      return 1;
+    }
+    d_heads = ctx->graph_cache + ctx->edges_uploaded;
+    d_tails = d_heads + ctx->edge_count;
+    d_weights = reinterpret_cast<float*>(d_tails + ctx->edge_count);
+  }
+  if (check_cuda(cudaMemcpyAsync(d_heads, heads, bytes,
         cudaMemcpyHostToDevice, ctx->stream),
         "cudaMemcpyAsync(massive t-SNE heads)") ||
-      check_cuda(cudaMemcpyAsync(ctx->tails, tails, bytes,
+      check_cuda(cudaMemcpyAsync(d_tails, tails, bytes,
         cudaMemcpyHostToDevice, ctx->stream),
         "cudaMemcpyAsync(massive t-SNE tails)") ||
-      check_cuda(cudaMemcpyAsync(ctx->weights, weights, bytes,
+      check_cuda(cudaMemcpyAsync(d_weights, weights, bytes,
         cudaMemcpyHostToDevice, ctx->stream),
         "cudaMemcpyAsync(massive t-SNE weights)")) return 1;
-  if (ctx->dimensions == 3) {
-    massive_tsne_attractive_3d_kernel<<<(edges - 1) /
-      256 + 1, 256, 0, ctx->stream>>>(ctx->heads,
-      ctx->tails, ctx->weights, ctx->current,
-      ctx->gradient, edges, exaggeration);
-  } else {
-    massive_tsne_attractive_kernel<<<(edges - 1) /
-      256 + 1, 256, 0, ctx->stream>>>(ctx->heads,
-      ctx->tails, ctx->weights, ctx->current,
-      ctx->gradient, edges, exaggeration);
+  massive_tsne_cuda_launch_attraction(ctx, d_heads, d_tails, d_weights,
+    edges, exaggeration);
+  if (check_cuda(cudaGetLastError(), "massive t-SNE attraction launch") ||
+      check_cuda(cudaStreamSynchronize(ctx->stream),
+        "cudaStreamSynchronize(massive t-SNE attraction)")) return 1;
+  if (ctx->graph_cache != nullptr) {
+    ctx->edges_uploaded += items;
+    ctx->graph_batches.push_back(edges);
   }
-  return check_cuda(cudaGetLastError(),
-      "massive_tsne_attractive_kernel launch") ||
-    check_cuda(cudaStreamSynchronize(ctx->stream),
-      "cudaStreamSynchronize(massive t-SNE attraction)");
+  return 0;
 }
 
 extern "C" int fastembedr_massive_tsne_cuda_finish(

@@ -156,6 +156,12 @@ massive_tsne_result <- function(plan, graph, init, fit, saved) {
     result$parameters$resumed_from_iteration <- saved$iteration
     result$resources <- massive_tsne_result_resources(
         plan, graph, fit, saved)
+    if (plan$backend == "cuda") {
+        cache <- fit$device_graph_cache_bytes %||% 0
+        result$resources$device_graph_cache_bytes <- cache
+        if (cache > 0) result$resources$graph_feeder <- "cached_device"
+        result$resources$estimated_peak_vram_bytes <- plan$peak_vram + cache
+    }
     if (plan$backend == "metal")
         result$metal_allocated_bytes_observed <-
             fit$metal_allocated_bytes_observed %||% NA_real_

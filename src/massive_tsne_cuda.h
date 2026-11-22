@@ -1,6 +1,8 @@
 #ifndef FASTEMBEDR_MASSIVE_TSNE_CUDA_H
 #define FASTEMBEDR_MASSIVE_TSNE_CUDA_H
 
+#include <cstdint>
+
 extern "C" void* fastembedr_massive_tsne_cuda_create(
     int vertices, int dimensions, int edge_capacity);
 extern "C" int fastembedr_massive_tsne_cuda_upload(
@@ -11,6 +13,10 @@ extern "C" int fastembedr_massive_tsne_cuda_repulsion_ms(
 extern "C" int fastembedr_massive_tsne_cuda_attract(
     void* context, const int* heads, const int* tails,
     const float* weights, int edges, float exaggeration);
+extern "C" int fastembedr_massive_tsne_cuda_cache_begin(
+    void* context, std::uint64_t edges);
+extern "C" int fastembedr_massive_tsne_cuda_cache_replay(
+    void* context, float exaggeration);
 extern "C" int fastembedr_massive_tsne_cuda_finish(
     void* context, float learning_rate, float momentum,
     float min_gain, float max_step_norm);
