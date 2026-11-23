@@ -345,6 +345,29 @@ test_that("full-graph Metal UMAP streams a prepared fuzzy graph", {
     expect_equal(dim(massive_read_rows(fit, 1L, rows)), c(rows, 2L))
     expect_true(all(is.finite(massive_read_rows(fit, 1L, rows))))
     expect_gt(sum(abs(massive_read_rows(fit, 1L, rows) - initial)), 0)
+    cached <- local({
+        prior <- options(fastEmbedR.metal_umap_cache_graph = TRUE)
+        on.exit(options(prior))
+        massive_umap_optimize(graph, source,
+            file.path(directory, "cached.f32"), backend = "metal",
+            n_epochs = 16L, negative_sample_rate = 1L,
+            chunk_rows = 5L, memory_limit = "256MB")
+    })
+    expect_identical(cached$optimizer, "metal_cached_compact_sgd")
+    expect_identical(cached$optimizer_backend_stages, "metal")
+    expect_equal(cached$parameters$cpu_tail_epochs, 0L)
+    expect_gt(cached$optimizer_stage_seconds[["cache_prepare"]], 0)
+    expect_equal(cached$optimizer_work$epochs_dispatched, 15L)
+    expect_gt(cached$optimizer_work$active_edges, 0)
+    expect_lte(cached$optimizer_work$active_edges, graph$n_edges)
+    expect_gt(cached$optimizer_work$coordinates_changed, 0)
+    expect_lte(cached$optimizer_work$coordinates_changed, 2 * rows)
+    expect_gte(cached$resources$observed_metal_owned_buffer_peak_bytes,
+        rows * 8 + graph$n_edges * 12)
+    found <- massive_read_rows(cached, 1L, rows)
+    expect_equal(dim(found), c(rows, 2L))
+    expect_true(all(is.finite(found)))
+    expect_gt(sum(abs(found - initial)), 0)
     batched <- file.path(directory, "batched.f32")
     native <- fastEmbedR:::massive_umap_optimize_metal_cpp(
         graph$offsets_path, graph$indices_path, graph$weights_path,

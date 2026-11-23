@@ -25,7 +25,7 @@ massive_tsne_optimize(
   checkpoint_every = 100L,
   devices = NULL,
   graph_access = "auto",
-  edge_chunk_capacity = 8388608L
+  edge_chunk_capacity = NULL
 )
 }
 \arguments{
@@ -64,9 +64,12 @@ bounded attraction-edge buffer per requested device.}
 \item{devices}{CUDA device IDs. Multiple IDs run one coordinated fit.}
 
 \item{graph_access}{Metal graph access: \code{"auto"}, \code{"mmap"}, or
-\code{"stream"}. Auto streams graphs larger than one edge chunk.}
+\code{"stream"}. Auto maps the graph when it fits the host and Metal
+memory budgets, and streams otherwise.}
 
-\item{edge_chunk_capacity}{Maximum attraction edges per Metal SSD chunk.}
+\item{edge_chunk_capacity}{Maximum attraction edges per Metal SSD chunk.
+\code{NULL} uses 8,388,608 edges. An explicit capacity also limits the
+graph size eligible for automatic mapping.}
 }
 \value{
 An experimental file-backed \code{fastEmbedR_massive_matrix}.

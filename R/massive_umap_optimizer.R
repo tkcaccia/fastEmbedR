@@ -77,18 +77,19 @@ massive_umap_optimize <- function(graph, init, output,
     if (plan$backend == "cuda" && is.null(plan$devices) &&
         !identical(built$backend_used, "native_cuda_umap_stream")) stop(
         "CUDA UMAP used an unexpected native route.", call. = FALSE)
-    if (plan$backend == "metal" &&
-        (!identical(built$backend_used,
-            "metal_snapshot_cpu_ordered_tail") ||
-        !is.numeric(built$metal_seconds) ||
-        !is.numeric(built$cpu_tail_seconds) ||
-        any(!is.finite(c(built$metal_seconds,
-            built$cpu_tail_seconds))))) stop(
-        "Metal UMAP stage accounting is incomplete.", call. = FALSE)
+    if (plan$backend == "metal") validate_massive_metal_umap_fit(built)
     if (!is.null(plan$devices))
         massive_umap_validate_cuda_fit(plan, graph, built, saved)
     massive_umap_result(plan, graph, init, built, saved, checkpoint,
         layout_storage)
+}
+
+validate_massive_metal_umap_fit <- function(built) {
+    if (!built$backend_used %in% c("metal_snapshot_cpu_ordered_tail",
+        "metal_cached_compact_sgd") || !is.numeric(built$metal_seconds) ||
+        !is.numeric(built$cpu_tail_seconds) ||
+        any(!is.finite(c(built$metal_seconds, built$cpu_tail_seconds))))
+        stop("Metal UMAP stage accounting is incomplete.", call. = FALSE)
 }
 
 massive_umap_validate_cuda_fit <- function(plan, graph, built, saved) {
@@ -196,7 +197,7 @@ massive_umap_result <- function(plan, graph, init, built, saved,
     result$optimizer <- if (plan$backend == "cpu" &&
         plan$cpu_update == "synchronized")
         "synchronized_cpu_fixed_point" else if (plan$backend == "metal")
-        "metal_snapshot_cpu_ordered_tail" else if (
+        built$backend_used else if (
             is.null(plan$devices))
         paste0("streamed_", plan$backend, "_sgd") else "synchronized_cuda_nccl"
     result$layout_storage <- if (plan$backend == "cuda" &&
@@ -228,19 +229,29 @@ massive_umap_result <- function(plan, graph, init, built, saved,
 
 massive_umap_metal_result <- function(result, plan, built) {
     result$native_backend_used <- built$backend_used
-    result$optimizer_backend_stages <- c("metal", "cpu")
+    result$optimizer_backend_stages <- if (built$cpu_tail_epochs > 0)
+        c("metal", "cpu") else "metal"
     result$optimizer_stage_seconds <- c(
         metal = built$metal_seconds,
         cpu_tail = built$cpu_tail_seconds)
+    if (!is.null(built$cache_prepare_seconds)) {
+        result$optimizer_stage_seconds <- c(result$optimizer_stage_seconds,
+            cache_prepare = built$cache_prepare_seconds)
+        result$optimizer_work <- built[c("active_edges", "coordinates_changed",
+            "epochs_dispatched")]
+    }
     result$parameters$metal_epochs <- built$metal_epochs
     result$parameters$cpu_tail_epochs <- built$cpu_tail_epochs
     result$resources <- c(result$resources,
         list(metal_memory_model = "unified_shared",
-            metal_buffer_bytes_estimate = 2 * plan$layout_bytes +
-                24 * plan$edge_capacity,
+            metal_buffer_bytes_estimate = if (built$cpu_tail_epochs == 0)
+                plan$layout_bytes + 12 * built$n_edges else
+                2 * plan$layout_bytes + 24 * plan$edge_capacity,
             observed_metal_owned_buffer_peak_bytes =
                 built$observed_metal_owned_buffer_peak_bytes,
             metal_memory_measurement_scope = "peak_owned_optimizer_buffers",
+            metal_graph_cache_budget_insufficient =
+                isTRUE(built$cache_budget_insufficient),
             edge_batch_capacity = plan$edge_capacity,
             peak_vram_bytes = NA_real_))
     result

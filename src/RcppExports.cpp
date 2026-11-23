@@ -591,6 +591,23 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// umap_csr_spectral_metal_cpp
+NumericMatrix umap_csr_spectral_metal_cpp(SEXP offsets, IntegerVector neighbors, SEXP weights, int n_components, int n_iterations, int seed, double memory_limit);
+RcppExport SEXP _fastEmbedR_umap_csr_spectral_metal_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP n_componentsSEXP, SEXP n_iterationsSEXP, SEXP seedSEXP, SEXP memory_limitSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_components(n_componentsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_iterations(n_iterationsSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< double >::type memory_limit(memory_limitSEXP);
+    rcpp_result_gen = Rcpp::wrap(umap_csr_spectral_metal_cpp(offsets, neighbors, weights, n_components, n_iterations, seed, memory_limit));
+    return rcpp_result_gen;
+END_RCPP
+}
 // standardize_metal_cpp
 List standardize_metal_cpp(NumericMatrix data);
 RcppExport SEXP _fastEmbedR_standardize_metal_cpp(SEXP dataSEXP) {
@@ -874,6 +891,20 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type auto_config(auto_configSEXP);
     Rcpp::traits::input_parameter< double >::type auto_iter_end(auto_iter_endSEXP);
     rcpp_result_gen = Rcpp::wrap(knn_tsne_opentsne_metal_cpp(indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs, auto_config, auto_iter_end));
+    return rcpp_result_gen;
+END_RCPP
+}
+// massive_tsne_mmap_fits_cpp
+bool massive_tsne_mmap_fits_cpp(int rows, int dims, double edges, double host_limit);
+RcppExport SEXP _fastEmbedR_massive_tsne_mmap_fits_cpp(SEXP rowsSEXP, SEXP dimsSEXP, SEXP edgesSEXP, SEXP host_limitSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type rows(rowsSEXP);
+    Rcpp::traits::input_parameter< int >::type dims(dimsSEXP);
+    Rcpp::traits::input_parameter< double >::type edges(edgesSEXP);
+    Rcpp::traits::input_parameter< double >::type host_limit(host_limitSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_tsne_mmap_fits_cpp(rows, dims, edges, host_limit));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3030,8 +3061,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // massive_spectral_init_stream_cpp
-List massive_spectral_init_stream_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string output, int n_components, int spectral_n_iter, int seed, int chunk_rows, double memory_limit);
-RcppExport SEXP _fastEmbedR_massive_spectral_init_stream_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP outputSEXP, SEXP n_componentsSEXP, SEXP spectral_n_iterSEXP, SEXP seedSEXP, SEXP chunk_rowsSEXP, SEXP memory_limitSEXP) {
+List massive_spectral_init_stream_cpp(std::string offsets_path, std::string indices_path, std::string weights_path, double n_vertices, std::string output, int n_components, int spectral_n_iter, int seed, int chunk_rows, double memory_limit, bool use_metal);
+RcppExport SEXP _fastEmbedR_massive_spectral_init_stream_cpp(SEXP offsets_pathSEXP, SEXP indices_pathSEXP, SEXP weights_pathSEXP, SEXP n_verticesSEXP, SEXP outputSEXP, SEXP n_componentsSEXP, SEXP spectral_n_iterSEXP, SEXP seedSEXP, SEXP chunk_rowsSEXP, SEXP memory_limitSEXP, SEXP use_metalSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -3045,7 +3076,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< int >::type chunk_rows(chunk_rowsSEXP);
     Rcpp::traits::input_parameter< double >::type memory_limit(memory_limitSEXP);
-    rcpp_result_gen = Rcpp::wrap(massive_spectral_init_stream_cpp(offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit));
+    Rcpp::traits::input_parameter< bool >::type use_metal(use_metalSEXP);
+    rcpp_result_gen = Rcpp::wrap(massive_spectral_init_stream_cpp(offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit, use_metal));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3545,6 +3577,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_pca_tsvd_cuda_cpp", (DL_FUNC) &_fastEmbedR_pca_tsvd_cuda_cpp, 8},
     {"_fastEmbedR_embedding_metal_available_cpp", (DL_FUNC) &_fastEmbedR_embedding_metal_available_cpp, 0},
     {"_fastEmbedR_spectral_knn_init_metal_cpp", (DL_FUNC) &_fastEmbedR_spectral_knn_init_metal_cpp, 5},
+    {"_fastEmbedR_umap_csr_spectral_metal_cpp", (DL_FUNC) &_fastEmbedR_umap_csr_spectral_metal_cpp, 7},
     {"_fastEmbedR_standardize_metal_cpp", (DL_FUNC) &_fastEmbedR_standardize_metal_cpp, 1},
     {"_fastEmbedR_project_embedding_knn_metal_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_knn_metal_cpp, 3},
     {"_fastEmbedR_project_embedding_affine_metal_cpp", (DL_FUNC) &_fastEmbedR_project_embedding_affine_metal_cpp, 8},
@@ -3561,6 +3594,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_pca_tsvd_metal_cpp", (DL_FUNC) &_fastEmbedR_pca_tsvd_metal_cpp, 7},
     {"_fastEmbedR_transform_tsne_metal_cpp", (DL_FUNC) &_fastEmbedR_transform_tsne_metal_cpp, 19},
     {"_fastEmbedR_knn_tsne_opentsne_metal_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_metal_cpp, 21},
+    {"_fastEmbedR_massive_tsne_mmap_fits_cpp", (DL_FUNC) &_fastEmbedR_massive_tsne_mmap_fits_cpp, 4},
     {"_fastEmbedR_massive_tsne_optimize_metal_cpp", (DL_FUNC) &_fastEmbedR_massive_tsne_optimize_metal_cpp, 23},
     {"_fastEmbedR_pca_rsvd_cpu_cpp", (DL_FUNC) &_fastEmbedR_pca_rsvd_cpu_cpp, 7},
     {"_fastEmbedR_float32_all_finite_cpp", (DL_FUNC) &_fastEmbedR_float32_all_finite_cpp, 2},
@@ -3687,7 +3721,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_massive_umap_optimize_cuda_cpp", (DL_FUNC) &_fastEmbedR_massive_umap_optimize_cuda_cpp, 23},
     {"_fastEmbedR_massive_tsne_optimize_cuda_cpp", (DL_FUNC) &_fastEmbedR_massive_tsne_optimize_cuda_cpp, 24},
     {"_fastEmbedR_massive_read_graph_edges_cpp", (DL_FUNC) &_fastEmbedR_massive_read_graph_edges_cpp, 9},
-    {"_fastEmbedR_massive_spectral_init_stream_cpp", (DL_FUNC) &_fastEmbedR_massive_spectral_init_stream_cpp, 10},
+    {"_fastEmbedR_massive_spectral_init_stream_cpp", (DL_FUNC) &_fastEmbedR_massive_spectral_init_stream_cpp, 11},
     {"_fastEmbedR_massive_validate_csr_graph_cpp", (DL_FUNC) &_fastEmbedR_massive_validate_csr_graph_cpp, 4},
     {"_fastEmbedR_massive_read_csr_graph_edges_cpp", (DL_FUNC) &_fastEmbedR_massive_read_csr_graph_edges_cpp, 8},
     {"_fastEmbedR_massive_vote_landmarks_cpp", (DL_FUNC) &_fastEmbedR_massive_vote_landmarks_cpp, 4},

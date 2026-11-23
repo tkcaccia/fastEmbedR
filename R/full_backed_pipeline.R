@@ -82,17 +82,21 @@ full_backed_pipeline_init <- function(data, init, paths,
         source <- c(graph$offsets_path, graph$indices_path,
             graph$weights_path)
         identity <- massive_checkpoint_input_files_identity(source)
+        use_metal <- identical(backend, "metal") &&
+            isTRUE(getOption("fastEmbedR.metal_file_spectral"))
         built <- massive_spectral_init_stream_cpp(
             source[[1L]], source[[2L]], source[[3L]], graph$n_vertices,
             paths$spectral, dimensions, 50L, seed,
-            8192L, massive_memory_bytes(memory_limit))
+            8192L, massive_memory_bytes(memory_limit), use_metal)
         if (!identical(identity,
                 massive_checkpoint_input_files_identity(source))) stop(
             "UMAP graph changed during spectral initialization.",
             call. = FALSE)
         return(list(layout = massive_matrix(paths$spectral,
-            data$nrow, dimensions), fit = NULL, backend = "cpu",
-            method = "streamed_graph_spectral", resources = built))
+            data$nrow, dimensions), fit = NULL,
+            backend = if (use_metal) "metal" else "cpu",
+            method = if (use_metal) "mapped_graph_spectral" else
+                "streamed_graph_spectral", resources = built))
     }
     workers <- if (identical(backend, "metal")) 1L else n.cores
     fit <- pca(data, ncomp = dimensions, backend = backend,

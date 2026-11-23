@@ -6279,6 +6279,54 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
     Rcpp::stop("The full-graph Metal UMAP graph has no positive edges.");
   }
   const auto curve = fastembedr_umap_curve(min_dist);
+  SEXP cached_setting = Rf_GetOption1(
+    Rf_install("fastEmbedR.metal_umap_cache_graph"));
+  const bool cached = Rf_isLogical(cached_setting) &&
+    Rf_xlength(cached_setting) == 1 && LOGICAL(cached_setting)[0] == TRUE &&
+    n_components == 2 && checkpoint_every == 0 && start_epoch == 0;
+  if (cached) {
+    const auto fill = [&](FastembedrUmapCompactEdge* edges) {
+      std::size_t count = 0;
+      const float min_weight = max_weight / n_epochs;
+      massive_umap_scan(graph, chunk_rows, edge_capacity,
+        [&](std::uint64_t head, std::uint64_t tail, float weight,
+            std::uint64_t) {
+          if (weight < min_weight || head == tail) return;
+          edges[count++] = {static_cast<std::uint32_t>(head),
+            static_cast<std::uint32_t>(tail),
+            std::max(1.0f, max_weight / std::max(weight, 1e-6f))};
+        });
+      return count;
+    };
+    const double cache_limit = memory_limit_bytes - staging_bytes -
+      128.0 * 1024 * 1024 - edge_capacity * 32.0;
+    const auto result = fastembedr_massive_umap_metal_compact(
+      layout, static_cast<int>(graph.vertices()), n_epochs,
+      negative_sample_rate, learning_rate, curve.first, curve.second,
+      repulsion_strength, seed, graph.edges(), cache_limit, fill);
+    if (result.bytes > 0) {
+      if (mapped) mapped->finish(output);
+      else massive_umap_write_layout(layout, output, graph.vertices(),
+        n_components, chunk_rows, bytes);
+      return List::create(
+        Rcpp::Named("n_vertices") = static_cast<double>(graph.vertices()),
+        Rcpp::Named("n_edges") = static_cast<double>(graph.edges()),
+        Rcpp::Named("positive_updates") = NA_REAL,
+        Rcpp::Named("negative_updates") = NA_REAL,
+        Rcpp::Named("backend_used") = "metal_cached_compact_sgd",
+        Rcpp::Named("metal_epochs") = n_epochs,
+        Rcpp::Named("cpu_tail_epochs") = 0,
+        Rcpp::Named("metal_seconds") = result.device_seconds,
+        Rcpp::Named("cache_prepare_seconds") = result.prepare_seconds,
+        Rcpp::Named("active_edges") = static_cast<double>(result.active_edges),
+        Rcpp::Named("coordinates_changed") =
+          static_cast<double>(result.coordinates_changed),
+        Rcpp::Named("epochs_dispatched") = result.epochs_dispatched,
+        Rcpp::Named("cpu_tail_seconds") = 0.0,
+        Rcpp::Named("observed_metal_owned_buffer_peak_bytes") =
+          static_cast<double>(result.bytes));
+    }
+  }
   using MetalContext = std::unique_ptr<void, decltype(
     &fastembedr_massive_umap_metal_destroy)>;
   MetalContext context(fastembedr_massive_umap_metal_create(
@@ -6375,6 +6423,7 @@ List massive_umap_optimize_metal_cpp(std::string offsets_path,
     Rcpp::Named("metal_epochs") = n_epochs,
     Rcpp::Named("cpu_tail_epochs") = tail_epochs,
     Rcpp::Named("metal_seconds") = metal_seconds,
+    Rcpp::Named("cache_budget_insufficient") = cached,
     Rcpp::Named("observed_metal_owned_buffer_peak_bytes") =
       static_cast<double>(peak_buffers),
         Rcpp::Named("cpu_tail_seconds") = cpu_tail_seconds);
@@ -7494,7 +7543,10 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
     std::string indices_path, std::string weights_path,
     double n_vertices, std::string output, int n_components,
     int spectral_n_iter, int seed, int chunk_rows,
-    double memory_limit) {
+    double memory_limit, bool use_metal = false) {
+#ifndef HAVE_METAL
+  if (use_metal) Rcpp::stop("Metal UMAP spectral initialization needs Metal.");
+#endif
   CsrGraphSource graph(offsets_path, indices_path, weights_path,
                        n_vertices, "stream");
   const auto n = graph.vertices();
@@ -7507,9 +7559,12 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
     Rcpp::stop("Invalid streamed spectral initialization controls.");
   }
   const auto values = checked_product(n, block);
-  const auto estimated = checked_product(values, 16) +
+  const auto cpu_bytes = checked_product(values, 16) +
     checked_product(n, 8) +
     checked_product(chunk_rows, n_components * 4) + 16 * 1024 * 1024;
+  const double metal_bytes = use_metal ? 8.0 * graph.edges() +
+    8.0 * (n + 1) + 4.0 * n + 8.0 * values + 6.0 * 65536 : 0.0;
+  const double estimated = cpu_bytes + metal_bytes;
   if (estimated > memory_limit ||
       values > std::numeric_limits<std::size_t>::max() /
         sizeof(double)) {
@@ -7553,9 +7608,31 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
   };
   orthogonalize(q);
   double multiply_seconds = 0.0;
+  double metal_owned_bytes = 0.0;
+  double metal_prepare_seconds = 0.0;
+#ifdef HAVE_METAL
+  std::unique_ptr<void, decltype(&fastembedr_umap_spectral_metal_destroy)>
+    device(nullptr, fastembedr_umap_spectral_metal_destroy);
+  if (use_metal) {
+    const auto started = Clock::now();
+    device.reset(fastembedr_umap_spectral_metal_create(
+      offsets_path, indices_path, weights_path, static_cast<int>(n), block,
+      graph.edges(), inv_degree.data(), memory_limit - cpu_bytes));
+    metal_owned_bytes = fastembedr_umap_spectral_metal_buffers(device.get());
+    metal_prepare_seconds = seconds_since(started);
+  }
+#endif
   auto multiply = [&](const std::vector<double>& input,
                       std::vector<double>& result) {
     const auto started = Clock::now();
+#ifdef HAVE_METAL
+    if (device) {
+      fastembedr_umap_spectral_metal_multiply(
+        device.get(), input.data(), result.data());
+      multiply_seconds += seconds_since(started);
+      return;
+    }
+#endif
     std::fill(result.begin(), result.end(), 0.0);
     spectral_stream_scan(graph, chunk_rows,
       [&](std::uint64_t source, std::uint32_t target, double weight,
@@ -7646,15 +7723,20 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
   }
   sink.finish(checked_product(n, n_components * 4));
   return List::create(
-    Rcpp::Named("backend_used") = "native_cpu_streamed_spectral",
+    Rcpp::Named("backend_used") = (use_metal ?
+      "native_metal_mapped_spectral" : "native_cpu_streamed_spectral"),
     Rcpp::Named("n_vertices") = static_cast<double>(n),
     Rcpp::Named("dimensions") = n_components,
     Rcpp::Named("iterations") = spectral_n_iter,
     Rcpp::Named("graph_passes") = spectral_n_iter + 2,
-    Rcpp::Named("memory_bytes_estimate") =
-      static_cast<double>(estimated),
+    Rcpp::Named("cpu_graph_passes") = use_metal ? 1 : spectral_n_iter + 2,
+    Rcpp::Named("graph_access") = use_metal ? "read_only_mmap" : "stream",
+    Rcpp::Named("multiply_precision") = use_metal ? "float32" : "float64",
+    Rcpp::Named("metal_owned_workspace_bytes") = metal_owned_bytes,
+    Rcpp::Named("memory_bytes_estimate") = estimated,
     Rcpp::Named("stage_seconds") = Rcpp::NumericVector::create(
       Rcpp::Named("degree_scan") = degree_seconds,
+      Rcpp::Named("metal_prepare") = metal_prepare_seconds,
       Rcpp::Named("graph_multiply") = multiply_seconds,
       Rcpp::Named("orthogonalization") = project_seconds,
       Rcpp::Named("ritz_projection") = ritz_seconds,

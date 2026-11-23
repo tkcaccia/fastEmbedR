@@ -7,6 +7,12 @@ using Rcpp::List;
 using Rcpp::NumericMatrix;
 using Rcpp::NumericVector;
 
+FastembedrUmapCompactResult fastembedr_massive_umap_metal_compact(
+    float*, int, int, int, double, double, double, double, int, std::uint64_t,
+    double, const std::function<std::size_t(FastembedrUmapCompactEdge*)>&) {
+  Rcpp::stop("Full-graph Metal UMAP requires macOS Metal.");
+}
+
 extern "C" void* fastembedr_massive_umap_metal_create(
     const float*, int, int, int, int, double, double, double,
     double, int) {
@@ -40,6 +46,11 @@ NumericMatrix spectral_knn_init_metal_impl(IntegerMatrix,
                                            int,
                                            int) {
   Rcpp::stop("Metal spectral initialization is only available on macOS with Metal support.");
+}
+
+NumericMatrix umap_csr_spectral_metal_impl(SEXP, IntegerVector, SEXP,
+    int, int, int, double) {
+  Rcpp::stop("Metal CSR spectral initialization requires macOS Metal.");
 }
 
 List standardize_metal_impl(NumericMatrix) {
@@ -199,6 +210,10 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix,
                                   bool,
                                   double) {
   Rcpp::stop("Metal t-SNE optimizer is only available on macOS with Metal support.");
+}
+
+bool massive_tsne_mmap_fits_impl(int, int, double, double) {
+  Rcpp::stop("File-backed Metal t-SNE requires macOS with Metal support.");
 }
 
 List massive_tsne_optimize_metal_impl(

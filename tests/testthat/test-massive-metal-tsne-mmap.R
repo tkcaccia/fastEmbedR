@@ -7,6 +7,24 @@ test_that("CUDA t-SNE graph mapping respects the host memory limit", {
     expect_identical(choose("512MB"), "stream")
 })
 
+test_that("Metal t-SNE auto uses the measured mapping budget", {
+    graph <- list(n_vertices = 100000000, n_edges = 5200000000)
+    seen <- NULL
+    testthat::local_mocked_bindings(
+        massive_tsne_mmap_fits_cpp = function(rows, dims, edges, budget) {
+            seen <<- c(rows, dims, edges)
+            budget >= 64 * 1024^3
+        }, .package = "fastEmbedR")
+    choose <- function(budget, capacity = NULL, dims = 2L) {
+        fastEmbedR:::massive_tsne_graph_access(graph, "metal", "auto",
+            capacity, budget, dims)$mode
+    }
+    expect_identical(choose("200GB", dims = 3L), "mmap")
+    expect_equal(seen, c(100000000, 3, 5200000000))
+    expect_identical(choose("22GB"), "stream")
+    expect_identical(choose("200GB", capacity = 8388608L), "stream")
+})
+
 test_that("file-backed Metal t-SNE runs a 3D graph without fallback", {
     if (!isTRUE(fastEmbedR:::embedding_metal_available_cpp()))
         skip("Metal is unavailable")
@@ -60,6 +78,7 @@ test_that("file-backed Metal t-SNE runs a 3D graph without fallback", {
     expect_gt(result$resources$metal_working_set_cap_bytes,
         result$resources$metal_state_admission_bytes)
     expect_identical(result$fft_grid_size, 16L)
+    expect_identical(result$resources$iterations, 5L)
     expect_true(all(is.finite(massive_read_rows(result, 1L, 16L))))
     expect_false(file.exists(paste0(output, ".checkpoint.rds")))
     streamed <- massive_tsne_optimize(graph, start, streamed_path,

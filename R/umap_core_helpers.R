@@ -207,7 +207,14 @@ initialize_umap_gpu_host_knn <- function(indices,
         )
         return(list(init = NULL, cfg = cfg))
     }
-
+    if (cfg$backend == "metal" &&
+        (umap_csr_needs_wide(nrow(indices), ncol(indices)) ||
+            isTRUE(getOption("fastEmbedR.metal_umap_init_from_csr")) ||
+            isTRUE(getOption("fastEmbedR.metal_umap_csr_spectral")))) {
+        cfg$init_backend_reason <- "Initialize from the optimizer's CSR graph."
+        return(list(init = NULL, cfg = cfg))
+    }
+    started <- proc.time()[[3L]]
     init_distances <- if (is_float32_matrix(distances)) {
         matrix(
             as.numeric(distances),
@@ -228,6 +235,7 @@ initialize_umap_gpu_host_knn <- function(indices,
         n_threads = cfg$n_threads
     )
     init <- scale_embedding_sdev_r(init, cfg$init_scale)
+    cfg$initialization_elapsed_sec <- proc.time()[[3L]] - started
     cfg$init_backend <- attr(init, "backend")
     cfg$init_backend_reason <- paste(
         "CPU initialization avoids a separate GPU initialization round trip;",
@@ -257,7 +265,8 @@ build_umap_csr_state <- function(indices,
         graph_mode = graph_mode,
         allow_wide = cfg$backend %in% c("cpu", "metal") &&
             n_components %in% c(2L, 3L),
-        compact_cpu = cfg$backend == "cpu" && n_components %in% c(2L, 3L)
+        compact_cpu = cfg$backend == "cpu" && n_components %in% c(2L, 3L),
+        compact_metal = cfg$backend == "metal"
     )
     cfg$graph_elapsed_sec <- proc.time()[[3L]] - started
     if (is.null(init)) {
@@ -271,6 +280,8 @@ build_umap_csr_state <- function(indices,
         )
         cfg$initialization_elapsed_sec <- proc.time()[[3L]] - started
         cfg$init_backend <- attr(init, "backend")
+        cfg$metal_initialization_allocated_bytes <-
+            attr(init, "metal_spectral_buffer_bytes")
     }
     cfg$graph_nnz <- as.double(graph$nnz)
     cfg$csr_offset_dtype <- graph$offset_dtype

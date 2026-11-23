@@ -29,8 +29,11 @@
 #' @param n.cores CPU worker count for FFT, sparse attraction, and updates.
 #' @param devices CUDA device IDs. Multiple IDs run one coordinated fit.
 #' @param graph_access Metal graph access: `"auto"`, `"mmap"`, or
-#'   `"stream"`. Auto streams graphs larger than one edge chunk.
+#'   `"stream"`. Auto maps the graph when it fits the host and Metal
+#'   memory budgets, and streams otherwise.
 #' @param edge_chunk_capacity Maximum attraction edges per Metal SSD chunk.
+#'   `NULL` uses 8,388,608 edges. An explicit capacity also limits the
+#'   graph size eligible for automatic mapping.
 #' @param checkpoint Save coordinates and optimizer state periodically.
 #' @param resume Continue a matching interrupted fit.
 #' @param checkpoint_every Iterations between state snapshots.
@@ -46,7 +49,7 @@ massive_tsne_optimize <- function(graph, init, output,
         max_step_norm = Inf, memory_limit = "8GB",
         backend = "cpu", n.cores = 1L, checkpoint = FALSE,
         resume = FALSE, checkpoint_every = 100L, devices = NULL,
-        graph_access = "auto", edge_chunk_capacity = 8388608L) {
+        graph_access = "auto", edge_chunk_capacity = NULL) {
     plan <- massive_tsne_optimize_plan(graph, init, output,
         early_exaggeration_iter, n_iter, early_exaggeration,
         exaggeration, learning_rate, initial_momentum,
@@ -165,7 +168,7 @@ massive_tsne_result <- function(plan, graph, init, fit, saved) {
         result$metal_allocated_bytes_observed <-
             fit$metal_allocated_bytes_observed %||% NA_real_
         result$resources <- c(result$resources, fit[intersect(names(fit),
-            c("observed_metal_owned_buffer_peak_bytes",
+            c("observed_metal_owned_buffer_peak_bytes", "iterations",
                 "metal_memory_measurement_scope"))])
     }
     result$elapsed_seconds_current_call <- fit$elapsed_seconds
@@ -400,7 +403,9 @@ massive_tsne_validate_graph_init <- function(graph, init, backend) {
 }
 
 massive_tsne_graph_access <- function(graph, backend,
-        graph_access, edge_chunk_capacity, memory_limit) {
+        graph_access, edge_chunk_capacity, memory_limit, dimensions = 2L) {
+    explicit_capacity <- !is.null(edge_chunk_capacity)
+    edge_chunk_capacity <- edge_chunk_capacity %||% 8388608L
     if (backend != "metal") {
         if (!identical(graph_access, "auto") ||
             !is.numeric(edge_chunk_capacity) ||
@@ -426,8 +431,12 @@ massive_tsne_graph_access <- function(graph, backend,
             as.double(edge_chunk_capacity))) stop(
         "`edge_chunk_capacity` must be a positive integer.",
         call. = FALSE)
-    if (graph_access == "auto") graph_access <-
-        if (graph$n_edges > capacity) "stream" else "mmap"
+    if (graph_access == "auto") {
+        eligible <- !explicit_capacity || graph$n_edges <= capacity
+        fits <- eligible && massive_tsne_mmap_fits_cpp(graph$n_vertices,
+            dimensions, graph$n_edges, massive_auto_memory_limit(memory_limit))
+        graph_access <- if (fits) "mmap" else "stream"
+    }
     list(mode = graph_access, capacity = capacity)
 }
 
@@ -435,10 +444,10 @@ massive_tsne_optimize_plan <- function(graph, init, output,
         early_iter, normal_iter, early_exag, exag, learning_rate,
         momentum, final_momentum, min_gain, max_step,
         memory_limit, backend, n.cores, devices = NULL,
-        graph_access = "auto", edge_chunk_capacity = 8388608L) {
+        graph_access = "auto", edge_chunk_capacity = NULL) {
     massive_tsne_validate_graph_init(graph, init, backend)
     access <- massive_tsne_graph_access(graph, backend,
-        graph_access, edge_chunk_capacity, memory_limit)
+        graph_access, edge_chunk_capacity, memory_limit, init$ncol)
     graph_access <- access$mode
     capacity <- access$capacity
     selected <- massive_tsne_devices(devices, backend,

@@ -125,6 +125,10 @@ spectral_knn_init_metal_cpp <- function(indices, distances, n_components, spectr
     .Call(`_fastEmbedR_spectral_knn_init_metal_cpp`, indices, distances, n_components, spectral_n_iter, seed)
 }
 
+umap_csr_spectral_metal_cpp <- function(offsets, neighbors, weights, n_components, n_iterations, seed, memory_limit) {
+    .Call(`_fastEmbedR_umap_csr_spectral_metal_cpp`, offsets, neighbors, weights, n_components, n_iterations, seed, memory_limit)
+}
+
 standardize_metal_cpp <- function(data) {
     .Call(`_fastEmbedR_standardize_metal_cpp`, data)
 }
@@ -187,6 +191,10 @@ transform_tsne_metal_cpp <- function(reference_layout, indices, distances, y_ini
 
 knn_tsne_opentsne_metal_cpp <- function(indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs, auto_config, auto_iter_end) {
     .Call(`_fastEmbedR_knn_tsne_opentsne_metal_cpp`, indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs, auto_config, auto_iter_end)
+}
+
+massive_tsne_mmap_fits_cpp <- function(rows, dims, edges, host_limit) {
+    .Call(`_fastEmbedR_massive_tsne_mmap_fits_cpp`, rows, dims, edges, host_limit)
 }
 
 massive_tsne_optimize_metal_cpp <- function(offsets_path, indices_path, weights_path, init_path, output_path, n, dims, early_iter, normal_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, start_iter, state_path, checkpoint_every, checkpoint_callback, graph_access, edge_chunk_capacity) {
@@ -693,8 +701,8 @@ massive_read_graph_edges_cpp <- function(indices_path, distances_path, n_vertice
     .Call(`_fastEmbedR_massive_read_graph_edges_cpp`, indices_path, distances_path, n_vertices, k, access, first_row, count, max_bytes, kind)
 }
 
-massive_spectral_init_stream_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit) {
-    .Call(`_fastEmbedR_massive_spectral_init_stream_cpp`, offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit)
+massive_spectral_init_stream_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit, use_metal = FALSE) {
+    .Call(`_fastEmbedR_massive_spectral_init_stream_cpp`, offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit, use_metal)
 }
 
 massive_validate_csr_graph_cpp <- function(offsets_path, indices_path, weights_path, n_vertices) {

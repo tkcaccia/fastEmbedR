@@ -37,6 +37,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include "csr_edge_tiles.h"
 #include "massive_umap_metal.h"
 
 using Rcpp::IntegerMatrix;
@@ -1706,6 +1707,7 @@ kernel void umap_epoch_compact_edges(
 ) {
   const UmapCompactEdge edge = edges[gid];
   const float period = edge.period;
+  if (float(epoch) < period) return;
   const int sample = int(floor(float(epoch) / period));
   if (sample == int(floor(float(epoch - 1u) / period))) return;
 
@@ -2501,6 +2503,158 @@ kernel void spectral_diffuse(
     weight_sum += w;
   }
   next[row] = weight_sum > 0.0f ? total / weight_sum : current[row];
+}
+
+kernel void umap_spectral_csr_multiply(
+  device const ulong* offsets [[buffer(0)]],
+  device const uint* neighbors [[buffer(1)]],
+  device const float* weights [[buffer(2)]],
+  device const float* inv_degree [[buffer(3)]],
+  device const float* input [[buffer(4)]],
+  device float* output [[buffer(5)]],
+  constant uint3& rows_block_first [[buffer(6)]],
+  constant ulong& n_edges [[buffer(7)]],
+  uint gid [[thread_position_in_grid]]) {
+  const uint row = rows_block_first.z + gid;
+  const uint rows = rows_block_first.x;
+  const uint block = rows_block_first.y;
+  const ulong first = offsets[row], end = offsets[row + 1];
+  const ulong base = ulong(row) * block;
+  if (first > end || end > n_edges) {
+    for (uint col = 0; col < block; ++col) output[base + col] = NAN;
+    return;
+  }
+  if (block == 8) {
+    device const float4* vectors =
+      reinterpret_cast<device const float4*>(input);
+    device float4* result = reinterpret_cast<device float4*>(output);
+    float4 lo = 0.0f, hi = 0.0f;
+    for (ulong edge = first; edge < end; ++edge) {
+      const uint id = neighbors[edge] - 1;
+      if (id >= rows) { lo = NAN; break; }
+      const float w = weights[edge] * inv_degree[id];
+      lo = fma(float4(w), vectors[ulong(id) * 2], lo);
+      hi = fma(float4(w), vectors[ulong(id) * 2 + 1], hi);
+    }
+    result[ulong(row) * 2] = inv_degree[row] * lo;
+    result[ulong(row) * 2 + 1] = inv_degree[row] * hi;
+    return;
+  }
+  float total[9] = {};
+  for (ulong edge = first; edge < end; ++edge) {
+    const uint id = neighbors[edge] - 1;
+    if (id >= rows) {
+      for (uint col = 0; col < block; ++col) output[base + col] = NAN;
+      return;
+    }
+    const float w = weights[edge] * inv_degree[id];
+    for (uint col = 0; col < block; ++col) {
+      total[col] = fma(w, input[ulong(id) * block + col], total[col]);
+    }
+  }
+  for (uint col = 0; col < block; ++col) {
+    output[base + col] = inv_degree[row] * total[col];
+  }
+}
+
+kernel void umap_spectral_diffuse_csr(
+  device const ulong* offsets [[buffer(0)]],
+  device const uint* neighbors [[buffer(1)]],
+  device const float* weights [[buffer(2)]],
+  device const float* current [[buffer(3)]],
+  device float* output [[buffer(4)]],
+  constant uint& dims [[buffer(5)]],
+  uint row [[thread_position_in_grid]]) {
+  float sums[3] = {};
+  float weight_sum = 0.0f;
+  for (ulong edge = offsets[row]; edge < offsets[row + 1]; ++edge) {
+    const uint neighbor = neighbors[edge];
+    const float weight = weights[edge];
+    if (neighbor == row || weight == 0.0f) continue;
+    const ulong base = ulong(neighbor) * dims;
+    for (uint col = 0; col < dims; ++col) {
+      sums[col] = fma(weight, current[base + col], sums[col]);
+    }
+    weight_sum += weight;
+  }
+  const ulong base = ulong(row) * dims;
+  for (uint col = 0; col < dims; ++col) {
+    output[base + col] = weight_sum > 0.0f ?
+      sums[col] / weight_sum : current[base + col];
+  }
+}
+
+inline void spectral_reduce_group(threadgroup float (*shared)[128],
+                                  uint tid) {
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint stride = 64; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      for (uint j = 0; j < 9; ++j) shared[j][tid] += shared[j][tid + stride];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+}
+
+kernel void umap_spectral_moments(
+  device const float* layout [[buffer(0)]],
+  device float* partial [[buffer(1)]],
+  constant uint3& spec [[buffer(2)]],
+  uint group [[threadgroup_position_in_grid]],
+  uint tid [[thread_index_in_threadgroup]]) {
+  threadgroup float shared[9][128];
+  float moments[9] = {};
+  const uint first = group * 2048u;
+  const uint last = min(first + 2048u, spec.x);
+  for (uint row = first + tid; row < last; row += 128u) {
+    const ulong base = ulong(row) * spec.y;
+    const float x = layout[base], y = layout[base + 1u];
+    const float z = spec.y == 3u ? layout[base + 2u] : 0.0f;
+    moments[0] += x; moments[1] += y; moments[2] += z;
+    moments[3] += x*x; moments[4] += x*y; moments[5] += x*z;
+    moments[6] += y*y; moments[7] += y*z; moments[8] += z*z;
+  }
+  for (uint j = 0; j < 9; ++j) shared[j][tid] = moments[j];
+  spectral_reduce_group(shared, tid);
+  if (tid == 0) {
+    for (uint j = 0; j < 9; ++j) partial[group * 9u + j] = shared[j][0];
+  }
+}
+
+kernel void umap_spectral_gram(
+  device const float* partial [[buffer(0)]],
+  device float* stats [[buffer(1)]],
+  constant uint3& spec [[buffer(2)]],
+  uint tid [[thread_index_in_threadgroup]]) {
+  threadgroup float shared[9][128];
+  for (uint j = 0; j < 9; ++j) {
+    float total = 0;
+    for (uint group = tid; group < spec.z; group += 128u) {
+      total += partial[group * 9u + j];
+    }
+    shared[j][tid] = total;
+  }
+  spectral_reduce_group(shared, tid);
+  if (tid != 0) return;
+  const float inv_n = 1.0f / float(spec.x);
+  const float sx = shared[0][0], sy = shared[1][0], sz = shared[2][0];
+  const float xx = max(shared[3][0] - sx * sx * inv_n, 1e-24f);
+  const float xy = shared[4][0] - sx * sy * inv_n;
+  const float xz = shared[5][0] - sx * sz * inv_n;
+  const float yy = shared[6][0] - sy * sy * inv_n;
+  const float yz = shared[7][0] - sy * sz * inv_n;
+  const float zz = shared[8][0] - sz * sz * inv_n;
+  const float nx = sqrt(xx), yx = xy / nx;
+  const float ny = sqrt(max(yy - yx*yx, 1e-24f));
+  stats[0] = sx * inv_n; stats[1] = sy * inv_n;
+  if (spec.y == 2u) {
+    stats[2] = 1.0f / nx; stats[3] = yx; stats[4] = 1.0f / ny;
+  } else {
+    const float zx = xz / nx, zy = (yz - yx*zx) / ny;
+    const float nz = sqrt(max(zz - zx*zx - zy*zy, 1e-24f));
+    stats[2] = sz * inv_n; stats[3] = 1.0f / nx;
+    stats[4] = yx; stats[5] = 1.0f / ny;
+    stats[6] = zx; stats[7] = zy; stats[8] = 1.0f / nz;
+  }
 }
 
 kernel void spectral_init_stats(
@@ -5971,6 +6125,184 @@ NumericMatrix spectral_knn_init_metal_impl(IntegerMatrix indices,
   }
 }
 
+namespace {
+
+void encode_umap_spectral_normalize(MetalEmbeddingState& state,
+    id<MTLCommandBuffer> command, id<MTLComputePipelineState> moments,
+    id<MTLComputePipelineState> gram, id<MTLBuffer> values,
+    id<MTLBuffer> partial, id<MTLBuffer> stats,
+    const std::uint32_t (&spec)[4]) {
+  const auto threads = MTLSizeMake(128, 1, 1);
+  auto encoder = [command computeCommandEncoder];
+  [encoder setComputePipelineState:moments];
+  [encoder setBuffer:values offset:0 atIndex:0];
+  [encoder setBuffer:partial offset:0 atIndex:1];
+  [encoder setBytes:spec length:sizeof(spec) atIndex:2];
+  [encoder dispatchThreadgroups:MTLSizeMake(spec[2], 1, 1)
+    threadsPerThreadgroup:threads];
+  [encoder endEncoding];
+
+  encoder = [command computeCommandEncoder];
+  [encoder setComputePipelineState:gram];
+  [encoder setBuffer:partial offset:0 atIndex:0];
+  [encoder setBuffer:stats offset:0 atIndex:1];
+  [encoder setBytes:spec length:sizeof(spec) atIndex:2];
+  [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1)
+    threadsPerThreadgroup:threads];
+  [encoder endEncoding];
+
+  encoder = [command computeCommandEncoder];
+  const auto normalize = spec[1] == 3u ? state.spectral_normalize_3d_pipeline :
+    state.spectral_normalize_pipeline;
+  [encoder setComputePipelineState:normalize];
+  [encoder setBuffer:values offset:0 atIndex:0];
+  [encoder setBuffer:stats offset:0 atIndex:1];
+  [encoder setBytes:spec length:sizeof(std::uint32_t) atIndex:2];
+  dispatch_rows(encoder, normalize, static_cast<int>(spec[0]));
+  [encoder endEncoding];
+}
+
+void copy_umap_spectral_csr(SEXP offsets, const IntegerVector& neighbors,
+    SEXP weights, std::uint32_t n, id<MTLBuffer> offset_buffer,
+    id<MTLBuffer> neighbor_buffer, id<MTLBuffer> weight_buffer) {
+  const auto* oi = TYPEOF(offsets) == INTSXP ? INTEGER(offsets) : nullptr;
+  const auto* od = TYPEOF(offsets) == REALSXP ? REAL(offsets) : nullptr;
+  const bool packed = metal_is_float32_s4(weights);
+  SEXP payload = packed ? static_cast<SEXP>(Rcpp::S4(weights).slot("Data")) :
+    weights;
+  if ((!oi && !od) || XLENGTH(payload) != neighbors.size() ||
+      TYPEOF(payload) != (packed ? INTSXP : REALSXP)) {
+    Rcpp::stop("Invalid Metal CSR spectral graph payload");
+  }
+  auto* starts = static_cast<std::uint64_t*>([offset_buffer contents]);
+  const double nnz = static_cast<double>(neighbors.size());
+  for (std::uint32_t row = 0; row <= n; ++row) {
+    const double value = oi ? oi[row] : od[row];
+    if (!std::isfinite(value) || value < 0 || value > nnz ||
+        std::floor(value) != value ||
+        (row != 0 && value < starts[row - 1])) {
+      Rcpp::stop("Invalid Metal CSR spectral offset");
+    }
+    starts[row] = static_cast<std::uint64_t>(value);
+  }
+  if (starts[0] != 0 || starts[n] != neighbors.size()) {
+    Rcpp::stop("Metal CSR spectral offsets do not span the graph");
+  }
+  const auto* ids = INTEGER(neighbors);
+  auto* edges = static_cast<std::uint32_t*>([neighbor_buffer contents]);
+  auto* w = static_cast<float*>([weight_buffer contents]);
+  const auto* bits = packed ? INTEGER(payload) : nullptr;
+  const auto* numeric = packed ? nullptr : REAL(payload);
+  for (R_xlen_t i = 0; i < neighbors.size(); ++i) {
+    const float weight = packed ? metal_int_bits_to_float(bits[i]) :
+      static_cast<float>(numeric[i]);
+    if (ids[i] < 0 || static_cast<std::uint32_t>(ids[i]) >= n ||
+        !std::isfinite(weight) || weight < 0) {
+      Rcpp::stop("Invalid Metal CSR spectral edge");
+    }
+    edges[i] = ids[i];
+    w[i] = weight;
+  }
+}
+
+} // namespace
+
+NumericMatrix umap_csr_spectral_metal_impl(SEXP offsets, IntegerVector neighbors,
+    SEXP weights, int dims, int iterations, int seed, double memory_limit) {
+  const auto rows = XLENGTH(offsets) - 1;
+  if (rows < 2 || rows > std::numeric_limits<int>::max() ||
+      neighbors.size() == 0 || (dims != 2 && dims != 3) ||
+      iterations < 1 || !std::isfinite(memory_limit) || memory_limit <= 0) {
+    Rcpp::stop("Invalid Metal CSR spectral dimensions or budget");
+  }
+  @autoreleasepool {
+    auto& state = metal_embedding_state();
+    const auto n = static_cast<std::uint32_t>(rows);
+    const auto d = static_cast<std::uint32_t>(dims);
+    const auto blocks = (n + 2047u) / 2048u;
+    const auto edge_bytes = static_cast<std::uint64_t>(neighbors.size()) * 4;
+    const auto offset_bytes = static_cast<std::uint64_t>(n + 1) * 8;
+    const auto layout_bytes = static_cast<std::uint64_t>(n) * d * 4;
+    const auto partial_bytes = static_cast<std::uint64_t>(blocks) * 36;
+    const auto need = 2 * edge_bytes + offset_bytes + 2 * layout_bytes +
+      partial_bytes + 36;
+    const double available = 0.7 * state.device.recommendedMaxWorkingSetSize -
+      state.device.currentAllocatedSize;
+    if (need > available || need + 2 * layout_bytes > memory_limit) {
+      Rcpp::stop("Metal CSR spectral workspace exceeds the memory budget");
+    }
+    auto allocate = [&](std::uint64_t bytes) {
+      if (bytes > state.device.maxBufferLength) {
+        Rcpp::stop("Metal CSR spectral workspace exceeds a buffer limit");
+      }
+      id<MTLBuffer> buffer = [[state.device newBufferWithLength:bytes
+        options:MTLResourceStorageModeShared] autorelease];
+      if (buffer == nil) Rcpp::stop("Failed to allocate Metal spectral buffer");
+      return buffer;
+    };
+    auto starts = allocate(offset_bytes), ids = allocate(edge_bytes);
+    auto edges = allocate(edge_bytes), partial = allocate(partial_bytes);
+    auto current = allocate(layout_bytes), next = allocate(layout_bytes);
+    auto stats = allocate(36);
+    copy_umap_spectral_csr(offsets, neighbors, weights, n, starts, ids, edges);
+    auto diffuse = [make_pipeline(state, "umap_spectral_diffuse_csr") autorelease];
+    auto moments = [make_pipeline(state, "umap_spectral_moments") autorelease];
+    auto gram = [make_pipeline(state, "umap_spectral_gram") autorelease];
+    const auto random = dims == 3 ? state.spectral_random_3d_pipeline :
+      state.spectral_random_pipeline;
+    const std::uint32_t spec[4] = {n, d, blocks, 0};
+    const auto rng = static_cast<std::uint32_t>(seed);
+    auto init = [state.queue commandBuffer];
+    auto encoder = [init computeCommandEncoder];
+    if (encoder == nil) Rcpp::stop("Cannot encode Metal spectral start");
+    [encoder setComputePipelineState:random];
+    [encoder setBuffer:current offset:0 atIndex:0];
+    [encoder setBytes:&n length:sizeof(n) atIndex:1];
+    [encoder setBytes:&rng length:sizeof(rng) atIndex:2];
+    dispatch_rows(encoder, random, rows);
+    [encoder endEncoding];
+    encode_umap_spectral_normalize(state, init, moments, gram, current,
+      partial, stats, spec);
+    wait_for_command(init, "CSR spectral start");
+    for (int iter = 0; iter < iterations; ++iter) {
+      @autoreleasepool {
+        auto command = [state.queue commandBuffer];
+        auto step = [command computeCommandEncoder];
+        if (step == nil) Rcpp::stop("Cannot encode Metal spectral diffusion");
+        [step setComputePipelineState:diffuse];
+        [step setBuffer:starts offset:0 atIndex:0];
+        [step setBuffer:ids offset:0 atIndex:1];
+        [step setBuffer:edges offset:0 atIndex:2];
+        [step setBuffer:current offset:0 atIndex:3];
+        [step setBuffer:next offset:0 atIndex:4];
+        [step setBytes:&d length:sizeof(d) atIndex:5];
+        dispatch_rows(step, diffuse, rows);
+        [step endEncoding];
+        encode_umap_spectral_normalize(state, command, moments, gram, next,
+          partial, stats, spec);
+        wait_for_command(command, "CSR spectral diffusion");
+      }
+      std::swap(current, next);
+      Rcpp::checkUserInterrupt();
+    }
+    NumericMatrix out(static_cast<int>(rows), dims);
+    const auto* result = static_cast<const float*>([current contents]);
+    for (std::uint32_t row = 0; row < n; ++row) {
+      for (int col = 0; col < dims; ++col) {
+        const float value = result[static_cast<std::uint64_t>(row) * d + col];
+        if (!std::isfinite(value)) Rcpp::stop("Nonfinite Metal spectral layout");
+        out(row, col) = value;
+      }
+    }
+    out.attr("backend") = "metal_csr_diffusion";
+    out.attr("metal_spectral_buffer_bytes") = static_cast<double>(
+      starts.allocatedSize + ids.allocatedSize + edges.allocatedSize +
+      partial.allocatedSize + current.allocatedSize + next.allocatedSize +
+      stats.allocatedSize);
+    return out;
+  }
+}
+
 NumericMatrix rsvd_multiply_metal_impl(NumericMatrix left,
                                        NumericMatrix right,
                                        bool transpose_left) {
@@ -8352,17 +8684,51 @@ void pack_umap_csr_for_metal(const IntegerVector& offsets,
 
 namespace {
 
-struct UmapCompactEdge {
-  std::uint32_t head;
-  std::uint32_t tail;
-  float period;
-};
-static_assert(sizeof(UmapCompactEdge) == 12, "Metal edge layout");
+static_assert(sizeof(FastembedrUmapCompactEdge) == 12, "Metal edge layout");
 
 struct MetalBufferRelease {
   using pointer = id<MTLBuffer>;
   void operator()(id<MTLBuffer> buffer) const { [buffer release]; }
 };
+
+std::uint32_t metal_umap_compact_epochs(MetalEmbeddingState& state,
+    id<MTLBuffer> layout, id<MTLBuffer> graph, std::size_t count,
+    const EmbedParams& params) {
+  const auto pipeline = state.umap_compact_edge_pipeline;
+  const auto threads = MTLSizeMake(bounded_threads(pipeline), 1, 1);
+  const std::uint32_t batch = 16u;
+  std::uint32_t completed_epochs = 0;
+  for (std::uint32_t first = 1; first < params.n_epochs; first += batch) {
+    @autoreleasepool {
+      id<MTLCommandBuffer> command = [state.queue commandBuffer];
+      if (command == nil) Rcpp::stop("Failed to create Metal UMAP command.");
+      const auto last = std::min(first + batch, params.n_epochs);
+      for (auto epoch = first; epoch < last; ++epoch) {
+        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+        if (encoder == nil) Rcpp::stop("Failed to encode Metal UMAP epoch.");
+        [encoder setComputePipelineState:pipeline];
+        [encoder setBuffer:layout offset:0 atIndex:0];
+        [encoder setBuffer:graph offset:0 atIndex:1];
+        [encoder setBytes:&params length:sizeof(params) atIndex:2];
+        [encoder setBytes:&epoch length:sizeof(epoch) atIndex:3];
+        fastembedr_csr_edge_tiles(0, count, kMetalUmapCompactTileEdges,
+          [&](std::uint64_t base, std::uint32_t edges) {
+            const auto offset = base * sizeof(FastembedrUmapCompactEdge);
+            [encoder setBufferOffset:offset atIndex:1];
+            [encoder dispatchThreads:MTLSizeMake(edges, 1, 1)
+              threadsPerThreadgroup:threads];
+          });
+        [encoder endEncoding];
+      }
+      wait_for_command(command, "compact UMAP epochs");
+      if (command.status != MTLCommandBufferStatusCompleted)
+        Rcpp::stop("Compact Metal UMAP epochs did not complete.");
+      completed_epochs += last - first;
+    }
+    Rcpp::checkUserInterrupt();
+  }
+  return completed_epochs;
+}
 
 NumericMatrix metal_umap_compact_fit(const IntegerVector& offsets,
     const IntegerVector& neighbors, SEXP weights, const NumericMatrix& init,
@@ -8381,7 +8747,7 @@ NumericMatrix metal_umap_compact_fit(const IntegerVector& offsets,
   const float threshold = params.max_weight / params.n_epochs;
   const int* ids = INTEGER(neighbors);
   const int* starts = INTEGER(offsets);
-  std::vector<UmapCompactEdge> edges;
+  std::vector<FastembedrUmapCompactEdge> edges;
   edges.reserve(nnz);
   for (int row = 0; row < n; ++row) {
     const int first = starts[row];
@@ -8414,14 +8780,15 @@ NumericMatrix metal_umap_compact_fit(const IntegerVector& offsets,
 
   MetalEmbeddingState& state = metal_embedding_state();
   using Buffer = std::unique_ptr<void, MetalBufferRelease>;
-  const std::size_t edge_bytes = edges.size() * sizeof(UmapCompactEdge);
+  const std::size_t edge_bytes = edges.size() *
+    sizeof(FastembedrUmapCompactEdge);
   const std::size_t layout_bytes = initial.size() * sizeof(std::int32_t);
   if (edge_bytes > state.device.maxBufferLength ||
       layout_bytes > state.device.maxBufferLength) {
     Rcpp::stop("Compact Metal UMAP graph or layout exceeds device limits.");
   }
   Buffer graph_ptr, layout_ptr;
-  const auto grid = MTLSizeMake(edges.size(), 1, 1);
+  const auto count = edges.size();
   id<MTLBuffer> graph = [state.device newBufferWithBytes:edges.data()
     length:edge_bytes options:MTLResourceStorageModeShared];
   graph_ptr.reset(graph);
@@ -8431,37 +8798,9 @@ NumericMatrix metal_umap_compact_fit(const IntegerVector& offsets,
   if (graph == nil || layout == nil) {
     Rcpp::stop("Unable to allocate compact Metal UMAP buffers.");
   }
-  std::vector<UmapCompactEdge>().swap(edges);
-  const auto pipeline = state.umap_compact_edge_pipeline;
-  const auto threads = MTLSizeMake(bounded_threads(pipeline), 1, 1);
+  std::vector<FastembedrUmapCompactEdge>().swap(edges);
   const auto device_started = std::chrono::steady_clock::now();
-  // Bound each submission to permit interrupt checks on large graphs.
-  const std::uint32_t batch = 16u;
-  for (std::uint32_t first = 1; first < params.n_epochs; first += batch) {
-    @autoreleasepool {
-      id<MTLCommandBuffer> command = [state.queue commandBuffer];
-      if (command == nil) Rcpp::stop("Failed to create Metal UMAP command.");
-      const auto last = std::min(first + batch, params.n_epochs);
-      for (auto epoch = first; epoch < last; ++epoch) {
-        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
-        if (encoder == nil) Rcpp::stop("Failed to encode Metal UMAP epoch.");
-        [encoder setComputePipelineState:pipeline];
-        [encoder setBuffer:layout offset:0 atIndex:0];
-        [encoder setBuffer:graph offset:0 atIndex:1];
-        [encoder setBytes:&params length:sizeof(params) atIndex:2];
-        [encoder setBytes:&epoch length:sizeof(epoch) atIndex:3];
-        [encoder dispatchThreads:grid threadsPerThreadgroup:threads];
-        [encoder endEncoding];
-      }
-      [command commit];
-      [command waitUntilCompleted];
-      if (command.status != MTLCommandBufferStatusCompleted) {
-        Rcpp::stop("Metal UMAP command failed: %s",
-          ns_error_message(command.error).c_str());
-      }
-    }
-    Rcpp::checkUserInterrupt();
-  }
+  metal_umap_compact_epochs(state, layout, graph, count, params);
   const auto done = std::chrono::steady_clock::now();
   const auto* coordinates =
     static_cast<const std::int32_t*>([layout contents]);
@@ -8486,6 +8825,73 @@ NumericMatrix metal_umap_compact_fit(const IntegerVector& offsets,
 }
 
 }  // namespace
+
+FastembedrUmapCompactResult fastembedr_massive_umap_metal_compact(
+    float* layout, int n, int epochs, int negatives, double learning_rate,
+    double a, double b, double repulsion, int seed, std::uint64_t edge_bound,
+    double memory_limit,
+    const std::function<std::size_t(FastembedrUmapCompactEdge*)>& fill) {
+  using Clock = std::chrono::steady_clock;
+  const auto started = Clock::now();
+  @autoreleasepool {
+    auto& state = metal_embedding_state();
+    if (edge_bound == 0 ||
+        edge_bound > std::numeric_limits<std::size_t>::max() /
+          sizeof(FastembedrUmapCompactEdge)) {
+      return {};
+    }
+    const auto edge_bytes = static_cast<std::size_t>(edge_bound) *
+      sizeof(FastembedrUmapCompactEdge);
+    const auto elements = 2u * static_cast<std::size_t>(n);
+    const auto layout_bytes = elements * sizeof(std::int32_t);
+    const double budget = std::min(memory_limit,
+      0.7 * state.device.recommendedMaxWorkingSetSize -
+        state.device.currentAllocatedSize);
+    if (edge_bytes > state.device.maxBufferLength ||
+        layout_bytes > state.device.maxBufferLength ||
+        static_cast<double>(edge_bytes) + layout_bytes > budget) return {};
+    using Buffer = std::unique_ptr<void, MetalBufferRelease>;
+    id<MTLBuffer> graph = [state.device newBufferWithLength:edge_bytes
+      options:MTLResourceStorageModeShared];
+    Buffer graph_ptr(graph);
+    id<MTLBuffer> coords = [state.device newBufferWithLength:layout_bytes
+      options:MTLResourceStorageModeShared];
+    Buffer layout_ptr(coords);
+    if (graph == nil || coords == nil) {
+      Rcpp::stop("Unable to allocate the cached Metal UMAP graph or layout.");
+    }
+    auto* fixed = static_cast<std::int32_t*>([coords contents]);
+    for (std::size_t i = 0; i < elements; ++i) {
+      const double value = layout[i];
+      if (!std::isfinite(value) || std::abs(value) > 16000.0)
+        Rcpp::stop("Cached Metal UMAP initialization is invalid.");
+      fixed[i] = static_cast<std::int32_t>(value * 65536.0);
+    }
+    const auto count = fill(
+      static_cast<FastembedrUmapCompactEdge*>([graph contents]));
+    if (count == 0 || count > edge_bound)
+      Rcpp::stop("Cached Metal UMAP has an invalid number of active edges.");
+    const EmbedParams params{static_cast<std::uint32_t>(n), 0u,
+      static_cast<std::uint32_t>(epochs), static_cast<std::uint32_t>(negatives),
+      kObjectiveUmap, static_cast<std::uint32_t>(seed),
+      static_cast<float>(learning_rate), static_cast<float>(a),
+      static_cast<float>(b), 1.0f, static_cast<float>(repulsion)};
+    const auto ready = Clock::now();
+    const auto completed =
+      metal_umap_compact_epochs(state, coords, graph, count, params);
+    const auto done = Clock::now();
+    std::uint64_t changed = 0;
+    for (std::size_t i = 0; i < elements; ++i) {
+      const auto initial = static_cast<std::int32_t>(layout[i] * 65536.0);
+      changed += (fixed[i] != initial);
+      layout[i] = static_cast<float>(fixed[i]) / 65536.0f;
+    }
+    return {graph.allocatedSize + coords.allocatedSize,
+      std::chrono::duration<double>(ready - started).count(),
+      std::chrono::duration<double>(done - ready).count(),
+      count, changed, completed};
+  }
+}
 
 NumericMatrix knn_embed_metal_csr_impl(IntegerVector offsets,
                                        IntegerVector csr_neighbors,
@@ -9290,29 +9696,29 @@ extern "C" void fastembedr_massive_umap_metal_destroy(void* raw) {
 
 namespace {
 
-class MetalTsneMappedFile {
+class MetalMappedGraphFile {
  public:
-  MetalTsneMappedFile(const std::string& path, std::size_t bytes,
+  MetalMappedGraphFile(const std::string& path, std::size_t bytes,
                       id<MTLDevice> device, bool metal_buffer) {
     const auto page = static_cast<std::size_t>(getpagesize());
     if (bytes > SIZE_MAX - (page - 1)) {
-      Rcpp::stop("Metal t-SNE graph mapping is too large.");
+      Rcpp::stop("Metal graph mapping is too large.");
     }
     bytes_ = ((bytes + page - 1) / page) * page;
     std::error_code error;
     const auto actual = std::filesystem::file_size(path, error);
     if (error || actual != bytes || bytes == 0 ||
         (metal_buffer && bytes_ > device.maxBufferLength)) {
-      Rcpp::stop("Metal t-SNE graph file size or buffer limit is invalid.");
+      Rcpp::stop("Metal graph file size or buffer limit is invalid.");
     }
     fd_ = open(path.c_str(), O_RDONLY);
-    if (fd_ < 0) Rcpp::stop("Cannot open Metal t-SNE graph file.");
+    if (fd_ < 0) Rcpp::stop("Cannot open Metal graph file.");
     data_ = mmap(nullptr, bytes_, PROT_READ, MAP_SHARED, fd_, 0);
     if (data_ == MAP_FAILED) {
       data_ = nullptr;
       close(fd_);
       fd_ = -1;
-      Rcpp::stop("Cannot map Metal t-SNE graph file read-only.");
+      Rcpp::stop("Cannot map Metal graph file read-only.");
     }
     if (metal_buffer) buffer_ = [device newBufferWithBytesNoCopy:data_
       length:bytes_ options:MTLResourceStorageModeShared
@@ -9322,17 +9728,17 @@ class MetalTsneMappedFile {
       close(fd_);
       data_ = nullptr;
       fd_ = -1;
-      Rcpp::stop("Metal rejected a read-only t-SNE graph mapping.");
+      Rcpp::stop("Metal rejected a read-only graph mapping.");
     }
   }
 
-  ~MetalTsneMappedFile() {
+  ~MetalMappedGraphFile() {
     if (buffer_ != nil) [buffer_ release];
     if (data_ != nullptr) munmap(data_, bytes_);
     if (fd_ >= 0) close(fd_);
   }
-  MetalTsneMappedFile(const MetalTsneMappedFile&) = delete;
-  MetalTsneMappedFile& operator=(const MetalTsneMappedFile&) = delete;
+  MetalMappedGraphFile(const MetalMappedGraphFile&) = delete;
+  MetalMappedGraphFile& operator=(const MetalMappedGraphFile&) = delete;
   id<MTLBuffer> buffer() const { return buffer_; }
   const void* data() const { return data_; }
 
@@ -9341,6 +9747,27 @@ class MetalTsneMappedFile {
   void* data_ = nullptr;
   std::size_t bytes_ = 0;
   id<MTLBuffer> buffer_ = nil;
+};
+
+struct MetalUmapSpectralCsr {
+  using Buffer = std::unique_ptr<void, MetalBufferRelease>;
+  MetalMappedGraphFile offsets, indices, weights;
+  Buffer degrees, input, output;
+  id<MTLComputePipelineState> pipeline;
+  std::uint32_t rows, block;
+  std::uint64_t edges;
+
+  MetalUmapSpectralCsr(MetalEmbeddingState& state,
+      const std::string& offset_path, const std::string& index_path,
+      const std::string& weight_path, std::uint32_t n, std::uint32_t width,
+      std::uint64_t nnz)
+      : offsets(offset_path, (std::uint64_t{n} + 1) * 8, state.device, true),
+        indices(index_path, nnz * 4, state.device, true),
+        weights(weight_path, nnz * 4, state.device, true),
+        pipeline(make_pipeline(state, "umap_spectral_csr_multiply")),
+        rows(n), block(width), edges(nnz) {}
+
+  ~MetalUmapSpectralCsr() { [pipeline release]; }
 };
 
 std::size_t metal_tsne_graph_edges(const std::string& path) {
@@ -9354,9 +9781,9 @@ std::size_t metal_tsne_graph_edges(const std::string& path) {
 }
 
 void metal_tsne_validate_mapped_graph(
-    const MetalTsneMappedFile& offsets,
-    const MetalTsneMappedFile& indices,
-    const MetalTsneMappedFile& weights,
+    const MetalMappedGraphFile& offsets,
+    const MetalMappedGraphFile& indices,
+    const MetalMappedGraphFile& weights,
     int n, std::size_t edges) {
   const auto* row_ptr = static_cast<const std::uint64_t*>(
     offsets.data());
@@ -9415,7 +9842,105 @@ std::vector<float> metal_tsne_read_initial(
 
 }  // namespace
 
+void* fastembedr_umap_spectral_metal_create(const std::string& offsets,
+    const std::string& indices, const std::string& weights,
+    int rows, int block, std::uint64_t edges, const double* inv_degree,
+    double device_budget) {
+  @autoreleasepool {
+    auto& state = metal_embedding_state();
+    const std::uint64_t basis_bytes = std::uint64_t{4} * rows * block;
+    const std::uint64_t degree_bytes = std::uint64_t{4} * rows;
+    const double need = (2.0 * basis_bytes + degree_bytes +
+      8.0 * (rows + 1.0) + 8.0 * edges + 6.0 * getpagesize());
+    const double available = 0.7 * state.device.recommendedMaxWorkingSetSize -
+      state.device.currentAllocatedSize;
+    if (need > std::min(device_budget, available) ||
+        basis_bytes > state.device.maxBufferLength ||
+        edges > state.device.maxBufferLength / 4) {
+      Rcpp::stop("Metal UMAP spectral graph exceeds its memory budget.");
+    }
+    auto ctx = std::make_unique<MetalUmapSpectralCsr>(state, offsets, indices,
+      weights, rows, block, edges);
+    const auto options = MTLResourceStorageModeShared;
+    ctx->degrees.reset([state.device newBufferWithLength:degree_bytes
+      options:options]);
+    ctx->input.reset([state.device newBufferWithLength:basis_bytes
+      options:options]);
+    ctx->output.reset([state.device newBufferWithLength:basis_bytes
+      options:options]);
+    if (ctx->pipeline == nil || !ctx->degrees || !ctx->input || !ctx->output) {
+      Rcpp::stop("Unable to allocate Metal UMAP spectral workspace.");
+    }
+    auto* degrees = static_cast<float*>([ctx->degrees.get() contents]);
+    std::copy_n(inv_degree, rows, degrees);
+    return ctx.release();
+  }
+}
+
+void fastembedr_umap_spectral_metal_multiply(void* context,
+    const double* input, double* result) {
+  auto& ctx = *static_cast<MetalUmapSpectralCsr*>(context);
+  auto& state = metal_embedding_state();
+  const auto values = std::uint64_t{ctx.rows} * ctx.block;
+  std::copy_n(input, values, static_cast<float*>([ctx.input.get() contents]));
+  const auto threads = MTLSizeMake(bounded_threads(ctx.pipeline), 1, 1);
+  constexpr std::uint32_t tile = 1u << 20;
+  for (std::uint32_t first = 0; first < ctx.rows; first += tile) {
+    @autoreleasepool {
+      auto command = [state.queue commandBuffer];
+      auto encoder = [command computeCommandEncoder];
+      if (encoder == nil) Rcpp::stop("Unable to encode Metal spectral tile.");
+      [encoder setComputePipelineState:ctx.pipeline];
+      [encoder setBuffer:ctx.offsets.buffer() offset:0 atIndex:0];
+      [encoder setBuffer:ctx.indices.buffer() offset:0 atIndex:1];
+      [encoder setBuffer:ctx.weights.buffer() offset:0 atIndex:2];
+      [encoder setBuffer:ctx.degrees.get() offset:0 atIndex:3];
+      [encoder setBuffer:ctx.input.get() offset:0 atIndex:4];
+      [encoder setBuffer:ctx.output.get() offset:0 atIndex:5];
+      const std::uint32_t params[4] = {ctx.rows, ctx.block, first, 0};
+      [encoder setBytes:params length:sizeof(params) atIndex:6];
+      [encoder setBytes:&ctx.edges length:sizeof(ctx.edges) atIndex:7];
+      [encoder dispatchThreads:MTLSizeMake(std::min(tile, ctx.rows - first), 1, 1)
+        threadsPerThreadgroup:threads];
+      [encoder endEncoding];
+      wait_for_command(command, "UMAP spectral multiplication");
+    }
+    Rcpp::checkUserInterrupt();
+  }
+  const auto* data = static_cast<const float*>([ctx.output.get() contents]);
+  std::transform(data, data + values, result, [](float value) {
+    if (!std::isfinite(value)) Rcpp::stop("Invalid Metal spectral product.");
+    return static_cast<double>(value);
+  });
+}
+
+std::uint64_t fastembedr_umap_spectral_metal_buffers(const void* context) {
+  const auto& ctx = *static_cast<const MetalUmapSpectralCsr*>(context);
+  return ctx.degrees.get().allocatedSize + ctx.input.get().allocatedSize +
+    ctx.output.get().allocatedSize;
+}
+
+void fastembedr_umap_spectral_metal_destroy(void* context) {
+  delete static_cast<MetalUmapSpectralCsr*>(context);
+}
+
 #include "tsne_fft_2d_file_metal.h"
+
+bool massive_tsne_mmap_fits_impl(int rows, int dims, double edges,
+                                double host_limit) {
+  if (rows < 2 || (dims != 2 && dims != 3) || !std::isfinite(edges) ||
+      edges < 1 || edges >= 9007199254740992.0 || std::floor(edges) != edges ||
+      !std::isfinite(host_limit) || host_limit <= 0) {
+    Rcpp::stop("Invalid Metal t-SNE graph admission request.");
+  }
+  @autoreleasepool {
+    auto& state = metal_embedding_state();
+    return metal_tsne_mmap_fits(rows, dims, static_cast<std::uint64_t>(edges),
+      host_limit, state.device.currentAllocatedSize,
+      state.device.recommendedMaxWorkingSetSize, state.device.maxBufferLength,
+      getpagesize());
+  }
+}
 
 List massive_tsne_optimize_metal_impl(
     const std::string& offsets_path,
@@ -9477,12 +10002,12 @@ List massive_tsne_optimize_metal_impl(
     const auto working_set_cap = recommended / 10 * 7;
     const auto resident_buffer_cap =
       working_set_cap - budget.fft_reserve_bytes;
-    MetalTsneMappedFile offsets(offsets_path,
+    MetalMappedGraphFile offsets(offsets_path,
       (static_cast<std::size_t>(n) + 1) * sizeof(std::uint64_t),
       state.device, !stream);
-    MetalTsneMappedFile indices(indices_path,
+    MetalMappedGraphFile indices(indices_path,
       edges * sizeof(std::uint32_t), state.device, !stream);
-    MetalTsneMappedFile weights(weights_path,
+    MetalMappedGraphFile weights(weights_path,
       edges * sizeof(float), state.device, !stream);
     metal_tsne_validate_mapped_graph(offsets, indices, weights,
                                      n, edges);

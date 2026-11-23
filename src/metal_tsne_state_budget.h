@@ -63,4 +63,25 @@ inline bool metal_tsne_state_fits(
   return current <= cap && plan.total_bytes <= cap - current;
 }
 
+inline bool metal_tsne_mmap_fits(std::uint64_t rows, std::uint32_t dimensions,
+    std::uint64_t edges, double host_limit, std::uint64_t current,
+    std::uint64_t recommended, std::uint64_t max_buffer, std::uint64_t page) {
+  const auto padded = [page](std::uint64_t units, std::uint64_t size) {
+    const auto bytes = metal_tsne_checked_mul(units, size);
+    return metal_tsne_checked_mul(
+      metal_tsne_checked_add(bytes, page - 1) / page, page);
+  };
+  const auto offsets = padded(metal_tsne_checked_add(rows, 1), 8);
+  const auto column = padded(edges, 4);
+  const auto coordinate = padded(metal_tsne_checked_mul(rows, dimensions), 4);
+  if (std::max({offsets, column, coordinate}) > max_buffer) return false;
+  auto budget = metal_tsne_state_budget(rows, dimensions, edges, 0, false);
+  const auto rounded_graph = metal_tsne_checked_add(offsets,
+    metal_tsne_checked_mul(column, 2));
+  budget.total_bytes = metal_tsne_checked_add(
+    budget.total_bytes - budget.graph_upload_bytes, rounded_graph);
+  return budget.total_bytes <= .8 * host_limit &&
+    metal_tsne_state_fits(budget, current, recommended);
+}
+
 #endif

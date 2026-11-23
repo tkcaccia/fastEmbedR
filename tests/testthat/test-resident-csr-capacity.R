@@ -84,6 +84,46 @@ test_that("resident CSR admission counts double KNN distances", {
         "distance width")
 })
 
+test_that("wide resident Metal UMAP uses the bounded graph plan", {
+    needs_wide <- fastEmbedR:::umap_csr_needs_wide
+    check <- fastEmbedR:::umap_check_resident_csr_capacity
+    expect_false(needs_wide(10000000, 30))
+    for (rows in c(50000000, 100000000)) {
+        expect_true(needs_wide(rows, 30))
+        expect_error(check(rows, 30, "200GB", 256 * 1024^3,
+            allow_wide = TRUE), "RAM budget")
+        plan <- check(rows, 30, "200GB", 256 * 1024^3,
+            allow_wide = TRUE, compact = TRUE)
+        expect_identical(plan$offset_dtype, "uint64")
+        expect_equal(plan$max_edges, 2 * rows * 30)
+    }
+})
+
+test_that("wide Metal UMAP initializes from its float32 CSR graph", {
+    skip_if_not_installed("float")
+    rows <- 24L
+    width <- 4L
+    ids <- outer(seq_len(rows), seq_len(width),
+        function(i, j) (i + j - 1L) %% rows + 1L)
+    distances <- float::fl(matrix(rep(seq_len(width), each = rows), rows))
+    cfg <- list(backend = "metal", n_threads = 1L, spectral_n_iter = 3L,
+        init_scale = 1)
+    with_mocked_bindings({
+        pending <- fastEmbedR:::initialize_umap_gpu_host_knn(
+            ids, distances, cfg, "fuzzy", 42L, 2L)
+        expect_null(pending$init)
+        state <- fastEmbedR:::build_umap_csr_state(
+            ids, distances, 0L, width, pending$cfg, "fuzzy", 2L, 42L)
+        expect_identical(state$graph$offset_dtype, "uint64")
+        expect_s4_class(state$graph$weights, "float32")
+        expect_identical(state$cfg$init_backend, "cpu_wide_csr_diffusion")
+        expect_true(all(is.finite(state$init)))
+    },
+    umap_csr_needs_wide = function(rows, width) TRUE,
+    spectral_knn_init = function(...) stop("Narrow initializer called"),
+    .package = "fastEmbedR")
+})
+
 test_that("the compact resident CPU CSR fits the bounded float32 workload", {
     available <- 26 * 1024^3
     needs <- fastEmbedR:::umap_resident_cpu_needs_compact

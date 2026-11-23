@@ -475,7 +475,8 @@ build_prepared_umap_graph <- function(knn, cfg, graph_mode,
         as.integer(cfg$n_threads),
         graph_mode = graph_mode,
         allow_wide = cfg$backend %in% c("cpu", "metal", "cuda") ||
-            isTRUE(allow_wide)
+            isTRUE(allow_wide),
+        compact_metal = cfg$backend == "metal"
     )
     cfg$graph_prep_backend <- paste0("cpu_", graph_mode, "_csr")
     cfg$graph_storage <- cfg$graph_prep_backend
@@ -652,6 +653,7 @@ record_metal_optimizer_policy <- function(cfg, layout) {
         cfg$gpu_optimizer_schedule <- "coo_epochs_per_sample"
         cfg$gpu_epochs_per_command <- 16L
         cfg$metal_optimizer_seconds <- attr(layout, "metal_optimizer_seconds")
+        cfg$optimization_elapsed_sec <- cfg$metal_optimizer_seconds
         return(cfg)
     }
     if (!identical(pipeline, "metal_wide_edge_tiles")) return(cfg)
@@ -659,6 +661,8 @@ record_metal_optimizer_policy <- function(cfg, layout) {
     cfg$gpu_optimizer_mode <- "csr_edge_tiles"
     cfg$gpu_optimizer_update_rule <- "native_metal_csr_edge_tiles"
     cfg$gpu_optimizer_schedule <- "stateless_edge_tiles"
+    cfg$metal_memory_measurement_scope <-
+        attr(layout, "metal_memory_measurement_scope")
     cfg
 }
 
@@ -848,6 +852,10 @@ fast_knn_umap_prepared_core <- function(
     )
 }
 
+umap_csr_needs_wide <- function(rows, width) {
+    2 * as.double(rows) * width > .Machine$integer.max
+}
+
 umap_resident_csr_stage_bytes <- function(rows, width,
         n_threads = 1L, distance_bytes = 4L, compact = FALSE) {
     if (length(distance_bytes) != 1L ||
@@ -858,7 +866,7 @@ umap_resident_csr_stage_bytes <- function(rows, width,
     }
     directed <- as.double(rows) * width
     symmetric <- 2 * directed
-    offset_width <- if (compact || symmetric > .Machine$integer.max) 8 else 4
+    offset_width <- if (compact || umap_csr_needs_wide(rows, width)) 8 else 4
     offsets <- (as.double(rows) + 1) * offset_width
     input <- (4 + distance_bytes) * directed
     copy <- 4 * directed
@@ -882,7 +890,7 @@ umap_resident_csr_stage_bytes <- function(rows, width,
             52 * symmetric + 168 * as.double(rows)
     )
     if (compact) {
-        # The wide CPU route keeps float32 weights and no per-edge schedule.
+        # Tiled optimizers keep float32 weights and no per-edge schedule.
         stages[["r_export"]] <- input + copy + 16 * symmetric + offsets
         stages[c("optimizer_base", "optimizer_active", "optimizer_spectral")] <-
             input + 8 * symmetric + offsets + 128 * as.double(rows)
@@ -900,8 +908,7 @@ umap_check_resident_csr_capacity <- function(rows, width,
         available = massive_available_ram_bytes(), n_threads = 1L,
         allow_wide = FALSE, distance_bytes = 4L, compact = FALSE) {
     if (!is.finite(rows) || !is.finite(width) || rows < 2 ||
-        width < 1 || (!allow_wide && 2 * as.double(rows) * width >
-            .Machine$integer.max)) stop(
+        width < 1 || (!allow_wide && umap_csr_needs_wide(rows, width))) stop(
         "Resident UMAP CSR may exceed signed 32-bit offsets; ",
         "use a file-backed full graph with bounded reads.",
         call. = FALSE)
@@ -935,8 +942,7 @@ umap_admit_wide_graph <- function(
         stop("Forced wide CSR requires wide-route admission.")
     }
     wide_needed <- isTRUE(force_wide) ||
-        (isTRUE(allow_wide) &&
-            2 * as.double(rows) * width > .Machine$integer.max)
+        (isTRUE(allow_wide) && umap_csr_needs_wide(rows, width))
     if (wide_needed && !requireNamespace("float", quietly = TRUE)) {
         stop("Wide resident CSR requires the float package.",
             call. = FALSE)
@@ -957,14 +963,16 @@ umap_build_csr_graph <- function(indices,
                                     graph_mode = c("fuzzy", "binary"),
                                     allow_wide = FALSE,
                                     force_wide = FALSE,
-                                    compact_cpu = FALSE) {
+                                    compact_cpu = FALSE,
+                                    compact_metal = FALSE) {
     graph_mode <- match.arg(graph_mode)
     rows <- nrow(indices)
     width <- if (identical(graph_mode, "binary")) n_cols else
         min(n_cols, edge_budget)
     float_input <- is_float32_matrix(distances)
-    compact <- compact_cpu && float_input &&
-        umap_resident_cpu_needs_compact(rows, width, n_threads)
+    compact <- (compact_cpu && float_input &&
+        umap_resident_cpu_needs_compact(rows, width, n_threads)) ||
+        (compact_metal && allow_wide && umap_csr_needs_wide(rows, width))
     force_wide <- force_wide || compact
     umap_check_resident_csr_capacity(rows, width,
         n_threads = n_threads, allow_wide = allow_wide,
@@ -1024,6 +1032,19 @@ umap_init_from_csr_graph <- function(graph,
                                         cfg,
                                         seed,
                                         verbose = FALSE) {
+    if (identical(cfg$backend, "metal") &&
+        isTRUE(getOption("fastEmbedR.metal_umap_csr_spectral"))) {
+        limit <- min(massive_available_ram_bytes(),
+            massive_memory_bytes(getOption("memory_limit", "8GB")),
+            na.rm = TRUE)
+        init <- umap_csr_spectral_metal_cpp(graph$offsets, graph$neighbors,
+            graph$weights, as.integer(n_components),
+            as.integer(cfg$spectral_n_iter), as.integer(seed), limit)
+        scaled <- scale_embedding_sdev_r(init, cfg$init_scale)
+        attr(scaled, "metal_spectral_buffer_bytes") <-
+            attr(init, "metal_spectral_buffer_bytes")
+        return(scaled)
+    }
     if (identical(graph$offset_dtype, "uint64")) {
         if (!n_components %in% c(2L, 3L)) stop(
             "Wide resident CSR initialization supports 2D or 3D.",

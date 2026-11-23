@@ -19,6 +19,9 @@ using Rcpp::NumericMatrix;
 using Rcpp::NumericVector;
 
 bool embedding_metal_available_impl();
+NumericMatrix umap_csr_spectral_metal_impl(SEXP offsets, IntegerVector neighbors,
+    SEXP weights, int dims, int iterations, int seed, double memory_limit);
+
 NumericMatrix spectral_knn_init_metal_impl(IntegerMatrix indices,
                                            NumericMatrix distances,
                                            int n_components,
@@ -138,6 +141,8 @@ List knn_tsne_opentsne_metal_impl(IntegerMatrix indices,
                                   bool record_costs,
                                   bool auto_config,
                                   double auto_iter_end);
+bool massive_tsne_mmap_fits_impl(int rows, int dims, double edges,
+                                double host_limit);
 List massive_tsne_optimize_metal_impl(
     const std::string& offsets_path,
     const std::string& indices_path,
@@ -166,6 +171,14 @@ NumericMatrix spectral_knn_init_metal_cpp(IntegerMatrix indices,
   return spectral_knn_init_metal_impl(
     indices, distances, n_components, spectral_n_iter, seed
   );
+}
+
+// [[Rcpp::export]]
+NumericMatrix umap_csr_spectral_metal_cpp(SEXP offsets, IntegerVector neighbors,
+    SEXP weights, int n_components, int n_iterations, int seed,
+    double memory_limit) {
+  return umap_csr_spectral_metal_impl(offsets, neighbors, weights, n_components,
+    n_iterations, seed, memory_limit);
 }
 
 // [[Rcpp::export]]
@@ -386,6 +399,8 @@ SEXP umap_metal_optimize_csr_wide_cpp(
   }
   fastembedr_massive_umap_metal_download(
     context.get(), layout.data());
+  const double peak_buffer_bytes = static_cast<double>(
+    fastembedr_massive_umap_metal_peak_buffers(context.get()));
   context.reset();
   Rcpp::IntegerMatrix payload(n, dimensions);
   for (int row = 0; row < n; ++row) {
@@ -411,6 +426,9 @@ SEXP umap_metal_optimize_csr_wide_cpp(
   result.attr("metal_cpu_warm_epochs") = 0;
   result.attr("metal_optimizer_pipeline") =
     "metal_wide_edge_tiles";
+  result.attr("metal_allocated_bytes_observed") = peak_buffer_bytes;
+  result.attr("metal_memory_measurement_scope") =
+    "peak_owned_optimizer_buffers";
   return result;
 }
 
@@ -562,6 +580,12 @@ List knn_tsne_opentsne_metal_cpp(IntegerMatrix indices,
     auto_config,
     auto_iter_end
   );
+}
+
+// [[Rcpp::export]]
+bool massive_tsne_mmap_fits_cpp(int rows, int dims, double edges,
+                               double host_limit) {
+  return massive_tsne_mmap_fits_impl(rows, dims, edges, host_limit);
 }
 
 // [[Rcpp::export]]
