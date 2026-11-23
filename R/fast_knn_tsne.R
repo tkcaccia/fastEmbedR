@@ -460,14 +460,16 @@ compute_tsne_matrix_knn <- function(
     if (is.null(nn)) {
         policy <- fastembedr_embedding_nn_policy(
             backend, n = n, p = ncol(x),
-            target_recall = target_recall, k = n_neighbors, metric = metric)
+            target_recall = target_recall, k = n_neighbors, metric = metric,
+            allow_cuda_profile = is.null(devices))
         if (identical(policy$backend, "cuda")) {
             nn <- run_faissr_cuda_embedding_knn(
                 x, n_neighbors, policy$method, metric,
                 fastembedr_knn_output_type(x, policy$backend),
                 policy$target_recall, devices,
                 prefer_resident = TRUE,
-                retain_data = retain_cuda_data
+                retain_data = retain_cuda_data,
+                cagra_profile = policy$selection$cuda_cagra_profile
             )
             engine <- nn$backend_used
         } else {

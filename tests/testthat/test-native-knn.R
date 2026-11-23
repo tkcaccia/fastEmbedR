@@ -689,6 +689,29 @@ test_that("CAGRA selection is explicit and limited to wide CUDA self KNN", {
         "requires CUDA device 0")
 })
 
+test_that("file-backed fbin dispatch allows automatic CUDA CAGRA planning", {
+    local_mocked_bindings(
+        fastembedr_knn_selection = function(..., file_backed,
+                allow_cuda_profile, memory_limit_bytes) {
+            expect_true(file_backed)
+            expect_true(allow_cuda_profile)
+            expect_equal(memory_limit_bytes, 22 * 1024^3)
+            list(method = "cagra_sharded")
+        },
+        precompute_knn_file_cagra_sharded = function(...) "sharded",
+        .package = "fastEmbedR"
+    )
+    found <- precompute_knn_backed(
+        list(format = "fbin", nrow = 50000000L, ncol = 96L), 30L,
+        "euclidean", "cuda", 1L, "unused", "22GB", NULL, FALSE, FALSE,
+        100L, 0.99, 0L
+    )
+    expect_identical(found, "sharded")
+    expect_error(fastembedr_resident_knn_policy(list(
+        reason = "cuda_cagra_resident_capacity_exceeded")),
+        "Resident CUDA CAGRA exceeds")
+})
+
 test_that("file-backed CUDA sharding reuses faissR indexes and merges rows", {
     skip_if_not(isTRUE(faissR::cuvs_available()))
     skip_if_not(isTRUE(faissR::cuda_available()))

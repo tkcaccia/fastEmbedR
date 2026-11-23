@@ -90,6 +90,7 @@ file_cagra_shard_fit <- function(data, first, rows, k, selection, parts,
         intermediate_degree = resources$intermediate_degree,
         batch_rows = resources$chunk_rows,
         memory_limit_bytes = resources$memory_limit_bytes)
+    if (!is.null(resources$builder)) profile$builder <- resources$builder
     reference <- massive_matrix_rows(data, first, rows)
     index <- builder(reference, k, resources$chunk_rows,
         resources$memory_limit_bytes, selection$target_recall, TRUE, profile)

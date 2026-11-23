@@ -1,5 +1,9 @@
 # fastEmbedR 0.1
 
+* Use faissR's automatic CUDA CAGRA planning in t-SNE, UMAP, and
+  `precompute_knn()`, including file-backed `.fbin` references. Report an
+  explicit capacity error when the resident index cannot fit.
+
 * Honor the private `faissR.knn.report_recall_miss` option for KNN
   benchmarking. Valid graphs can be retained after a recall miss, with
   the selected target and actual audit result recorded separately.

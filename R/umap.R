@@ -236,13 +236,15 @@ compute_umap_matrix_knn <- function(x, nn, n_neighbors, metric, state,
         result <- if (is.null(nn)) {
             policy <- fastembedr_embedding_nn_policy(
                 state$backend, nrow(x), ncol(x),
-                state$target_recall, k = n_neighbors, metric = metric)
+                state$target_recall, k = n_neighbors, metric = metric,
+                allow_cuda_profile = is.null(devices))
             if (identical(policy$backend, "cuda")) {
                 result <- run_faissr_cuda_embedding_knn(
                     x, as.integer(n_neighbors), policy$method, metric,
                     fastembedr_knn_output_type(x, policy$backend),
                     policy$target_recall, devices,
-                    prefer_resident = TRUE
+                    prefer_resident = TRUE,
+                    cagra_profile = policy$selection$cuda_cagra_profile
                 )
                 engine <- result$backend_used
                 result

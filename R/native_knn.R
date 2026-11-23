@@ -184,6 +184,11 @@ fastembedr_knn_selection <- function(backend, n, p, k, metric,
 }
 
 fastembedr_resident_knn_policy <- function(selection) {
+    if (identical(selection$reason, "cuda_cagra_resident_capacity_exceeded")) {
+        stop("Resident CUDA CAGRA exceeds the available RAM or VRAM. ",
+            "Precompute KNN with a file-backed massive_matrix().",
+            call. = FALSE)
+    }
     policy <- selection[c("backend", "method", "target_recall")]
     if (identical(policy$backend, "cpu")) {
         policy$recall_status <- if (identical(policy$method, "exact")) {
@@ -400,6 +405,8 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' Resident CUDA Flat and IVF results stay on the device when `devices` is
 #' omitted and can be passed directly to [umap_knn()] or [tsne_knn()] with
 #' `backend = "cuda"`. An explicit device selection returns host matrices.
+#' For large Euclidean CUDA self searches with cuVS, faissR can select CAGRA
+#' with NN-descent and shard a file-backed index to fit the memory budget.
 #' Set `options(fastEmbedR.cuda_knn_method = "cagra")` to use faissR's
 #' cuVS CAGRA settings for the requested recall tier, or use
 #' `"cagra_width4"` to request a width-four graph search. These options
@@ -471,7 +478,7 @@ precompute_knn <- function(data, k = 30L,
     policy <- fastembedr_embedding_nn_policy(
         backend, n = n, p = ncol(x),
         target_recall = target_recall, k = k, metric = metric,
-        allow_cuda_profile = is.null(devices) && is_float32_matrix(x))
+        allow_cuda_profile = is.null(devices))
     keep_gpu <- identical(backend, "cuda") && is.null(devices) &&
         !policy$method %in% c("cagra", "cagra_width4")
     result <- timed_do_call(run_precompute_knn, list(
@@ -500,7 +507,7 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
     select <- function(allow) fastembedr_knn_selection(backend, data$nrow,
         data$ncol, k, metric, target_recall, file_backed = TRUE,
         allow_ivf = allow, memory_limit_bytes = memory_bytes,
-        allow_cuda_profile = identical(data$format, "f32") &&
+        allow_cuda_profile = data$format %in% c("f32", "fbin") &&
             is.null(devices) && !checkpoint && !resume)
     selection <- select(allow_ivf)
     if (selection$method == "cagra_sharded") {
