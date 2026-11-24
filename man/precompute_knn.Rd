@@ -46,10 +46,8 @@ silently copied to disk.}
 uses it to cap estimated VRAM. When omitted,
 \code{options(memory_limit = ...)} is used, or detected available RAM.}
 
-\item{devices}{Optional distinct CUDA device indices. For resident input,
-explicit devices use faissR Flat or IVF and return host KNN matrices;
-multiple devices use a replicated index. File-backed input uses
-disjoint query ranges.}
+\item{devices}{Optional distinct CUDA device indices. Device work
+division depends on the selected KNN method. See Details.}
 
 \item{checkpoint}{Save completed file-backed KNN query blocks.}
 
@@ -118,10 +116,12 @@ cuVS CAGRA settings for the requested recall tier, or use
 apply to CUDA Euclidean self KNN with at least 500,000 rows and require
 a cuVS-enabled faissR build with CAGRA support.
 Resident CAGRA returns host neighbor matrices. File-backed CAGRA stages
-the source in batches, keeps one index on the GPU, and writes neighbors
-to disk. This route requires a capacity check and checkpointing off.
-Two or more explicit \code{devices} select sharded resident CUDA CAGRA
-with cuVS tree merging.
+the source in batches and writes neighbors to disk. With
+\code{"cagra_width4"} and two or more explicit CUDA \code{devices}, each GPU
+builds a disjoint reference shard and searches all query batches.
+faissR merges candidate neighbors before writing each batch.
+File-backed CAGRA checks capacity and requires checkpointing off.
+Resident multi-GPU CAGRA uses cuVS tree merging.
 The target tier describes the settings used. Supply audit rows to
 measure recall for a file-backed fit.
 Set \code{options(fastEmbedR.metal_knn_method = "cagra")} for native Metal

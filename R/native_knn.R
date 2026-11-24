@@ -360,10 +360,8 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' @param memory_limit Working-memory budget for file-backed KNN. CUDA also
 #'   uses it to cap estimated VRAM. When omitted,
 #'   `options(memory_limit = ...)` is used, or detected available RAM.
-#' @param devices Optional distinct CUDA device indices. For resident input,
-#'   explicit devices use faissR Flat or IVF and return host KNN matrices;
-#'   multiple devices use a replicated index. File-backed input uses
-#'   disjoint query ranges.
+#' @param devices Optional distinct CUDA device indices. Device work
+#'   division depends on the selected KNN method. See Details.
 #' @param checkpoint Save completed file-backed KNN query blocks.
 #' @param resume Continue a matching file-backed KNN checkpoint.
 #' @param checkpoint_every Save progress after this many query blocks.
@@ -413,10 +411,12 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' apply to CUDA Euclidean self KNN with at least 500,000 rows and require
 #' a cuVS-enabled faissR build with CAGRA support.
 #' Resident CAGRA returns host neighbor matrices. File-backed CAGRA stages
-#' the source in batches, keeps one index on the GPU, and writes neighbors
-#' to disk. This route requires a capacity check and checkpointing off.
-#' Two or more explicit `devices` select sharded resident CUDA CAGRA
-#' with cuVS tree merging.
+#' the source in batches and writes neighbors to disk. With
+#' `"cagra_width4"` and two or more explicit CUDA `devices`, each GPU
+#' builds a disjoint reference shard and searches all query batches.
+#' faissR merges candidate neighbors before writing each batch.
+#' File-backed CAGRA checks capacity and requires checkpointing off.
+#' Resident multi-GPU CAGRA uses cuVS tree merging.
 #' The target tier describes the settings used. Supply audit rows to
 #' measure recall for a file-backed fit.
 #' Set `options(fastEmbedR.metal_knn_method = "cagra")` for native Metal
@@ -517,8 +517,10 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
             audit_rows, devices, checkpoint || resume))
     }
     if (selection$method %in% c("cagra", "cagra_width4")) {
-        budget <- if (cuda_auto) massive_cuda_memory_cpp()$free_bytes
-            else memory_bytes
+        budget <- if (cuda_auto && length(devices) < 2L) {
+            massive_cuda_memory_cpp()$free_bytes
+        } else memory_bytes
+        devices <- massive_validate_devices(devices, backend, data$nrow)
         return(precompute_knn_file_cagra(data, k, output,
             budget, selection, audit_rows, devices,
             checkpoint || resume))

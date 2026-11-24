@@ -1,15 +1,18 @@
 precompute_knn_file_cagra <- function(data, k, output, memory_bytes,
         selection, audit_rows, devices, checkpoint) {
-    if (checkpoint || !is.null(devices)) stop(
-        "File-backed CAGRA requires checkpointing off and one GPU.",
-        call. = FALSE)
+    multi <- length(devices) > 1L && selection$backend == "cuda" &&
+        selection$method == "cagra_width4"
+    if (checkpoint || (!is.null(devices) && !multi)) stop(
+        "File-backed CAGRA needs checkpointing off. CUDA width-four CAGRA ",
+        "supports an explicit set of two or more devices.", call. = FALSE)
     k <- validate_precompute_k(k, data$nrow - 1L, "nrow(data) - 1")
     audit_rows <- integer_scalar(audit_rows)
     if (is.na(audit_rows) || audit_rows < 0L ||
         audit_rows > min(data$nrow, 10000L)) stop(
         "`audit_rows` must be between zero and 10,000 rows.", call. = FALSE)
-    entry <- if (selection$backend == "metal") "metal_cagra_file" else
-        "cuvs_cagra_wide_file"
+    entry <- if (multi) "cuvs_cagra_wide_file_multi" else
+        if (selection$backend == "metal") "metal_cagra_file" else
+            "cuvs_cagra_wide_file"
     builder <- get0(entry, envir = asNamespace("faissR"), inherits = FALSE)
     if (!is.function(builder)) stop(
         "The installed faissR lacks file-backed CAGRA support.", call. = FALSE)
@@ -20,8 +23,9 @@ precompute_knn_file_cagra <- function(data, k, output, memory_bytes,
     identity <- massive_checkpoint_source_identity(data)
     arguments <- list(data, k, resources$chunk_rows, memory_bytes,
         selection$target_recall, selection$method == "cagra_width4")
-    if (!is.null(selection$cuda_cagra_profile))
-        arguments$profile <- selection$cuda_cagra_profile
+    if (multi) arguments$devices <- devices else
+        if (!is.null(selection$cuda_cagra_profile))
+            arguments$profile <- selection$cuda_cagra_profile
     index <- do.call(builder, arguments)
     live <- TRUE
     on.exit(if (live) index$release(), add = TRUE)
@@ -64,6 +68,8 @@ massive_file_cagra_graph <- function(data, output, setup,
     graph$resources$reference_bytes <- index$reference_bytes
     graph$resources$device_bytes_estimate <- index$device_bytes_estimate
     graph$resources$host_batch_bytes_estimate <- index$host_batch_bytes_estimate
+    graph$resources$host_workspace_required_bytes <-
+        index$host_workspace_required_bytes
     graph$resources$owned_metal_bytes <- index$owned_metal_bytes
     graph$resources$observed_metal_owned_buffer_peak_bytes <-
         index$observed_metal_owned_buffer_peak_bytes
@@ -74,12 +80,14 @@ massive_file_cagra_graph <- function(data, output, setup,
     graph$cagra_settings <- index$params
     graph$source_read_and_upload_seconds <- index$source_read_and_upload_seconds
     graph$build_seconds <- index$build_seconds
+    graph$build_and_upload_seconds <- index$build_and_upload_seconds
     graph$build_timing <- index$build_timing
     graph$knn_search_seconds <- measurement$search_seconds
     graph$graph_write_seconds <- measurement$graph_write_seconds
     graph$search_and_write_seconds <- measurement$seconds
-    graph$total_seconds <- graph$source_read_and_upload_seconds +
-        graph$build_seconds + graph$search_and_write_seconds
+    graph$total_seconds <- (index$build_and_upload_seconds %||%
+        (index$source_read_and_upload_seconds + index$build_seconds)) +
+        graph$search_and_write_seconds
     graph
 }
 
