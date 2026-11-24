@@ -770,6 +770,36 @@ test_that("resident CAGRA directs explicit multiple devices to faissR", {
     expect_true(is.na(out$target_met))
 })
 
+test_that("resident faissR CAGRA assembles sharded output across batches", {
+    skip_if_not(isTRUE(faissR::cuvs_available()))
+    skip_if(massive_cuda_device_count_cpp() < 2L)
+    set.seed(41L)
+    n <- 320L
+    k <- 8L
+    features <- matrix(rnorm(n * 8L), n)
+    fit <- faissr_cuvs_multi_cagra_cpp(list(data = float::fl(features),
+        k = k, devices = c(1L, 0L), output = "float32", width = 4L,
+        queue = 64L, nn_descent = TRUE, graph_degree = 16L,
+        intermediate_degree = 32L, batch_rows = 48L,
+        memory_limit_bytes = 2^30))
+    expect_identical(fit$backend_used, "cuda_cuvs_multi_cagra")
+    expect_identical(fit$devices, c(0L, 1L))
+    expect_identical(fit$merge, "native_host")
+    expect_identical(fit$shard_rows, c(160L, 160L))
+    expect_identical(dim(fit$indices), c(n, k))
+    expect_s4_class(fit$distances, "float32")
+    expect_false(any(fit$indices == seq_len(n)))
+    truth <- as.matrix(dist(features))
+    observed <- truth[cbind(rep(seq_len(n), k), c(fit$indices))]
+    expect_equal(c(float::dbl(fit$distances)), observed, tolerance = 1e-4)
+    diag(truth) <- Inf
+    exact <- t(apply(truth, 1L, function(row) order(row)[seq_len(k)]))
+    recall <- vapply(seq_len(n), function(i) {
+        mean(fit$indices[i, ] %in% exact[i, ])
+    }, numeric(1))
+    expect_gt(mean(recall), .98)
+})
+
 test_that("Metal CAGRA selection covers resident and file-backed self KNN", {
     previous <- options(fastEmbedR.metal_knn_method = "cagra")
     on.exit(options(previous))

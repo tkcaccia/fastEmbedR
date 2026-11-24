@@ -931,7 +931,7 @@ run_faissr_cuda_cagra <- function(data, k, method, metric, output,
     }
     if (length(devices) > 1L) {
         return(run_faissr_cuda_multi_cagra(data, k, method, output,
-            target_recall, devices))
+            target_recall, devices, cagra_profile))
     }
     if (!is.null(devices) && !identical(as.integer(devices), 0L)) {
         stop("A single-device CAGRA request requires CUDA device 0.",
@@ -950,17 +950,32 @@ run_faissr_cuda_cagra <- function(data, k, method, metric, output,
 }
 
 run_faissr_cuda_multi_cagra <- function(data, k, method, output,
-        target_recall, devices) {
-    preset <- get0("cuvs_cagra_wide_params", envir = asNamespace("faissR"),
-        inherits = FALSE)
+        target_recall, devices, profile = NULL) {
+    faiss <- asNamespace("faissR")
+    preset <- get0("cuvs_cagra_wide_params", envir = faiss, inherits = FALSE)
     if (!is.function(preset)) stop(
         "The installed faissR build lacks the CAGRA presets.", call. = FALSE)
     params <- preset(target_recall, identical(method, "cagra_width4"))
+    search <- getOption("faissR.cuvs_cagra_resident_search")
+    if (!is.null(search)) {
+        resolve <- get("cuvs_cagra_file_search", envir = faiss)
+        params <- resolve(params, k, search)
+    }
+    profile <- profile %||% getOption("faissR.cuvs_cagra_profile")
+    if (!is.null(profile)) {
+        validate <- get("cuvs_validate_cagra_profile", envir = faiss)
+        profile <- validate(profile, nrow(data), k)
+    }
     devices <- sort(as.integer(devices))
     out <- faissr_cuvs_multi_cagra_cpp(list(
         data = data, k = as.integer(k), devices = devices, output = output,
         width = params$width, queue = params$queue,
-        nn_descent = params$builder == "nn_descent"
+        nn_descent = params$builder == "nn_descent",
+        graph_degree = profile$graph_degree %||% 64L,
+        intermediate_degree = profile$intermediate_degree %||% 128L,
+        batch_rows = min(params$batch %||% 1024L,
+            profile$batch_rows %||% 1024L),
+        memory_limit_bytes = massive_available_ram_bytes()
     ))
     expected <- c(nrow(data), as.integer(k))
     if (!identical(out$backend_used, "cuda_cuvs_multi_cagra") ||
