@@ -127,9 +127,10 @@ Build the graph with \code{\link[=massive_umap_fuzzy_graph]{massive_umap_fuzzy_g
 CUDA full-graph route requires a device-resident 2D layout.}
 
 \item{output}{New \code{.f32} path for experimental file-backed coordinates.
-A one-call full fit also writes KNN, fuzzy graph, and streamed spectral
-initialization from that graph. The spectral stage runs on CPU and is
-recorded separately even when the fit backend is Metal or CUDA.}
+A one-call full fit writes KNN, fuzzy graph, and spectral initialization.
+Initialization has separate timing and backend records. On a single
+CUDA GPU, it caches the graph when the graph and the spectral workspace
+fit the budgets. Larger graphs use streamed CPU initialization.}
 
 \item{chunk_rows}{Maximum experimental query rows per batch.}
 

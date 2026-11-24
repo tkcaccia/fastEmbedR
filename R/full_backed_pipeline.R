@@ -68,6 +68,21 @@ full_backed_umap_layout_controls <- function(backend, layout_storage,
     invisible(NULL)
 }
 
+full_backed_umap_spectral_backend <- function(graph, dimensions,
+        backend, devices, limit) {
+    if (backend == "metal" &&
+        isTRUE(getOption("fastEmbedR.metal_file_spectral"))) return("metal")
+    if (backend != "cuda" || !is.null(devices) ||
+        !isTRUE(getOption("fastEmbedR.cuda_file_spectral", TRUE))) return("cpu")
+    n <- as.double(graph$n_vertices)
+    block <- min(n - 1, max(dimensions + 6, 8))
+    host_bytes <- (20 * block + 8) * n + 8192 * dimensions * 4 + 20 * 1024^2
+    device_bytes <- 8 * graph$n_edges + (8 * block + 12) * n + 8
+    free <- massive_cuda_memory_cpp()$free_bytes
+    if (is.finite(free) && host_bytes <= limit &&
+        device_bytes <= min(limit, 0.65 * free - 64 * 1024^2)) "cuda" else "cpu"
+}
+
 full_backed_pipeline_init <- function(data, init, paths,
         dimensions, backend, n.cores, seed, memory_limit,
         devices, graph = NULL, tsne = FALSE,
@@ -82,21 +97,23 @@ full_backed_pipeline_init <- function(data, init, paths,
         source <- c(graph$offsets_path, graph$indices_path,
             graph$weights_path)
         identity <- massive_checkpoint_input_files_identity(source)
-        use_metal <- identical(backend, "metal") &&
-            isTRUE(getOption("fastEmbedR.metal_file_spectral"))
+        limit <- massive_memory_bytes(memory_limit)
+        initializer <- full_backed_umap_spectral_backend(graph, dimensions,
+            backend, devices, limit)
         built <- massive_spectral_init_stream_cpp(
             source[[1L]], source[[2L]], source[[3L]], graph$n_vertices,
             paths$spectral, dimensions, 50L, seed,
-            8192L, massive_memory_bytes(memory_limit), use_metal)
+            8192L, limit, use_metal = initializer == "metal",
+            use_cuda = initializer == "cuda")
         if (!identical(identity,
                 massive_checkpoint_input_files_identity(source))) stop(
             "UMAP graph changed during spectral initialization.",
             call. = FALSE)
         return(list(layout = massive_matrix(paths$spectral,
             data$nrow, dimensions), fit = NULL,
-            backend = if (use_metal) "metal" else "cpu",
-            method = if (use_metal) "mapped_graph_spectral" else
-                "streamed_graph_spectral", resources = built))
+            backend = initializer, method = switch(initializer,
+                metal = "mapped_graph_spectral", cuda = "cached_graph_spectral",
+                "streamed_graph_spectral"), resources = built))
     }
     workers <- if (identical(backend, "metal")) 1L else n.cores
     fit <- pca(data, ncomp = dimensions, backend = backend,

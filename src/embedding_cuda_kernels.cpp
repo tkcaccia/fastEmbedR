@@ -123,7 +123,7 @@ std::size_t align_bytes(std::size_t bytes, std::size_t alignment = 256u) {
 
 class CudaWorkspace {
  public:
-  CudaWorkspace() = default;
+  explicit CudaWorkspace(bool retain_pool = true) : retain_pool_(retain_pool) {}
   CudaWorkspace(const CudaWorkspace&) = delete;
   CudaWorkspace& operator=(const CudaWorkspace&) = delete;
   ~CudaWorkspace() {
@@ -136,17 +136,18 @@ class CudaWorkspace {
     offset_ = 0u;
     if (capacity_ == 0u) return 0;
 #if CUDART_VERSION >= 11020
-    if (configure_pool()) return 1;
-    return check_cuda(
-      cudaMallocAsync(&base_, capacity_, nullptr),
-      std::string("cudaMallocAsync(workspace ") + label + ")"
-    );
-#else
+    if (retain_pool_) {
+      if (configure_pool()) return 1;
+      return check_cuda(
+        cudaMallocAsync(&base_, capacity_, nullptr),
+        std::string("cudaMallocAsync(workspace ") + label + ")"
+      );
+    }
+#endif
     return check_cuda(
       cudaMalloc(&base_, capacity_),
       std::string("cudaMalloc(workspace ") + label + ")"
     );
-#endif
   }
 
   template <typename T>
@@ -172,10 +173,10 @@ class CudaWorkspace {
   void release() noexcept {
     if (base_ == nullptr) return;
 #if CUDART_VERSION >= 11020
-    cudaFreeAsync(base_, nullptr);
-#else
-    cudaFree(base_);
+    if (retain_pool_) cudaFreeAsync(base_, nullptr);
+    else
 #endif
+      cudaFree(base_);
     base_ = nullptr;
     capacity_ = 0u;
     offset_ = 0u;
@@ -211,6 +212,7 @@ class CudaWorkspace {
   }
 #endif
 
+  bool retain_pool_;
   void* base_ = nullptr;
   std::size_t capacity_ = 0u;
   std::size_t offset_ = 0u;
@@ -6245,6 +6247,130 @@ extern "C" int fastembedr_cuda_umap_optimize_coo(const int* heads,
   return 0;
 }
 
+// The file-backed spectral solver uploads CSR once and keeps its basis
+// projections in the caller. Both graph passes use the same weighted operator.
+struct MassiveSpectralCudaContext {
+  // Release all initializer VRAM before admitting the optimizer cache.
+  CudaWorkspace workspace{false};
+  int vertices = 0;
+  int block = 0;
+  std::uint64_t edges = 0;
+  std::uint64_t* offsets = nullptr;
+  std::uint32_t* neighbors = nullptr;
+  float* weights = nullptr;
+  float* inv_degree = nullptr;
+  float* input = nullptr;
+  float* output = nullptr;
+  std::vector<float> staging;
+};
+
+__global__ void massive_spectral_cuda_multiply_kernel(
+    int vertices, int block, std::uint64_t edges,
+    const std::uint64_t* offsets, const std::uint32_t* neighbors,
+    const float* weights, const float* inv_degree, const float* input,
+    float* output) {
+  const auto row = static_cast<std::uint64_t>(blockIdx.x) * blockDim.x +
+    threadIdx.x;
+  if (row >= static_cast<std::uint64_t>(vertices)) return;
+  float sums[9] = {};
+  const auto begin = offsets[row], end = offsets[row + 1];
+  bool valid = begin <= end && end <= edges;
+  for (auto edge = begin; valid && edge < end; ++edge) {
+    const auto target = neighbors[edge];
+    if (target == 0 || target > static_cast<std::uint32_t>(vertices)) {
+      valid = false;
+      break;
+    }
+    const auto neighbor = static_cast<std::size_t>(target - 1);
+    const float scaled = weights[edge] * inv_degree[neighbor];
+    for (int col = 0; col < block; ++col) {
+      sums[col] += scaled * input[neighbor * block + col];
+    }
+  }
+  for (int col = 0; col < block; ++col) {
+    output[row * block + col] = valid ?
+      inv_degree[row] * sums[col] : CUDART_NAN_F;
+  }
+}
+
+extern "C" void fastembedr_massive_spectral_cuda_destroy(void* raw) {
+  delete static_cast<MassiveSpectralCudaContext*>(raw);
+}
+
+extern "C" void* fastembedr_massive_spectral_cuda_create(
+    int vertices, int block, std::uint64_t edges, const double* inv_degree) {
+  embedding_last_error.clear();
+  if (vertices < 2 || block < 2 || block > 9 || edges == 0 ||
+      edges > SIZE_MAX / 16u || inv_degree == nullptr) {
+    set_embedding_error("invalid file-backed CUDA spectral dimensions");
+    return nullptr;
+  }
+  auto ctx = std::make_unique<MassiveSpectralCudaContext>();
+  ctx->vertices = vertices;
+  ctx->block = block;
+  ctx->edges = edges;
+  const auto rows = static_cast<std::size_t>(vertices);
+  const auto values = rows * block;
+  const auto bytes = align_bytes((rows + 1) * sizeof(std::uint64_t)) +
+    align_bytes(edges * sizeof(std::uint32_t)) +
+    align_bytes(edges * sizeof(float)) + align_bytes(rows * sizeof(float)) +
+    2 * align_bytes(values * sizeof(float));
+  if (check_embedding_memory_available(bytes, "CUDA spectral graph cache") ||
+      ctx->workspace.init(bytes, "file-backed spectral")) return nullptr;
+  ctx->offsets = ctx->workspace.alloc<std::uint64_t>(rows + 1, "CSR offsets");
+  ctx->neighbors = ctx->workspace.alloc<std::uint32_t>(edges, "CSR neighbors");
+  ctx->weights = ctx->workspace.alloc<float>(edges, "CSR weights");
+  ctx->inv_degree = ctx->workspace.alloc<float>(rows, "inverse degrees");
+  ctx->input = ctx->workspace.alloc<float>(values, "spectral input");
+  ctx->output = ctx->workspace.alloc<float>(values, "spectral output");
+  if (!ctx->offsets || !ctx->neighbors || !ctx->weights ||
+      !ctx->inv_degree || !ctx->input || !ctx->output) return nullptr;
+  ctx->staging.resize(values);
+  std::copy_n(inv_degree, rows, ctx->staging.begin());
+  if (check_cuda(cudaMemcpy(ctx->inv_degree, ctx->staging.data(),
+        rows * sizeof(float), cudaMemcpyHostToDevice),
+        "cudaMemcpy(spectral degree upload)")) return nullptr;
+  return ctx.release();
+}
+
+extern "C" int fastembedr_massive_spectral_cuda_upload(
+    void* raw, int field, std::size_t offset, std::size_t bytes,
+    const void* values) {
+  auto* ctx = static_cast<MassiveSpectralCudaContext*>(raw);
+  if (ctx == nullptr || field < 0 || field > 2 || values == nullptr) {
+    set_embedding_error("invalid file-backed CUDA spectral upload");
+    return 1;
+  }
+  void* arrays[] = {ctx->offsets, ctx->neighbors, ctx->weights};
+  const std::size_t sizes[] = {
+    (static_cast<std::size_t>(ctx->vertices) + 1) * sizeof(std::uint64_t),
+    ctx->edges * sizeof(std::uint32_t), ctx->edges * sizeof(float)};
+  if (offset > sizes[field] || bytes > sizes[field] - offset) {
+    set_embedding_error("CUDA spectral graph upload exceeds its extent");
+    return 1;
+  }
+  return check_cuda(cudaMemcpy(static_cast<char*>(arrays[field]) + offset,
+    values, bytes, cudaMemcpyHostToDevice), "cudaMemcpy(spectral CSR upload)");
+}
+
+extern "C" int fastembedr_massive_spectral_cuda_multiply(
+    void* raw, const double* input, double* output) {
+  auto& ctx = *static_cast<MassiveSpectralCudaContext*>(raw);
+  const auto values = ctx.staging.size();
+  const auto bytes = values * sizeof(float);
+  std::copy_n(input, values, ctx.staging.begin());
+  if (check_cuda(cudaMemcpy(ctx.input, ctx.staging.data(), bytes,
+        cudaMemcpyHostToDevice), "cudaMemcpy(spectral basis upload)")) return 1;
+  massive_spectral_cuda_multiply_kernel<<<(ctx.vertices - 1) / 256 + 1, 256>>>(
+    ctx.vertices, ctx.block, ctx.edges, ctx.offsets, ctx.neighbors, ctx.weights,
+    ctx.inv_degree, ctx.input, ctx.output);
+  if (check_cuda(cudaGetLastError(), "CUDA spectral multiply launch") ||
+      check_cuda(cudaMemcpy(ctx.staging.data(), ctx.output, bytes,
+        cudaMemcpyDeviceToHost), "cudaMemcpy(spectral basis download)")) return 1;
+  std::copy_n(ctx.staging.begin(), values, output);
+  return 0;
+}
+
 struct MassiveUmapCudaContext {
   int vertices = 0;
   int dimensions = 2;
@@ -6255,6 +6381,10 @@ struct MassiveUmapCudaContext {
   int* tails = nullptr;
   float* weights = nullptr;
   float* periods = nullptr;
+  int* graph_cache = nullptr;
+  std::size_t cache_capacity = 0;
+  std::size_t edges_uploaded = 0;
+  std::vector<int> cached_batches;
 };
 
 extern "C" void fastembedr_massive_umap_cuda_destroy(void* raw) {
@@ -6265,6 +6395,7 @@ extern "C" void fastembedr_massive_umap_cuda_destroy(void* raw) {
   if (ctx->tails != nullptr) cudaFree(ctx->tails);
   if (ctx->weights != nullptr) cudaFree(ctx->weights);
   if (ctx->periods != nullptr) cudaFree(ctx->periods);
+  if (ctx->graph_cache != nullptr) cudaFree(ctx->graph_cache);
   delete ctx;
 }
 
@@ -6351,6 +6482,73 @@ extern "C" int fastembedr_massive_umap_cuda_upload(
     cudaMemcpyHostToDevice), "cudaMemcpy(massive UMAP upload)");
 }
 
+// Cache only when the graph fits the admitted one-device budget.
+extern "C" int fastembedr_massive_umap_cuda_cache_begin(
+    void* raw, std::uint64_t edges, double memory_limit) {
+  auto* ctx = static_cast<MassiveUmapCudaContext*>(raw);
+  if (ctx == nullptr || ctx->graph_cache != nullptr) {
+    set_embedding_error("invalid CUDA UMAP graph cache request");
+    return -1;
+  }
+  constexpr auto edge_bytes = 2 * sizeof(int) + 2 * sizeof(float);
+  constexpr auto reserve = 64u * 1024u * 1024u;
+  if (edges == 0 || edges > SIZE_MAX / edge_bytes) return 0;
+  const auto bytes = static_cast<std::size_t>(edges) * edge_bytes;
+  const double occupied = static_cast<double>(ctx->vertices) *
+    ctx->dimensions * sizeof(float) + ctx->capacity * double(edge_bytes);
+  std::size_t free = 0, total = 0;
+  if (check_cuda(cudaMemGetInfo(&free, &total),
+        "cudaMemGetInfo(file-backed UMAP graph cache)")) return -1;
+  if (bytes > memory_limit - occupied || bytes > 0.65 * free - reserve)
+    return 0;
+  if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&ctx->graph_cache),
+        bytes), "cudaMalloc(file-backed UMAP graph cache)")) return -1;
+  ctx->cache_capacity = static_cast<std::size_t>(edges);
+  return 1;
+}
+
+int massive_umap_cuda_launch(MassiveUmapCudaContext* ctx,
+    const int* heads, const int* tails, const float* weights,
+    const float* periods, int edges, int epoch) {
+  const int blocks = (edges - 1) / 256 + 1;
+  if (ctx->dimensions == 3) {
+    embed_epoch_coo_atomic_3d_kernel<<<blocks, 256>>>(ctx->layout,
+      heads, tails, weights, periods, ctx->params,
+      static_cast<unsigned int>(epoch), edges);
+  } else {
+    embed_epoch_coo_atomic_kernel<<<blocks, 256>>>(ctx->layout,
+      heads, tails, weights, periods, ctx->params,
+      static_cast<unsigned int>(epoch), edges);
+  }
+  return check_cuda(cudaGetLastError(), "massive CUDA UMAP edge kernel");
+}
+
+extern "C" int fastembedr_massive_umap_cuda_cache_replay(
+    void* raw, int epoch) {
+  auto* ctx = static_cast<MassiveUmapCudaContext*>(raw);
+  if (!ctx || !ctx->graph_cache || ctx->cached_batches.empty() ||
+      epoch < 1 || epoch >= ctx->params.n_epochs) {
+    set_embedding_error("invalid CUDA UMAP graph cache replay");
+    return 1;
+  }
+  const auto capacity = ctx->cache_capacity;
+  const auto* heads = ctx->graph_cache;
+  const auto* tails = heads + capacity;
+  const auto* weights = reinterpret_cast<const float*>(tails + capacity);
+  const auto* periods = weights + capacity;
+  // Reuse the same batch boundaries as streaming, including RNG edge IDs.
+  for (int count : ctx->cached_batches) {
+    if (massive_umap_cuda_launch(ctx, heads, tails, weights,
+          periods, count, epoch)) return 1;
+    heads += count;
+    tails += count;
+    weights += count;
+    periods += count;
+  }
+  return check_cuda(cudaDeviceSynchronize(),
+    "massive CUDA UMAP graph cache synchronization");
+}
+
 extern "C" int fastembedr_massive_umap_cuda_step(
     void* raw, const int* heads, const int* tails,
     const float* weights, const float* periods, int edges, int epoch) {
@@ -6362,33 +6560,40 @@ extern "C" int fastembedr_massive_umap_cuda_step(
     set_embedding_error("invalid massive CUDA UMAP edge batch");
     return 1;
   }
-  const auto ids_bytes = static_cast<std::size_t>(edges) * sizeof(int);
-  const auto weights_bytes = static_cast<std::size_t>(edges) *
-    sizeof(float);
-  if (check_cuda(cudaMemcpy(ctx->heads, heads, ids_bytes,
-      cudaMemcpyHostToDevice), "cudaMemcpy(massive UMAP heads)") ||
-      check_cuda(cudaMemcpy(ctx->tails, tails, ids_bytes,
-      cudaMemcpyHostToDevice), "cudaMemcpy(massive UMAP tails)") ||
-      check_cuda(cudaMemcpy(ctx->weights, weights, weights_bytes,
-      cudaMemcpyHostToDevice), "cudaMemcpy(massive UMAP weights)") ||
-      check_cuda(cudaMemcpy(ctx->periods, periods, weights_bytes,
-      cudaMemcpyHostToDevice), "cudaMemcpy(massive UMAP periods)")) {
-    return 1;
+  const auto items = static_cast<std::size_t>(edges);
+  const auto bytes = items * sizeof(float);
+  auto* d_heads = ctx->heads;
+  auto* d_tails = ctx->tails;
+  auto* d_weights = ctx->weights;
+  auto* d_periods = ctx->periods;
+  if (ctx->graph_cache) {
+    const auto capacity = ctx->cache_capacity;
+    if (items > capacity - ctx->edges_uploaded) {
+      set_embedding_error("file-backed CUDA UMAP exceeded its graph cache");
+      return 1;
+    }
+    d_heads = ctx->graph_cache + ctx->edges_uploaded;
+    d_tails = d_heads + capacity;
+    d_weights = reinterpret_cast<float*>(d_tails + capacity);
+    d_periods = d_weights + capacity;
   }
-  const int blocks = (edges - 1) / 256 + 1;
-  if (ctx->dimensions == 3) {
-    embed_epoch_coo_atomic_3d_kernel<<<blocks, 256>>>(ctx->layout,
-      ctx->heads, ctx->tails, ctx->weights, ctx->periods,
-      ctx->params, static_cast<unsigned int>(epoch), edges);
-  } else {
-    embed_epoch_coo_atomic_kernel<<<blocks, 256>>>(ctx->layout,
-      ctx->heads, ctx->tails, ctx->weights, ctx->periods,
-      ctx->params, static_cast<unsigned int>(epoch), edges);
+  if (check_cuda(cudaMemcpy(d_heads, heads, bytes, cudaMemcpyHostToDevice),
+        "cudaMemcpy(massive UMAP heads)") ||
+      check_cuda(cudaMemcpy(d_tails, tails, bytes, cudaMemcpyHostToDevice),
+        "cudaMemcpy(massive UMAP tails)") ||
+      check_cuda(cudaMemcpy(d_weights, weights, bytes, cudaMemcpyHostToDevice),
+        "cudaMemcpy(massive UMAP weights)") ||
+      check_cuda(cudaMemcpy(d_periods, periods, bytes, cudaMemcpyHostToDevice),
+        "cudaMemcpy(massive UMAP periods)") ||
+      massive_umap_cuda_launch(ctx, d_heads, d_tails, d_weights, d_periods,
+        edges, epoch) ||
+      check_cuda(cudaDeviceSynchronize(),
+        "massive CUDA UMAP edge synchronization")) return 1;
+  if (ctx->graph_cache) {
+    ctx->cached_batches.push_back(edges);
+    ctx->edges_uploaded += items;
   }
-  return check_cuda(cudaGetLastError(),
-      "massive CUDA UMAP edge kernel") ||
-    check_cuda(cudaDeviceSynchronize(),
-      "massive CUDA UMAP edge synchronization");
+  return 0;
 }
 
 extern "C" int fastembedr_massive_umap_cuda_finish_epoch(void* raw) {

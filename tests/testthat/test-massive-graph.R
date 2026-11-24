@@ -3157,10 +3157,15 @@ test_that("CUDA streams fuzzy UMAP edges without CPU fallback", {
     writeBin(as.vector(t(start)), init_path, size = 4L,
         endian = "little")
     init <- massive_matrix(init_path, n, 2L)
-    fitted <- massive_umap_optimize(graph, init, output,
-        n_epochs = 30L, negative_sample_rate = 2L,
-        learning_rate = 0.05, chunk_rows = 3L,
-        memory_limit = "256MB", backend = "cuda")
+    fitted <- local({
+        previous <- options(fastEmbedR.cuda_umap_graph_cache = FALSE)
+        on.exit(options(previous))
+        massive_umap_optimize(graph, init, output,
+            n_epochs = 30L, negative_sample_rate = 2L,
+            learning_rate = 0.05, chunk_rows = 3L,
+            memory_limit = "256MB", backend = "cuda")
+    })
+    expect_identical(fitted$native_backend_used, "native_cuda_umap_stream")
     layout <- massive_read_rows(fitted, 1L, n)
     expect_identical(fitted$backend, "cuda")
     expect_identical(fitted$gpu_devices, 0L)
@@ -3215,6 +3220,11 @@ test_that("CUDA streams fuzzy UMAP edges without CPU fallback", {
         n * 2L * 4L)
     expect_equal(managed$resources$device_buffer_bytes,
         managed$resources$edge_batch_capacity * 16)
+    expect_identical(managed$native_backend_used, "native_cuda_umap_cached")
+    expect_identical(managed$resources$graph_feeder, "cached_device")
+    expect_equal(managed$resources$device_graph_cache_bytes,
+        graph$n_edges * 16)
+    expect_equal(managed$updates$edge_visits, fitted$updates$edge_visits)
     expect_true(all(is.finite(managed_layout)))
     expect_gt(stats::cor(as.vector(stats::dist(layout)),
         as.vector(stats::dist(managed_layout))), 0.9)

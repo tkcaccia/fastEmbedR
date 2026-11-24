@@ -1,9 +1,11 @@
 #' Optimize an experimental disk-backed UMAP graph
 #'
-#' Streams a symmetric fuzzy CSR graph for each epoch. CPU coordinates use
-#' float32 RAM or an explicitly requested writable memory-mapped file.
-#' CUDA streams bounded edge batches. Its default layout must fit VRAM;
-#' explicit managed storage allows CUDA paging from host RAM.
+#' Reads a symmetric fuzzy CSR graph. CPU coordinates use float32 RAM or
+#' an explicitly requested writable memory-mapped file. A single CUDA
+#' device reuses cached edge batches when they fit its memory budget and
+#' streams them otherwise. The result records the graph feeder and cache
+#' size. CUDA layouts use device memory by default. Explicit managed
+#' storage allows CUDA paging from host RAM.
 #' Sampling times are derived from edge weights instead of storing a
 #' per-edge schedule. CPU supports file-backed 2D or 3D initialization;
 #' Completed CPU, Metal, or CUDA epochs can be checkpointed and resumed without
@@ -75,7 +77,8 @@ massive_umap_optimize <- function(graph, init, output,
             call. = FALSE)
     }
     if (plan$backend == "cuda" && is.null(plan$devices) &&
-        !identical(built$backend_used, "native_cuda_umap_stream")) stop(
+        !built$backend_used %in% c("native_cuda_umap_stream",
+            "native_cuda_umap_cached")) stop(
         "CUDA UMAP used an unexpected native route.", call. = FALSE)
     if (plan$backend == "metal") validate_massive_metal_umap_fit(built)
     if (!is.null(plan$devices))
@@ -145,7 +148,8 @@ massive_umap_native_fit <- function(graph, init, plan, saved,
             plan$chunk_rows, plan$edge_capacity, plan$limit,
             saved$epoch, saved$every, saved$progress,
             saved$edge_visits, init$ncol, layout_storage,
-            plan$devices %||% integer())
+            plan$devices %||% integer(),
+            isTRUE(getOption("fastEmbedR.cuda_umap_graph_cache", TRUE)))
     } else if (backend == "metal") {
         massive_umap_optimize_metal_cpp(graph$offsets_path,
             graph$indices_path, graph$weights_path, graph$n_vertices,
@@ -274,9 +278,10 @@ massive_umap_cuda_result <- function(result, plan, built,
     result$gpu_devices <- if (is.null(plan$devices)) {
         as.integer(massive_cuda_memory_cpp()$device)
     } else built$devices
-    result$resources$graph_feeder <- if (is.null(plan$devices)) {
-        "serial"
-    } else "concurrent_owner"
+    cache_bytes <- built$device_graph_cache_bytes %||% 0
+    result$resources$device_graph_cache_bytes <- cache_bytes
+    result$resources$graph_feeder <- if (cache_bytes > 0) "cached_device"
+        else if (is.null(plan$devices)) "serial" else "concurrent_owner"
     result$resources$device_step_timing_scope <-
         if (is.null(plan$devices)) "kernel_wait" else
         "host_pack_copy_enqueue_and_slot_wait"

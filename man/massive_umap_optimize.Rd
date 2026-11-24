@@ -88,10 +88,12 @@ The two optimizers have different update trajectories.}
 An experimental file-backed \code{fastEmbedR_massive_matrix}.
 }
 \description{
-Streams a symmetric fuzzy CSR graph for each epoch. CPU coordinates use
-float32 RAM or an explicitly requested writable memory-mapped file.
-CUDA streams bounded edge batches. Its default layout must fit VRAM;
-explicit managed storage allows CUDA paging from host RAM.
+Reads a symmetric fuzzy CSR graph. CPU coordinates use float32 RAM or
+an explicitly requested writable memory-mapped file. A single CUDA
+device reuses cached edge batches when they fit its memory budget and
+streams them otherwise. The result records the graph feeder and cache
+size. CUDA layouts use device memory by default. Explicit managed
+storage allows CUDA paging from host RAM.
 Sampling times are derived from edge weights instead of storing a
 per-edge schedule. CPU supports file-backed 2D or 3D initialization;
 Completed CPU, Metal, or CUDA epochs can be checkpointed and resumed without

@@ -1,6 +1,18 @@
 #ifndef FASTEMBEDR_MASSIVE_UMAP_CUDA_H
 #define FASTEMBEDR_MASSIVE_UMAP_CUDA_H
 
+#include <cstddef>
+#include <cstdint>
+
+extern "C" void fastembedr_massive_spectral_cuda_destroy(void* context);
+extern "C" void* fastembedr_massive_spectral_cuda_create(
+    int vertices, int block, std::uint64_t edges, const double* inv_degree);
+extern "C" int fastembedr_massive_spectral_cuda_upload(
+    void* context, int field, std::size_t offset, std::size_t bytes,
+    const void* values);
+extern "C" int fastembedr_massive_spectral_cuda_multiply(
+    void* context, const double* input, double* output);
+
 extern "C" void* fastembedr_massive_umap_cuda_create(
     int vertices, int dimensions, int edge_capacity,
     int epochs, int negatives,
@@ -11,6 +23,10 @@ extern "C" int fastembedr_massive_umap_cuda_upload(
 extern "C" int fastembedr_massive_umap_cuda_step(
     void* context, const int* heads, const int* tails,
     const float* weights, const float* periods, int edges, int epoch);
+extern "C" int fastembedr_massive_umap_cuda_cache_begin(
+    void* context, std::uint64_t edges, double memory_limit);
+extern "C" int fastembedr_massive_umap_cuda_cache_replay(
+    void* context, int epoch);
 extern "C" int fastembedr_massive_umap_cuda_finish_epoch(void* context);
 extern "C" int fastembedr_massive_umap_cuda_download(
     void* context, int first, int rows, float* layout);

@@ -689,8 +689,8 @@ massive_nccl_available_cpp <- function() {
     .Call(`_fastEmbedR_massive_nccl_available_cpp`)
 }
 
-massive_umap_optimize_cuda_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, edge_capacity, memory_limit_bytes, start_epoch = 0L, checkpoint_every = 0L, checkpoint_callback = NULL, visits_done = 0, dimensions = 2L, layout_storage = "memory", devices = NULL) {
-    .Call(`_fastEmbedR_massive_umap_optimize_cuda_cpp`, offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, edge_capacity, memory_limit_bytes, start_epoch, checkpoint_every, checkpoint_callback, visits_done, dimensions, layout_storage, devices)
+massive_umap_optimize_cuda_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, edge_capacity, memory_limit_bytes, start_epoch = 0L, checkpoint_every = 0L, checkpoint_callback = NULL, visits_done = 0, dimensions = 2L, layout_storage = "memory", devices = NULL, cache_graph = TRUE) {
+    .Call(`_fastEmbedR_massive_umap_optimize_cuda_cpp`, offsets_path, indices_path, weights_path, n_vertices, init_path, init_format, output, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, chunk_rows, edge_capacity, memory_limit_bytes, start_epoch, checkpoint_every, checkpoint_callback, visits_done, dimensions, layout_storage, devices, cache_graph)
 }
 
 massive_tsne_optimize_cuda_cpp <- function(offsets_path, indices_path, weights_path, access, init_path, output_path, n, dims, early_iter, normal_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, start_iter, state_path, checkpoint_every, checkpoint_callback, edge_capacity, devices) {
@@ -701,8 +701,8 @@ massive_read_graph_edges_cpp <- function(indices_path, distances_path, n_vertice
     .Call(`_fastEmbedR_massive_read_graph_edges_cpp`, indices_path, distances_path, n_vertices, k, access, first_row, count, max_bytes, kind)
 }
 
-massive_spectral_init_stream_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit, use_metal = FALSE) {
-    .Call(`_fastEmbedR_massive_spectral_init_stream_cpp`, offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit, use_metal)
+massive_spectral_init_stream_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit, use_metal = FALSE, use_cuda = FALSE) {
+    .Call(`_fastEmbedR_massive_spectral_init_stream_cpp`, offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit, use_metal, use_cuda)
 }
 
 massive_validate_csr_graph_cpp <- function(offsets_path, indices_path, weights_path, n_vertices) {

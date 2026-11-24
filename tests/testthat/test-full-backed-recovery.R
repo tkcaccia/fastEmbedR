@@ -76,6 +76,7 @@ test_that("streamed graph spectral initialization is bounded and stable", {
         "native_cpu_streamed_spectral")
     expect_identical(first$graph_passes, 12L)
     expect_identical(names(first$stage_seconds), c("degree_scan",
+        "metal_prepare",
         "graph_multiply", "orthogonalization", "ritz_projection",
         "layout_write"))
     expect_true(all(is.finite(first$stage_seconds) &

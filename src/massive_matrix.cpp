@@ -6558,7 +6558,7 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
     SEXP checkpoint_callback = R_NilValue,
     double visits_done = 0, int dimensions = 2,
     std::string layout_storage = "memory",
-    SEXP devices = R_NilValue) {
+    SEXP devices = R_NilValue, bool cache_graph = true) {
 #ifndef FASTEMBEDR_HAS_CUDA
   Rcpp::stop("Native massive CUDA UMAP is unavailable; no CPU fallback.");
 #else
@@ -6666,6 +6666,11 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
       layout_storage == "managed" ? 1 : 0);
   if (raw == nullptr) massive_umap_cuda_check(1);
   std::unique_ptr<void, decltype(destroy)> context(raw, destroy);
+  const int cache = (cache_graph && !multi_device &&
+      n_epochs - start_epoch > 1) ?
+    fastembedr_massive_umap_cuda_cache_begin(context.get(), graph.edges(),
+      memory_limit_bytes) : 0;
+  if (cache < 0) massive_umap_cuda_check(1);
   const auto init_rows = std::min(chunk_rows, 8192);
   std::vector<float> init_buffer(
     static_cast<std::size_t>(init_rows) * dimensions);
@@ -6701,6 +6706,7 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
   Rcpp::NumericVector per_device_rows(device_ids.size());
   double finalization_block_seconds = 0;
   double graph_visit_seconds = 0;
+  double cached_edge_visits = 0;
   double device_step_seconds = 0;
   double owner_wall_seconds = 0;
   const auto owner_rows = multi_device ?
@@ -6752,54 +6758,52 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
       Rcpp::checkUserInterrupt();
     } else
 #endif
-    for (std::uint64_t first = 1; first <= graph.vertices();) {
-      auto rows = graph.bounded_rows(first, chunk_rows,
-                                     edge_capacity, true);
-      const auto rank = static_cast<int>((first - 1) / owner_rows);
-      if (multi_device) rows = std::min<std::uint64_t>(rows,
-        (static_cast<std::uint64_t>(rank) + 1) * owner_rows - first + 1);
-      int active = 0;
-      auto flush = [&]() {
-        if (active == 0) return;
-        int status = 1;
-        const auto started = std::chrono::steady_clock::now();
-#ifdef FASTEMBEDR_HAS_NCCL
-        if (multi_device) status =
-          fastembedr_massive_umap_multigpu_step(context.get(), rank,
-            heads.data(), tails.data(), weights.data(),
-            periods.data(), active, epoch);
-        else
-#endif
-          status = fastembedr_massive_umap_cuda_step(
-            context.get(), heads.data(), tails.data(),
-            weights.data(), periods.data(), active, epoch);
-        massive_umap_cuda_check(status);
-        device_step_seconds += std::chrono::duration<double>(
-          std::chrono::steady_clock::now() - started).count();
-        edge_visits += active;
-        if (device_ids.size() > 0) per_device_visits[rank] += active;
-        active = 0;
-      };
-      const auto visit_started = std::chrono::steady_clock::now();
-      const auto before_steps = device_step_seconds;
-      graph.visit(first, rows,
-        [&](std::uint64_t source, std::uint32_t target,
-            float weight, std::uint64_t) {
-          if (weight < min_weight) return;
-          heads[active] = static_cast<int>(source - 1);
-          tails[active] = static_cast<int>(target - 1);
-          weights[active] = weight;
-          periods[active] = max_weight /
-            std::max(weight, 1.0e-6f);
-          if (++active == edge_capacity) flush();
-        });
-      graph_visit_seconds += std::max(0.0,
-        std::chrono::duration<double>(
-          std::chrono::steady_clock::now() - visit_started).count() -
-        (device_step_seconds - before_steps));
-      flush();
-      first += rows;
-      Rcpp::checkUserInterrupt();
+    if (cache && epoch > start_epoch) {
+      const auto began = std::chrono::steady_clock::now();
+      massive_umap_cuda_check(
+        fastembedr_massive_umap_cuda_cache_replay(context.get(), epoch));
+      device_step_seconds += std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - began).count();
+      edge_visits += cached_edge_visits;
+    } else {
+      const double before_visits = edge_visits;
+      for (std::uint64_t first = 1; first <= graph.vertices();) {
+        const auto rows = graph.bounded_rows(first, chunk_rows,
+                                             edge_capacity, true);
+        int active = 0;
+        auto flush = [&]() {
+          if (active == 0) return;
+          const auto started = std::chrono::steady_clock::now();
+          massive_umap_cuda_check(fastembedr_massive_umap_cuda_step(
+            context.get(), heads.data(), tails.data(), weights.data(),
+            periods.data(), active, epoch));
+          device_step_seconds += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started).count();
+          edge_visits += active;
+          active = 0;
+        };
+        const auto visit_started = std::chrono::steady_clock::now();
+        const auto before_steps = device_step_seconds;
+        graph.visit(first, rows,
+          [&](std::uint64_t source, std::uint32_t target,
+              float weight, std::uint64_t) {
+            if (weight < min_weight) return;
+            heads[active] = static_cast<int>(source - 1);
+            tails[active] = static_cast<int>(target - 1);
+            weights[active] = weight;
+            periods[active] = max_weight /
+              std::max(weight, 1.0e-6f);
+            if (++active == edge_capacity) flush();
+          });
+        graph_visit_seconds += std::max(0.0,
+          std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - visit_started).count() -
+          (device_step_seconds - before_steps));
+        flush();
+        first += rows;
+        Rcpp::checkUserInterrupt();
+      }
+      if (cache) cached_edge_visits = edge_visits - before_visits;
     }
     int epoch_status = 1;
 #ifdef FASTEMBEDR_HAS_NCCL
@@ -6839,7 +6843,9 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
   return List::create(
     Rcpp::Named("backend_used") = multi_device ?
       "native_cuda_umap_coordinated_nccl" :
-      "native_cuda_umap_stream",
+      cache ? "native_cuda_umap_cached" : "native_cuda_umap_stream",
+    Rcpp::Named("device_graph_cache_bytes") =
+      cache ? 16.0 * graph.edges() : 0.0,
     Rcpp::Named("devices") = device_ids,
     Rcpp::Named("n_vertices") = static_cast<double>(graph.vertices()),
     Rcpp::Named("n_edges") = static_cast<double>(graph.edges()),
@@ -7543,10 +7549,17 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
     std::string indices_path, std::string weights_path,
     double n_vertices, std::string output, int n_components,
     int spectral_n_iter, int seed, int chunk_rows,
-    double memory_limit, bool use_metal = false) {
+    double memory_limit, bool use_metal = false, bool use_cuda = false) {
 #ifndef HAVE_METAL
   if (use_metal) Rcpp::stop("Metal UMAP spectral initialization needs Metal.");
 #endif
+#ifndef FASTEMBEDR_HAS_CUDA
+  if (use_cuda) Rcpp::stop("CUDA UMAP spectral initialization needs CUDA.");
+#endif
+  if (use_metal && use_cuda) {
+    Rcpp::stop("Select one UMAP spectral accelerator.");
+  }
+  constexpr std::size_t upload_tile = 4 * 1024 * 1024;
   CsrGraphSource graph(offsets_path, indices_path, weights_path,
                        n_vertices, "stream");
   const auto n = graph.vertices();
@@ -7564,8 +7577,11 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
     checked_product(chunk_rows, n_components * 4) + 16 * 1024 * 1024;
   const double metal_bytes = use_metal ? 8.0 * graph.edges() +
     8.0 * (n + 1) + 4.0 * n + 8.0 * values + 6.0 * 65536 : 0.0;
-  const double estimated = cpu_bytes + metal_bytes;
-  if (estimated > memory_limit ||
+  const double cuda_host_bytes = use_cuda ? 4.0 * values + upload_tile : 0.0;
+  const double cuda_device_bytes = use_cuda ? 8.0 * graph.edges() +
+    8.0 * (n + 1) + 4.0 * n + 8.0 * values : 0.0;
+  const double estimated = cpu_bytes + metal_bytes + cuda_host_bytes;
+  if (estimated > memory_limit || cuda_device_bytes > memory_limit ||
       values > std::numeric_limits<std::size_t>::max() /
         sizeof(double)) {
     Rcpp::stop("Streamed spectral initialization exceeds RAM budget.");
@@ -7622,6 +7638,34 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
     metal_prepare_seconds = seconds_since(started);
   }
 #endif
+  double cuda_prepare_seconds = 0.0;
+#ifdef FASTEMBEDR_HAS_CUDA
+  std::unique_ptr<void, decltype(&fastembedr_massive_spectral_cuda_destroy)>
+    cuda(nullptr, fastembedr_massive_spectral_cuda_destroy);
+  if (use_cuda) {
+    const auto started = Clock::now();
+    cuda.reset(fastembedr_massive_spectral_cuda_create(
+      static_cast<int>(n), block, graph.edges(), inv_degree.data()));
+    massive_umap_cuda_check(cuda ? 0 : 1);
+    const std::array<std::string, 3> paths{
+      offsets_path, indices_path, weights_path};
+    const std::array<std::uint64_t, 3> sizes{
+      checked_product(n + 1, 8), checked_product(graph.edges(), 4),
+      checked_product(graph.edges(), 4)};
+    for (int field = 0; field < 3; ++field) {
+      GraphFile payload(paths[field], sizes[field], "stream");
+      for (std::uint64_t offset = 0; offset < sizes[field];) {
+        const auto bytes = std::min<std::uint64_t>(
+          upload_tile, sizes[field] - offset);
+        massive_umap_cuda_check(fastembedr_massive_spectral_cuda_upload(
+          cuda.get(), field, offset, bytes, payload.read(offset, bytes)));
+        offset += bytes;
+        Rcpp::checkUserInterrupt();
+      }
+    }
+    cuda_prepare_seconds = seconds_since(started);
+  }
+#endif
   auto multiply = [&](const std::vector<double>& input,
                       std::vector<double>& result) {
     const auto started = Clock::now();
@@ -7630,6 +7674,15 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
       fastembedr_umap_spectral_metal_multiply(
         device.get(), input.data(), result.data());
       multiply_seconds += seconds_since(started);
+      return;
+    }
+#endif
+#ifdef FASTEMBEDR_HAS_CUDA
+    if (cuda) {
+      massive_umap_cuda_check(fastembedr_massive_spectral_cuda_multiply(
+        cuda.get(), input.data(), result.data()));
+      multiply_seconds += seconds_since(started);
+      Rcpp::checkUserInterrupt();
       return;
     }
 #endif
@@ -7722,25 +7775,31 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
     Rcpp::checkUserInterrupt();
   }
   sink.finish(checked_product(n, n_components * 4));
+  Rcpp::NumericVector stage_seconds = Rcpp::NumericVector::create(
+    Rcpp::Named("degree_scan") = degree_seconds,
+    Rcpp::Named("metal_prepare") = metal_prepare_seconds,
+    Rcpp::Named("graph_multiply") = multiply_seconds,
+    Rcpp::Named("orthogonalization") = project_seconds,
+    Rcpp::Named("ritz_projection") = ritz_seconds,
+    Rcpp::Named("layout_write") = seconds_since(write_started));
+  if (use_cuda) stage_seconds.push_back(cuda_prepare_seconds, "cuda_prepare");
   return List::create(
-    Rcpp::Named("backend_used") = (use_metal ?
-      "native_metal_mapped_spectral" : "native_cpu_streamed_spectral"),
+    Rcpp::Named("backend_used") = (use_metal ? "native_metal_mapped_spectral" :
+      use_cuda ? "native_cuda_cached_spectral" : "native_cpu_streamed_spectral"),
     Rcpp::Named("n_vertices") = static_cast<double>(n),
     Rcpp::Named("dimensions") = n_components,
     Rcpp::Named("iterations") = spectral_n_iter,
     Rcpp::Named("graph_passes") = spectral_n_iter + 2,
-    Rcpp::Named("cpu_graph_passes") = use_metal ? 1 : spectral_n_iter + 2,
-    Rcpp::Named("graph_access") = use_metal ? "read_only_mmap" : "stream",
-    Rcpp::Named("multiply_precision") = use_metal ? "float32" : "float64",
+    Rcpp::Named("cpu_graph_passes") = use_metal ? 1 :
+      use_cuda ? 2 : spectral_n_iter + 2,
+    Rcpp::Named("graph_access") = use_metal ? "read_only_mmap" :
+      use_cuda ? "device_cached" : "stream",
+    Rcpp::Named("multiply_precision") = use_metal || use_cuda ?
+      "float32" : "float64",
+    Rcpp::Named("cuda_workspace_estimate_bytes") = cuda_device_bytes,
     Rcpp::Named("metal_owned_workspace_bytes") = metal_owned_bytes,
     Rcpp::Named("memory_bytes_estimate") = estimated,
-    Rcpp::Named("stage_seconds") = Rcpp::NumericVector::create(
-      Rcpp::Named("degree_scan") = degree_seconds,
-      Rcpp::Named("metal_prepare") = metal_prepare_seconds,
-      Rcpp::Named("graph_multiply") = multiply_seconds,
-      Rcpp::Named("orthogonalization") = project_seconds,
-      Rcpp::Named("ritz_projection") = ritz_seconds,
-      Rcpp::Named("layout_write") = seconds_since(write_started)),
+    Rcpp::Named("stage_seconds") = stage_seconds,
     Rcpp::Named("output") = output);
 }
 
