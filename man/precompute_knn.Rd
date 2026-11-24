@@ -44,7 +44,7 @@ silently copied to disk.}
 
 \item{memory_limit}{Working-memory budget for file-backed KNN. CUDA also
 uses it to cap estimated VRAM. When omitted,
-\code{options(memory_limit = ...)} is used, or \code{"8GB"}.}
+\code{options(memory_limit = ...)} is used, or detected available RAM.}
 
 \item{devices}{Optional distinct CUDA device indices. For resident input,
 explicit devices use faissR Flat or IVF and return host KNN matrices;
@@ -110,6 +110,8 @@ weights or t-SNE affinities from it before full-graph fitting.
 Resident CUDA Flat and IVF results stay on the device when \code{devices} is
 omitted and can be passed directly to \code{\link[=umap_knn]{umap_knn()}} or \code{\link[=tsne_knn]{tsne_knn()}} with
 \code{backend = "cuda"}. An explicit device selection returns host matrices.
+For large Euclidean CUDA self searches with cuVS, faissR can select CAGRA
+with NN-descent and shard a file-backed index to fit the memory budget.
 Set \code{options(fastEmbedR.cuda_knn_method = "cagra")} to use faissR's
 cuVS CAGRA settings for the requested recall tier, or use
 \code{"cagra_width4"} to request a width-four graph search. These options

@@ -41,7 +41,7 @@ tsne(
   output = NULL,
   chunk_rows = NULL,
   storage = NULL,
-  memory_limit = "8GB",
+  memory_limit = "available",
   devices = NULL,
   landmark_method = "reservoir",
   checkpoint = FALSE,
@@ -185,7 +185,7 @@ uses \code{options(storage = ...)}. Explicit \code{"resident"} on a
 
 \item{memory_limit}{Conservative experimental RAM budget. When omitted for
 file-backed input, uses \code{options(memory_limit = ...)}, or
-\code{"8GB"}.}
+detected available RAM.}
 
 \item{devices}{Optional CUDA device indices. In resident full-data mode,
 one-call matrix KNN currently uses faissR on GPU 0 and returns host

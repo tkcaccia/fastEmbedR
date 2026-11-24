@@ -13,7 +13,7 @@ massive_cluster_landmarks(
   backend = "cpu",
   n.cores = 1L,
   chunk_rows = NULL,
-  memory_limit = "8GB",
+  memory_limit = fastembedr_memory_option(),
   resolution = 1,
   n_iterations = 10L,
   n_runs = 1L,

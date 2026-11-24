@@ -17,7 +17,7 @@ massive_cluster(
   landmark_method = c("reservoir", "random"),
   knn_method = c("auto", "exact", "hnsw", "ivf"),
   chunk_rows = NULL,
-  memory_limit = "8GB",
+  memory_limit = fastembedr_memory_option(),
   resolution = 1,
   n_iterations = 10L,
   n_runs = 1L,

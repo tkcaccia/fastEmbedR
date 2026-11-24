@@ -69,7 +69,7 @@ full_backed_umap_layout_controls <- function(backend, layout_storage,
 }
 
 full_backed_umap_spectral_backend <- function(graph, dimensions,
-        backend, devices, limit) {
+        backend, devices, limit, device_limit = limit) {
     if (backend == "metal" &&
         isTRUE(getOption("fastEmbedR.metal_file_spectral"))) return("metal")
     if (backend != "cuda" || !is.null(devices) ||
@@ -80,7 +80,7 @@ full_backed_umap_spectral_backend <- function(graph, dimensions,
     device_bytes <- 8 * graph$n_edges + (8 * block + 12) * n + 8
     free <- massive_cuda_memory_cpp()$free_bytes
     if (is.finite(free) && host_bytes <= limit &&
-        device_bytes <= min(limit, 0.65 * free - 64 * 1024^2)) "cuda" else "cpu"
+        device_bytes <= min(device_limit, free - 64 * 1024^2)) "cuda" else "cpu"
 }
 
 full_backed_pipeline_init <- function(data, init, paths,
@@ -98,13 +98,15 @@ full_backed_pipeline_init <- function(data, init, paths,
             graph$weights_path)
         identity <- massive_checkpoint_input_files_identity(source)
         limit <- massive_memory_bytes(memory_limit)
+        device_limit <- fastembedr_device_memory_limit(memory_limit)
         initializer <- full_backed_umap_spectral_backend(graph, dimensions,
-            backend, devices, limit)
+            backend, devices, limit, device_limit)
         built <- massive_spectral_init_stream_cpp(
             source[[1L]], source[[2L]], source[[3L]], graph$n_vertices,
             paths$spectral, dimensions, 50L, seed,
             8192L, limit, use_metal = initializer == "metal",
-            use_cuda = initializer == "cuda")
+            use_cuda = initializer == "cuda",
+            device_memory_limit = device_limit)
         if (!identical(identity,
                 massive_checkpoint_input_files_identity(source))) stop(
             "UMAP graph changed during spectral initialization.",
@@ -212,7 +214,8 @@ full_backed_umap_request <- function(data, output, dimensions,
     controls <- list(method = "umap", k = k,
         dimensions = dimensions, backend = backend,
         workers = workers, fit_workers = fit_workers, seed = seed,
-        memory_bytes = massive_memory_bytes(memory_limit),
+        memory_bytes = if (identical(memory_limit, "available")) memory_limit
+            else massive_memory_bytes(memory_limit),
         devices = devices, chunk_rows = chunk_rows,
         layout_storage = layout_storage,
         cpu_update = cpu_update, keep_knn = keep_knn,
@@ -325,7 +328,8 @@ full_backed_tsne_request <- function(data, output, policy,
         backend = settings$backend, workers = workers,
         seed = settings$seed, optimizer = settings$optimizer,
         dimensions = settings$n_components,
-        memory_bytes = massive_memory_bytes(memory_limit),
+        memory_bytes = if (identical(memory_limit, "available")) memory_limit
+            else massive_memory_bytes(memory_limit),
         devices = devices, keep_knn = settings$keep_knn,
         target_recall = settings$target_recall)
     full_backed_pipeline_start(data, output,

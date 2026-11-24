@@ -24,10 +24,13 @@ fastembedr_storage_option <- function(x, storage = NULL) {
     choice
 }
 
-fastembedr_memory_option <- function(default) {
-    value <- getOption("memory_limit", default)
-    massive_memory_bytes(value)
-    value
+fastembedr_memory_option <- function() {
+    getOption("memory_limit", "available")
+}
+
+fastembedr_device_memory_limit <- function(memory_limit) {
+    if (identical(memory_limit, "available")) return(Inf)
+    massive_memory_bytes(memory_limit)
 }
 
 fastembedr_resident_file_requested <- function(x, storage) {
@@ -61,7 +64,7 @@ fastembedr_explicit_resident_data <- function(x, storage,
     limit <- massive_memory_bytes(memory_limit)
     available <- massive_available_ram_bytes()
     if (!is.finite(bytes) || !is.finite(available) ||
-        1.25 * bytes > min(limit, 0.8 * available)) stop(
+        1.25 * bytes > min(limit, available)) stop(
         "Resident float32 loading exceeds the memory limit or ",
         "available RAM; use a larger explicit `memory_limit` only ",
         "when the machine has enough free RAM.", call. = FALSE)
@@ -72,7 +75,7 @@ fastembedr_pca_resident_data <- function(x, storage, memory_limit,
         memory_missing, massive, output, chunk_rows, checkpoint, resume) {
     resident_limit <- if (memory_missing &&
         fastembedr_resident_file_requested(x, storage))
-        fastembedr_memory_option("512MB") else memory_limit
+        fastembedr_memory_option() else memory_limit
     fastembedr_explicit_resident_data(x, storage, resident_limit,
         massive, fastembedr_resident_controls_ok(output,
             chunk_rows, checkpoint, resume))
@@ -95,7 +98,7 @@ fastembedr_embedding_storage <- function(x, landmarks, massive,
         controls_ok = TRUE) {
     resident_source <- fastembedr_resident_file_requested(x, storage)
     resident_limit <- if (memory_missing && resident_source)
-        fastembedr_memory_option("8GB") else memory_limit
+        fastembedr_memory_option() else memory_limit
     x <- fastembedr_explicit_resident_data(x, storage,
         resident_limit, massive, controls_ok)
     storage <- fastembedr_storage_option(x, storage)
@@ -114,10 +117,11 @@ fastembedr_embedding_storage <- function(x, landmarks, massive,
         "A file-backed input cannot use resident embedding mode.",
         call. = FALSE)
     if (memory_missing && !identical(massive, "off"))
-        memory_limit <- fastembedr_memory_option("8GB")
+        memory_limit <- fastembedr_memory_option()
     if (resident_source) memory_limit <- resident_limit
     list(data = x, massive = massive, memory_limit = memory_limit,
-        control_memory_limit = if (resident_source) "8GB" else memory_limit)
+        control_memory_limit = if (resident_source || memory_missing) "8GB"
+            else memory_limit)
 }
 
 fastembedr_cluster_storage_mode <- function(x, massive, storage,

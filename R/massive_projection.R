@@ -601,7 +601,7 @@ massive_projection_setup <- function(fit, graph, output,
 massive_project_landmarks <- function(
     fit, graph, output, selection = NULL,
     backend = "cpu", n.cores = 1L,
-    chunk_rows = NULL, memory_limit = "8GB",
+    chunk_rows = NULL, memory_limit = fastembedr_memory_option(),
     refinement_epochs = 50L, transform_iter = 250L,
     transform_perplexity = 5, seed = 4L,
     checkpoint = FALSE, resume = FALSE,

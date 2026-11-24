@@ -6558,7 +6558,8 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
     SEXP checkpoint_callback = R_NilValue,
     double visits_done = 0, int dimensions = 2,
     std::string layout_storage = "memory",
-    SEXP devices = R_NilValue, bool cache_graph = true) {
+    SEXP devices = R_NilValue, bool cache_graph = true,
+    double device_memory_limit = 0) {
 #ifndef FASTEMBEDR_HAS_CUDA
   Rcpp::stop("Native massive CUDA UMAP is unavailable; no CPU fallback.");
 #else
@@ -6666,10 +6667,12 @@ List massive_umap_optimize_cuda_cpp(std::string offsets_path,
       layout_storage == "managed" ? 1 : 0);
   if (raw == nullptr) massive_umap_cuda_check(1);
   std::unique_ptr<void, decltype(destroy)> context(raw, destroy);
+  const double device_limit = device_memory_limit == 0 ?
+    memory_limit_bytes : device_memory_limit;
   const int cache = (cache_graph && !multi_device &&
       n_epochs - start_epoch > 1) ?
     fastembedr_massive_umap_cuda_cache_begin(context.get(), graph.edges(),
-      memory_limit_bytes) : 0;
+      device_limit) : 0;
   if (cache < 0) massive_umap_cuda_check(1);
   const auto init_rows = std::min(chunk_rows, 8192);
   std::vector<float> init_buffer(
@@ -7549,7 +7552,8 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
     std::string indices_path, std::string weights_path,
     double n_vertices, std::string output, int n_components,
     int spectral_n_iter, int seed, int chunk_rows,
-    double memory_limit, bool use_metal = false, bool use_cuda = false) {
+    double memory_limit, bool use_metal = false, bool use_cuda = false,
+    double device_memory_limit = 0) {
 #ifndef HAVE_METAL
   if (use_metal) Rcpp::stop("Metal UMAP spectral initialization needs Metal.");
 #endif
@@ -7581,7 +7585,9 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
   const double cuda_device_bytes = use_cuda ? 8.0 * graph.edges() +
     8.0 * (n + 1) + 4.0 * n + 8.0 * values : 0.0;
   const double estimated = cpu_bytes + metal_bytes + cuda_host_bytes;
-  if (estimated > memory_limit || cuda_device_bytes > memory_limit ||
+  const double device_limit = device_memory_limit == 0 ?
+    memory_limit : device_memory_limit;
+  if (estimated > memory_limit || cuda_device_bytes > device_limit ||
       values > std::numeric_limits<std::size_t>::max() /
         sizeof(double)) {
     Rcpp::stop("Streamed spectral initialization exceeds RAM budget.");

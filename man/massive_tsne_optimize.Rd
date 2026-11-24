@@ -17,7 +17,7 @@ massive_tsne_optimize(
   final_momentum = 0.8,
   min_gain = 0.01,
   max_step_norm = Inf,
-  memory_limit = "8GB",
+  memory_limit = fastembedr_memory_option(),
   backend = "cpu",
   n.cores = 1L,
   checkpoint = FALSE,

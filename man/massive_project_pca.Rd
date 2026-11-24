@@ -11,7 +11,7 @@ massive_project_pca(
   backend = NULL,
   n.cores = NULL,
   chunk_rows = NULL,
-  memory_limit = "512MB",
+  memory_limit = fastembedr_memory_option(),
   devices = NULL,
   landmarks = NULL,
   checkpoint = FALSE,

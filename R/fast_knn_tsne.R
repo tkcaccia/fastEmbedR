@@ -847,7 +847,7 @@ validate_tsne_affinity_scope <- function(affinity_k, massive) {
 #' @param chunk_rows Maximum experimental query rows per batch.
 #' @param memory_limit Conservative experimental RAM budget. When omitted for
 #'   file-backed input, uses `options(memory_limit = ...)`, or
-#'   `"8GB"`.
+#'   detected available RAM.
 #' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
 #'   uses `options(storage = ...)`. Explicit `"resident"` on a
 #'   [massive_matrix()] file descriptor loads float32 input after a RAM and
@@ -922,9 +922,10 @@ tsne <- function(data, perplexity = NULL, n_components = 2L, init_data = NULL,
     transform_perplexity = 5, transform_iter = 250L,
     transform_early_exaggeration_iter = 0L, transform_n_negatives = NULL,
     initialization = c("median", "weighted", "random"), massive = "off",
-    output = NULL, chunk_rows = NULL, storage = NULL, memory_limit = "8GB",
-    devices = NULL, landmark_method = "reservoir", checkpoint = FALSE,
-    resume = FALSE, affinity_k = NULL, target_recall = NULL, ...) {
+    output = NULL, chunk_rows = NULL, storage = NULL,
+    memory_limit = "available", devices = NULL, landmark_method = "reservoir",
+    checkpoint = FALSE, resume = FALSE, affinity_k = NULL,
+    target_recall = NULL, ...) {
     storage <- fastembedr_embedding_storage(data, landmarks, massive,
         missing(massive), memory_limit, missing(memory_limit), "t-SNE", storage,
         fastembedr_resident_controls_ok(output, chunk_rows,
@@ -940,10 +941,9 @@ tsne <- function(data, perplexity = NULL, n_components = 2L, init_data = NULL,
         learning_rate, early_exaggeration_iter, early_exaggeration,
         n_iter, exaggeration, initial_momentum, final_momentum,
         max_step_norm, negative_gradient_method, record_costs, auto_config)
-    settings <- new_tsne_settings(perplexity, n_components,
-        init_data, Y_init, standardize, pca_dims, metric, seed,
-        backend, keep_knn, verbose, n.cores, optimizer, devices,
-        affinity_k, target_recall)
+    settings <- new_tsne_settings(perplexity, n_components, init_data,
+        Y_init, standardize, pca_dims, metric, seed, backend, keep_knn,
+        verbose, n.cores, optimizer, devices, affinity_k, target_recall)
     validate_tsne_affinity_scope(affinity_k, massive)
     controls <- if (!identical(massive, "off") ||
         landmark_embedding_requested(landmarks))

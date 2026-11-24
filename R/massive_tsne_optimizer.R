@@ -46,7 +46,7 @@ massive_tsne_optimize <- function(graph, init, output,
         early_exaggeration = 12, exaggeration = 1,
         learning_rate = "auto", initial_momentum = 0.8,
         final_momentum = 0.8, min_gain = 0.01,
-        max_step_norm = Inf, memory_limit = "8GB",
+        max_step_norm = Inf, memory_limit = fastembedr_memory_option(),
         backend = "cpu", n.cores = 1L, checkpoint = FALSE,
         resume = FALSE, checkpoint_every = 100L, devices = NULL,
         graph_access = "auto", edge_chunk_capacity = NULL) {

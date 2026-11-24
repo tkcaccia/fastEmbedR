@@ -351,7 +351,7 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #' @param chunk_rows Maximum experimental query rows per batch.
 #' @param memory_limit Conservative experimental RAM budget. When omitted for
 #'   file-backed input, uses `options(memory_limit = ...)`, or
-#'   `"8GB"`.
+#'   detected available RAM.
 #' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
 #'   uses `options(storage = ...)`. Explicit `"resident"` on a
 #'   [massive_matrix()] file descriptor loads float32 input after a RAM and
@@ -418,7 +418,7 @@ umap <- function(data, n_neighbors = NULL, n_components = 2L,
     backend = NULL, n.cores = NULL, keep_knn = FALSE,
     graph_mode = c("fuzzy", "binary"), verbose = FALSE, landmarks = FALSE,
     transform_k = NULL, massive = "off", output = NULL, chunk_rows = NULL,
-    memory_limit = "8GB", refinement_epochs = 0L, local_refine = FALSE,
+    memory_limit = "available", refinement_epochs = 0L, local_refine = FALSE,
     local_neighbors = 15L, overlap_rows = 500L, devices = NULL,
     landmark_method = "reservoir", init = NULL, layout_storage = "memory",
     checkpoint = FALSE, resume = FALSE, cpu_update = "sgd", ef_search = 0L,

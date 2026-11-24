@@ -1,4 +1,5 @@
 massive_memory_bytes <- function(value) {
+    if (identical(value, "available")) return(massive_auto_memory_limit(value))
     if (is.numeric(value) && length(value) == 1L &&
         is.finite(value) && value > 0) return(as.numeric(value))
     if (!is.character(value) || length(value) != 1L || is.na(value) ||
@@ -115,7 +116,8 @@ massive_auto_memory_limit <- function(memory_limit,
         available <= 0) stop(
         "Auto mode cannot determine available RAM; use an explicit ",
         "massive mode and memory_limit.", call. = FALSE)
-    min(massive_memory_bytes(memory_limit), 0.8 * available)
+    if (identical(memory_limit, "available")) return(available)
+    min(massive_memory_bytes(memory_limit), available)
 }
 
 massive_pca_auto_gpu_ok <- function(rows, cols, backend) {
@@ -1300,7 +1302,8 @@ massive_pca_projection_checkpoint <- function(x, path, model, selected,
 #' @export
 #' @keywords internal
 massive_project_pca <- function(fit, x, output, backend = NULL,
-        n.cores = NULL, chunk_rows = NULL, memory_limit = "512MB",
+        n.cores = NULL, chunk_rows = NULL,
+        memory_limit = fastembedr_memory_option(),
         devices = NULL, landmarks = NULL, checkpoint = FALSE,
         resume = FALSE) {
     workers <- normalize_pca_threads(n.cores)

@@ -45,7 +45,7 @@ normalize_opentsne_knn_input <- function(
 }
 
 tsne_check_resident_affinity_capacity <- function(rows, width,
-        memory_limit = fastembedr_memory_option("8GB"),
+        memory_limit = fastembedr_memory_option(),
         available = massive_available_ram_bytes(), backend = NULL,
         distance_bytes = 8L, devices = NULL) {
     edges <- as.double(rows) * width

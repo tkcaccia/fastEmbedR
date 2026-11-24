@@ -22,7 +22,9 @@
 #' @param repulsion_strength Repulsive-force multiplier.
 #' @param seed Random seed for negative sampling.
 #' @param chunk_rows Maximum graph rows per sequential read.
-#' @param memory_limit Host working-buffer budget. The full layout counts in
+#' @param memory_limit Working-buffer budget. The default uses available RAM
+#'   and, for CUDA, available device memory. Set `options(memory_limit = ...)`
+#'   or pass an explicit cap to limit both. The full layout counts in
 #'   CPU RAM mode; OS page cache for a mapped layout is not capped by this
 #'   value. CUDA preflights device allocations against free device memory;
 #'   managed CUDA coordinates count against the host budget.
@@ -54,7 +56,8 @@
 massive_umap_optimize <- function(graph, init, output,
         n_epochs = 200L, negative_sample_rate = 5L, learning_rate = 1,
         min_dist = 0.1, repulsion_strength = 1, seed = 1L,
-        chunk_rows = 8192L, memory_limit = "16GB", backend = "cpu",
+        chunk_rows = 8192L, memory_limit = fastembedr_memory_option(),
+        backend = "cpu",
         n.cores = 1L, checkpoint = FALSE, resume = FALSE,
         checkpoint_every = 10L, layout_storage = "memory",
         devices = NULL, cpu_update = "sgd") {
@@ -149,7 +152,8 @@ massive_umap_native_fit <- function(graph, init, plan, saved,
             saved$epoch, saved$every, saved$progress,
             saved$edge_visits, init$ncol, layout_storage,
             plan$devices %||% integer(),
-            isTRUE(getOption("fastEmbedR.cuda_umap_graph_cache", TRUE)))
+            isTRUE(getOption("fastEmbedR.cuda_umap_graph_cache", TRUE)),
+            plan$device_limit)
     } else if (backend == "metal") {
         massive_umap_optimize_metal_cpp(graph$offsets_path,
             graph$indices_path, graph$weights_path, graph$n_vertices,
@@ -497,23 +501,23 @@ massive_umap_optimize_plan <- function(graph, init, output,
         learning_rate, min_dist, repulsion_strength, seed, chunk_rows)
     layout <- massive_umap_plan_layout(graph, init, controls,
         memory_limit, backend, layout_storage, cpu_update)
-    layout_bytes <- layout$bytes
-    limit <- layout$limit
-    path <- massive_float_output(output, layout_bytes,
+    device_limit <- fastembedr_device_memory_limit(memory_limit)
+    path <- massive_float_output(output, layout$bytes,
         resume = resume && layout_storage == "mmap")
     graph_paths <- c(graph$offsets_path, graph$indices_path,
         graph$weights_path)
     massive_checkpoint_validated_graph_identity(graph, graph_paths)
     paths <- c(graph_paths, init$path)
     edge_capacity <- if (backend == "cuda") {
-        massive_umap_cuda_capacity(graph, layout_bytes,
-            controls$chunk_rows, limit, init$ncol, layout_storage,
-            devices)
+        massive_umap_cuda_capacity(graph, layout$bytes,
+            controls$chunk_rows, layout$limit, init$ncol, layout_storage,
+            devices, device_limit)
     } else layout$metal_capacity
-    list(output = path, layout_bytes = layout_bytes, backend = backend,
+    list(output = path, layout_bytes = layout$bytes, backend = backend,
         delta_bytes = layout$delta_bytes,
         peak_ram_estimate = layout$peak_ram_estimate,
-        edge_capacity = edge_capacity, limit = limit,
+        edge_capacity = edge_capacity, limit = layout$limit,
+        device_limit = device_limit,
         devices = devices, gpu_identity = identity,
         n.cores = as.integer(n.cores), cpu_update = cpu_update,
         source_paths = paths, init_format = init$format,
@@ -572,7 +576,8 @@ massive_umap_cuda_layout_bytes <- function(vertices, dimensions,
 massive_umap_cuda_capacity <- function(graph, layout_bytes,
                                         chunk_rows, limit,
                                         dimensions, layout_storage,
-                                        devices = NULL) {
+                                        devices = NULL,
+                                        device_limit = Inf) {
     free_bytes <- if (is.null(devices)) {
         massive_cuda_memory_cpp()$free_bytes
     } else massive_auto_cuda_free(devices, graph$n_vertices)
@@ -581,7 +586,7 @@ massive_umap_cuda_capacity <- function(graph, layout_bytes,
             dimensions, devices) *
             if (is.null(devices)) 1 else 3
     } else 0
-    available <- 0.65 * free_bytes - device_layout - 64 * 1024^2
+    available <- min(device_limit, free_bytes - 64 * 1024^2) - device_layout
     host_layout <- if (layout_storage == "managed") {
         layout_bytes
     } else 0

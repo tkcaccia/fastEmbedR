@@ -71,3 +71,14 @@ test_that("CUDA spectral admission accounts for graph and basis allocations", {
     graph <- list(n_vertices = 5e7, n_edges = 2.6e9)
     expect_identical(choose(), "cpu")
 })
+
+test_that("CUDA UMAP budgets host memory separately from VRAM", {
+    local_mocked_bindings(massive_cuda_memory_cpp = function() {
+        list(free_bytes = 15 * 2^30)
+    })
+    graph <- list(n_vertices = 10000000L, n_edges = 1300000000)
+    expect_identical(full_backed_umap_spectral_backend(
+        graph, 2L, "cuda", NULL, 6 * 2^30, Inf), "cuda")
+    expect_identical(full_backed_umap_spectral_backend(
+        graph, 2L, "cuda", NULL, 6 * 2^30, 8 * 2^30), "cpu")
+})

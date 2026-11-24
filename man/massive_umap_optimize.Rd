@@ -15,7 +15,7 @@ massive_umap_optimize(
   repulsion_strength = 1,
   seed = 1L,
   chunk_rows = 8192L,
-  memory_limit = "16GB",
+  memory_limit = fastembedr_memory_option(),
   backend = "cpu",
   n.cores = 1L,
   checkpoint = FALSE,
@@ -48,7 +48,9 @@ the first epoch initializes the edge-sampling schedule.}
 
 \item{chunk_rows}{Maximum graph rows per sequential read.}
 
-\item{memory_limit}{Host working-buffer budget. The full layout counts in
+\item{memory_limit}{Working-buffer budget. The default uses available RAM
+and, for CUDA, available device memory. Set \code{options(memory_limit = ...)}
+or pass an explicit cap to limit both. The full layout counts in
 CPU RAM mode; OS page cache for a mapped layout is not capped by this
 value. CUDA preflights device allocations against free device memory;
 managed CUDA coordinates count against the host budget.}

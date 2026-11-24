@@ -436,7 +436,7 @@ massive_cluster_landmarks <- function(
     reference_graph, knn, output,
     method = c("leiden", "louvain"),
     selection = NULL, backend = "cpu", n.cores = 1L,
-    chunk_rows = NULL, memory_limit = "8GB",
+    chunk_rows = NULL, memory_limit = fastembedr_memory_option(),
     resolution = 1, n_iterations = 10L, n_runs = 1L,
     steps = 4L, seed = 1L, checkpoint = FALSE,
     checkpoint_every = 100L, resume = FALSE,

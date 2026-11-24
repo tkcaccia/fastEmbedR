@@ -172,7 +172,7 @@ fastembedr_knn_selection <- function(backend, n, p, k, metric,
         target_recall = fastembedr_target_recall(target_recall))
     if (!is.null(memory_limit_bytes))
         request$memory_limit_bytes <- memory_limit_bytes
-    if (backend == "cuda" && allow_cuda_profile)
+    if (backend == "cuda" && (allow_cuda_profile || file_backed))
         request$host_available_bytes <- massive_available_ram_bytes()
     selection <- faissr_knn_select_cpp(request)
     requested <- if (backend == "cuda") cuda_method else metal_method
@@ -359,7 +359,7 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
 #' @param output New file prefix required for a file-backed KNN result.
 #' @param memory_limit Working-memory budget for file-backed KNN. CUDA also
 #'   uses it to cap estimated VRAM. When omitted,
-#'   `options(memory_limit = ...)` is used, or `"8GB"`.
+#'   `options(memory_limit = ...)` is used, or detected available RAM.
 #' @param devices Optional distinct CUDA device indices. For resident input,
 #'   explicit devices use faissR Flat or IVF and return host KNN matrices;
 #'   multiple devices use a replicated index. File-backed input uses
@@ -500,13 +500,15 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
         "File-backed KNN requires a new `output` file prefix.",
         call. = FALSE)
     limit <- if (is.null(memory_limit))
-        fastembedr_memory_option("8GB") else memory_limit
+        fastembedr_memory_option() else memory_limit
     memory_bytes <- massive_memory_bytes(limit)
+    cuda_auto <- backend == "cuda" && identical(limit, "available")
     workers <- resolve_n_cores(n.cores)
     allow_ivf <- backend != "metal" || (!checkpoint && !resume && workers == 1L)
     select <- function(allow) fastembedr_knn_selection(backend, data$nrow,
         data$ncol, k, metric, target_recall, file_backed = TRUE,
-        allow_ivf = allow, memory_limit_bytes = memory_bytes,
+        allow_ivf = allow,
+        memory_limit_bytes = if (!cuda_auto) memory_bytes,
         allow_cuda_profile = data$format %in% c("f32", "fbin") &&
             is.null(devices) && !checkpoint && !resume)
     selection <- select(allow_ivf)
@@ -515,8 +517,10 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
             audit_rows, devices, checkpoint || resume))
     }
     if (selection$method %in% c("cagra", "cagra_width4")) {
+        budget <- if (cuda_auto) massive_cuda_memory_cpp()$free_bytes
+            else memory_bytes
         return(precompute_knn_file_cagra(data, k, output,
-            memory_bytes, selection, audit_rows, devices,
+            budget, selection, audit_rows, devices,
             checkpoint || resume))
     }
     if (backend == "metal" && selection$method == "ivf" &&

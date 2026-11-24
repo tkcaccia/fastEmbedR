@@ -12,7 +12,7 @@ massive_project_landmarks(
   backend = "cpu",
   n.cores = 1L,
   chunk_rows = NULL,
-  memory_limit = "8GB",
+  memory_limit = fastembedr_memory_option(),
   refinement_epochs = 50L,
   transform_iter = 250L,
   transform_perplexity = 5,

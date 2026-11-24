@@ -15,7 +15,7 @@ massive_landmark_knn(
     "sharded_ivf"),
   chunk_rows = NULL,
   reference_chunk_rows = NULL,
-  memory_limit = "8GB",
+  memory_limit = fastembedr_memory_option(),
   checkpoint = FALSE,
   resume = FALSE,
   devices = NULL,

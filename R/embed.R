@@ -795,7 +795,7 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' @param memory_limit Conservative RAM budget for out-of-core buffers
 #'   and any resident R-matrix input, for example `"512MB"` or `"16GB"`.
 #'   When omitted for file-backed input, uses
-#'   `options(memory_limit = ...)`, or `"512MB"`.
+#'   `options(memory_limit = ...)`, or detected available RAM.
 #'   This does not limit R itself or linked-library memory.
 #' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
 #'   uses `options(storage = ...)`. Explicit `"resident"` on a
@@ -844,7 +844,7 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 pca <- function(x, ncomp = 2L, xtest = NULL, center = TRUE,
         scale = FALSE, backend = NULL, n.cores = NULL, seed = 4L,
         tsne_init = FALSE, massive = "off", output = NULL,
-        chunk_rows = NULL, memory_limit = "512MB", checkpoint = FALSE,
+        chunk_rows = NULL, memory_limit = "available", checkpoint = FALSE,
         resume = FALSE, devices = NULL, landmarks = FALSE, storage = NULL) {
     automatic <- missing(massive)
     memory_missing <- missing(memory_limit)
@@ -854,7 +854,7 @@ pca <- function(x, ncomp = 2L, xtest = NULL, center = TRUE,
     massive <- pca_resolve_massive(x, massive, automatic)
     massive <- fastembedr_pca_storage_mode(x, massive, storage)
     if (memory_missing && massive != "off")
-        memory_limit <- fastembedr_memory_option("512MB")
+        memory_limit <- fastembedr_memory_option()
     if (!identical(landmarks, FALSE) && !is.null(landmarks))
         return(pca_landmarks_dispatch(x, ncomp, xtest, center,
             scale, backend, n.cores, seed, tsne_init, devices,

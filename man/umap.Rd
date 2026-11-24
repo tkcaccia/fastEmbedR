@@ -23,7 +23,7 @@ umap(
   massive = "off",
   output = NULL,
   chunk_rows = NULL,
-  memory_limit = "8GB",
+  memory_limit = "available",
   refinement_epochs = 0L,
   local_refine = FALSE,
   local_neighbors = 15L,
@@ -136,7 +136,7 @@ fit the budgets. Larger graphs use streamed CPU initialization.}
 
 \item{memory_limit}{Conservative experimental RAM budget. When omitted for
 file-backed input, uses \code{options(memory_limit = ...)}, or
-\code{"8GB"}.}
+detected available RAM.}
 
 \item{refinement_epochs}{Fixed-reference UMAP projection epochs. In
 resident landmark mode, the default is 50 and an explicit zero disables

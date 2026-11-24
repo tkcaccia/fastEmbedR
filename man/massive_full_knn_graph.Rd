@@ -12,7 +12,7 @@ massive_full_knn_graph(
   n.cores = 1L,
   chunk_rows = NULL,
   reference_chunk_rows = NULL,
-  memory_limit = "8GB",
+  memory_limit = fastembedr_memory_option(),
   checkpoint = FALSE,
   resume = FALSE,
   method = c("exact", "metal_ivf", "hnsw_sharded", "ivf_sharded", "coarse_postings"),

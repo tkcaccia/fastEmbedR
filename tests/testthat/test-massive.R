@@ -378,7 +378,7 @@ test_that("auto RAM probe respects host and container reports", {
     expect_warning(fastEmbedR:::massive_linux_cgroup_v2_available(
         v2, file.path(directory, "missing-cgroup")), NA)
     expect_equal(fastEmbedR:::massive_auto_memory_limit(
-        "8GB", available), 0.8 * available)
+        "8GB", available), available)
     writeLines("max", file.path(v2, "memory.max"))
     writeLines("2147483648", file.path(v1,
         "memory.limit_in_bytes"))
@@ -2879,7 +2879,7 @@ test_that("landmark auto search uses the faissR shape policy", {
 test_that("CUDA KNN planning caps batches before allocation", {
     resources <- list(chunk_rows = 250000L)
     reference <- list(nrow = 1000, ncol = 1024)
-    info <- list(device = 0L, free_bytes = 400 * 1024^2)
+    info <- list(device = 0L, free_bytes = 260 * 1024^2)
     plan <- fastEmbedR:::massive_knn_cuda_resources(
         resources, reference, 30L, "ivf", info)
     expect_lt(plan$chunk_rows, 32768L)
@@ -3217,10 +3217,11 @@ test_that("file-backed UMAP projection reuses saved KNN rows", {
             fit, graph, gpu_output, backend = "cuda",
             refinement_epochs = 0L), "unavailable")
         expect_error(fastEmbedR:::massive_cuda_projector_create_cpp(
-            fit$layout, graph$ncol, 7L), "unavailable")
+            fit$layout, graph$ncol, 7L), "unavailable|available GPU")
         expect_error(massive_project_landmarks(fit, graph,
             tempfile(fileext = ".f32"), backend = "cuda",
-            devices = 0L, refinement_epochs = 0L), "unavailable")
+            devices = 0L, refinement_epochs = 0L),
+            "unavailable|no CUDA-capable device")
     }
 })
 

@@ -33,8 +33,8 @@ massive_knn_resources <- function(x, reference, k, method,
 }
 
 massive_cuda_knn_budget <- function(info) {
-    if (isTRUE(getOption("fastEmbedR.knn.use_available_vram", FALSE))) {
-        return(max(0, info$free_bytes - 512 * 1024^2))
+    if (isTRUE(getOption("fastEmbedR.knn.use_available_vram", TRUE))) {
+        return(info$free_bytes)
     }
     0.65 * info$free_bytes
 }
@@ -759,9 +759,9 @@ massive_landmark_knn <- function(x, reference, k, output,
         method = c("auto", "exact", "stream_exact",
             "hnsw", "ivf", "sharded_exact", "sharded_ivf"),
         chunk_rows = NULL, reference_chunk_rows = NULL,
-        memory_limit = "8GB", checkpoint = FALSE, resume = FALSE,
-        devices = NULL, checkpoint_every = 100L, ef_search = 0L,
-        target_recall = NULL) {
+        memory_limit = fastembedr_memory_option(),
+        checkpoint = FALSE, resume = FALSE, devices = NULL,
+        checkpoint_every = 100L, ef_search = 0L, target_recall = NULL) {
     target_recall <- fastembedr_target_recall(target_recall)
     massive_checkpoint_validate_controls(checkpoint, resume)
     method <- match.arg(method)
@@ -1426,9 +1426,11 @@ massive_cuda_sharded_resources <- function(x, k, chunk_rows,
         call. = FALSE)
     fixed <- 128 * 1024^2
     index_bytes <- if (method == "ivf_sharded") 12 else 8
-    host_max <- floor((0.7 * limit - fixed) / (16 * x$ncol))
-    gpu_budget <- min(massive_cuda_knn_budget(info), 0.7 * limit)
-    gpu_max <- floor((gpu_budget - fixed) /
+    per_query <- 12 * x$ncol + 32 * (k + 1)
+    host_max <- floor((0.7 * limit - fixed - per_query) / (16 * x$ncol))
+    gpu_budget <- min(massive_cuda_knn_budget(info),
+        fastembedr_device_memory_limit(memory_limit))
+    gpu_max <- floor((gpu_budget - fixed - per_query) /
         (index_bytes * x$ncol))
     shard_rows <- min(requested, host_max, gpu_max, x$nrow)
     if (!is.finite(shard_rows) || shard_rows < 2L) stop(
@@ -1441,7 +1443,6 @@ massive_cuda_sharded_resources <- function(x, k, chunk_rows,
     host_free <- 0.7 * limit - fixed - 16 * shard_rows * x$ncol
     gpu_free <- gpu_budget - fixed -
         index_bytes * shard_rows * x$ncol
-    per_query <- 12 * x$ncol + 32 * (k + 1)
     rows <- as.integer(min(requested_query, floor(host_free / per_query),
         floor(gpu_free / per_query), floor(128e6 / (8 * x$ncol)),
         floor(128e6 / (12 * (k + 1)))))
@@ -1531,7 +1532,8 @@ massive_sharded_signature <- function(setup, backend, source_identity) {
         query_rows = setup$resources$chunk_rows,
         reference_rows = setup$resources$reference_chunk_rows,
         n_shards = setup$resources$n_shards,
-        memory_limit = setup$resources$memory_limit_bytes,
+        memory_limit = setup$memory_policy %||%
+            setup$resources$memory_limit_bytes,
         checkpoint_every = setup$checkpoint_every,
         gpu_identity = if (backend == "cuda" && setup$method == "exact")
             massive_cuda_device_uuids(setup$resources$gpu_device) else NULL,
@@ -2147,7 +2149,6 @@ massive_sharded_graph <- function(x, k, output, n.cores,
         audit_rows, backend, method, checkpoint, resume,
         checkpoint_every, ef_search, hnsw_build,
         target_recall = 0.99) {
-    workers <- normalize_nn_threads(n.cores)
     resources <- massive_full_shard_resources(x, k, chunk_rows,
         reference_chunk_rows, memory_limit, backend, method,
         target_recall, hnsw_build)
@@ -2155,8 +2156,9 @@ massive_sharded_graph <- function(x, k, output, n.cores,
         stop("`ef_search` exceeds the smallest reference shard.")
     paths <- massive_knn_paths(output, resources$output_bytes, resume)
     parts <- stats::setNames(paste0(unname(paths), ".part"), names(paths))
-    setup <- list(k = k, workers = workers,
+    setup <- list(k = k, workers = normalize_nn_threads(n.cores),
         resources = resources, method = method, ef_search = ef_search,
+        memory_policy = if (identical(memory_limit, "available")) memory_limit,
         hnsw_build = hnsw_build, checkpoint_every = checkpoint_every,
         target_recall = target_recall, audit_rows = audit_rows,
         cuda_provider = if (backend == "cuda") "faissR" else NULL)
@@ -2644,7 +2646,8 @@ massive_full_knn_dispatch <- function(x, k, output, backend, n.cores,
 #' @keywords internal
 massive_full_knn_graph <- function(x, k, output, backend = "cpu",
         n.cores = 1L, chunk_rows = NULL, reference_chunk_rows = NULL,
-        memory_limit = "8GB", checkpoint = FALSE, resume = FALSE,
+        memory_limit = fastembedr_memory_option(),
+        checkpoint = FALSE, resume = FALSE,
         method = c("exact", "metal_ivf", "hnsw_sharded",
             "ivf_sharded", "coarse_postings"),
         audit_rows = 0L, checkpoint_every = 100L,

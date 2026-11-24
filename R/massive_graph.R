@@ -284,7 +284,7 @@ massive_weighted_graph <- function(prefix, n_vertices, k,
 #' @param output New prefix for `.offsets.u64`, `.indices.u32`, and
 #'   `.weights.f32` output files.
 #' @param memory_limit RAM budget for external sorting, at least 64 MB. When
-#'   omitted, uses `options(memory_limit = ...)`, or `"8GB"`.
+#'   omitted, uses `options(memory_limit = ...)`, or detected available RAM.
 #' @param backend Only `"cpu"` is currently supported.
 #' @param checkpoint Save completed sorted-pair runs for resume.
 #' @param resume Continue a matching interrupted graph sort.
@@ -297,7 +297,7 @@ massive_weighted_graph <- function(prefix, n_vertices, k,
 #' @export
 #' @keywords internal
 massive_umap_fuzzy_graph <- function(x, output,
-        memory_limit = getOption("memory_limit", "8GB"),
+        memory_limit = fastembedr_memory_option(),
         backend = "cpu", checkpoint = FALSE, resume = FALSE,
         checkpoint_every = 100L, sort_method = c("global", "bucketed"),
         consume_knn = FALSE) {
@@ -501,7 +501,7 @@ massive_fuzzy_graph <- function(prefix, n_vertices,
 #' @param perplexity Positive perplexity no larger than the KNN width.
 #' @param output New CSR output prefix.
 #' @param memory_limit RAM budget for external sorting, at least 64 MB. When
-#'   omitted, uses `options(memory_limit = ...)`, or `"8GB"`.
+#'   omitted, uses `options(memory_limit = ...)`, or detected available RAM.
 #' @param backend Only `"cpu"` is supported for graph construction.
 #' @param n.cores CPU workers for independent conditional-probability rows.
 #' @param checkpoint Save completed sorted-pair runs for resume.
@@ -514,7 +514,7 @@ massive_fuzzy_graph <- function(prefix, n_vertices,
 #' @export
 #' @keywords internal
 massive_tsne_affinities <- function(x, perplexity, output,
-        memory_limit = getOption("memory_limit", "8GB"),
+        memory_limit = fastembedr_memory_option(),
         backend = "cpu", n.cores = 1L, checkpoint = FALSE,
         resume = FALSE, checkpoint_every = 100L,
         sort_method = c("global", "bucketed"), consume_knn = FALSE) {
@@ -623,7 +623,9 @@ massive_umap_fuzzy_preflight <- function(x, output, memory_limit,
         x$file_identity)) stop(
         "Massive membership files changed since import.",
         call. = FALSE)
-    list(prefix = prefix, limit = limit, disk_bytes = needed)
+    list(prefix = prefix, limit = limit, disk_bytes = needed,
+        memory_policy = if (identical(memory_limit, "available"))
+            memory_limit)
 }
 
 massive_graph_sort_signature <- function(x, plan, method,
@@ -636,7 +638,8 @@ massive_graph_sort_signature <- function(x, plan, method,
         "Cannot hash the native graph sorter.", call. = FALSE)
     massive_checkpoint_signature(list(version = 1L,
         input = x$file_identity, n_vertices = x$n_vertices,
-        k = x$k, output = plan$prefix, memory_limit = plan$limit,
+        k = x$k, output = plan$prefix,
+        memory_limit = plan$memory_policy %||% plan$limit,
         method = method, perplexity = perplexity,
         workers = workers, checkpoint_every = checkpoint_every,
         native = native))

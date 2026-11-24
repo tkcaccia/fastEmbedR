@@ -3875,7 +3875,7 @@ test_that("coordinated UMAP budgets padded device layouts", {
         3L * 3L * 4L + 5L * 48L * 2L)
     graph <- list(n_vertices = 13L, n_edges = 8L,
         max_degree = 2L)
-    free <- (64 * 1024^2 + 336 + 16) / 0.65
+    free <- 64 * 1024^2 + 336 + 16
     with_mocked_bindings(
         expect_error(fastEmbedR:::massive_umap_cuda_capacity(
             graph, 156, 3L, 256 * 1024^2, 3L, "memory", 0:1),

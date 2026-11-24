@@ -1,7 +1,12 @@
 test_that("one-call full UMAP resumes after graph-stage failure", {
     skip_on_os("windows")
-    old_options <- options(fastEmbedR.target_recall = 0.90)
+    old_options <- options(fastEmbedR.target_recall = 0.90,
+        memory_limit = NULL)
     on.exit(options(old_options), add = TRUE)
+    available <- 512 * 2^20
+    testthat::local_mocked_bindings(
+        massive_available_ram_bytes = function() available,
+        .package = "fastEmbedR")
     x <- as.matrix(iris[, 1:4])
     work <- tempfile("full-umap-recovery-")
     dir.create(work)
@@ -15,8 +20,7 @@ test_that("one-call full UMAP resumes after graph-stage failure", {
         n_neighbors = 10L, n_components = 2L,
         backend = "cpu", n.cores = 1L, seed = 11L,
         storage = "file_backed", output = path,
-        memory_limit = "512MB", checkpoint = TRUE,
-        resume = resume, target_recall = 0.95)
+        checkpoint = TRUE, resume = resume, target_recall = 0.95)
     expect_error(testthat::with_mocked_bindings(
         run(output),
         massive_umap_fuzzy_graph = function(...) stop(
@@ -30,6 +34,7 @@ test_that("one-call full UMAP resumes after graph-stage failure", {
         seed = 11L, storage = "file_backed", output = output,
         memory_limit = "512MB", checkpoint = TRUE,
         resume = TRUE), "checkpoint does not match")
+    available <- 768 * 2^20
     resumed <- run(output, resume = TRUE)
     reference <- run(file.path(work, "reference.f32"))
     expect_false(file.exists(sidecar))

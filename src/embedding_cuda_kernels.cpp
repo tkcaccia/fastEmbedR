@@ -426,13 +426,14 @@ CudaFftPlanCache& cuda_fft_plan_cache() {
   return cache;
 }
 
-int check_embedding_memory_available(std::size_t required_bytes, const char* where) {
+int check_embedding_memory_available(std::size_t required_bytes,
+    const char* where, std::size_t fixed_reserve = 0) {
   std::size_t free_bytes = 0;
   std::size_t total_bytes = 0;
   const cudaError_t code = cudaMemGetInfo(&free_bytes, &total_bytes);
   if (check_cuda(code, "cudaMemGetInfo(embedding preflight)")) return 1;
-  const std::size_t reserve = free_bytes / 20u;
-  if (required_bytes > free_bytes - reserve) {
+  const std::size_t reserve = fixed_reserve ? fixed_reserve : free_bytes / 20u;
+  if (free_bytes < reserve || required_bytes > free_bytes - reserve) {
     set_embedding_error(
       std::string(where) + ": CUDA memory request exceeds available memory; required " +
       std::to_string(static_cast<unsigned long long>(required_bytes)) +
@@ -6315,7 +6316,8 @@ extern "C" void* fastembedr_massive_spectral_cuda_create(
     align_bytes(edges * sizeof(std::uint32_t)) +
     align_bytes(edges * sizeof(float)) + align_bytes(rows * sizeof(float)) +
     2 * align_bytes(values * sizeof(float));
-  if (check_embedding_memory_available(bytes, "CUDA spectral graph cache") ||
+  if (check_embedding_memory_available(bytes, "CUDA spectral graph cache",
+        64u * 1024u * 1024u) ||
       ctx->workspace.init(bytes, "file-backed spectral")) return nullptr;
   ctx->offsets = ctx->workspace.alloc<std::uint64_t>(rows + 1, "CSR offsets");
   ctx->neighbors = ctx->workspace.alloc<std::uint32_t>(edges, "CSR neighbors");
@@ -6499,7 +6501,7 @@ extern "C" int fastembedr_massive_umap_cuda_cache_begin(
   std::size_t free = 0, total = 0;
   if (check_cuda(cudaMemGetInfo(&free, &total),
         "cudaMemGetInfo(file-backed UMAP graph cache)")) return -1;
-  if (bytes > memory_limit - occupied || bytes > 0.65 * free - reserve)
+  if (bytes > memory_limit - occupied || bytes > double(free) - reserve)
     return 0;
   if (check_cuda(cudaMalloc(reinterpret_cast<void**>(&ctx->graph_cache),
         bytes), "cudaMalloc(file-backed UMAP graph cache)")) return -1;

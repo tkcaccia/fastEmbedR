@@ -904,7 +904,7 @@ umap_resident_csr_stage_bytes <- function(rows, width,
 }
 
 umap_check_resident_csr_capacity <- function(rows, width,
-        memory_limit = getOption("memory_limit", "8GB"),
+        memory_limit = fastembedr_memory_option(),
         available = massive_available_ram_bytes(), n_threads = 1L,
         allow_wide = FALSE, distance_bytes = 4L, compact = FALSE) {
     if (!is.finite(rows) || !is.finite(width) || rows < 2 ||
@@ -926,7 +926,7 @@ umap_check_resident_csr_capacity <- function(rows, width,
 }
 
 umap_resident_cpu_needs_compact <- function(rows, width, n_threads,
-        memory_limit = getOption("memory_limit", "8GB"),
+        memory_limit = fastembedr_memory_option(),
         available = massive_available_ram_bytes(), distance_bytes = 4L) {
     conventional <- umap_resident_csr_stage_bytes(rows, width, n_threads,
         distance_bytes)
@@ -1035,7 +1035,7 @@ umap_init_from_csr_graph <- function(graph,
     if (identical(cfg$backend, "metal") &&
         isTRUE(getOption("fastEmbedR.metal_umap_csr_spectral"))) {
         limit <- min(massive_available_ram_bytes(),
-            massive_memory_bytes(getOption("memory_limit", "8GB")),
+            massive_memory_bytes(fastembedr_memory_option()),
             na.rm = TRUE)
         init <- umap_csr_spectral_metal_cpp(graph$offsets, graph$neighbors,
             graph$weights, as.integer(n_components),

@@ -520,7 +520,7 @@ graph_cluster_input_controls <- function(graph, landmarks, k,
 #'   controls such as `output`, `chunk_rows`,
 #'   `memory_limit`, `checkpoint`, `resume`, and `gpu_storage`.
 #'   When omitted for file-backed input, the memory budget uses
-#'   `options(memory_limit = ...)`, or `"8GB"`.
+#'   `options(memory_limit = ...)`, or detected available RAM.
 #' @param storage `"auto"`, `"resident"`, or `"file_backed"`. When omitted,
 #'   uses `options(storage = ...)`. Explicit `"resident"` on a
 #'   [massive_matrix()] file descriptor loads float32 input after a RAM and
@@ -708,7 +708,7 @@ graph_cluster_prepare_input <- function(graph, storage, dots,
             "Resident file loading conflicts with file-backed ",
             "clustering controls.", call. = FALSE)
         graph <- fastembedr_explicit_resident_data(graph, storage,
-            dots$memory_limit %||% fastembedr_memory_option("8GB"))
+            dots$memory_limit %||% fastembedr_memory_option())
         dots$memory_limit <- NULL
     }
     list(graph = graph, dots = dots)
@@ -786,7 +786,7 @@ graph_cluster_resident <- function(graph, method, backend,
 }
 
 graph_check_resident_capacity <- function(graph, backend,
-        memory_limit = fastembedr_memory_option("8GB"),
+        memory_limit = fastembedr_memory_option(),
         available = massive_available_ram_bytes()) {
     if (!is.list(graph) || is.null(graph$from) ||
         is.null(graph$n_vertices)) return(invisible(NULL))
@@ -795,7 +795,7 @@ graph_check_resident_capacity <- function(graph, backend,
 }
 
 graph_check_knn_capacity <- function(x, k, backend,
-        memory_limit = fastembedr_memory_option("8GB"),
+        memory_limit = fastembedr_memory_option(),
         available = massive_available_ram_bytes()) {
     rows <- nrow(x)
     if (is.null(rows) && is.list(x)) rows <- nrow(x$indices)
@@ -859,7 +859,7 @@ graph_cluster_data_input <- function(graph, method, backend,
         storage, dots$landmarks)
     if (fastembedr_file_backed_input(graph) &&
         is.null(dots$memory_limit))
-        dots$memory_limit <- fastembedr_memory_option("8GB")
+        dots$memory_limit <- fastembedr_memory_option()
     if (is.null(massive)) massive <- if (
         inherits(graph, "fastEmbedR_massive_graph")) {
         "out_of_core_graph"

@@ -17,7 +17,7 @@ pca(
   massive = "off",
   output = NULL,
   chunk_rows = NULL,
-  memory_limit = "512MB",
+  memory_limit = "available",
   checkpoint = FALSE,
   resume = FALSE,
   devices = NULL,
@@ -79,7 +79,7 @@ including when auto mode selects that route.}
 \item{memory_limit}{Conservative RAM budget for out-of-core buffers
 and any resident R-matrix input, for example \code{"512MB"} or \code{"16GB"}.
 When omitted for file-backed input, uses
-\code{options(memory_limit = ...)}, or \code{"512MB"}.
+\code{options(memory_limit = ...)}, or detected available RAM.
 This does not limit R itself or linked-library memory.}
 
 \item{checkpoint}{Save the experimental out-of-core PCA model and

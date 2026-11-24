@@ -126,7 +126,7 @@ File-backed data and prepared graphs reject it.}
 controls such as \code{output}, \code{chunk_rows},
 \code{memory_limit}, \code{checkpoint}, \code{resume}, and \code{gpu_storage}.
 When omitted for file-backed input, the memory budget uses
-\code{options(memory_limit = ...)}, or \code{"8GB"}.}
+\code{options(memory_limit = ...)}, or detected available RAM.}
 }
 \value{
 A \code{fastEmbedR_graph_cluster} containing one-based \code{membership},

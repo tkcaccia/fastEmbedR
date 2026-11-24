@@ -215,9 +215,9 @@ test_that("file-backed KNN routing respects work and session options", {
         backend = "cpu", output = "large")$method, "hnsw_sharded")
     expect_identical(precompute_knn(source(2000, 50000), k = 30L,
         backend = "cpu", output = "wide")$method, "hnsw_sharded")
-    expect_identical(precompute_knn(source(70000, 784), k = 30L,
+    expect_identical(precompute_knn(source(200000, 32), k = 30L,
         backend = "cuda", output = "cuda")$method, "ivf_sharded")
-    expect_identical(precompute_knn(source(1000, 10), k = 30L,
+    expect_identical(precompute_knn(source(1000, 10), k = 2L,
         backend = "metal", output = "metal")$method, "exact")
     }, massive_full_knn_graph = function(...) list(...),
         .package = "fastEmbedR")
@@ -277,4 +277,22 @@ test_that("file-backed CPU dispatch forwards approximate recall tier", {
     expect_identical(observed$target_recall, 0.95)
     expect_identical(observed$audit_rows, 7L)
     expect_identical(result$target_recall, 0.95)
+})
+
+test_that("omitted working budgets use detected RAM and VRAM", {
+    local_mocked_bindings(massive_available_ram_bytes = function() 24 * 2^30,
+        .package = "fastEmbedR")
+    old <- options(memory_limit = NULL,
+        fastEmbedR.knn.use_available_vram = NULL)
+    on.exit(options(old))
+    expect_equal(massive_memory_bytes(fastembedr_memory_option()), 24 * 2^30)
+    expect_equal(massive_auto_memory_limit("available"), 24 * 2^30)
+    expect_equal(massive_cuda_knn_budget(list(free_bytes = 16 * 2^30)),
+        16 * 2^30)
+    expect_identical(fastembedr_device_memory_limit("available"), Inf)
+    options(memory_limit = "4GB")
+    expect_equal(massive_auto_memory_limit(fastembedr_memory_option()),
+        4 * 2^30)
+    expect_equal(fastembedr_device_memory_limit(fastembedr_memory_option()),
+        4 * 2^30)
 })
