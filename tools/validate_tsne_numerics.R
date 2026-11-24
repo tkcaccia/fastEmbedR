@@ -27,6 +27,7 @@ requested_backends <- requested_backends[
   requested_backends %in% c("cpu", "metal", "cuda")
 ]
 if (!length(requested_backends)) stop("No valid backend was requested.")
+validation_backends <- unique(c("cpu", requested_backends))
 
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 source(file.path(source_root, "tests", "testthat", "helper-knn.R"))
@@ -57,10 +58,6 @@ backend_available <- function(backend) {
     FALSE
   )
 }
-backend_method_supported <- function(backend, method) {
-  !(identical(backend, "cuda") && identical(method, "exact"))
-}
-
 thresholds <- data.frame(
   check = c(
     "affinity_float32_vs_float64_max_abs",
@@ -74,20 +71,18 @@ thresholds <- data.frame(
     "fft_repulsive_grid64_relative_l2",
     "fft_repulsive_grid128_relative_l2",
     "fft_force_correlation_minimum",
-    "backend_exact_first_step_relative_l2",
     "backend_fft_first_step_relative_l2",
-    "backend_exact_trajectory_relative_kl",
     "backend_fft_trajectory_relative_kl",
     "pathological_valid_input_finite",
     "public_backend_pathological_inputs"
   ),
   direction = c(
-    rep("maximum", 10L), "minimum", rep("maximum", 4L),
+    rep("maximum", 10L), "minimum", rep("maximum", 2L),
     "required", "required"
   ),
   threshold = c(
     2e-6, 5e-5, 5e-5, 1e-4, 5e-6, 2e-7, 2e-4,
-    1e-2, 3e-3, 1e-3, 0.999, 5e-4, 2e-3, 2e-2, 5e-2, 1, 1
+    1e-2, 3e-3, 1e-3, 0.999, 2e-3, 5e-2, 1, 1
   ),
   rationale = c(
     "float32 affinity mass against independent dense float64 oracle",
@@ -101,9 +96,7 @@ thresholds <- data.frame(
     "medium FFT grid approximation against exact repulsion",
     "production-scale diagnostic grid against exact repulsion",
     "FFT and exact force direction",
-    "identical-state CPU/GPU exact update",
     "identical-state CPU/GPU FFT update",
-    "common-affinity KL trajectory relative to CPU exact",
     "common-affinity KL trajectory relative to CPU FFT",
     "all returned gradients, normalizers, and KL must be finite",
     "each available public backend must return finite layouts or reject Inf"
@@ -318,7 +311,7 @@ set.seed(1705)
 x_backend <- matrix(rnorm(64L * 6L), 64L, 6L)
 knn_backend <- test_exact_knn(x_backend, k = 15L, exclude_self = TRUE)
 initial_backend <- matrix(rnorm(64L * 2L, sd = 1e-4), 64L, 2L)
-run_prefix <- function(backend, method, iterations, learning_rate = 1) {
+run_prefix <- function(backend, iterations, learning_rate = 1) {
   knn_input <- knn_backend
   if (identical(backend, "cuda")) {
     if (!requireNamespace("float", quietly = TRUE)) {
@@ -338,18 +331,22 @@ run_prefix <- function(backend, method, iterations, learning_rate = 1) {
     initial_momentum = 0,
     final_momentum = 0,
     max_step_norm = 1e6,
-    negative_gradient_method = method,
+    negative_gradient_method = "fft",
     auto_config = FALSE,
     backend = backend,
     n.cores = 2L,
     seed = 1705L
   )
-  if (inherits(result, "float32")) float::dbl(result) else as.matrix(result)
+  stopifnot(identical(attr(result, "fastEmbedR_config")$backend, backend))
+  layout <- if (inherits(result, "float32")) float::dbl(result) else
+    as.matrix(result)
+  stopifnot(identical(dim(layout), dim(initial_backend)), all(is.finite(layout)))
+  layout
 }
-available <- vapply(requested_backends, backend_available, logical(1))
+available <- vapply(validation_backends, backend_available, logical(1))
 
 backend_pathology_rows <- list()
-for (backend in requested_backends) {
+for (backend in validation_backends) {
   if (!available[[backend]]) {
     backend_pathology_rows[[length(backend_pathology_rows) + 1L]] <- data.frame(
       backend = backend, case = NA_character_, status = "unavailable",
@@ -449,74 +446,47 @@ backend_pathology <- bind_rows(backend_pathology_rows)
 write_result(backend_pathology, "backend_pathological_inputs.csv")
 
 one_step_rows <- list()
-cpu_steps <- list()
-for (method in c("exact", "fft")) {
-  cpu_steps[[method]] <- run_prefix("cpu", method, 1L)
-  for (backend in requested_backends) {
-    if (!available[[backend]]) {
-      one_step_rows[[length(one_step_rows) + 1L]] <- data.frame(
-        backend = backend, method = method, status = "unavailable",
-        relative_l2_vs_cpu = NA_real_, max_abs_vs_cpu = NA_real_,
-        threshold = if (method == "exact") 5e-4 else 2e-3,
-        passed = NA, stringsAsFactors = FALSE
-      )
-      next
-    }
-    if (!backend_method_supported(backend, method)) {
-      one_step_rows[[length(one_step_rows) + 1L]] <- data.frame(
-        backend = backend, method = method, status = "unsupported",
-        relative_l2_vs_cpu = NA_real_, max_abs_vs_cpu = NA_real_,
-        threshold = if (method == "exact") 5e-4 else 2e-3,
-        passed = NA, stringsAsFactors = FALSE
-      )
-      next
-    }
-    observed <- if (backend == "cpu") cpu_steps[[method]] else
-      run_prefix(backend, method, 1L)
-    error <- tsne_relative_l2(observed, cpu_steps[[method]])
-    threshold <- if (method == "exact") 5e-4 else 2e-3
+cpu_step <- run_prefix("cpu", 1L)
+for (backend in validation_backends) {
+  if (!available[[backend]]) {
     one_step_rows[[length(one_step_rows) + 1L]] <- data.frame(
-      backend = backend, method = method, status = "success",
-      relative_l2_vs_cpu = error,
-      max_abs_vs_cpu = max(abs(observed - cpu_steps[[method]])),
-      threshold = threshold,
-      passed = error <= threshold,
-      stringsAsFactors = FALSE
+      backend = backend, method = "fft", status = "unavailable",
+      relative_l2_vs_cpu = NA_real_, max_abs_vs_cpu = NA_real_,
+      threshold = 2e-3, passed = NA, stringsAsFactors = FALSE
     )
+    next
   }
+  observed <- if (backend == "cpu") cpu_step else run_prefix(backend, 1L)
+  error <- tsne_relative_l2(observed, cpu_step)
+  one_step_rows[[length(one_step_rows) + 1L]] <- data.frame(
+    backend = backend, method = "fft", status = "success",
+    relative_l2_vs_cpu = error, max_abs_vs_cpu = max(abs(observed - cpu_step)),
+    threshold = 2e-3, passed = error <= 2e-3, stringsAsFactors = FALSE
+  )
 }
 one_step <- bind_rows(one_step_rows)
 write_result(one_step, "backend_first_step.csv")
 
 trajectory_rows <- list()
 checkpoints <- c(1L, 10L, 25L, 50L, 100L)
-for (method in c("exact", "fft")) {
-  for (iteration in checkpoints) {
-    for (backend in requested_backends) {
-      if (!available[[backend]]) {
-        trajectory_rows[[length(trajectory_rows) + 1L]] <- data.frame(
-          backend = backend, method = method, iteration = iteration,
-          status = "unavailable", kl = NA_real_, stringsAsFactors = FALSE
-        )
-        next
-      }
-      if (!backend_method_supported(backend, method)) {
-        trajectory_rows[[length(trajectory_rows) + 1L]] <- data.frame(
-          backend = backend, method = method, iteration = iteration,
-          status = "unsupported", kl = NA_real_, stringsAsFactors = FALSE
-        )
-        next
-      }
-      observed <- run_prefix(backend, method, iteration, learning_rate = 5)
-      objective <- fastEmbedR:::opentsne_force_diagnostic_cpp(
-        knn_backend$indices, knn_backend$distances, observed,
-        5, 1, 64L, 2L
-      )$kl
+for (iteration in checkpoints) {
+  for (backend in validation_backends) {
+    if (!available[[backend]]) {
       trajectory_rows[[length(trajectory_rows) + 1L]] <- data.frame(
-        backend = backend, method = method, iteration = iteration,
-        status = "success", kl = objective, stringsAsFactors = FALSE
+        backend = backend, method = "fft", iteration = iteration,
+        status = "unavailable", kl = NA_real_, stringsAsFactors = FALSE
       )
+      next
     }
+    observed <- run_prefix(backend, iteration, learning_rate = 5)
+    objective <- fastEmbedR:::opentsne_force_diagnostic_cpp(
+      knn_backend$indices, knn_backend$distances, observed, 5, 1, 64L, 2L
+    )$kl
+    stopifnot(is.finite(objective))
+    trajectory_rows[[length(trajectory_rows) + 1L]] <- data.frame(
+      backend = backend, method = "fft", iteration = iteration,
+      status = "success", kl = objective, stringsAsFactors = FALSE
+    )
   }
 }
 trajectory <- bind_rows(trajectory_rows)
@@ -533,7 +503,7 @@ trajectory$cpu_kl <- cpu_kl[reference_position]
 trajectory$relative_kl_difference_vs_cpu <- abs(
   trajectory$kl - trajectory$cpu_kl
 ) / pmax(abs(trajectory$cpu_kl), .Machine$double.eps)
-trajectory$threshold <- ifelse(trajectory$method == "exact", 2e-2, 5e-2)
+trajectory$threshold <- 5e-2
 trajectory$passed <- ifelse(
   trajectory$status == "success",
   trajectory$relative_kl_difference_vs_cpu <= trajectory$threshold,
@@ -583,8 +553,7 @@ summary_rows <- list(
     stringsAsFactors = FALSE
   )
 )
-for (backend in requested_backends) {
-  if (backend == "cpu") next
+for (backend in validation_backends) {
   summary_rows[[length(summary_rows) + 1L]] <- data.frame(
     check = paste0(backend, "_first_step"),
     available = available[[backend]],
@@ -656,8 +625,10 @@ manifest <- c(
   }),
   paste0("requested_backends=", paste(requested_backends, collapse = ",")),
   paste0("available_backends=", paste(
-    requested_backends[available], collapse = ","
+    validation_backends[available], collapse = ","
   )),
+  "public_repulsion=fft",
+  "cross_backend_reference=cpu_fft",
   paste0("R_version=", R.version.string),
   paste0("platform=", R.version$platform),
   paste0("machine=", Sys.info()[["machine"]]),
