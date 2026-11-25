@@ -32,6 +32,25 @@ test_that("CUDA PCA preprocesses numeric and float32 input on CUDA", {
     )
 })
 
+test_that("CUDA randomized PCA scores project onto the fitted loadings", {
+    skip_if_not_installed("float")
+    skip_if_not(isTRUE(fastEmbedR:::embedding_cuda_available_cpp()))
+
+    set.seed(944)
+    data <- matrix(rnorm(320L * 72L, mean = 7), 320L, 72L)
+    as_double <- function(x) if (inherits(x, "float32")) float::dbl(x) else x
+    for (input in list(data, float::fl(data))) {
+        fit <- fastEmbedR:::fastembedr_cuda_pca(
+            input, ncomp = 3L, center = TRUE, scale = TRUE,
+            seed = 944L, method = "rsvd")
+        expect_identical(fit$backend, "cuda_native_rsvd")
+        training <- scale(as_double(input), fit$center, fit$scale)
+        expected <- training %*% as_double(fit$loadings)
+        scores <- as_double(fit$scores)
+        expect_lt(max(abs(scores - expected)) / max(abs(expected)), 1e-4)
+    }
+})
+
 test_that("Metal PCA preprocesses numeric and float32 input on Metal", {
     skip_if_not_installed("float")
     if (!isTRUE(fastEmbedR:::embedding_metal_available_cpp())) {

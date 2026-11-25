@@ -1649,17 +1649,6 @@ __global__ void tsvd_scores_to_rowmajor_init_kernel(const float* scores,
   values[base + 1u] = isfinite(y) ? y : 0.0f;
 }
 
-__global__ void scale_rsvd_scores_kernel(float* scores,
-                                         const float* singular_values,
-                                         int n,
-                                         int n_components) {
-  const int item = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
-  const int total = n * n_components;
-  if (item >= total) return;
-  const int component = item / n;
-  scores[item] *= singular_values[component];
-}
-
 __global__ void finalize_tsne_pca_init_stats_kernel(const double* partial,
                                                     double* stats,
                                                     int n_blocks,
@@ -3800,17 +3789,6 @@ int cuda_pca_scores_to_device(const HostT* values,
         d_scores_out, d_components, d_singular
       );
       rsvd.synchronize_and_validate();
-      const int score_items = n * n_components;
-      scale_rsvd_scores_kernel<<<(score_items + 255) / 256, 256>>>(
-        d_scores_out, d_singular, n, n_components
-      );
-      if (check_cuda(
-            cudaGetLastError(),
-            "scale_rsvd_scores_kernel launch"
-          )) {
-        cleanup();
-        return 1;
-      }
     } else {
 #ifdef FASTEMBEDR_HAS_RAFT
       static thread_local raft::handle_t handle;

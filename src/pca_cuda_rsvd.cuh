@@ -153,7 +153,7 @@ class RsvdWorkspace {
   ~RsvdWorkspace() { release(); }
 
   void solve(const float* matrix, unsigned long long seed,
-             float* left, float* right, float* singular) {
+             float* scores, float* right, float* singular) {
     require_cuda(
       cudaMemsetAsync(invalid_, 0, sizeof(int), stream_),
       "cudaMemsetAsync(rSVD status)"
@@ -197,8 +197,8 @@ class RsvdWorkspace {
     );
     require_solver(
       cusolverDnSgesvd(
-        solver_, 'S', 'S', columns_, sketch_, small_, columns_,
-        singular_all_, small_u_, columns_, small_vt_, sketch_, work_,
+        solver_, 'S', 'N', columns_, sketch_, small_, columns_,
+        singular_all_, small_u_, columns_, nullptr, 1, work_,
         work_size_, rwork_, info_
       ),
       "cusolverDnSgesvd(rSVD reduced matrix)"
@@ -207,10 +207,9 @@ class RsvdWorkspace {
     require_cuda(
       cudaGetLastError(), "collect_solver_status(rSVD SVD)"
     );
-    multiply(
-      CUBLAS_OP_N, CUBLAS_OP_T, rows_, rank_, sketch_,
-      basis_, rows_, small_vt_, sketch_, left, rows_
-    );
+    // Project the original standardized data onto the returned loadings.
+    multiply(CUBLAS_OP_N, CUBLAS_OP_N, rows_, rank_, columns_,
+      matrix, rows_, small_u_, columns_, scores, rows_);
     require_cuda(
       cudaMemcpyAsync(
         right, small_u_,
@@ -279,7 +278,6 @@ class RsvdWorkspace {
     allocate(right_basis_, static_cast<std::size_t>(columns_) * sketch_);
     allocate(small_, static_cast<std::size_t>(columns_) * sketch_);
     allocate(small_u_, static_cast<std::size_t>(columns_) * sketch_);
-    allocate(small_vt_, static_cast<std::size_t>(sketch_) * sketch_);
     allocate(singular_all_, sketch_);
     allocate(tau_, sketch_);
     allocate(rwork_, static_cast<std::size_t>(std::max(1, sketch_ - 1)));
@@ -379,7 +377,7 @@ class RsvdWorkspace {
 
   void release() noexcept {
     for (float* pointer : {
-           omega_, basis_, right_basis_, small_, small_u_, small_vt_,
+           omega_, basis_, right_basis_, small_, small_u_,
            singular_all_, tau_, work_, rwork_
          }) {
       if (pointer == nullptr) continue;
@@ -420,7 +418,6 @@ class RsvdWorkspace {
   float* right_basis_ = nullptr;
   float* small_ = nullptr;
   float* small_u_ = nullptr;
-  float* small_vt_ = nullptr;
   float* singular_all_ = nullptr;
   float* tau_ = nullptr;
   float* work_ = nullptr;
