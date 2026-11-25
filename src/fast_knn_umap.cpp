@@ -467,13 +467,17 @@ struct FloatVectorView {
   IntegerVector bits;
   NumericVector doubles;
   bool is_float32;
+  const int* bit_data = nullptr;
+  const double* double_data = nullptr;
 
   FloatVectorView(SEXP values, const char* name) :
       is_float32(is_float32_s4(values)) {
     if (is_float32) {
       bits = float32_payload_slot(values);
+      bit_data = INTEGER(bits);
     } else if (TYPEOF(values) == REALSXP) {
       doubles = NumericVector(values);
+      double_data = REAL(doubles);
     } else {
       Rcpp::stop("%s must be numeric or float32", name);
     }
@@ -486,9 +490,9 @@ struct FloatVectorView {
 
   float operator[](const std::size_t index) const {
     if (is_float32) {
-      return int_bits_to_float(bits[static_cast<R_xlen_t>(index)]);
+      return int_bits_to_float(bit_data[index]);
     }
-    return static_cast<float>(doubles[static_cast<R_xlen_t>(index)]);
+    return static_cast<float>(double_data[index]);
   }
 };
 
@@ -2733,6 +2737,9 @@ NumericMatrix initialize_layout_csr_cuda_diffusion(const int n,
   if (n < 1) Rcpp::stop("CSR graph must have at least one row");
   if (spectral_n_iter < 1) Rcpp::stop("spectral_n_iter must be positive");
 
+  // Callers validate CSR offsets, neighbors and weights before diffusion.
+  const auto* row_offsets = offsets.begin();
+  const auto* target_ids = neighbors.begin();
   std::vector<float> current(static_cast<std::size_t>(n) * 2u);
   std::vector<float> next(static_cast<std::size_t>(n) * 2u);
   parallel_for_chunks(n, n_threads, [&](const int begin, const int end, const int) {
@@ -2750,12 +2757,11 @@ NumericMatrix initialize_layout_csr_cuda_diffusion(const int n,
         float sx = 0.0f;
         float sy = 0.0f;
         float sw = 0.0f;
-        const auto begin = static_cast<std::size_t>(offsets[row]);
-        const auto end = static_cast<std::size_t>(offsets[row + 1]);
+        const auto begin = static_cast<std::size_t>(row_offsets[row]);
+        const auto end = static_cast<std::size_t>(row_offsets[row + 1]);
         for (std::size_t pos = begin; pos < end; ++pos) {
-          const int nb = neighbors[pos] - index_offset;
-          const float w = static_cast<float>(weights[pos]);
-          if (nb < 0 || nb >= n || nb == row || w <= 0.0f || !std::isfinite(w)) continue;
+          const int nb = target_ids[pos] - index_offset;
+          const float w = weights[pos];
           const std::size_t nb_base = static_cast<std::size_t>(nb) * 2u;
           sx += w * current[nb_base];
           sy += w * current[nb_base + 1u];

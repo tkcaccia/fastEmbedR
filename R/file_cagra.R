@@ -82,6 +82,10 @@ massive_file_cagra_graph <- function(data, output, setup,
     graph$build_seconds <- index$build_seconds
     graph$build_and_upload_seconds <- index$build_and_upload_seconds
     graph$build_timing <- index$build_timing
+    graph$shard_rows <- index$shard_rows
+    if (is.function(index$search_timing)) {
+        graph$search_timing <- index$search_timing()
+    }
     graph$knn_search_seconds <- measurement$search_seconds
     graph$graph_write_seconds <- measurement$graph_write_seconds
     graph$search_and_write_seconds <- measurement$seconds
