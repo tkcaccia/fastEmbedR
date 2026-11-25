@@ -7405,15 +7405,56 @@ namespace {
 
 template <typename Function>
 void spectral_stream_scan(CsrGraphSource& graph, int chunk_rows,
-                          Function consume) {
-  for (std::uint64_t first = 1; first <= graph.vertices();) {
+    Function consume, std::uint64_t first, std::uint64_t last,
+    const std::atomic<bool>* stop = nullptr) {
+  while (first < last && (!stop || !stop->load())) {
     const auto begin = graph.offset(first - 1);
     const auto end = graph.offset(first);
     const auto budget = std::max<std::uint64_t>(65536, end - begin);
-    const auto rows = graph.bounded_rows(first, chunk_rows, budget);
-    graph.visit(first, rows, consume);
+    const auto count = std::min<std::uint64_t>(chunk_rows, last - first);
+    const auto rows = graph.bounded_rows(first, count, budget);
+    graph.visit(first, rows, consume, !stop);
     first += rows;
-    Rcpp::checkUserInterrupt();
+    if (!stop) Rcpp::checkUserInterrupt();
+  }
+}
+
+template <typename Function>
+void spectral_scan_rows(const std::vector<CsrGraphSource*>& readers,
+    int chunk_rows, Function consume) {
+  const auto vertices = readers[0]->vertices();
+  const auto workers = readers.size();
+  if (workers == 1) {
+    spectral_stream_scan(*readers[0], chunk_rows, consume, 1, vertices + 1);
+    return;
+  }
+  std::atomic<bool> stop{false};
+  std::vector<std::future<void>> tasks;
+  tasks.reserve(workers);
+  try {
+    for (std::size_t rank = 0; rank < workers; ++rank) {
+      tasks.emplace_back(std::async(std::launch::async, [&, rank]() {
+        try {
+          const auto first = 1 + vertices * rank / workers;
+          const auto last = 1 + vertices * (rank + 1) / workers;
+          spectral_stream_scan(*readers[rank], chunk_rows, consume,
+                               first, last, &stop);
+        } catch (...) {
+          stop.store(true);
+          throw;
+        }
+      }));
+    }
+    for (auto& task : tasks) {
+      while (task.wait_for(std::chrono::milliseconds(50)) !=
+             std::future_status::ready) {
+        Rcpp::checkUserInterrupt();
+      }
+      task.get();
+    }
+  } catch (...) {
+    stop.store(true);
+    throw;
   }
 }
 
@@ -7553,7 +7594,7 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
     double n_vertices, std::string output, int n_components,
     int spectral_n_iter, int seed, int chunk_rows,
     double memory_limit, bool use_metal = false, bool use_cuda = false,
-    double device_memory_limit = 0) {
+    double device_memory_limit = 0, int cpu_workers = 1) {
 #ifndef HAVE_METAL
   if (use_metal) Rcpp::stop("Metal UMAP spectral initialization needs Metal.");
 #endif
@@ -7571,7 +7612,7 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
     n - 1, std::max(n_components + 6, 8)));
   if ((n_components != 2 && n_components != 3) ||
       block < n_components || spectral_n_iter < 1 ||
-      spectral_n_iter > 1000 || chunk_rows < 1 ||
+      spectral_n_iter > 1000 || chunk_rows < 1 || cpu_workers < 1 ||
       !std::isfinite(memory_limit) || memory_limit <= 0) {
     Rcpp::stop("Invalid streamed spectral initialization controls.");
   }
@@ -7601,8 +7642,23 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
     return std::chrono::duration<double>(Clock::now() - start).count();
   };
   const auto degree_started = Clock::now();
+  // Each additional reader keeps its own bounded offsets and edge tiles.
+  const double reader_bytes = (static_cast<double>(chunk_rows) + 1) * 8 +
+    2.0 * 65536 * 4 + 128 * 1024;
+  const auto rows_per_scan = (n - 1) / chunk_rows + 1;
+  const int workers = use_metal || use_cuda ? 1 :
+    static_cast<int>(std::min({static_cast<double>(cpu_workers),
+      static_cast<double>(rows_per_scan),
+      1 + std::floor((memory_limit - estimated) / reader_bytes)}));
+  std::vector<std::unique_ptr<CsrGraphSource>> additional;
+  std::vector<CsrGraphSource*> readers{&graph};
+  for (int rank = 1; rank < workers; ++rank) {
+    additional.push_back(std::make_unique<CsrGraphSource>(offsets_path,
+      indices_path, weights_path, n_vertices, "stream"));
+    readers.push_back(additional.back().get());
+  }
   std::vector<double> inv_degree(n, 0.0);
-  spectral_stream_scan(graph, chunk_rows,
+  spectral_scan_rows(readers, chunk_rows,
     [&](std::uint64_t source, std::uint32_t, double weight,
         std::uint64_t) {
       inv_degree[source - 1] += weight;
@@ -7693,7 +7749,7 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
     }
 #endif
     std::fill(result.begin(), result.end(), 0.0);
-    spectral_stream_scan(graph, chunk_rows,
+    spectral_scan_rows(readers, chunk_rows,
       [&](std::uint64_t source, std::uint32_t target, double weight,
           std::uint64_t) {
         const auto row = source - 1;
@@ -7798,13 +7854,15 @@ List massive_spectral_init_stream_cpp(std::string offsets_path,
     Rcpp::Named("graph_passes") = spectral_n_iter + 2,
     Rcpp::Named("cpu_graph_passes") = use_metal ? 1 :
       use_cuda ? 2 : spectral_n_iter + 2,
+    Rcpp::Named("cpu_graph_workers") = workers,
     Rcpp::Named("graph_access") = use_metal ? "read_only_mmap" :
       use_cuda ? "device_cached" : "stream",
     Rcpp::Named("multiply_precision") = use_metal || use_cuda ?
       "float32" : "float64",
     Rcpp::Named("cuda_workspace_estimate_bytes") = cuda_device_bytes,
     Rcpp::Named("metal_owned_workspace_bytes") = metal_owned_bytes,
-    Rcpp::Named("memory_bytes_estimate") = estimated,
+    Rcpp::Named("memory_bytes_estimate") =
+      estimated + (workers - 1) * reader_bytes,
     Rcpp::Named("stage_seconds") = stage_seconds,
     Rcpp::Named("output") = output);
 }

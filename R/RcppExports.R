@@ -701,8 +701,8 @@ massive_read_graph_edges_cpp <- function(indices_path, distances_path, n_vertice
     .Call(`_fastEmbedR_massive_read_graph_edges_cpp`, indices_path, distances_path, n_vertices, k, access, first_row, count, max_bytes, kind)
 }
 
-massive_spectral_init_stream_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit, use_metal = FALSE, use_cuda = FALSE, device_memory_limit = 0) {
-    .Call(`_fastEmbedR_massive_spectral_init_stream_cpp`, offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit, use_metal, use_cuda, device_memory_limit)
+massive_spectral_init_stream_cpp <- function(offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit, use_metal = FALSE, use_cuda = FALSE, device_memory_limit = 0, cpu_workers = 1L) {
+    .Call(`_fastEmbedR_massive_spectral_init_stream_cpp`, offsets_path, indices_path, weights_path, n_vertices, output, n_components, spectral_n_iter, seed, chunk_rows, memory_limit, use_metal, use_cuda, device_memory_limit, cpu_workers)
 }
 
 massive_validate_csr_graph_cpp <- function(offsets_path, indices_path, weights_path, n_vertices) {

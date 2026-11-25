@@ -106,7 +106,8 @@ full_backed_pipeline_init <- function(data, init, paths,
             paths$spectral, dimensions, 50L, seed,
             8192L, limit, use_metal = initializer == "metal",
             use_cuda = initializer == "cuda",
-            device_memory_limit = device_limit)
+            device_memory_limit = device_limit,
+            cpu_workers = resolve_n_cores(n.cores))
         if (!identical(identity,
                 massive_checkpoint_input_files_identity(source))) stop(
             "UMAP graph changed during spectral initialization.",

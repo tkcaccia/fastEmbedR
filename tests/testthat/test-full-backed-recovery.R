@@ -76,7 +76,10 @@ test_that("streamed graph spectral initialization is bounded and stable", {
     args[[10L]] <- 512 * 1024^2
     first <- do.call(native, args)
     args[[5L]] <- file.path(work, "second.f32")
-    do.call(native, args)
+    parallel <- do.call(native, c(args, list(cpu_workers = 2L)))
+    expect_identical(first$cpu_graph_workers, 1L)
+    expect_identical(parallel$cpu_graph_workers, 2L)
+    expect_lte(parallel$memory_bytes_estimate, args[[10L]])
     expect_identical(first$backend_used,
         "native_cpu_streamed_spectral")
     expect_identical(first$graph_passes, 12L)
