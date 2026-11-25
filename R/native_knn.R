@@ -499,23 +499,23 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
     if (is.null(output)) stop(
         "File-backed KNN requires a new `output` file prefix.",
         call. = FALSE)
-    limit <- if (is.null(memory_limit))
-        fastembedr_memory_option() else memory_limit
+    limit <- memory_limit %||% fastembedr_memory_option()
     memory_bytes <- massive_memory_bytes(limit)
     cuda_auto <- backend == "cuda" && identical(limit, "available")
     workers <- resolve_n_cores(n.cores)
     allow_ivf <- backend != "metal" || (!checkpoint && !resume && workers == 1L)
+    origin <- data
+    while (identical(origin$format, "view")) origin <- origin$source
     select <- function(allow) fastembedr_knn_selection(backend, data$nrow,
         data$ncol, k, metric, target_recall, file_backed = TRUE,
         allow_ivf = allow,
         memory_limit_bytes = if (!cuda_auto) memory_bytes,
-        allow_cuda_profile = data$format %in% c("f32", "fbin") &&
+        allow_cuda_profile = origin$format %in% c("f32", "fbin") &&
             is.null(devices) && !checkpoint && !resume)
     selection <- select(allow_ivf)
-    if (selection$method == "cagra_sharded") {
-        return(precompute_knn_file_cagra_sharded(data, k, output, selection,
+    if (selection$method == "cagra_sharded") return(
+        precompute_knn_file_cagra_sharded(data, k, output, selection,
             audit_rows, devices, checkpoint || resume))
-    }
     if (selection$method %in% c("cagra", "cagra_width4")) {
         budget <- if (cuda_auto && length(devices) < 2L) {
             massive_cuda_memory_cpp()$free_bytes

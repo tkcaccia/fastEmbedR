@@ -689,20 +689,28 @@ test_that("CAGRA selection is explicit and limited to wide CUDA self KNN", {
         "requires CUDA device 0")
 })
 
-test_that("file-backed fbin dispatch allows automatic CUDA CAGRA planning", {
+test_that("file-backed fbin views allow automatic CUDA CAGRA planning", {
+    source <- structure(list(format = "fbin", nrow = 100000000L,
+        ncol = 96L, access = "stream"), class = "fastEmbedR_massive_matrix")
+    outer <- massive_matrix_rows(source, 1001L, 50000001L)
+    view <- massive_matrix_rows(outer, 2L, 50000000L)
     local_mocked_bindings(
-        fastembedr_knn_selection = function(..., file_backed,
+        fastembedr_knn_selection = function(backend, n, p, ..., file_backed,
                 allow_cuda_profile, memory_limit_bytes) {
+            expect_identical(backend, "cuda")
+            expect_equal(c(n, p), c(view$nrow, view$ncol))
             expect_true(file_backed)
             expect_true(allow_cuda_profile)
             expect_equal(memory_limit_bytes, 22 * 1024^3)
             list(method = "cagra_sharded")
         },
-        precompute_knn_file_cagra_sharded = function(...) "sharded",
+        precompute_knn_file_cagra_sharded = function(data, ...) {
+            expect_identical(data, view)
+            "sharded"
+        },
         .package = "fastEmbedR"
     )
-    found <- precompute_knn_backed(
-        list(format = "fbin", nrow = 50000000L, ncol = 96L), 30L,
+    found <- precompute_knn_backed(view, 30L,
         "euclidean", "cuda", 1L, "unused", "22GB", NULL, FALSE, FALSE,
         100L, 0.99, 0L
     )
