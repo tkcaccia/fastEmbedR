@@ -469,7 +469,8 @@ compute_tsne_matrix_knn <- function(
                 policy$target_recall, devices,
                 prefer_resident = TRUE,
                 retain_data = retain_cuda_data,
-                cagra_profile = policy$selection$cuda_cagra_profile
+                cagra_profile = policy$selection$cuda_cagra_profile,
+                n_threads = n_threads
             )
             engine <- nn$backend_used
         } else {

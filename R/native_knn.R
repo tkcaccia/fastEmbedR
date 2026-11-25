@@ -318,7 +318,8 @@ run_precompute_knn <- function(x, k, metric, policy, n_threads,
         return(run_faissr_cuda_embedding_knn(x, k, policy$method, metric,
             fastembedr_knn_output_type(x, policy$backend),
             policy$target_recall, devices,
-            cagra_profile = policy$selection$cuda_cagra_profile))
+            cagra_profile = policy$selection$cuda_cagra_profile,
+            n_threads = n_threads))
     }
     if (!is.null(devices)) return(run_faissr_cuda_multi_knn(
         x, k, policy$method, metric,
@@ -523,7 +524,7 @@ precompute_knn_backed <- function(data, k, metric, backend, n.cores,
         devices <- massive_validate_devices(devices, backend, data$nrow)
         return(precompute_knn_file_cagra(data, k, output,
             budget, selection, audit_rows, devices,
-            checkpoint || resume))
+            checkpoint || resume, workers))
     }
     if (backend == "metal" && selection$method == "ivf" &&
         !isTRUE(faissr_metal_file_ivf_plan_cpp(data, as.integer(k),
@@ -924,14 +925,14 @@ run_faissr_cuda_resident_ivf <- function(data, k, metric, target_recall,
 }
 
 run_faissr_cuda_cagra <- function(data, k, method, metric, output,
-        target_recall, devices, cagra_profile = NULL) {
+        target_recall, devices, cagra_profile = NULL, n_threads = 1L) {
     if (!identical(metric, "euclidean")) {
         stop("Resident CAGRA currently requires Euclidean distance.",
             call. = FALSE)
     }
     if (length(devices) > 1L) {
         return(run_faissr_cuda_multi_cagra(data, k, method, output,
-            target_recall, devices, cagra_profile))
+            target_recall, devices, cagra_profile, n_threads))
     }
     if (!is.null(devices) && !identical(as.integer(devices), 0L)) {
         stop("A single-device CAGRA request requires CUDA device 0.",
@@ -950,7 +951,7 @@ run_faissr_cuda_cagra <- function(data, k, method, metric, output,
 }
 
 run_faissr_cuda_multi_cagra <- function(data, k, method, output,
-        target_recall, devices, profile = NULL) {
+        target_recall, devices, profile = NULL, n_threads = 1L) {
     faiss <- asNamespace("faissR")
     preset <- get0("cuvs_cagra_wide_params", envir = faiss, inherits = FALSE)
     if (!is.function(preset)) stop(
@@ -975,8 +976,8 @@ run_faissr_cuda_multi_cagra <- function(data, k, method, output,
         intermediate_degree = profile$intermediate_degree %||% 128L,
         batch_rows = min(params$batch %||% 1024L,
             profile$batch_rows %||% 1024L),
-        memory_limit_bytes = massive_available_ram_bytes()
-    ))
+        memory_limit_bytes = massive_available_ram_bytes(),
+        merge_workers = min(2L, resolve_n_cores(n_threads))))
     expected <- c(nrow(data), as.integer(k))
     if (!identical(out$backend_used, "cuda_cuvs_multi_cagra") ||
         !identical(out$devices, devices) || !identical(out$exact, FALSE) ||
@@ -999,10 +1000,10 @@ run_faissr_cuda_multi_cagra <- function(data, k, method, output,
 
 run_faissr_cuda_embedding_knn <- function(data, k, method, metric, output,
         target_recall, devices = NULL, prefer_resident = FALSE,
-        retain_data = FALSE, cagra_profile = NULL) {
+        retain_data = FALSE, cagra_profile = NULL, n_threads = 1L) {
     if (method %in% c("cagra", "cagra_width4")) {
         return(run_faissr_cuda_cagra(data, k, method, metric, output,
-            target_recall, devices, cagra_profile))
+            target_recall, devices, cagra_profile, n_threads))
     }
     if (isTRUE(prefer_resident) && is.null(devices) &&
         method %in% c("exact", "flat")) {

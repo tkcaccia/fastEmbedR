@@ -1,5 +1,5 @@
 precompute_knn_file_cagra <- function(data, k, output, memory_bytes,
-        selection, audit_rows, devices, checkpoint) {
+        selection, audit_rows, devices, checkpoint, workers = 1L) {
     multi <- length(devices) > 1L && selection$backend == "cuda" &&
         selection$method == "cagra_width4"
     if (checkpoint || (!is.null(devices) && !multi)) stop(
@@ -23,9 +23,13 @@ precompute_knn_file_cagra <- function(data, k, output, memory_bytes,
     identity <- massive_checkpoint_source_identity(data)
     arguments <- list(data, k, resources$chunk_rows, memory_bytes,
         selection$target_recall, selection$method == "cagra_width4")
-    if (multi) arguments$devices <- devices else
-        if (!is.null(selection$cuda_cagra_profile))
-            arguments$profile <- selection$cuda_cagra_profile
+    if (multi) {
+        arguments$devices <- devices
+        if ("merge_workers" %in% names(formals(builder)))
+            arguments$merge_workers <- min(2L, workers)
+    } else if (!is.null(selection$cuda_cagra_profile)) {
+        arguments$profile <- selection$cuda_cagra_profile
+    }
     index <- do.call(builder, arguments)
     live <- TRUE
     on.exit(if (live) index$release(), add = TRUE)

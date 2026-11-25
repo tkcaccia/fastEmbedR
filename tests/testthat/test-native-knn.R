@@ -762,6 +762,7 @@ test_that("resident CAGRA directs explicit multiple devices to faissR", {
             expect_identical(request$devices, c(0L, 1L))
             expect_identical(request$width, 4L)
             expect_identical(request$queue, 512L)
+            expect_identical(request$merge_workers, 2L)
             expect_false(request$nn_descent)
             list(backend_used = "cuda_cuvs_multi_cagra",
                 devices = request$devices, exact = FALSE,
@@ -771,7 +772,8 @@ test_that("resident CAGRA directs explicit multiple devices to faissR", {
         .package = "fastEmbedR"
     )
     out <- run_faissr_cuda_embedding_knn(matrix(c(1, 2), 2L), 1L,
-        "cagra_width4", "euclidean", "double", 0.95, devices = c(1L, 0L))
+        "cagra_width4", "euclidean", "double", 0.95,
+        devices = c(1L, 0L), n_threads = 4L)
     expect_identical(out$backend_used, "cuda_cuvs_multi_cagra")
     expect_identical(out$target_recall, 0.95)
     expect_false(out$recall_audited)
@@ -788,9 +790,10 @@ test_that("resident faissR CAGRA assembles sharded output across batches", {
     fit <- faissr_cuvs_multi_cagra_cpp(list(data = float::fl(features),
         k = k, devices = c(1L, 0L), output = "float32", width = 4L,
         queue = 64L, nn_descent = TRUE, graph_degree = 16L,
-        intermediate_degree = 32L, batch_rows = 48L,
-        memory_limit_bytes = 2^30))
+        intermediate_degree = 32L, batch_rows = 160L,
+        memory_limit_bytes = 2^30, merge_workers = 2L))
     expect_identical(fit$backend_used, "cuda_cuvs_multi_cagra")
+    expect_identical(fit$search_timing$merge_cpu_workers, 2L)
     expect_identical(fit$devices, c(0L, 1L))
     expect_identical(fit$merge, "native_host")
     expect_identical(fit$shard_rows, c(160L, 160L))

@@ -244,7 +244,8 @@ compute_umap_matrix_knn <- function(x, nn, n_neighbors, metric, state,
                     fastembedr_knn_output_type(x, policy$backend),
                     policy$target_recall, devices,
                     prefer_resident = TRUE,
-                    cagra_profile = policy$selection$cuda_cagra_profile
+                    cagra_profile = policy$selection$cuda_cagra_profile,
+                    n_threads = state$n_threads
                 )
                 engine <- result$backend_used
                 result
