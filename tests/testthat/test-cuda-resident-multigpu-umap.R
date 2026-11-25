@@ -183,6 +183,42 @@ test_that("wide prepared CUDA selects the current GPU automatically", {
     }, .package = "fastEmbedR")
 })
 
+test_that("wide fuzzy CUDA initializes from the existing CSR graph", {
+    skip_if_not_installed("float")
+    rows <- 36L
+    width <- 6L
+    indices <- outer(seq_len(rows), seq_len(width),
+        function(i, j) (i + 2L * j - 1L) %% rows + 1L)
+    distances <- float::fl(matrix(rep(seq_len(width), each = rows),
+        rows, width))
+    prepared <- prepare_umap_knn(indices, distances, backend = "cpu")
+    prepared$graph <- fastEmbedR:::umap_build_csr_graph(
+        indices, distances, 0L, width, width, 1L,
+        allow_wide = TRUE, force_wide = TRUE)
+    cfg <- fastEmbedR:::configure_prepared_umap(prepared, "cuda", 2L, 1L, NULL)
+    expected <- fastEmbedR:::umap_init_from_csr_graph(
+        prepared$graph, 2L, cfg, 42L)
+    with_mocked_bindings({
+        fit <- umap_knn(prepared, backend = "cuda", n.cores = 1L,
+            devices = c(0L, 1L))
+        meta <- attr(fit, "fastEmbedR_config")
+        expect_identical(meta$init_backend, "cpu_wide_csr_diffusion")
+        expect_false(meta$initialization_reuse_hit)
+    },
+    massive_nccl_available_cpp = function() TRUE,
+    massive_validate_devices = function(devices, ...) devices,
+    massive_cuda_device_uuids = function(...) c("GPU-A", "GPU-B"),
+    spectral_knn_init = function(...) stop("KNN affinity rebuild"),
+    umap_cuda_optimize_csr_multigpu_cpp = function(...) {
+        args <- list(...)
+        expect_identical(args[[4L]], expected)
+        expect_identical(args[[11L]], c(0L, 1L))
+        list(Y = args[[4L]], optimizer = "cuda_resident_umap_coordinated_nccl",
+            gpu_devices = args[[11L]], per_device_edge_visits = c(10, 10),
+            delta_scale = 256, synchronization_seconds = 0.01)
+    }, .package = "fastEmbedR")
+})
+
 test_that("CUDA wide dispatch checks large edge bounds without allocation", {
     small <- structure(list(n = 1000000L, k = 30L),
         class = "fake_gpu_knn")

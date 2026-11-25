@@ -575,8 +575,10 @@ validate_reusable_umap_init <- function(init, n, n_components) {
 
 compute_prepared_umap_init <- function(prepared, cfg, seed) {
     knn <- prepared$knn
+    # Wide CUDA graphs already contain the complete fuzzy affinities.
     spectral <- cfg$backend %in% c("cuda", "metal") &&
-        cfg$graph_mode == "fuzzy"
+        cfg$graph_mode == "fuzzy" && !(cfg$backend == "cuda" &&
+            identical(prepared$graph$offset_dtype, "uint64"))
     init <- if (spectral) {
         distances <- if (is_float32_matrix(knn$distances)) {
             matrix(

@@ -85,6 +85,8 @@ test_that("standard fuzzy graph is the UMAP default", {
         attr(default_layout, "fastEmbedR_config")$graph_mode,
         "fuzzy"
     )
+    attr(default_layout, "fastEmbedR_config") <- NULL
+    attr(explicit_layout, "fastEmbedR_config") <- NULL
     expect_equal(default_layout, explicit_layout, tolerance = 1e-7)
 })
 
