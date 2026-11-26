@@ -604,7 +604,7 @@ prepare_cpu_pca_input <- function(data, ncomp) {
     list(data = x, dimensions = dimensions, rank = rank)
 }
 
-cpu_pca_sketch <- function(input, seed) {
+cpu_pca_sketch <- function(input, seed, power_iterations = NULL) {
     tuning <- fastembedr_rsvd_tuning(
         input$dimensions[[1L]],
         input$dimensions[[2L]],
@@ -618,7 +618,7 @@ cpu_pca_sketch <- function(input, seed) {
     power <- if (sketch_rank >= min(input$dimensions)) {
         0L
     } else {
-        tuning$power
+        power_iterations %||% tuning$power
     }
     restore_seed <- set_local_seed(seed)
     on.exit(restore_seed(), add = TRUE)
@@ -665,13 +665,19 @@ fastembedr_cpu_rsvd_pca <- function(data,
                                     center = TRUE,
                                     scale = FALSE,
                                     seed = 4L,
-                                    n.cores = 1L) {
+                                    n.cores = 1L,
+                                    power_iterations = NULL) {
     input <- prepare_cpu_pca_input(data, ncomp)
     if (fastembedr_cpu_covariance_route(input$dimensions,
-            is_float32_matrix(input$data))) return(
-        fastembedr_blocked_pca(input$data, input$rank,
+            is_float32_matrix(input$data))) {
+        if (!is.null(power_iterations)) {
+            stop("`power_iterations` is unavailable for CPU covariance PCA.",
+                call. = FALSE)
+        }
+        return(fastembedr_blocked_pca(input$data, input$rank,
             center, scale, seed, n.cores))
-    sketch <- cpu_pca_sketch(input, seed)
+    }
+    sketch <- cpu_pca_sketch(input, seed, power_iterations)
     fit <- pca_rsvd_cpu_cpp(
         input$data,
         input$rank,
@@ -685,7 +691,7 @@ fastembedr_cpu_rsvd_pca <- function(data,
 }
 
 run_pca_backend <- function(x, ncomp, center, scale, backend,
-                            n_threads, seed) {
+                            n_threads, seed, power_iterations = NULL) {
     args <- list(
         data = x,
         ncomp = ncomp,
@@ -700,8 +706,47 @@ run_pca_backend <- function(x, ncomp, center, scale, backend,
     )
     if (backend == "cpu") {
         args$n.cores <- n_threads
+        args$power_iterations <- power_iterations
+    } else if (!is.null(power_iterations)) {
+        stop("`power_iterations` requires the CPU backend.", call. = FALSE)
     }
     do.call(fun, args)
+}
+
+run_resident_pca <- function(x, ncomp, xtest, center, scale, backend,
+        n.cores, seed, tsne_init, power_iterations) {
+    backend <- validate_pca_backend(resolve_embedding_backend(backend))
+    request <- validate_pca_request(ncomp, tsne_init, n.cores)
+    run_pca <- function() {
+        fit <- run_pca_backend(x, request$ncomp, center, scale, backend,
+            request$n_threads, seed, power_iterations)
+        finalize_pca_fit(fit, xtest, tsne_init)
+    }
+    if (!identical(backend, "cpu")) return(run_pca())
+    threaded <- with_pca_cpu_threads(request$n_threads, run_pca())
+    fit <- threaded$value
+    fit$n.cores_requested <- request$n_threads
+    fit$n.cores_effective <- fit$n_threads %||% request$n_threads
+    fit$blas.n.cores <- threaded$effective
+    fit$blas.n.cores_requested <- threaded$blas_threads
+    fit$core_control <- threaded$control
+    fit
+}
+
+validate_pca_power_control <- function(power_iterations, massive, landmarks,
+        devices) {
+    if (is.null(power_iterations)) return(NULL)
+    value <- integer_scalar(power_iterations)
+    if (!is.numeric(power_iterations) || is.na(value) || value < 0L) {
+        stop("`power_iterations` must be a nonnegative integer.",
+            call. = FALSE)
+    }
+    if (massive != "off" || !identical(landmarks %||% FALSE, FALSE) ||
+        !is.null(devices)) {
+        stop("`power_iterations` requires a full resident CPU rSVD fit.",
+            call. = FALSE)
+    }
+    value
 }
 
 validate_pca_request <- function(ncomp, tsne_init, n.cores) {
@@ -753,6 +798,11 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #' scores/loadings also remain float32. The API intentionally has no
 #' decomposition method menu and does not call Python. Explicit unavailable GPU
 #' requests fail instead of being reported as GPU work.
+#' For difficult low-rank CPU rSVD fits, compare loading subspaces across
+#' seeds or with a centered reference on the same input. The smallest
+#' singular value of the cross-product of two orthonormal loading bases
+#' measures their least-aligned direction. If agreement is poor, refit with
+#' `power_iterations = 3L` and reassess. Extra iterations add matrix passes.
 #'
 #' @param x Numeric matrix/data frame, `float::float32` matrix, or
 #'   [massive_matrix()] file descriptor with observations in rows.
@@ -821,6 +871,11 @@ validate_pca_request <- function(ncomp, tsne_init, n.cores) {
 #'   CPU and single-device CUDA use CPU projection. Multi-GPU CUDA projects
 #'   on the requested devices.
 #'   The route is recorded in `projection_backend`.
+#' @param power_iterations Nonnegative integer number of power iterations
+#'   for full resident CPU rSVD. `NULL` uses the default for the fitted rank.
+#'   Covariance, file-backed, landmark, and GPU fits require `NULL`. The
+#'   returned `power` gives the effective count, which is zero when the
+#'   sketch already spans the full dimension.
 #' @return A `fastEmbedR_pca` list with `scores`, `loadings`,
 #'   `singular_values`, centering/scaling vectors, backend metadata, and
 #'   decomposition metadata. When `tsne_init = TRUE`, the list also
@@ -845,7 +900,8 @@ pca <- function(x, ncomp = 2L, xtest = NULL, center = TRUE,
         scale = FALSE, backend = NULL, n.cores = NULL, seed = 4L,
         tsne_init = FALSE, massive = "off", output = NULL,
         chunk_rows = NULL, memory_limit = "available", checkpoint = FALSE,
-        resume = FALSE, devices = NULL, landmarks = FALSE, storage = NULL) {
+        resume = FALSE, devices = NULL, landmarks = FALSE, storage = NULL,
+        power_iterations = NULL) {
     automatic <- missing(massive)
     memory_missing <- missing(memory_limit)
     x <- fastembedr_pca_resident_data(x, storage, memory_limit,
@@ -853,6 +909,8 @@ pca <- function(x, ncomp = 2L, xtest = NULL, center = TRUE,
     storage <- fastembedr_storage_option(x, storage)
     massive <- pca_resolve_massive(x, massive, automatic)
     massive <- fastembedr_pca_storage_mode(x, massive, storage)
+    power_iterations <- validate_pca_power_control(power_iterations, massive,
+        landmarks, devices)
     if (memory_missing && massive != "off")
         memory_limit <- fastembedr_memory_option()
     if (!identical(landmarks, FALSE) && !is.null(landmarks))
@@ -872,24 +930,8 @@ pca <- function(x, ncomp = 2L, xtest = NULL, center = TRUE,
     }
     if (!is.null(devices)) return(pca_resident_cuda_fit(x, ncomp,
         xtest, center, scale, backend, seed, tsne_init, devices))
-    backend <- validate_pca_backend(resolve_embedding_backend(backend))
-    request <- validate_pca_request(ncomp, tsne_init, n.cores)
-    run_pca <- function() {
-        fit <- run_pca_backend(
-            x, request$ncomp, center, scale, backend,
-            request$n_threads, seed
-        )
-        finalize_pca_fit(fit, xtest, tsne_init)
-    }
-    if (!identical(backend, "cpu")) return(run_pca())
-    threaded <- with_pca_cpu_threads(request$n_threads, run_pca())
-    fit <- threaded$value
-    fit$n.cores_requested <- request$n_threads
-    fit$n.cores_effective <- fit$n_threads %||% request$n_threads
-    fit$blas.n.cores <- threaded$effective
-    fit$blas.n.cores_requested <- threaded$blas_threads
-    fit$core_control <- threaded$control
-    fit
+    run_resident_pca(x, ncomp, xtest, center, scale, backend, n.cores, seed,
+        tsne_init, power_iterations)
 }
 
 fastembedr_rsvd_tuning <- function(n, p, rank, backend) {

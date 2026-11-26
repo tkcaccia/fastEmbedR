@@ -46,7 +46,7 @@ test_that("blocked CPU PCA keeps 16 workers and covariance parity", {
                 n_threads_effective = n_threads)
         }, .package = "fastEmbedR"
     )
-    fit <- fastEmbedR:::fastembedr_cpu_blocked_pca(x, 2L,
+    fit <- fastEmbedR:::fastembedr_blocked_pca(x, 2L,
         TRUE, FALSE, 19L, 16L)
     reference <- prcomp(x, center = TRUE, scale. = FALSE)
     expect_true(all(abs(cor(fit$scores,
@@ -72,7 +72,7 @@ test_that("native resident float32 covariance and projection use 16", {
     expect_s4_class(fit$scores, "float32")
     expected <- sweep(values, 2L, colMeans(values)) %*% loadings
     expect_equal(float::dbl(fit$scores), expected, tolerance = 1e-4)
-    complete <- fastEmbedR:::fastembedr_cpu_blocked_pca(
+    complete <- fastEmbedR:::fastembedr_blocked_pca(
         data, 2L, TRUE, FALSE, 41L, 16L)
     expect_identical(complete$n_threads, 16L)
     expect_s4_class(complete$scores, "float32")

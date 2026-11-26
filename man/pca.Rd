@@ -22,7 +22,8 @@ pca(
   resume = FALSE,
   devices = NULL,
   landmarks = FALSE,
-  storage = NULL
+  storage = NULL,
+  power_iterations = NULL
 )
 }
 \arguments{
@@ -110,6 +111,12 @@ uses \code{options(storage = ...)}. Explicit \code{"resident"} on a
 \code{memory_limit} check; the limit does not bound the subsequent fit.
 \code{"file_backed"} forces out-of-core PCA, while conflicting \code{massive}
 values fail before fitting.}
+
+\item{power_iterations}{Nonnegative integer number of power iterations
+for full resident CPU rSVD. \code{NULL} uses the default for the fitted rank.
+Covariance, file-backed, landmark, and GPU fits require \code{NULL}. The
+returned \code{power} gives the effective count, which is zero when the
+sketch already spans the full dimension.}
 }
 \value{
 A \code{fastEmbedR_pca} list with \code{scores}, \code{loadings},
@@ -154,6 +161,11 @@ the call. A single-threaded BLAS can still report one effective thread. With
 scores/loadings also remain float32. The API intentionally has no
 decomposition method menu and does not call Python. Explicit unavailable GPU
 requests fail instead of being reported as GPU work.
+For difficult low-rank CPU rSVD fits, compare loading subspaces across
+seeds or with a centered reference on the same input. The smallest
+singular value of the cross-product of two orthonormal loading bases
+measures their least-aligned direction. If agreement is poor, refit with
+\code{power_iterations = 3L} and reassess. Extra iterations add matrix passes.
 }
 \examples{
 fit <- pca(
