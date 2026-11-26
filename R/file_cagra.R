@@ -16,8 +16,9 @@ precompute_knn_file_cagra <- function(data, k, output, memory_bytes,
     builder <- get0(entry, envir = asNamespace("faissR"), inherits = FALSE)
     if (!is.function(builder)) stop(
         "The installed faissR lacks file-backed CAGRA support.", call. = FALSE)
-    resources <- list(memory_limit_bytes = memory_bytes,
-        output_bytes = 8 * as.double(data$nrow) * k, chunk_rows = 1024L,
+    profile <- selection$cuda_cagra_profile
+    resources <- list(chunk_rows = profile$batch_rows %||% 1024L,
+        output_bytes = 8 * as.double(data$nrow) * k,
         reference_chunk_rows = min(data$nrow, floor(192e6 / (4 * data$ncol))))
     paths <- massive_knn_paths(output, resources$output_bytes)
     identity <- massive_checkpoint_source_identity(data)
@@ -28,8 +29,7 @@ precompute_knn_file_cagra <- function(data, k, output, memory_bytes,
         if ("merge_workers" %in% names(formals(builder)))
             arguments$merge_workers <- min(2L, workers)
     }
-    if (!is.null(selection$cuda_cagra_profile))
-        arguments$profile <- selection$cuda_cagra_profile
+    if (!is.null(profile)) arguments$profile <- profile
     index <- do.call(builder, arguments)
     live <- TRUE
     on.exit(if (live) index$release(), add = TRUE)

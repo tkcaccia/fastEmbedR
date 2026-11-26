@@ -757,12 +757,15 @@ test_that("file-backed CUDA sharding reuses faissR indexes and merges rows", {
 })
 
 test_that("resident CAGRA directs explicit multiple devices to faissR", {
+    old <- options(faissR.cuvs_cagra_overlap = FALSE)
+    on.exit(options(old))
     local_mocked_bindings(
         faissr_cuvs_multi_cagra_cpp = function(request) {
             expect_identical(request$devices, c(0L, 1L))
             expect_identical(request$width, 4L)
             expect_identical(request$queue, 512L)
             expect_identical(request$merge_workers, 2L)
+            expect_false(request$overlap_merge)
             expect_false(request$nn_descent)
             list(backend_used = "cuda_cuvs_multi_cagra",
                 devices = request$devices, exact = FALSE,
@@ -778,6 +781,28 @@ test_that("resident CAGRA directs explicit multiple devices to faissR", {
     expect_identical(out$target_recall, 0.95)
     expect_false(out$recall_audited)
     expect_true(is.na(out$target_met))
+})
+
+test_that("resident CAGRA verifies the requested merge overlap", {
+    old <- options(faissR.cuvs_cagra_overlap = TRUE)
+    on.exit(options(old))
+    confirmed <- FALSE
+    local_mocked_bindings(
+        faissr_cuvs_multi_cagra_cpp = function(request) {
+            expect_true(request$overlap_merge)
+            list(backend_used = "cuda_cuvs_multi_cagra",
+                devices = request$devices, exact = FALSE,
+                query_merge_overlap_enabled = if (confirmed) TRUE else NULL,
+                indices = matrix(c(2L, 1L), 2L),
+                distances = matrix(c(1, 1), 2L))
+        },
+        .package = "fastEmbedR"
+    )
+    run <- function() run_faissr_cuda_embedding_knn(matrix(1:2, 2L), 1L,
+        "cagra_width4", "euclidean", "double", .95, devices = 0:1)
+    expect_error(run(), "incompatible multi-GPU CAGRA")
+    confirmed <- TRUE
+    expect_true(run()$query_merge_overlap_enabled)
 })
 
 test_that("resident faissR CAGRA assembles sharded output across batches", {

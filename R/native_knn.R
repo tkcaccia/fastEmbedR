@@ -975,10 +975,11 @@ run_faissr_cuda_multi_cagra <- function(data, k, method, output,
         params <- resolve(params, k, search)
     }
     if (!is.null(profile)) {
-        validate <- get("cuvs_validate_cagra_profile", envir = faiss)
-        profile <- validate(profile, nrow(data), k)
+        profile <- get("cuvs_validate_cagra_profile", envir = faiss)(
+            profile, nrow(data), k)
     }
     devices <- sort(as.integer(devices))
+    overlap <- isTRUE(getOption("faissR.cuvs_cagra_overlap"))
     out <- faissr_cuvs_multi_cagra_cpp(list(
         data = data, k = as.integer(k), devices = devices, output = output,
         width = params$width, queue = params$queue,
@@ -989,15 +990,15 @@ run_faissr_cuda_multi_cagra <- function(data, k, method, output,
             profile$batch_rows %||% 1024L),
         memory_limit_bytes = min(massive_available_ram_bytes(),
             profile$memory_limit_bytes %||% Inf),
-        merge_workers = min(2L, resolve_n_cores(n_threads))))
-    expected <- c(nrow(data), as.integer(k))
+        merge_workers = min(2L, resolve_n_cores(n_threads)),
+        overlap_merge = overlap))
     if (!identical(out$backend_used, "cuda_cuvs_multi_cagra") ||
         !identical(out$devices, devices) || !identical(out$exact, FALSE) ||
-        !identical(dim(out$indices), expected) ||
-        !identical(dim(out$distances), expected)) stop(
+        (overlap && !isTRUE(out$query_merge_overlap_enabled)) ||
+        !identical(dim(out$indices), c(nrow(data), as.integer(k))) ||
+        !identical(dim(out$distances), dim(out$indices))) stop(
         "faissR returned incompatible multi-GPU CAGRA KNN.", call. = FALSE)
-    out$backend <- "cuda"
-    out$accelerator <- "cuda"
+    out[c("backend", "accelerator")] <- list("cuda")
     out$index_base <- 1L
     out$exclude_self <- TRUE
     out$knn_provider <- "faissR"
