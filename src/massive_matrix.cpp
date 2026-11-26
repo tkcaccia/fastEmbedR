@@ -7458,25 +7458,28 @@ void spectral_scan_rows(const std::vector<CsrGraphSource*>& readers,
   }
 }
 
-template <typename Reference>
-void spectral_stream_project(std::vector<double>& q, std::uint64_t n,
-                             int block, int first, int last,
-                             Reference reference) {
+template <typename Normalize, typename Reference>
+double spectral_stream_project(std::vector<double>& q, std::uint64_t n,
+                               int block, int first, int last,
+                               Normalize normalized, Reference reference) {
   std::array<double, 9> dots{};
   for (std::uint64_t row = 0; row < n; ++row) {
-    const double direction = reference(row);
+    const double direction = normalized(row);
     const double* values = q.data() + row * block;
     for (int col = first; col < last; ++col) {
       dots[col] += values[col] * direction;
     }
   }
+  double norm = 0.0;
   for (std::uint64_t row = 0; row < n; ++row) {
     const double direction = reference(row);
     double* values = q.data() + row * block;
     for (int col = first; col < last; ++col) {
       values[col] -= dots[col] * direction;
     }
+    norm += values[first] * values[first];
   }
+  return norm;
 }
 
 void spectral_stream_orthogonalize(std::vector<double>& q,
@@ -7488,40 +7491,38 @@ void spectral_stream_orthogonalize(std::vector<double>& q,
     const double inv = inv_degree[row];
     return inv > 0.0 ? inv_sqrt_volume / inv : 0.0;
   };
-  // Apply each projection in the original order for every column.
-  spectral_stream_project(q, n, block, 0, block, trivial);
+  // Accumulate the next column's norm as each row is projected.
+  double norm = spectral_stream_project(q, n, block, 0, block,
+                                       trivial, trivial);
   std::normal_distribution<double> normal(0.0, 1.0);
   for (int col = 0; col < block; ++col) {
-    const auto norm_squared = [&]() {
-      double norm = 0.0;
-      for (std::uint64_t row = 0; row < n; ++row) {
-        const double value = q[row * block + col];
-        norm += value * value;
-      }
-      return norm;
-    };
-    double norm = norm_squared();
     if (!std::isfinite(norm) || norm <= 1e-20) {
       for (std::uint64_t row = 0; row < n; ++row) {
         q[row * block + col] = normal(rng);
       }
-      spectral_stream_project(q, n, block, col, col + 1, trivial);
+      norm = spectral_stream_project(q, n, block, col, col + 1,
+                                     trivial, trivial);
       for (int prior = 0; prior < col; ++prior) {
-        spectral_stream_project(q, n, block, col, col + 1,
-          [&](std::uint64_t row) { return q[row * block + prior]; });
+        const auto reference = [&](std::uint64_t row) {
+          return q[row * block + prior];
+        };
+        norm = spectral_stream_project(q, n, block, col, col + 1,
+                                       reference, reference);
       }
-      norm = norm_squared();
       if (!std::isfinite(norm) || norm <= 1e-20) {
         Rcpp::stop("Streamed spectral basis lost rank.");
       }
     }
     const double scale = 1.0 / std::sqrt(norm);
-    for (std::uint64_t row = 0; row < n; ++row) {
-      q[row * block + col] *= scale;
-    }
+    const auto entry = [&](std::uint64_t row) -> double& {
+      return q[row * block + col];
+    };
     if (col + 1 < block) {
-      spectral_stream_project(q, n, block, col + 1, block,
-        [&](std::uint64_t row) { return q[row * block + col]; });
+      // Normalization precedes each dot product in the same row order.
+      norm = spectral_stream_project(q, n, block, col + 1, block,
+        [&](std::uint64_t row) { return entry(row) *= scale; }, entry);
+    } else {
+      for (std::uint64_t row = 0; row < n; ++row) entry(row) *= scale;
     }
   }
 }
