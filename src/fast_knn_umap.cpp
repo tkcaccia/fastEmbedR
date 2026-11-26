@@ -295,15 +295,16 @@ class DisjointSet {
     return root;
   }
 
-  void unite(int a, int b) {
+  bool unite(int a, int b) {
     a = find(a);
     b = find(b);
-    if (a == b) return;
+    if (a == b) return false;
     if (size_[static_cast<std::size_t>(a)] < size_[static_cast<std::size_t>(b)]) {
       std::swap(a, b);
     }
     parent_[static_cast<std::size_t>(b)] = a;
     size_[static_cast<std::size_t>(a)] += size_[static_cast<std::size_t>(b)];
+    return true;
   }
 
  private:
@@ -4091,48 +4092,46 @@ Rcpp::List knn_connectivity_range_cpp(IntegerMatrix indices,
   if (n < 2) Rcpp::stop("indices must have at least two rows");
   if (k < 1) Rcpp::stop("indices must have at least one neighbor column");
 
-  int min_idx = std::numeric_limits<int>::max();
-  int max_idx = std::numeric_limits<int>::min();
-  for (int i = 0; i < n; ++i) {
-    for (int j = 0; j < k; ++j) {
-      const int idx = indices(i, j + col_start);
-      min_idx = std::min(min_idx, idx);
-      max_idx = std::max(max_idx, idx);
-    }
-  }
-  const int index_offset = (min_idx >= 1 && max_idx <= n) ? 1 : 0;
+  const int* begin = indices.begin() +
+    static_cast<std::size_t>(col_start) * n;
+  const int* end = begin + static_cast<std::size_t>(k) * n;
+  const int index_offset = std::all_of(begin, end,
+    [n](const int id) { return id >= 1 && id <= n; }) ? 1 : 0;
 
   DisjointSet dsu(n);
   std::uint64_t valid_edges = 0;
   std::uint64_t self_edges = 0;
   std::uint64_t invalid_edges = 0;
-  for (int i = 0; i < n; ++i) {
-    for (int j = 0; j < k; ++j) {
-      const int neighbor = indices(i, j + col_start) - index_offset;
+  int component_count = n;
+  for (int col = 0; col < k; ++col) {
+    const int* values = begin + static_cast<std::size_t>(col) * n;
+    for (int row = 0; row < n; ++row) {
+      const int neighbor = values[row] - index_offset;
       if (neighbor < 0 || neighbor >= n) {
         ++invalid_edges;
-      } else if (neighbor == i) {
+      } else if (neighbor == row) {
         ++self_edges;
       } else {
-        dsu.unite(i, neighbor);
         ++valid_edges;
+        if (component_count > 1 && dsu.unite(row, neighbor)) {
+          --component_count;
+        }
       }
     }
   }
 
-  std::vector<int> component_sizes(static_cast<std::size_t>(n), 0);
-  for (int i = 0; i < n; ++i) {
-    ++component_sizes[static_cast<std::size_t>(dsu.find(i))];
-  }
-
-  int component_count = 0;
   int singleton_count = 0;
-  int largest_component_size = 0;
-  for (int size : component_sizes) {
-    if (size <= 0) continue;
-    ++component_count;
-    if (size == 1) ++singleton_count;
-    largest_component_size = std::max(largest_component_size, size);
+  int largest_component_size = n;
+  if (component_count > 1) {
+    std::vector<int> component_sizes(static_cast<std::size_t>(n), 0);
+    for (int row = 0; row < n; ++row) {
+      ++component_sizes[static_cast<std::size_t>(dsu.find(row))];
+    }
+    largest_component_size = 0;
+    for (int size : component_sizes) {
+      if (size == 1) ++singleton_count;
+      largest_component_size = std::max(largest_component_size, size);
+    }
   }
 
   const double largest_fraction =

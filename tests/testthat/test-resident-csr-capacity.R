@@ -38,6 +38,18 @@ test_that("resident CSR edge count remains numeric metadata", {
     expect_equal(connectivity$invalid_edge_count, 0)
 })
 
+test_that("connected KNN still counts the remaining inputs", {
+    indices <- cbind(c(1L, 2L, 3L, 4L, 0L), c(0L, NA_integer_, 1L, 3L, 10L))
+    info <- fastEmbedR:::knn_connectivity_range_cpp(indices, 0L, 2L)
+    expect_true(info$connected)
+    expect_identical(info$index_offset, 0L)
+    expect_equal(info$component_count, 1L)
+    expect_equal(info$largest_component_size, nrow(indices))
+    expect_equal(info$valid_edge_count, 6)
+    expect_equal(info$self_edge_count, 2)
+    expect_equal(info$invalid_edge_count, 2)
+})
+
 test_that("resident CSR stage model keeps wide offsets and float32 edges", {
     plan <- fastEmbedR:::umap_resident_csr_stage_bytes(
         50000000, 30, 16L)
