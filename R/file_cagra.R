@@ -27,9 +27,9 @@ precompute_knn_file_cagra <- function(data, k, output, memory_bytes,
         arguments$devices <- devices
         if ("merge_workers" %in% names(formals(builder)))
             arguments$merge_workers <- min(2L, workers)
-    } else if (!is.null(selection$cuda_cagra_profile)) {
-        arguments$profile <- selection$cuda_cagra_profile
     }
+    if (!is.null(selection$cuda_cagra_profile))
+        arguments$profile <- selection$cuda_cagra_profile
     index <- do.call(builder, arguments)
     live <- TRUE
     on.exit(if (live) index$release(), add = TRUE)

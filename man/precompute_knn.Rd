@@ -121,7 +121,8 @@ the source in batches and writes neighbors to disk. With
 builds a disjoint reference shard and searches all query batches.
 faissR merges candidate neighbors before writing each batch.
 File-backed CAGRA checks capacity and requires checkpointing off.
-Resident multi-GPU CAGRA uses cuVS tree merging.
+Eligible CUDA calls with multiple explicit devices use disjoint CAGRA
+reference shards. faissR merges per-shard candidates on the host.
 The target tier describes the settings used. Supply audit rows to
 measure recall for a file-backed fit.
 Set \code{options(fastEmbedR.metal_knn_method = "cagra")} for native Metal

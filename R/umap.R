@@ -237,7 +237,7 @@ compute_umap_matrix_knn <- function(x, nn, n_neighbors, metric, state,
             policy <- fastembedr_embedding_nn_policy(
                 state$backend, nrow(x), ncol(x),
                 state$target_recall, k = n_neighbors, metric = metric,
-                allow_cuda_profile = is.null(devices))
+                allow_cuda_profile = is.null(devices), cuda_devices = devices)
             if (identical(policy$backend, "cuda")) {
                 result <- run_faissr_cuda_embedding_knn(
                     x, as.integer(n_neighbors), policy$method, metric,
@@ -381,9 +381,9 @@ assemble_umap_matrix_fit <- function(input, prepared, knn_state,
 #'   `"synchronized"` enables deterministic multicore CPU updates for
 #'   full-graph UMAP. Other modes and backends reject this choice.
 #' @param devices Optional CUDA device indices. In resident full-data mode,
-#'   one-call matrix KNN currently uses faissR on GPU 0 and returns host
-#'   neighbors. Multiple-device one-call fits use an experimental faissR
-#'   FAISS GPU replica KNN route with host results; its scaling needs audit.
+#'   eligible Euclidean self-KNN with multiple CUDA devices uses faissR
+#'   CAGRA reference shards and returns host neighbors. Other eligible
+#'   shapes use the existing FAISS GPU Flat or IVF routes.
 #'   In experimental landmark mode, devices
 #'   distribute query
 #'   projection while reference fitting and KNN use the first device.

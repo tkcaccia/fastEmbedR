@@ -152,9 +152,9 @@ refinement in massive landmark mode. Requires CPU and positive epochs.}
 at least \code{local_neighbors}.}
 
 \item{devices}{Optional CUDA device indices. In resident full-data mode,
-one-call matrix KNN currently uses faissR on GPU 0 and returns host
-neighbors. Multiple-device one-call fits use an experimental faissR
-FAISS GPU replica KNN route with host results; its scaling needs audit.
+eligible Euclidean self-KNN with multiple CUDA devices uses faissR
+CAGRA reference shards and returns host neighbors. Other eligible
+shapes use the existing FAISS GPU Flat or IVF routes.
 In experimental landmark mode, devices
 distribute query
 projection while reference fitting and KNN use the first device.
