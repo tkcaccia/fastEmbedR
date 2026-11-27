@@ -473,6 +473,7 @@ test_that("CUDA reference queries use faissR host and device results", {
     )
     expect_s3_class(device, "faissR_gpu_knn")
     expect_identical(device$result_residency, "cuda")
+    expect_identical(attr(device, "backend"), "cuda")
     observed <- fastEmbedR:::fastembedr_gpu_knn_to_host(device)
     expect_identical(observed$indices, expected)
 })

@@ -15,8 +15,7 @@ RAPIDS_INCLUDE="$RAPIDS/include/rapids"
 RAPIDS_LIB="$RAPIDS/lib"
 CUSTOM_CCCL="$TMP/custom-cccl"
 CUSTOM_CCCL_INCLUDE="$CUSTOM_CCCL/include"
-mkdir -p "$INCLUDE/cuvs/core" "$INCLUDE/cuvs/neighbors"
-mkdir -p "$INCLUDE/cuvs/distance" "$LIB"
+mkdir -p "$INCLUDE" "$LIB"
 mkdir -p "$RAPIDS_INCLUDE/raft/core" "$RAPIDS_INCLUDE/raft/linalg"
 mkdir -p "$RAPIDS_LIB" "$CUSTOM_CCCL_INCLUDE/cub"
 mkdir -p "$CUSTOM_CCCL_INCLUDE/thrust/iterator"
@@ -79,8 +78,6 @@ EOF
 printf '#pragma once\n' > "$CUSTOM_CCCL_INCLUDE/cub/cub.cuh"
 printf '#pragma once\n' \
   > "$CUSTOM_CCCL_INCLUDE/thrust/iterator/counting_iterator.h"
-printf '#pragma once\n' > "$INCLUDE/cuvs/neighbors/brute_force.h"
-printf '#pragma once\n' > "$INCLUDE/cuvs/distance/distance.h"
 printf '#pragma once\n' \
   > "$CUSTOM_CCCL_INCLUDE/fastembedr_custom_cccl.hpp"
 cat > "$RAPIDS_INCLUDE/raft/core/handle.hpp" <<'EOF'
@@ -106,32 +103,6 @@ struct paramsTSVD {
 }
 }
 EOF
-cat > "$INCLUDE/cuvs/core/c_api.h" <<'EOF'
-#pragma once
-#ifndef FASTEMBEDR_CUSTOM_CPPFLAG
-#error FASTEMBEDR_CUDA_CPPFLAGS did not reach the cuVS probe
-#endif
-#ifdef __cplusplus
-extern "C" {
-#endif
-typedef int cuvsError_t;
-typedef void* cuvsResources_t;
-int cuvsResourcesCreate(cuvsResources_t* resources);
-#ifdef __cplusplus
-}
-#endif
-EOF
-cat > "$INCLUDE/cuvs/neighbors/ivf_flat.h" <<'EOF'
-#pragma once
-#ifdef __cplusplus
-extern "C" {
-#endif
-int cuvsIvfFlatIndexCreate(void** index);
-#ifdef __cplusplus
-}
-#endif
-EOF
-
 cat > "$TMP/cudart.c" <<'EOF'
 int cudaRuntimeGetVersion(int* version) {
   if (version) *version = 13000;
@@ -164,31 +135,18 @@ int curandCreateGenerator(void** generator, int rng_type) {
   return 0;
 }
 EOF
-cat > "$TMP/cuvs.c" <<'EOF'
-int cuvsResourcesCreate(void** resources) {
-  if (resources) *resources = 0;
-  return 0;
-}
-int cuvsIvfFlatIndexCreate(void** index) {
-  if (index) *index = 0;
-  return 0;
-}
-EOF
-printf 'int fastembedr_fake_cuvs_cpp(void) { return 0; }\n' \
-  > "$TMP/cuvs_cpp.c"
+printf 'int fastembedr_fake_library(void) { return 0; }\n' > "$TMP/stub.c"
 
 cc -shared -fPIC "$TMP/cudart.c" -o "$LIB/libcudart.so"
 cc -shared -fPIC "$TMP/cublas.c" -o "$LIB/libcublas.so"
 cc -shared -fPIC "$TMP/cufft.c" -o "$LIB/libcufft.so"
 cc -shared -fPIC "$TMP/cusolver.c" -o "$LIB/libcusolver.so"
 cc -shared -fPIC "$TMP/curand.c" -o "$LIB/libcurand.so"
-cc -shared -fPIC "$TMP/cuvs.c" -o "$LIB/libcuvs_c.so"
-cc -shared -fPIC "$TMP/cuvs_cpp.c" -o "$LIB/libcuvs.so"
 for library in cublasLt cusparse; do
-  cc -shared -fPIC "$TMP/cuvs_cpp.c" -o "$LIB/lib${library}.so"
+  cc -shared -fPIC "$TMP/stub.c" -o "$LIB/lib${library}.so"
 done
 for library in raft rmm rapids_logger; do
-  cc -shared -fPIC "$TMP/cuvs_cpp.c" -o "$RAPIDS_LIB/lib${library}.so"
+  cc -shared -fPIC "$TMP/stub.c" -o "$RAPIDS_LIB/lib${library}.so"
 done
 
 mkdir -p "$TOOLKIT/bin"
@@ -212,10 +170,9 @@ EOF
 chmod +x "$TOOLKIT/bin/nvcc"
 
 GOOD="$TMP/good"
-mkdir -p "$GOOD/src/dlpack"
+mkdir -p "$GOOD/src"
 GOOD=$(CDPATH= cd -- "$GOOD" && pwd -P)
 cp "$ROOT/configure" "$GOOD/configure"
-cp "$ROOT/src/dlpack/dlpack.h" "$GOOD/src/dlpack/dlpack.h"
 chmod +x "$GOOD/configure"
 : > "$TMP/nvcc.log"
 if ! (
@@ -225,7 +182,6 @@ if ! (
   NVCC_LOG="$TMP/nvcc.log" \
   CUDA_HOME="$TOOLKIT" \
   CCCL_HOME="$CUSTOM_CCCL" \
-  CUVS_HOME="$TOOLKIT" \
   RAFT_HOME="$RAPIDS" \
   NVCC="$TOOLKIT/bin/nvcc" \
   CUDAHOSTCXX="$TEST_CXX" \
@@ -243,9 +199,11 @@ grep -F -- "-I$INCLUDE" "$GOOD/src/Makevars"
 grep -F -- "-L$LIB" "$GOOD/src/Makevars"
 grep -F -- "-Wl,-rpath,$LIB" "$GOOD/src/Makevars"
 grep -F -- "-DFASTEMBEDR_HAS_CUDA" "$GOOD/src/Makevars"
-grep -F -- "-DFASTEMBEDR_HAS_CUVS" "$GOOD/src/Makevars"
+if grep -Fq -- "-DFASTEMBEDR_HAS_CUVS" "$GOOD/src/Makevars"; then
+  echo "fastEmbedR must obtain cuVS KNN through faissR." >&2
+  exit 1
+fi
 grep -F -- "-DFASTEMBEDR_HAS_RAFT" "$GOOD/src/Makevars"
-grep -F -- "-I$GOOD/src" "$GOOD/src/Makevars"
 grep -F -- "-I$CUSTOM_CCCL_INCLUDE" "$GOOD/src/Makevars"
 grep -F -- "-DFASTEMBEDR_CUSTOM_CPPFLAG=1" "$GOOD/src/Makevars"
 grep -F -- "-DFASTEMBEDR_CUSTOM_NVCC_FLAG=1" "$GOOD/src/Makevars"
@@ -293,20 +251,24 @@ if (
 fi
 grep -F "toolkit compile/link probe failed" "$TMP/broken.log"
 
-REMOVED_FAISS="$TMP/removed-faiss"
-mkdir -p "$REMOVED_FAISS/src"
-cp "$ROOT/configure" "$REMOVED_FAISS/configure"
-chmod +x "$REMOVED_FAISS/configure"
+OBSOLETE="$TMP/obsolete"
+mkdir -p "$OBSOLETE/src"
+cp "$ROOT/configure" "$OBSOLETE/configure"
+chmod +x "$OBSOLETE/configure"
 if (
-  cd "$REMOVED_FAISS"
-  FASTEMBEDR_USE_FAISS_GPU=1 ./configure \
-    > "$TMP/removed-faiss.log" 2>&1
+  cd "$OBSOLETE"
+  FASTEMBEDR_USE_FAISS_GPU=1 ./configure > "$TMP/obsolete-faiss.log" 2>&1
 ); then
-  echo "The removed FAISS GPU switch was unexpectedly accepted." >&2
+  echo "The obsolete FAISS GPU switch was unexpectedly accepted." >&2
   exit 1
 fi
-grep -F "FASTEMBEDR_USE_FAISS_GPU is obsolete" \
-  "$TMP/removed-faiss.log"
+grep -F "FASTEMBEDR_USE_FAISS_GPU is obsolete" "$TMP/obsolete-faiss.log"
+(
+  cd "$OBSOLETE"
+  FASTEMBEDR_USE_CUDA=0 FASTEMBEDR_USE_CUVS=1 ./configure \
+    > "$TMP/obsolete-cuvs.log" 2>&1
+)
+grep -F "FASTEMBEDR_USE_CUVS is obsolete" "$TMP/obsolete-cuvs.log"
 
 DIAGNOSTIC="$TMP/diagnostic"
 mkdir -p "$DIAGNOSTIC/src"

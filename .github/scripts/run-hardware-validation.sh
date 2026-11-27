@@ -71,8 +71,6 @@ elif [[ "$backend" == "metal" ]]; then
   export SDKROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
 else
   export FASTEMBEDR_USE_CUDA=1
-  export FASTEMBEDR_USE_CUVS=1
-  export FASTEMBEDR_USE_RAFT="${FASTEMBEDR_USE_RAFT:-1}"
   export FASTEMBEDR_REQUIRE_CUDA=1
   export PACKAGE_REQUIRE_CUDA=1
 fi

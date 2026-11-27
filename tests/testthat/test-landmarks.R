@@ -110,7 +110,7 @@ test_that("resident UMAP exposes landmark refinement epochs", {
     expect_identical(refined$parameters$landmark_refinement_epochs, 10L)
     expect_gt(sum(abs(refined$layout - disabled$layout)), 0)
     expect_equal(refined$landmarks$layout,
-        disabled$landmarks$layout)
+        disabled$landmarks$layout, ignore_attr = TRUE)
     expect_error(do.call(umap, c(controls,
         list(refinement_epochs = -1L))), "non-negative integer")
     expect_error(umap(x, backend = "cpu", refinement_epochs = 2L),

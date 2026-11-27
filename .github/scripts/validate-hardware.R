@@ -53,6 +53,7 @@ if (backend == "cuda") {
     ),
     cpu_fallback = isTRUE(knn_run$value$cpu_fallback),
     backend_used = as.character(knn_run$value$backend_used),
+    knn_provider = as.character(knn_run$value$knn_provider),
     provider = as.character(knn_run$value$gpu_provider)
   )
   utils::write.csv(
@@ -60,14 +61,16 @@ if (backend == "cuda") {
     file.path(out_dir, "cuda-knn-metadata.csv"),
     row.names = FALSE
   )
-  if (!inherits(knn_run$value, "fastEmbedR_gpu_knn") ||
+  if (!inherits(knn_run$value, "faissR_gpu_knn") ||
       !identical(knn_run$value$result_residency, "cuda") ||
       !isTRUE(knn_run$value$device_to_host_result_copies == 0L) ||
       isTRUE(knn_run$value$cpu_fallback)) {
     stop("CUDA KNN did not remain on the device.", call. = FALSE)
   }
-  if (!startsWith(knn_run$value$gpu_provider, "fastEmbedR_native_")) {
-    stop("CUDA KNN did not report a native GPU provider.", call. = FALSE)
+  if (!identical(knn_run$value$knn_provider, "faissR") ||
+      !identical(knn_run$value$gpu_provider, "faiss_gpu")) {
+    stop("Exact CUDA KNN did not report the faissR GPU provider.",
+         call. = FALSE)
   }
   observed <- fastEmbedR:::fastembedr_gpu_knn_to_host(knn_run$value)
   distance <- as.matrix(stats::dist(x))
@@ -115,12 +118,12 @@ tsne_knn_run <- elapsed("tsne_knn", tsne_knn(
 ))
 
 selection <- select_landmarks(x, landmarks = 0.5, seed = seed)
-landmark_umap_run <- elapsed("landmark_umap", landmark_umap(
+landmark_umap_run <- elapsed("landmark_umap", umap(
   x, landmarks = selection$indices, n_neighbors = 15L,
   backend = backend, n.cores = 4L, seed = seed,
-  transform_k = 15L, graph_mode = "fuzzy"
+  transform_k = 15L, graph_mode = "fuzzy", refinement_epochs = 1L
 ))
-landmark_tsne_run <- elapsed("landmark_tsne", landmark_tsne(
+landmark_tsne_run <- elapsed("landmark_tsne", tsne(
   x, landmarks = selection$indices, perplexity = 15,
   backend = backend, n.cores = 4L, seed = seed,
   transform_k = 15L, transform_perplexity = 5,
@@ -163,14 +166,16 @@ if (!identical(umap_knn_backend, backend)) {
 if (!identical(tsne_knn_backend, backend)) {
   stop("precomputed-KNN t-SNE backend mismatch", call. = FALSE)
 }
-if (!identical(landmark_umap_run$value$parameters$backend, backend) ||
-    !identical(landmark_umap_run$value$parameters$projection_backend,
-               backend)) {
+landmark_umap_meta <- landmark_umap_run$value$parameters
+landmark_tsne_meta <- landmark_tsne_run$value$parameters
+if (!identical(landmark_umap_meta$backend, backend) ||
+    !identical(landmark_umap_meta$projection_nn_backend, backend) ||
+    !identical(landmark_umap_meta$landmark_refinement_backend, backend)) {
   stop("landmark UMAP backend mismatch", call. = FALSE)
 }
-if (!identical(landmark_tsne_run$value$parameters$backend, backend) ||
-    !identical(landmark_tsne_run$value$parameters$projection_backend,
-               backend)) {
+if (!identical(landmark_tsne_meta$backend, backend) ||
+    !identical(landmark_tsne_meta$projection_nn_backend, backend) ||
+    !identical(landmark_tsne_meta$transform_backend, backend)) {
   stop("landmark t-SNE backend mismatch", call. = FALSE)
 }
 if (!identical(cluster_run$value$backend_requested, backend) ||
@@ -203,8 +208,8 @@ summary <- data.frame(
     tsne_backend,
     umap_knn_backend,
     tsne_knn_backend,
-    landmark_umap_run$value$parameters$projection_backend,
-    landmark_tsne_run$value$parameters$projection_backend,
+    landmark_umap_meta$landmark_refinement_backend,
+    landmark_tsne_meta$transform_backend,
     cluster_run$value$backend
   ),
   elapsed_sec = c(

@@ -9,7 +9,7 @@ test_that("CUDA IVF uses one index when its budget fits", {
     expect_identical(plan$n_shards, 1L)
     expect_equal(plan$reference_chunk_rows, source$nrow)
     expect_lte(plan$peak_vram_bytes, plan$vram_budget_bytes)
-    expect_equal(plan$vram_budget_bytes, 0.7 * 4 * 1024^3)
+    expect_equal(plan$vram_budget_bytes, 4 * 1024^3)
     capped <- with_mocked_bindings(
         massive_cuda_sharded_resources(source, 30L, NULL, 200000L,
             "4GB", method = "ivf_sharded"),

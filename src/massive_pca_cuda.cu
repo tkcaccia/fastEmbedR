@@ -227,7 +227,12 @@ extern "C" int fastembedr_massive_pca_cuda_memory(
 
 extern "C" int fastembedr_massive_cuda_device_count(int* count) {
   pca_error.clear();
-  return check(cudaGetDeviceCount(count), "CUDA device count");
+  const auto status = cudaGetDeviceCount(count);
+  if (status == cudaErrorNoDevice) {
+    *count = 0;
+    return 0;
+  }
+  return check(status, "CUDA device count");
 }
 
 extern "C" int fastembedr_massive_cuda_select_device(int device) {

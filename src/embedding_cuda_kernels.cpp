@@ -6825,7 +6825,8 @@ extern "C" void* fastembedr_massive_umap_multigpu_create(
       }
     }
   }
-  if (massive_umap_nccl_check(ncclCommInitAll(ctx->comms.data(),
+  if (device_count > 1 &&
+      massive_umap_nccl_check(ncclCommInitAll(ctx->comms.data(),
         device_count, devices), "ncclCommInitAll(multi-GPU UMAP)")) {
     fastembedr_massive_umap_multigpu_destroy(ctx);
     return nullptr;
@@ -7050,6 +7051,7 @@ extern "C" int fastembedr_massive_umap_multigpu_finish_epoch(
   }
   const auto count = static_cast<std::size_t>(ctx->block_rows) *
     ctx->dimensions;
+  const bool distributed = ctx->devices.size() > 1;
   const auto reduce_started = std::chrono::steady_clock::now();
   for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
     if (check_cuda(cudaSetDevice(ctx->devices[rank]),
@@ -7057,29 +7059,31 @@ extern "C" int fastembedr_massive_umap_multigpu_finish_epoch(
         check_cuda(cudaDeviceSynchronize(),
           "cudaDeviceSynchronize(UMAP batch barrier)")) return 1;
   }
-  if (massive_umap_nccl_check(ncclGroupStart(),
-        "ncclGroupStart(UMAP reduce)")) return 1;
-  int failed = 0;
-  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
-    failed |= check_cuda(cudaSetDevice(ctx->devices[rank]),
-      "cudaSetDevice(UMAP reduce)");
-    if (!failed) failed |= massive_umap_nccl_check(
-      ncclReduceScatter(ctx->deltas[rank],
-        ctx->deltas[rank] + rank * count, count,
-        ncclUint64, ncclSum, ctx->comms[rank], 0),
-      "ncclReduceScatter(UMAP delta)");
+  if (distributed) {
+    if (massive_umap_nccl_check(ncclGroupStart(),
+          "ncclGroupStart(UMAP reduce)")) return 1;
+    int failed = 0;
+    for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+      failed |= check_cuda(cudaSetDevice(ctx->devices[rank]),
+        "cudaSetDevice(UMAP reduce)");
+      if (!failed) failed |= massive_umap_nccl_check(
+        ncclReduceScatter(ctx->deltas[rank],
+          ctx->deltas[rank] + rank * count, count,
+          ncclUint64, ncclSum, ctx->comms[rank], 0),
+        "ncclReduceScatter(UMAP delta)");
+    }
+    failed |= massive_umap_nccl_check(ncclGroupEnd(),
+      "ncclGroupEnd(UMAP reduce)");
+    if (failed) return 1;
+    for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+      if (check_cuda(cudaSetDevice(ctx->devices[rank]),
+            "cudaSetDevice(UMAP owner update)") ||
+          check_cuda(cudaDeviceSynchronize(),
+            "UMAP reduce synchronization")) return 1;
+    }
+    ctx->collective_seconds += std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - reduce_started).count();
   }
-  failed |= massive_umap_nccl_check(ncclGroupEnd(),
-    "ncclGroupEnd(UMAP reduce)");
-  if (failed) return 1;
-  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
-    if (check_cuda(cudaSetDevice(ctx->devices[rank]),
-          "cudaSetDevice(UMAP owner update)") ||
-        check_cuda(cudaDeviceSynchronize(),
-          "UMAP reduce synchronization")) return 1;
-  }
-  ctx->collective_seconds += std::chrono::duration<double>(
-    std::chrono::steady_clock::now() - reduce_started).count();
   for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
     if (check_cuda(cudaSetDevice(ctx->devices[rank]),
           "cudaSetDevice(UMAP owner update)")) return 1;
@@ -7101,28 +7105,32 @@ extern "C" int fastembedr_massive_umap_multigpu_finish_epoch(
           "multi-GPU UMAP owner update")) return 1;
   }
   const auto gather_started = std::chrono::steady_clock::now();
-  if (massive_umap_nccl_check(ncclGroupStart(),
-        "ncclGroupStart(UMAP gather)")) return 1;
-  failed = 0;
-  for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
-    failed |= check_cuda(cudaSetDevice(ctx->devices[rank]),
-      "cudaSetDevice(UMAP gather)");
-    if (!failed) failed |= massive_umap_nccl_check(
-      ncclAllGather(ctx->workers[rank]->layout + rank * count,
-        ctx->workers[rank]->layout, count, ncclFloat32,
-        ctx->comms[rank], 0), "ncclAllGather(UMAP layout)");
+  if (distributed) {
+    if (massive_umap_nccl_check(ncclGroupStart(),
+          "ncclGroupStart(UMAP gather)")) return 1;
+    int failed = 0;
+    for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
+      failed |= check_cuda(cudaSetDevice(ctx->devices[rank]),
+        "cudaSetDevice(UMAP gather)");
+      if (!failed) failed |= massive_umap_nccl_check(
+        ncclAllGather(ctx->workers[rank]->layout + rank * count,
+          ctx->workers[rank]->layout, count, ncclFloat32,
+          ctx->comms[rank], 0), "ncclAllGather(UMAP layout)");
+    }
+    failed |= massive_umap_nccl_check(ncclGroupEnd(),
+      "ncclGroupEnd(UMAP gather)");
+    if (failed) return 1;
   }
-  failed |= massive_umap_nccl_check(ncclGroupEnd(),
-    "ncclGroupEnd(UMAP gather)");
-  if (failed) return 1;
   for (std::size_t rank = 0; rank < ctx->devices.size(); ++rank) {
     if (check_cuda(cudaSetDevice(ctx->devices[rank]),
           "cudaSetDevice(UMAP barrier)") ||
         check_cuda(cudaDeviceSynchronize(),
-          "UMAP gather synchronization")) return 1;
+          "UMAP epoch synchronization")) return 1;
   }
-  ctx->collective_seconds += std::chrono::duration<double>(
-    std::chrono::steady_clock::now() - gather_started).count();
+  if (distributed) {
+    ctx->collective_seconds += std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - gather_started).count();
+  }
   return check_cuda(cudaSetDevice(ctx->previous_device),
     "cudaSetDevice(multi-GPU UMAP restore)");
 }

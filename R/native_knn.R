@@ -1587,6 +1587,7 @@ run_faissr_cuda_query_knn <- function(data, query, k, method, metric,
             isTRUE(out$cpu_fallback)) stop(
             "faissR did not return resident CUDA query KNN.",
             call. = FALSE)
+        attr(out, "backend") <- "cuda"
         return(out)
     }
     out <- do.call(faissR::nn, c(args, list(

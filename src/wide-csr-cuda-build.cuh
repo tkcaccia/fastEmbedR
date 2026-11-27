@@ -5,7 +5,7 @@ using WideEdgeKey = unsigned long long;
 using WideRecordCount = std::int64_t;
 static_assert(sizeof(WideRecordCount) <= sizeof(WideEdgeKey));
 
-__device__ WideEdgeKey wide_edge_key(int row, int peer) {
+__device__ __forceinline__ WideEdgeKey wide_edge_key(int row, int peer) {
   return (static_cast<WideEdgeKey>(row) << 32) | static_cast<unsigned>(peer);
 }
 

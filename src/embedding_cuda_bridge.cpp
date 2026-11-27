@@ -851,7 +851,8 @@ List umap_cuda_optimize_csr_multigpu_cpp(
   return List::create(
     Rcpp::Named("Y") = result,
     Rcpp::Named("optimizer") =
-      "cuda_resident_umap_coordinated_nccl",
+      devices.size() > 1 ? "cuda_resident_umap_coordinated_nccl" :
+      "cuda_resident_umap_coordinated",
     Rcpp::Named("gpu_devices") = devices,
     Rcpp::Named("per_device_edge_visits") = visits,
     Rcpp::Named("delta_scale") = delta_scale,

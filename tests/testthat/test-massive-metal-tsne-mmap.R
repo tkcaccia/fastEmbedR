@@ -11,6 +11,7 @@ test_that("Metal t-SNE auto uses the measured mapping budget", {
     graph <- list(n_vertices = 100000000, n_edges = 5200000000)
     seen <- NULL
     testthat::local_mocked_bindings(
+        massive_available_ram_bytes = function() 256 * 1024^3,
         massive_tsne_mmap_fits_cpp = function(rows, dims, edges, budget) {
             seen <<- c(rows, dims, edges)
             budget >= 64 * 1024^3

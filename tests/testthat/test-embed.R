@@ -362,9 +362,15 @@ test_that("float32 KNN bridge uses faissR Flat below 5000 rows", {
     expect_identical(attr(out, "method"), "faissr_flat")
 })
 
-test_that("one-call KNN policy selects native CPU and Metal defaults", {
+test_that("one-call KNN policy selects native backend defaults", {
+    policy_fields <- function(backend, n) {
+        policy <- fastEmbedR:::fastembedr_embedding_nn_policy(backend, n = n)
+        expect_type(policy$selection, "list")
+        policy$selection <- NULL
+        policy
+    }
     expect_equal(
-        fastEmbedR:::fastembedr_embedding_nn_policy("cpu", n = 1000L),
+        policy_fields("cpu", 1000L),
         list(
             backend = "cpu", method = "exact",
             target_recall = 0.99,
@@ -372,14 +378,14 @@ test_that("one-call KNN policy selects native CPU and Metal defaults", {
         )
     )
     expect_equal(
-        fastEmbedR:::fastembedr_embedding_nn_policy("metal", n = 1000L),
+        policy_fields("metal", 1000L),
         list(
             backend = "metal", method = "exact", tuning = "auto",
             target_recall = 0.99
         )
     )
     expect_equal(
-        fastEmbedR:::fastembedr_embedding_nn_policy("cpu", n = 200000L),
+        policy_fields("cpu", 200000L),
         list(
             backend = "cpu", method = "hnsw",
             target_recall = 0.99,
@@ -388,14 +394,14 @@ test_that("one-call KNN policy selects native CPU and Metal defaults", {
         )
     )
     expect_equal(
-        fastEmbedR:::fastembedr_embedding_nn_policy("metal", n = 200000L),
+        policy_fields("metal", 200000L),
         list(
             backend = "metal", method = "ivf", tuning = "auto",
             target_recall = 0.99
         )
     )
     expect_equal(
-        fastEmbedR:::fastembedr_embedding_nn_policy("cuda", n = 1000L),
+        policy_fields("cuda", 1000L),
         list(
             backend = "cuda", method = "exact", tuning = "auto",
             target_recall = 0.99
@@ -599,7 +605,8 @@ test_that("explicit CUDA devices preserve faissR host KNN output", {
         run_faissr_cuda_embedding_knn = function(
                 data, k, method, metric, output, target_recall,
                 devices = NULL, prefer_resident = FALSE,
-                retain_data = FALSE) {
+                retain_data = FALSE, cagra_profile = NULL,
+                n_threads = NULL) {
             captured$methods[[length(captured$methods) + 1L]] <- method
             captured$devices[[length(captured$devices) + 1L]] <- devices
             idx <- t(vapply(seq_len(nrow(data)), function(i) {

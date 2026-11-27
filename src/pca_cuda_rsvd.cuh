@@ -280,6 +280,11 @@ class RsvdWorkspace {
     allocate(small_u_, static_cast<std::size_t>(columns_) * sketch_);
     allocate(singular_all_, sketch_);
     allocate(tau_, sketch_);
+    // The cuSOLVER QR kernel can read tau before writing it.
+    require_cuda(
+      cudaMemsetAsync(tau_, 0, sketch_ * sizeof(float), stream_),
+      "cudaMemsetAsync(rSVD QR Householder coefficients)"
+    );
     allocate(rwork_, static_cast<std::size_t>(std::max(1, sketch_ - 1)));
 #if CUDART_VERSION >= 11020
     require_cuda(
