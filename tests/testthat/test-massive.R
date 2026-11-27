@@ -3221,7 +3221,7 @@ test_that("file-backed UMAP projection reuses saved KNN rows", {
         expect_error(massive_project_landmarks(fit, graph,
             tempfile(fileext = ".f32"), backend = "cuda",
             devices = 0L, refinement_epochs = 0L),
-            "unavailable|no CUDA-capable device")
+            "unavailable|no CUDA-capable device|distinct available CUDA")
     }
 })
 
