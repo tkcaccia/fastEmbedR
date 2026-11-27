@@ -1,6 +1,7 @@
 #include <Rcpp.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <cmath>
@@ -528,21 +529,82 @@ std::uint64_t resident_umap_rank_epoch(
 #endif
 
 // [[Rcpp::export]]
+SEXP umap_cuda_init_csr_wide_cpp(
+    NumericVector offsets, IntegerVector neighbors, SEXP weights,
+    int iterations, int seed, IntegerVector devices, double device_limit) {
+#if defined(FASTEMBEDR_HAS_CUDA) && defined(FASTEMBEDR_HAS_NCCL)
+  if (offsets.size() < 3 || offsets.size() > INT_MAX - 255 ||
+      devices.size() < 1 || devices.size() >= offsets.size() ||
+      iterations < 1 || seed < 0 || !(device_limit > 0)) {
+    Rcpp::stop("Invalid resident CUDA wide UMAP initialization request.");
+  }
+  std::vector<int> ids(devices.begin(), devices.end());
+  std::sort(ids.begin(), ids.end());
+  if (ids.front() < 0 || std::adjacent_find(ids.begin(), ids.end()) !=
+      ids.end()) Rcpp::stop("Expected distinct CUDA initialization devices.");
+  const int n = static_cast<int>(offsets.size() - 1);
+  const auto graph = resident_csr_view(offsets, neighbors, weights, n);
+  if (!graph.float_weights) Rcpp::stop("Expected float32 CSR weights.");
+  resident_csr_max_weight(graph);
+  std::vector<float> layout(static_cast<std::size_t>(n) * 2);
+  IntegerVector rows(devices.size());
+  NumericVector edges(devices.size());
+  NumericVector clocks = NumericVector::create(
+    Rcpp::Named("setup_upload") = 0.0,
+    Rcpp::Named("diffusion") = 0.0,
+    Rcpp::Named("download") = 0.0,
+    Rcpp::Named("max_device_workspace_bytes") = 0.0);
+  const int status = fastembedr_cuda_umap_wide_init(n, graph.wide_offsets,
+    graph.neighbors, graph.float_weights, iterations,
+    static_cast<unsigned int>(seed), devices.begin(), devices.size(),
+    device_limit, layout.data(), rows.begin(), edges.begin(), clocks.begin());
+  if (status == 2) return R_NilValue;
+  resident_umap_check(status);
+  NumericMatrix result(n, 2);
+  for (int row = 0; row < n; ++row) {
+    const auto start = static_cast<std::size_t>(row) * 2;
+    result(row, 0) = layout[start];
+    result(row, 1) = layout[start + 1];
+  }
+  return List::create(Rcpp::Named("layout") = result,
+    Rcpp::Named("device_rows") = rows, Rcpp::Named("device_edges") = edges,
+    Rcpp::Named("resources") = clocks);
+#else
+  Rcpp::stop("Resident CUDA wide UMAP initialization requires CUDA and NCCL.");
+#endif
+}
+
+// [[Rcpp::export]]
 List umap_cuda_optimize_csr_multigpu_cpp(
     SEXP offsets, IntegerVector neighbors,
-    SEXP weights, NumericMatrix init,
+    SEXP weights, SEXP initial,
     int n_epochs, int negative_sample_rate,
     double learning_rate, double min_dist,
     double repulsion_strength, int seed,
-    IntegerVector devices) {
+    IntegerVector devices, int diffusion_iterations = 0,
+    double diffusion_scale = 0.0, double device_limit = 0.0,
+    int knn_col_start = -1, int knn_width = 0) {
 #if defined(FASTEMBEDR_HAS_CUDA) && defined(FASTEMBEDR_HAS_NCCL)
-  const int n = init.nrow();
-  const int dimensions = init.ncol();
-  const auto nnz = static_cast<std::uint64_t>(neighbors.size());
-  const auto graph = resident_csr_view(offsets, neighbors,
-    weights, n);
-  if (n < 2 || (dimensions != 2 && dimensions != 3) ||
-      nnz < 1 || devices.size() < 1 || devices.size() > n ||
+  const bool from_knn = knn_col_start >= 0;
+  const bool reuse_csr = diffusion_iterations > 0;
+  const bool wide = reuse_csr || TYPEOF(offsets) == REALSXP;
+  IntegerMatrix indices;
+  if (from_knn) indices = Rcpp::as<IntegerMatrix>(neighbors);
+  NumericMatrix init;
+  if (!reuse_csr) init = Rcpp::as<NumericMatrix>(initial);
+  if ((from_knn && !reuse_csr) || (reuse_csr && (!Rf_isNull(initial) ||
+      !(device_limit > 0) || (!from_knn &&
+      (XLENGTH(offsets) < 3 || XLENGTH(offsets) > INT_MAX - 255))))) {
+    Rcpp::stop("Invalid retained CUDA wide UMAP initialization request.");
+  }
+  const int n = from_knn ? indices.nrow() :
+    reuse_csr ? static_cast<int>(XLENGTH(offsets) - 1) : init.nrow();
+  const int dimensions = reuse_csr ? 2 : init.ncol();
+  const auto graph = from_knn ? ResidentCsrView{} :
+    resident_csr_view(offsets, neighbors, weights, n);
+  std::uint64_t nnz = graph.edges;
+  if (n < 2 || (from_knn && n > INT_MAX - 256) || (dimensions != 2 && dimensions != 3) ||
+      (!from_knn && nnz < 1) || devices.size() < 1 || devices.size() > n ||
       n_epochs < 1 || negative_sample_rate < 0 ||
       !std::isfinite(learning_rate) || learning_rate <= 0 ||
       !std::isfinite(min_dist) || min_dist < 0 ||
@@ -550,7 +612,109 @@ List umap_cuda_optimize_csr_multigpu_cpp(
       repulsion_strength <= 0 || seed < 0) {
     Rcpp::stop("Invalid resident multi-GPU UMAP request.");
   }
-  const float max_weight = resident_csr_max_weight(graph);
+  float max_weight = from_knn ? 0.0f : resident_csr_max_weight(graph);
+  Rcpp::List graph_resources;
+  using RetainedGraph = std::unique_ptr<void,
+    decltype(&fastembedr_cuda_umap_wide_graph_destroy)>;
+  RetainedGraph retained(nullptr, fastembedr_cuda_umap_wide_graph_destroy);
+  double initialization_seconds = 0;
+  Rcpp::List initialization_resources;
+  std::vector<float> layout;
+  if (reuse_csr) {
+    if (!from_knn && (!graph.wide_offsets || !graph.float_weights)) {
+      Rcpp::stop("Retained CUDA UMAP requires wide float32 CSR.");
+    }
+    std::vector<int> sorted(devices.begin(), devices.end());
+    std::sort(sorted.begin(), sorted.end());
+    if (sorted.front() < 0 || std::adjacent_find(sorted.begin(), sorted.end()) !=
+        sorted.end()) Rcpp::stop("Expected distinct CUDA UMAP devices.");
+    if (from_knn) {
+      const auto started = std::chrono::steady_clock::now();
+      if (!Rf_isS4(weights) || !Rcpp::S4(weights).is("float32")) {
+        Rcpp::stop("CUDA fuzzy graph requires float32 KNN distances.");
+      }
+      const IntegerMatrix bits = Rcpp::S4(weights).slot("Data");
+      if (bits.nrow() != n || bits.ncol() != indices.ncol() ||
+          knn_width < 1 || knn_col_start >= indices.ncol() ||
+          knn_width > indices.ncol() - knn_col_start) {
+        Rcpp::stop("Invalid CUDA fuzzy graph KNN shape.");
+      }
+      const auto first = static_cast<std::size_t>(knn_col_start) * n;
+      const auto count = static_cast<std::size_t>(knn_width) * n;
+      const auto* ids = indices.begin() + first;
+      const auto* values = bits.begin() + first;
+      const auto bounds = std::minmax_element(ids, ids + count);
+      const int base = *bounds.first >= 1 && *bounds.second <= n ? 1 : 0;
+      long double sum = 0;
+      std::uint64_t valid = 0;
+      for (std::size_t i = 0; i < count; ++i) {
+        float distance;
+        std::memcpy(&distance, values + i, sizeof(distance));
+        if (std::isfinite(distance) && distance >= 0.0f) {
+          sum += distance;
+          ++valid;
+        }
+      }
+      NumericVector graph_edges(devices.size()), routed(devices.size());
+      NumericVector graph_times(3);
+      graph_times.names() = Rcpp::CharacterVector::create(
+        "source_membership", "peer_route", "owner_sort_and_union");
+      void* built = nullptr;
+      resident_umap_check(fastembedr_cuda_umap_wide_graph_build(
+        ids, values, n, knn_width, base,
+        valid ? static_cast<double>(sum / valid) : 1.0,
+        devices.begin(), devices.size(), device_limit, &built,
+        graph_edges.begin(), routed.begin(), graph_times.begin(), &max_weight));
+      retained.reset(built);
+      for (double rank_edges : graph_edges) {
+        nnz += static_cast<std::uint64_t>(rank_edges);
+      }
+      graph_resources = List::create(
+        Rcpp::Named("edges") = static_cast<double>(nnz),
+        Rcpp::Named("max_weight") = max_weight,
+        Rcpp::Named("device_edges") = graph_edges,
+        Rcpp::Named("cross_owner_records_via_host") = routed,
+        Rcpp::Named("host_record_upper_bytes") = 12.0 * count,
+        Rcpp::Named("outgoing_records_regenerated") = true,
+        Rcpp::Named("stages") = graph_times,
+        Rcpp::Named("seconds") = std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - started).count());
+    }
+    IntegerVector init_rows(devices.size());
+    NumericVector init_edges(devices.size()), times(4);
+    times.names() = Rcpp::CharacterVector::create(
+      "setup_upload", "diffusion", "scale_on_device",
+      "max_device_workspace_bytes");
+    void* raw_graph = retained.get();
+    const auto start = std::chrono::steady_clock::now();
+    const int status = fastembedr_cuda_umap_wide_init(n, graph.wide_offsets,
+      graph.neighbors, graph.float_weights, diffusion_iterations, seed,
+      devices.begin(), devices.size(), device_limit, nullptr,
+      init_rows.begin(), init_edges.begin(), times.begin(), &raw_graph,
+      diffusion_scale);
+    if (status == 2) Rcpp::stop("Retained CUDA CSR exceeds the device budget.");
+    resident_umap_check(status);
+    if (!from_knn) retained.reset(raw_graph);
+    initialization_seconds = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - start).count();
+    initialization_resources = List::create(
+      Rcpp::Named("device_rows") = init_rows,
+      Rcpp::Named("device_edges") = init_edges,
+      Rcpp::Named("layout_reused_on_device") = true,
+      Rcpp::Named("resources") = times);
+  } else {
+    layout.resize(static_cast<std::size_t>(n) * dimensions);
+    for (int row = 0; row < n; ++row) {
+      for (int axis = 0; axis < dimensions; ++axis) {
+        const double value = init(row, axis);
+        if (!std::isfinite(value)) {
+          Rcpp::stop("Resident UMAP initialization is non-finite.");
+        }
+        layout[static_cast<std::size_t>(row) * dimensions + axis] =
+          static_cast<float>(value);
+      }
+    }
+  }
   const double contributions = static_cast<double>(nnz) *
     (1.0 + static_cast<double>(n_epochs) *
       negative_sample_rate);
@@ -562,8 +726,16 @@ List umap_cuda_optimize_csr_multigpu_cpp(
   }
   const double delta_scale = std::exp2(std::floor(std::log2(
     std::min(scale_limit, std::ldexp(1.0, 24)))));
+  const float min_weight = max_weight / n_epochs;
+  NumericVector visits(devices.size());
+  if (from_knn) {
+    resident_umap_check(fastembedr_cuda_umap_wide_graph_counts(
+      retained.get(), min_weight, device_limit, visits.begin()));
+    for (auto& visits_rank : visits) visits_rank *= n_epochs;
+  }
+  const auto optimizer_started = std::chrono::steady_clock::now();
   const auto curve = fastembedr_umap_curve(min_dist);
-  const int capacity = static_cast<int>(std::min(
+  const int capacity = reuse_csr ? 1 : static_cast<int>(std::min(
     std::uint64_t{1000000}, nnz));
   void* raw = fastembedr_massive_umap_multigpu_create(
     n, dimensions, capacity, n_epochs, negative_sample_rate,
@@ -572,50 +744,50 @@ List umap_cuda_optimize_csr_multigpu_cpp(
     static_cast<float>(curve.second),
     static_cast<float>(repulsion_strength), max_weight,
     static_cast<unsigned int>(seed), devices.begin(),
-    devices.size(), delta_scale);
+    devices.size(), delta_scale, retained.get(), device_limit);
   if (raw == nullptr) resident_umap_check(1);
   std::unique_ptr<void, decltype(
       &fastembedr_massive_umap_multigpu_destroy)> context(
     raw, fastembedr_massive_umap_multigpu_destroy);
-  std::vector<float> layout(
-    static_cast<std::size_t>(n) * dimensions);
-  for (int row = 0; row < n; ++row) {
-    for (int axis = 0; axis < dimensions; ++axis) {
-      const double value = init(row, axis);
-      if (!std::isfinite(value)) {
-        Rcpp::stop("Resident UMAP initialization is non-finite.");
-      }
-      layout[static_cast<std::size_t>(row) * dimensions +
-        axis] = static_cast<float>(value);
-    }
-  }
   constexpr int transfer_rows = 1000000;
-  for (int first = 0; first < n; first += transfer_rows) {
+  for (int first = 0; !reuse_csr && first < n; first += transfer_rows) {
     const int rows = std::min(transfer_rows, n - first);
     resident_umap_check(fastembedr_massive_umap_multigpu_upload(
       context.get(), first, rows, layout.data() +
         static_cast<std::size_t>(first) * dimensions));
   }
   const int block_rows = (n - 1) / devices.size() + 1;
-  const float min_weight = max_weight / n_epochs;
   std::vector<unsigned long long> rank_edges(devices.size());
-  for (int rank = 0; rank < devices.size(); ++rank) {
+  for (int rank = 0; !from_knn && rank < devices.size(); ++rank) {
     const int first = rank * block_rows;
     const int last = std::min(n, first + block_rows);
     rank_edges[rank] = graph.offset(last) - graph.offset(first);
   }
-  const int cache_state = n_epochs > 1 ?
+  const int cache_state = !reuse_csr && n_epochs > 1 ?
     fastembedr_massive_umap_multigpu_cache_begin(
       context.get(), rank_edges.data()) : 0;
   if (cache_state < 0) resident_umap_check(1);
   const bool cached = cache_state == 1;
   std::vector<std::uint64_t> cached_visits(devices.size(), 0);
-  NumericVector visits(devices.size());
+  if (reuse_csr && !from_knn) {
+    for (int rank = 0; rank < devices.size(); ++rank) {
+      const int first = rank * block_rows;
+      const int last = std::min(n, first + block_rows);
+      std::uint64_t count = 0;
+      for (auto i = graph.offset(first); i < graph.offset(last); ++i) {
+        if (graph.weight(i) >= min_weight) ++count;
+      }
+      visits[rank] = static_cast<double>(count) * n_epochs;
+    }
+  }
   for (int epoch = 0; epoch < n_epochs; ++epoch) {
     resident_umap_check(
       fastembedr_massive_umap_multigpu_start_epoch(
         context.get()));
-    if (cached && epoch > 0) {
+    if (reuse_csr) {
+      resident_umap_check(fastembedr_cuda_umap_wide_graph_step(
+        context.get(), retained.get(), epoch));
+    } else if (cached && epoch > 0) {
       for (int rank = 0; rank < devices.size(); ++rank) {
         resident_umap_check(
           fastembedr_massive_umap_multigpu_cache_replay(
@@ -643,6 +815,7 @@ List umap_cuda_optimize_csr_multigpu_cpp(
         context.get()));
     Rcpp::checkUserInterrupt();
   }
+  layout.resize(static_cast<std::size_t>(n) * dimensions);
   for (int first = 0; first < n; first += transfer_rows) {
     const int rows = std::min(transfer_rows, n - first);
     resident_umap_check(
@@ -651,7 +824,7 @@ List umap_cuda_optimize_csr_multigpu_cpp(
           static_cast<std::size_t>(first) * dimensions));
   }
   Rcpp::RObject result;
-  if (graph.wide_offsets) {
+  if (wide) {
     Rcpp::IntegerMatrix payload(n, dimensions);
     for (int row = 0; row < n; ++row) {
       for (int axis = 0; axis < dimensions; ++axis) {
@@ -682,10 +855,16 @@ List umap_cuda_optimize_csr_multigpu_cpp(
     Rcpp::Named("gpu_devices") = devices,
     Rcpp::Named("per_device_edge_visits") = visits,
     Rcpp::Named("delta_scale") = delta_scale,
-    Rcpp::Named("graph_cache_mode") = cached ?
-      "resident_device_shards" : "staged_batches",
-    Rcpp::Named("graph_cache_bytes") = cached ?
-      static_cast<double>(nnz) * 16.0 : 0.0,
+    Rcpp::Named("graph_cache_mode") = reuse_csr ? "retained_device_csr" :
+      cached ? "resident_device_shards" : "staged_batches",
+    Rcpp::Named("graph_cache_bytes") = reuse_csr ?
+      fastembedr_cuda_umap_wide_graph_allocated_bytes(retained.get()) :
+      cached ? static_cast<double>(nnz) * 16.0 : 0.0,
+    Rcpp::Named("graph_build") = graph_resources,
+    Rcpp::Named("initialization_elapsed_sec") = initialization_seconds,
+    Rcpp::Named("initialization_resources") = initialization_resources,
+    Rcpp::Named("optimization_elapsed_sec") = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - optimizer_started).count(),
     Rcpp::Named("synchronization_seconds") =
       fastembedr_massive_umap_multigpu_collective_seconds(
         context.get()));

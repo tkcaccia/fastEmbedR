@@ -55,10 +55,55 @@ struct ResidentPcaShard {
   int device;
   int first;
   int last;
+  int completed_rows = 0;
   std::vector<double> cross;
-  std::vector<float> scores;
   std::string error;
 };
+
+struct ResidentPcaInput {
+  Rcpp::RObject matrix;
+  int rows;
+  int columns;
+  bool float32;
+};
+
+ResidentPcaInput resident_pca_input(SEXP data) {
+  const bool float32 = fastembedr::is_float32_matrix(data);
+  Rcpp::RObject matrix(data);
+  if (float32) matrix = Rcpp::S4(data).slot("Data");
+  if (!Rf_isMatrix(matrix) ||
+      TYPEOF(matrix) != (float32 ? INTSXP : REALSXP)) {
+    Rcpp::stop("Resident CUDA PCA requires a double or float32 matrix.");
+  }
+  const int* dim = INTEGER(Rf_getAttrib(matrix, R_DimSymbol));
+  return {matrix, dim[0], dim[1], float32};
+}
+
+double resident_pca_number(double value) { return value; }
+
+double resident_pca_number(int bits) {
+  return fastembedr::int_bits_to_float(bits);
+}
+
+template <class Source>
+Rcpp::NumericVector resident_pca_means(const Source* values, int rows,
+    int columns, bool centered) {
+  Rcpp::NumericVector means(columns);
+  for (int column = 0; column < columns; ++column) {
+    double total = 0.0;
+    for (int row = 0; row < rows; ++row) {
+      const double value = resident_pca_number(values[
+        row + static_cast<std::size_t>(column) * rows]);
+      if (!std::isfinite(value) ||
+          !std::isfinite(static_cast<float>(value))) {
+        Rcpp::stop("Resident CUDA PCA needs finite float32 input.");
+      }
+      total += value;
+    }
+    means[column] = centered ? total / rows : 0.0;
+  }
+  return means;
+}
 
 std::vector<ResidentPcaShard> resident_pca_shards(
     const Rcpp::IntegerVector& devices, int rows) {
@@ -77,14 +122,15 @@ std::vector<ResidentPcaShard> resident_pca_shards(
       static_cast<int>(static_cast<std::int64_t>(rows) * i /
         devices.size()),
       static_cast<int>(static_cast<std::int64_t>(rows) * (i + 1) /
-        devices.size()), {}, {}, {}});
+        devices.size()), 0, {}, {}});
   }
   return shards;
 }
 
-void resident_pca_worker(const double* input, int rows, int columns,
+template <class Source>
+void resident_pca_worker(const Source* input, int rows, int columns,
     const float* center, const float* scale, const float* loadings,
-    int rank, ResidentPcaShard* shard) {
+    int rank, double* scores, ResidentPcaShard* shard) {
   try {
     if (fastembedr_massive_cuda_select_device(shard->device)) {
       throw std::runtime_error(fastembedr_massive_pca_cuda_error());
@@ -103,15 +149,16 @@ void resident_pca_worker(const double* input, int rows, int columns,
       static_cast<std::size_t>(columns) * columns :
       static_cast<std::size_t>(batch) * rank);
     if (rank == 0) shard->cross.assign(result.size(), 0.0);
-    else shard->scores.resize(
-      static_cast<std::size_t>(shard->last - shard->first) * rank);
     for (int first = shard->first; first < shard->last; first += batch) {
       const int count = std::min(batch, shard->last - first);
       for (int row = 0; row < count; ++row) {
         for (int col = 0; col < columns; ++col) {
-          block[static_cast<std::size_t>(row) * columns + col] =
-            static_cast<float>(input[first + row +
-              static_cast<std::size_t>(col) * rows]);
+          const float value = static_cast<float>(resident_pca_number(
+            input[first + row + static_cast<std::size_t>(col) * rows]));
+          if (rank != 0 && !std::isfinite(value)) {
+            throw std::runtime_error("PCA projection needs finite input.");
+          }
+          block[static_cast<std::size_t>(row) * columns + col] = value;
         }
       }
       const int status = rank == 0 ?
@@ -127,11 +174,15 @@ void resident_pca_worker(const double* input, int rows, int columns,
           shard->cross[i] += result[i];
         }
       } else {
-        const auto offset = static_cast<std::size_t>(first -
-          shard->first) * rank;
-        std::copy_n(result.begin(), static_cast<std::size_t>(count) *
-          rank, shard->scores.begin() + offset);
+        // Devices own disjoint row ranges of the caller's score matrix.
+        for (int col = 0; col < rank; ++col) {
+          auto* output = scores + static_cast<std::size_t>(col) * rows + first;
+          for (int row = 0; row < count; ++row) {
+            output[row] = result[static_cast<std::size_t>(row) * rank + col];
+          }
+        }
       }
+      shard->completed_rows += count;
     }
   } catch (const std::exception& error) {
     shard->error = error.what();
@@ -140,19 +191,20 @@ void resident_pca_worker(const double* input, int rows, int columns,
   }
 }
 
-void resident_pca_run(const Rcpp::NumericMatrix& input,
-    const Rcpp::IntegerVector& devices, const std::vector<float>& center,
+template <class Source>
+void resident_pca_run(const Source* values, int rows, int columns,
+    const std::vector<float>& center,
     const std::vector<float>& scale,
-    const std::vector<float>& loadings, int rank,
+    const std::vector<float>& loadings, int rank, double* scores,
     std::vector<ResidentPcaShard>& shards) {
   std::vector<std::thread> workers;
   workers.reserve(shards.size());
   try {
     for (auto& shard : shards) {
-      workers.emplace_back(resident_pca_worker, REAL(input), input.nrow(),
-        input.ncol(), center.data(), scale.empty() ? nullptr :
+      workers.emplace_back(resident_pca_worker<Source>, values, rows,
+        columns, center.data(), scale.empty() ? nullptr :
         scale.data(), loadings.empty() ? nullptr : loadings.data(),
-        rank, &shard);
+        rank, scores, &shard);
     }
   } catch (...) {
     for (auto& worker : workers) worker.join();
@@ -165,6 +217,28 @@ void resident_pca_run(const Rcpp::NumericMatrix& input,
         shard.error.c_str());
     }
   }
+}
+
+void resident_pca_run(const ResidentPcaInput& input,
+    const std::vector<float>& center, const std::vector<float>& scale,
+    const std::vector<float>& loadings, int rank, double* scores,
+    std::vector<ResidentPcaShard>& shards) {
+  if (input.float32) {
+    resident_pca_run(INTEGER(input.matrix), input.rows, input.columns,
+      center, scale, loadings, rank, scores, shards);
+  } else {
+    resident_pca_run(REAL(input.matrix), input.rows, input.columns,
+      center, scale, loadings, rank, scores, shards);
+  }
+}
+
+Rcpp::IntegerVector resident_pca_completed(
+    const std::vector<ResidentPcaShard>& shards) {
+  Rcpp::IntegerVector rows(shards.size());
+  for (std::size_t i = 0; i < shards.size(); ++i) {
+    rows[i] = shards[i].completed_rows;
+  }
+  return rows;
 }
 
 std::vector<float> resident_pca_float_vector(
@@ -184,31 +258,22 @@ std::vector<float> resident_pca_float_vector(
 
 // [[Rcpp::export]]
 Rcpp::List pca_cuda_resident_covariance_cpp(
-    Rcpp::NumericMatrix input, Rcpp::IntegerVector devices,
+    SEXP input, Rcpp::IntegerVector devices,
     bool centered) {
-  const int rows = input.nrow();
-  const int columns = input.ncol();
+  const auto view = resident_pca_input(input);
+  const int rows = view.rows;
+  const int columns = view.columns;
   if (rows < 3 || columns < 1 || columns > 2048) {
     Rcpp::stop("Resident CUDA covariance PCA needs 3+ rows and "
       "at most 2048 columns.");
   }
   auto shards = resident_pca_shards(devices, rows);
-  Rcpp::NumericVector means(columns);
-  for (int col = 0; col < columns; ++col) {
-    double total = 0.0;
-    for (int row = 0; row < rows; ++row) {
-      const double value = input(row, col);
-      if (!std::isfinite(value) ||
-          !std::isfinite(static_cast<float>(value))) {
-        Rcpp::stop("Resident CUDA PCA needs finite float32 input.");
-      }
-      total += value;
-    }
-    means[col] = centered ? total / rows : 0.0;
-  }
+  auto means = view.float32 ? resident_pca_means(INTEGER(view.matrix),
+    rows, columns, centered) : resident_pca_means(REAL(view.matrix),
+    rows, columns, centered);
   auto center = resident_pca_float_vector(means);
   const std::vector<float> empty;
-  resident_pca_run(input, devices, center, empty, empty, 0, shards);
+  resident_pca_run(view, center, empty, empty, 0, nullptr, shards);
   Rcpp::NumericMatrix covariance(columns, columns);
   for (int col = 0; col < columns; ++col) {
     for (int other = 0; other < columns; ++other) {
@@ -220,16 +285,18 @@ Rcpp::List pca_cuda_resident_covariance_cpp(
     }
   }
   return Rcpp::List::create(Rcpp::Named("center") = means,
-    Rcpp::Named("covariance") = covariance);
+    Rcpp::Named("covariance") = covariance,
+    Rcpp::Named("device_rows") = resident_pca_completed(shards));
 }
 
 // [[Rcpp::export]]
-Rcpp::NumericMatrix pca_cuda_resident_project_cpp(
-    Rcpp::NumericMatrix input, Rcpp::IntegerVector devices,
+Rcpp::List pca_cuda_resident_project_cpp(
+    SEXP input, Rcpp::IntegerVector devices,
     Rcpp::NumericVector center, Rcpp::NumericVector scale,
     Rcpp::NumericMatrix loadings) {
-  const int rows = input.nrow();
-  const int columns = input.ncol();
+  const auto view = resident_pca_input(input);
+  const int rows = view.rows;
+  const int columns = view.columns;
   const int rank = loadings.ncol();
   if (rows < 1 || columns < 1 || rank < 1 || rank > columns ||
       loadings.nrow() != columns || center.size() != columns ||
@@ -245,18 +312,14 @@ Rcpp::NumericMatrix pca_cuda_resident_project_cpp(
   auto center_float = resident_pca_float_vector(center);
   auto scale_float = resident_pca_float_vector(scale);
   auto loadings_float = resident_pca_float_vector(loadings);
-  resident_pca_run(input, devices, center_float, scale_float,
-    loadings_float, rank, shards);
   Rcpp::NumericMatrix scores(rows, rank);
-  for (const auto& shard : shards) {
-    for (int row = shard.first; row < shard.last; ++row) {
-      for (int col = 0; col < rank; ++col) {
-        scores(row, col) = shard.scores[
-          static_cast<std::size_t>(row - shard.first) * rank + col];
-      }
-    }
+  resident_pca_run(view, center_float, scale_float,
+    loadings_float, rank, REAL(scores), shards);
+  if (loadings.hasAttribute("dimnames")) {
+    Rcpp::colnames(scores) = Rcpp::colnames(loadings);
   }
-  return scores;
+  return Rcpp::List::create(Rcpp::Named("scores") = scores,
+    Rcpp::Named("device_rows") = resident_pca_completed(shards));
 }
 
 #if defined(__unix__) || defined(__APPLE__)

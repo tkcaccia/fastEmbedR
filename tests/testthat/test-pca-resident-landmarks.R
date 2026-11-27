@@ -116,6 +116,7 @@ test_that("multi-GPU landmark PCA projects external rows on CUDA", {
         expect_identical(fit$test_projection_backend, "cuda")
         expect_identical(fit$test_projection_devices,
             c(0L, 1L))
+        expect_identical(fit$test_projection_device_rows, c(1L, 2L))
         expect_equal(fit$scores_test, expected,
             tolerance = 1e-8)
         expect_equal(calls, 1L)
@@ -124,7 +125,8 @@ test_that("multi-GPU landmark PCA projects external rows on CUDA", {
             center, scale, loadings) {
         calls <<- calls + 1L
         expect_identical(devices, c(0L, 1L))
-        sweep(sweep(data, 2L, center, "-"), 2L,
+        scores <- sweep(sweep(data, 2L, center, "-"), 2L,
             scale, "/") %*% loadings
+        list(scores = scores, device_rows = c(1L, 2L))
     }, .package = "fastEmbedR")
 })

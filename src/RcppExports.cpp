@@ -186,16 +186,33 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// umap_cuda_init_csr_wide_cpp
+SEXP umap_cuda_init_csr_wide_cpp(NumericVector offsets, IntegerVector neighbors, SEXP weights, int iterations, int seed, IntegerVector devices, double device_limit);
+RcppExport SEXP _fastEmbedR_umap_cuda_init_csr_wide_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP iterationsSEXP, SEXP seedSEXP, SEXP devicesSEXP, SEXP device_limitSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< int >::type iterations(iterationsSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type devices(devicesSEXP);
+    Rcpp::traits::input_parameter< double >::type device_limit(device_limitSEXP);
+    rcpp_result_gen = Rcpp::wrap(umap_cuda_init_csr_wide_cpp(offsets, neighbors, weights, iterations, seed, devices, device_limit));
+    return rcpp_result_gen;
+END_RCPP
+}
 // umap_cuda_optimize_csr_multigpu_cpp
-List umap_cuda_optimize_csr_multigpu_cpp(SEXP offsets, IntegerVector neighbors, SEXP weights, NumericMatrix init, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, IntegerVector devices);
-RcppExport SEXP _fastEmbedR_umap_cuda_optimize_csr_multigpu_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP initSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP devicesSEXP) {
+List umap_cuda_optimize_csr_multigpu_cpp(SEXP offsets, IntegerVector neighbors, SEXP weights, SEXP initial, int n_epochs, int negative_sample_rate, double learning_rate, double min_dist, double repulsion_strength, int seed, IntegerVector devices, int diffusion_iterations, double diffusion_scale, double device_limit, int knn_col_start, int knn_width);
+RcppExport SEXP _fastEmbedR_umap_cuda_optimize_csr_multigpu_cpp(SEXP offsetsSEXP, SEXP neighborsSEXP, SEXP weightsSEXP, SEXP initialSEXP, SEXP n_epochsSEXP, SEXP negative_sample_rateSEXP, SEXP learning_rateSEXP, SEXP min_distSEXP, SEXP repulsion_strengthSEXP, SEXP seedSEXP, SEXP devicesSEXP, SEXP diffusion_iterationsSEXP, SEXP diffusion_scaleSEXP, SEXP device_limitSEXP, SEXP knn_col_startSEXP, SEXP knn_widthSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< SEXP >::type offsets(offsetsSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type neighbors(neighborsSEXP);
     Rcpp::traits::input_parameter< SEXP >::type weights(weightsSEXP);
-    Rcpp::traits::input_parameter< NumericMatrix >::type init(initSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type initial(initialSEXP);
     Rcpp::traits::input_parameter< int >::type n_epochs(n_epochsSEXP);
     Rcpp::traits::input_parameter< int >::type negative_sample_rate(negative_sample_rateSEXP);
     Rcpp::traits::input_parameter< double >::type learning_rate(learning_rateSEXP);
@@ -203,7 +220,12 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type repulsion_strength(repulsion_strengthSEXP);
     Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type devices(devicesSEXP);
-    rcpp_result_gen = Rcpp::wrap(umap_cuda_optimize_csr_multigpu_cpp(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, devices));
+    Rcpp::traits::input_parameter< int >::type diffusion_iterations(diffusion_iterationsSEXP);
+    Rcpp::traits::input_parameter< double >::type diffusion_scale(diffusion_scaleSEXP);
+    Rcpp::traits::input_parameter< double >::type device_limit(device_limitSEXP);
+    Rcpp::traits::input_parameter< int >::type knn_col_start(knn_col_startSEXP);
+    Rcpp::traits::input_parameter< int >::type knn_width(knn_widthSEXP);
+    rcpp_result_gen = Rcpp::wrap(umap_cuda_optimize_csr_multigpu_cpp(offsets, neighbors, weights, initial, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, devices, diffusion_iterations, diffusion_scale, device_limit, knn_col_start, knn_width));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -2365,12 +2387,12 @@ BEGIN_RCPP
 END_RCPP
 }
 // pca_cuda_resident_covariance_cpp
-Rcpp::List pca_cuda_resident_covariance_cpp(Rcpp::NumericMatrix input, Rcpp::IntegerVector devices, bool centered);
+Rcpp::List pca_cuda_resident_covariance_cpp(SEXP input, Rcpp::IntegerVector devices, bool centered);
 RcppExport SEXP _fastEmbedR_pca_cuda_resident_covariance_cpp(SEXP inputSEXP, SEXP devicesSEXP, SEXP centeredSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type input(inputSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type input(inputSEXP);
     Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type devices(devicesSEXP);
     Rcpp::traits::input_parameter< bool >::type centered(centeredSEXP);
     rcpp_result_gen = Rcpp::wrap(pca_cuda_resident_covariance_cpp(input, devices, centered));
@@ -2378,12 +2400,12 @@ BEGIN_RCPP
 END_RCPP
 }
 // pca_cuda_resident_project_cpp
-Rcpp::NumericMatrix pca_cuda_resident_project_cpp(Rcpp::NumericMatrix input, Rcpp::IntegerVector devices, Rcpp::NumericVector center, Rcpp::NumericVector scale, Rcpp::NumericMatrix loadings);
+Rcpp::List pca_cuda_resident_project_cpp(SEXP input, Rcpp::IntegerVector devices, Rcpp::NumericVector center, Rcpp::NumericVector scale, Rcpp::NumericMatrix loadings);
 RcppExport SEXP _fastEmbedR_pca_cuda_resident_project_cpp(SEXP inputSEXP, SEXP devicesSEXP, SEXP centerSEXP, SEXP scaleSEXP, SEXP loadingsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type input(inputSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type input(inputSEXP);
     Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type devices(devicesSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type center(centerSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type scale(scaleSEXP);
@@ -3561,7 +3583,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastEmbedR_umap_cuda_graph_dump_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_graph_dump_cpp, 2},
     {"_fastEmbedR_umap_cuda_optimize_coo_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_optimize_coo_cpp, 12},
     {"_fastEmbedR_umap_cuda_optimize_csr_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_optimize_csr_cpp, 12},
-    {"_fastEmbedR_umap_cuda_optimize_csr_multigpu_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_optimize_csr_multigpu_cpp, 11},
+    {"_fastEmbedR_umap_cuda_init_csr_wide_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_init_csr_wide_cpp, 7},
+    {"_fastEmbedR_umap_cuda_optimize_csr_multigpu_cpp", (DL_FUNC) &_fastEmbedR_umap_cuda_optimize_csr_multigpu_cpp, 16},
     {"_fastEmbedR_knn_tsne_opentsne_cuda_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cuda_cpp, 19},
     {"_fastEmbedR_knn_tsne_opentsne_cuda_float_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cuda_float_cpp, 19},
     {"_fastEmbedR_knn_tsne_opentsne_cuda_gpu_cpp", (DL_FUNC) &_fastEmbedR_knn_tsne_opentsne_cuda_gpu_cpp, 20},

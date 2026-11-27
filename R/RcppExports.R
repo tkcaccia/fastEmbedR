@@ -41,8 +41,12 @@ umap_cuda_optimize_csr_cpp <- function(offsets, neighbors, weights, epochs_per_s
     .Call(`_fastEmbedR_umap_cuda_optimize_csr_cpp`, offsets, neighbors, weights, epochs_per_sample, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, optimizer_mode)
 }
 
-umap_cuda_optimize_csr_multigpu_cpp <- function(offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, devices) {
-    .Call(`_fastEmbedR_umap_cuda_optimize_csr_multigpu_cpp`, offsets, neighbors, weights, init, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, devices)
+umap_cuda_init_csr_wide_cpp <- function(offsets, neighbors, weights, iterations, seed, devices, device_limit) {
+    .Call(`_fastEmbedR_umap_cuda_init_csr_wide_cpp`, offsets, neighbors, weights, iterations, seed, devices, device_limit)
+}
+
+umap_cuda_optimize_csr_multigpu_cpp <- function(offsets, neighbors, weights, initial, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, devices, diffusion_iterations = 0L, diffusion_scale = 0.0, device_limit = 0.0, knn_col_start = -1L, knn_width = 0L) {
+    .Call(`_fastEmbedR_umap_cuda_optimize_csr_multigpu_cpp`, offsets, neighbors, weights, initial, n_epochs, negative_sample_rate, learning_rate, min_dist, repulsion_strength, seed, devices, diffusion_iterations, diffusion_scale, device_limit, knn_col_start, knn_width)
 }
 
 knn_tsne_opentsne_cuda_cpp <- function(indices, distances, y_init, init, n_components, perplexity, early_exaggeration_iter, n_iter, early_exaggeration, exaggeration, learning_rate, learning_rate_auto, initial_momentum, final_momentum, min_gain, max_step_norm, negative_gradient_method, seed, record_costs) {

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cfloat>
 #include <climits>
 #include <cmath>
 #include <cstddef>
@@ -18,10 +19,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <future>
 #include <limits>
 #include <memory>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <cuda_runtime.h>
@@ -35,7 +38,9 @@
 #define CCCL_IGNORE_DEPRECATED_STREAM_REF_HEADER
 #endif
 #include <cub/cub.cuh>
+#include <cub/version.cuh>
 #include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/transform_iterator.h>
 
 #include "pca_cuda_rsvd.cuh"
 #include "massive_umap_cuda.h"
@@ -2966,24 +2971,11 @@ static __device__ __forceinline__ void add_umap_delta(
 }
 
 template <int Dimensions, typename Delta>
-__global__ void embed_epoch_coo_delta_kernel(const float* layout,
-                                             Delta* delta,
-                                             const int* heads,
-                                             const int* tails,
-                                             const float* weights,
-                                             const float* epochs_per_sample,
-                                             EmbedParams p,
-                                             unsigned int epoch,
-                                             int n_edges_capacity,
-                                             double delta_scale) {
-  const int gid = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
-  if (gid >= n_edges_capacity) return;
-
-  const int head = heads[gid];
-  const int tail = tails[gid];
+__device__ __forceinline__ void embed_epoch_delta_edge(
+    const float* layout, Delta* delta, int head, int tail, float weight,
+    float period, EmbedParams p, unsigned int epoch, double delta_scale) {
   if (head < 0 || head >= p.n || tail < 0 || tail >= p.n || head == tail) return;
 
-  const float period = epochs_per_sample[gid];
   const int positive_samples = positive_samples_this_epoch_umap_schedule(period, epoch);
   if (positive_samples <= 0) return;
 
@@ -3004,8 +2996,7 @@ __global__ void embed_epoch_coo_delta_kernel(const float* layout,
       d2 += diff[axis] * diff[axis];
     }
     d2 = fmaxf(eps, d2);
-    const float w = weights[gid];
-    const float coeff = attractive_coeff(d2, w, p);
+    const float coeff = attractive_coeff(d2, weight, p);
     for (int axis = 0; axis < Dimensions; ++axis) {
       const float gradient = clip4(coeff * diff[axis]) * alpha;
       add_umap_delta(delta, head_base + axis, gradient,
@@ -3045,6 +3036,24 @@ __global__ void embed_epoch_coo_delta_kernel(const float* layout,
         clip4(rcoeff * diff[axis]) * alpha, delta_scale);
     }
   }
+}
+
+template <int Dimensions, typename Delta>
+__global__ void embed_epoch_coo_delta_kernel(const float* layout,
+                                             Delta* delta,
+                                             const int* heads,
+                                             const int* tails,
+                                             const float* weights,
+                                             const float* epochs_per_sample,
+                                             EmbedParams p,
+                                             unsigned int epoch,
+                                             int n_edges_capacity,
+                                             double delta_scale) {
+  const int gid = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (gid >= n_edges_capacity) return;
+
+  embed_epoch_delta_edge<Dimensions>(layout, delta, heads[gid],
+    tails[gid], weights[gid], epochs_per_sample[gid], p, epoch, delta_scale);
 }
 
 static __device__ __forceinline__ void update_umap_row_atomic(
@@ -6379,11 +6388,12 @@ extern "C" void fastembedr_massive_umap_cuda_destroy(void* raw) {
   delete ctx;
 }
 
-extern "C" void* fastembedr_massive_umap_cuda_create(
+static void* create_massive_umap_cuda(
     int vertices, int dimensions, int edge_capacity,
     int epochs, int negatives,
     float learning_rate, float a, float b, float repulsion,
-    float max_weight, unsigned int seed, int managed_layout) {
+    float max_weight, unsigned int seed, int managed_layout,
+    float** initial_layout) {
   embedding_last_error.clear();
   if (vertices < 2 || (dimensions != 2 && dimensions != 3) ||
       edge_capacity < 1 || epochs < 1 ||
@@ -6415,7 +6425,7 @@ extern "C" void* fastembedr_massive_umap_cuda_create(
     }
   }
   const auto device_bytes = edge_bytes +
-    (managed_layout == 0 ? layout_bytes : 0);
+    (managed_layout == 0 && !initial_layout ? layout_bytes : 0);
   if (check_embedding_memory_available(device_bytes,
       "massive CUDA UMAP allocation")) return nullptr;
   auto* ctx = new MassiveUmapCudaContext();
@@ -6428,11 +6438,16 @@ extern "C" void* fastembedr_massive_umap_cuda_create(
     return check_cuda(cudaMalloc(address, bytes),
       "cudaMalloc(massive UMAP)");
   };
-  const auto layout_status = managed_layout != 0 ?
-    check_cuda(cudaMallocManaged(
+  int layout_status = 0;
+  if (initial_layout) {
+    ctx->layout = std::exchange(*initial_layout, nullptr);
+  } else if (managed_layout != 0) {
+    layout_status = check_cuda(cudaMallocManaged(
       reinterpret_cast<void**>(&ctx->layout), layout_bytes),
-      "cudaMallocManaged(massive UMAP layout)") :
-    alloc(reinterpret_cast<void**>(&ctx->layout), layout_bytes);
+      "cudaMallocManaged(massive UMAP layout)");
+  } else {
+    layout_status = alloc(reinterpret_cast<void**>(&ctx->layout), layout_bytes);
+  }
   if (layout_status ||
       alloc(reinterpret_cast<void**>(&ctx->heads),
         static_cast<std::size_t>(edge_capacity) * sizeof(int)) ||
@@ -6446,6 +6461,16 @@ extern "C" void* fastembedr_massive_umap_cuda_create(
     return nullptr;
   }
   return ctx;
+}
+
+extern "C" void* fastembedr_massive_umap_cuda_create(
+    int vertices, int dimensions, int edge_capacity,
+    int epochs, int negatives,
+    float learning_rate, float a, float b, float repulsion,
+    float max_weight, unsigned int seed, int managed_layout) {
+  return create_massive_umap_cuda(vertices, dimensions, edge_capacity, epochs,
+    negatives, learning_rate, a, b, repulsion, max_weight, seed,
+    managed_layout, nullptr);
 }
 
 extern "C" int fastembedr_massive_umap_cuda_upload(
@@ -6630,6 +6655,8 @@ struct MassiveUmapMultiCudaContext {
   int previous_device = 0;
   double delta_scale = 1.0;
   double collective_seconds = 0.0;
+  double device_limit = 0.0;
+  std::size_t workspace_bytes = 0;
   std::vector<int> devices;
   std::vector<MassiveUmapCudaContext*> workers;
   std::vector<unsigned long long*> deltas;
@@ -6679,12 +6706,18 @@ extern "C" void fastembedr_massive_umap_multigpu_destroy(void* raw) {
   delete ctx;
 }
 
+namespace {
+float** wide_layout_slot(void* retained, int rank, int device,
+    std::size_t items);
+}
+
 extern "C" void* fastembedr_massive_umap_multigpu_create(
     int vertices, int dimensions, int edge_capacity, int epochs,
     int negatives,
     float learning_rate, float a, float b, float repulsion,
     float max_weight, unsigned int seed, const int* devices,
-    int device_count, double delta_scale) {
+    int device_count, double delta_scale, void* retained_layouts,
+    double device_limit) {
   embedding_last_error.clear();
   if (vertices < 2 || (dimensions != 2 && dimensions != 3) ||
       edge_capacity < 1 || devices == nullptr ||
@@ -6738,26 +6771,36 @@ extern "C" void* fastembedr_massive_umap_multigpu_create(
   const auto layout_bytes = static_cast<std::size_t>(padded) *
     dimensions * sizeof(float);
   const auto edge_bytes = static_cast<std::size_t>(edge_capacity) * 16u;
+  ctx->workspace_bytes = 3u * layout_bytes + 3u * edge_bytes;
+  ctx->device_limit = device_limit;
+  if (device_limit > 0 && ctx->workspace_bytes > device_limit) {
+    fastembedr_massive_umap_multigpu_destroy(ctx);
+    set_embedding_error("CUDA UMAP optimizer exceeds the device budget");
+    return nullptr;
+  }
   for (int rank = 0; rank < device_count; ++rank) {
-    if (check_cuda(cudaSetDevice(devices[rank]),
+    float** initial = retained_layouts ? wide_layout_slot(retained_layouts,
+      rank, devices[rank], layout_bytes / sizeof(float)) : nullptr;
+    if ((retained_layouts && !initial) ||
+        check_cuda(cudaSetDevice(devices[rank]),
           "cudaSetDevice(multi-GPU UMAP)") ||
-        check_embedding_memory_available(3u * layout_bytes +
+        check_embedding_memory_available((initial ? 2u : 3u) * layout_bytes +
           3u * edge_bytes, "multi-GPU UMAP allocation")) {
       fastembedr_massive_umap_multigpu_destroy(ctx);
       return nullptr;
     }
     ctx->workers[rank] = static_cast<MassiveUmapCudaContext*>(
-      fastembedr_massive_umap_cuda_create(
+      create_massive_umap_cuda(
         static_cast<int>(padded), dimensions, edge_capacity, epochs,
         negatives, learning_rate, a, b, repulsion, max_weight,
-        seed, 0));
+        seed, 0, initial));
     if (ctx->workers[rank] == nullptr ||
         check_cuda(cudaMalloc(
           reinterpret_cast<void**>(&ctx->deltas[rank]),
           2u * layout_bytes),
           "cudaMalloc(multi-GPU UMAP delta)") ||
-        check_cuda(cudaMemset(ctx->workers[rank]->layout, 0,
-          layout_bytes), "cudaMemset(multi-GPU UMAP layout)")) {
+        (!initial && check_cuda(cudaMemset(ctx->workers[rank]->layout, 0,
+          layout_bytes), "cudaMemset(multi-GPU UMAP layout)"))) {
       fastembedr_massive_umap_multigpu_destroy(ctx);
       return nullptr;
     }
@@ -6854,7 +6897,9 @@ extern "C" int fastembedr_massive_umap_multigpu_cache_begin(
     std::size_t free = 0, total = 0;
     if (check_cuda(cudaMemGetInfo(&free, &total),
           "cudaMemGetInfo(UMAP graph cache admission)")) return -1;
-    if (free <= reserve || bytes > (free - reserve) / 2u) {
+    const bool exceeds_budget = ctx->device_limit > 0 &&
+      static_cast<double>(ctx->workspace_bytes) + bytes > ctx->device_limit;
+    if (exceeds_budget || free <= reserve || bytes > (free - reserve) / 2u) {
       return check_cuda(cudaSetDevice(ctx->previous_device),
         "cudaSetDevice(UMAP graph cache restore)") ? -1 : 0;
     }
@@ -9501,3 +9546,5 @@ extern "C" int fastembedr_cuda_matrix_multiply(const double* left,
   cleanup();
   return 0;
 }
+
+#include "wide-csr-cuda-diffusion.cuh"

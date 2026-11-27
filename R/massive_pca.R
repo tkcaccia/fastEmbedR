@@ -360,6 +360,7 @@ massive_pca_decomposition <- function(source, rank, center, scale,
     covariance_fn <- if (backend == "cuda") {
         massive_pca_covariance_cuda_cpp
     } else massive_pca_covariance_cpp
+    started <- proc.time()[[3L]]
     stats <- if (is.list(saved_stats)) saved_stats else if (
             length(resources$gpu_devices %||% integer()) > 1L) {
         massive_pca_covariance_devices(source, rank, center, resources)
@@ -368,6 +369,7 @@ massive_pca_decomposition <- function(source, rank, center, scale,
             center)
     } else covariance_fn(source, resources$chunk_rows, n.cores,
         center, saved_stats)
+    covariance_done <- proc.time()[[3L]]
     deviations <- if (scale) sqrt(diag(stats$covariance)) else {
         rep(1, source$ncol)
     }
@@ -382,8 +384,9 @@ massive_pca_decomposition <- function(source, rank, center, scale,
         decomposition_backend = "cpu_eigen",
         loadings = eig$vectors[, seq_len(rank), drop = FALSE],
         singular_values = sqrt(pmax(eig$values[seq_len(rank)], 0) *
-            (source$nrow - 1))
-    )
+            (source$nrow - 1)),
+        timing = c(covariance = covariance_done - started,
+            decomposition = proc.time()[[3L]] - covariance_done))
     if (!is.null(stats$fit_devices)) {
         fit$fit_devices <- stats$fit_devices
         fit$fit_per_device <- stats$fit_per_device
@@ -1383,9 +1386,11 @@ run_massive_pca <- function(x, ncomp, xtest, center, scale, backend,
     started <- proc.time()[[3L]]
     prepared <- massive_pca_prepare(x, path, rank, center, scale,
         backend, workers, seed, resources, checkpoint, resume)
+    projection_started <- proc.time()[[3L]]
     resources <- massive_pca_project(x, path, prepared$fit,
         resources, workers, backend, prepared, devices, memory_limit,
         checkpoint, resume)
+    prepared$fit$timing["scores"] <- proc.time()[[3L]] - projection_started
     if (length(devices) == 1L) resources$gpu_devices <- devices
     fit <- finish_massive_pca(
         prepared$fit, path, x, rank, workers, seed, resources, started,

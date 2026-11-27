@@ -433,11 +433,14 @@ massive_pca_device_worker <- function(task, arguments, package_path,
     fit <- arguments$fit
     saved <- massive_pca_shard_checkpoint(task, source, fit,
         resources, arguments$checkpoint)
+    started <- proc.time()[[3L]]
     massive_pca_project_cuda_cpp(source, task$output, fit$loadings,
         fit$center, fit$scale, resources$chunk_rows,
         saved$rows, saved$progress, saved$resume)
     if (file.info(task$output)$size != task$bytes) stop(
         "CUDA PCA shard has an unexpected byte count.")
+    resources$projection_seconds <- proc.time()[[3L]] - started
+    resources$projection_rows <- task$bytes / (arguments$rank * 4) - saved$rows
     if (isTRUE(arguments$checkpoint))
         massive_multigpu_record_shard(task)
     if (!is.null(saved$sidecar)) unlink(saved$sidecar)

@@ -54,13 +54,14 @@ pca_resident_test_projection <- function(fit, xtest, devices,
         return(fit)
     }
     data <- prepare_pca_test_matrix(xtest, fit)$data
-    data <- embedding_dense_double_matrix(data)
+    if (!is_float32_matrix(data)) data <- embedding_dense_double_matrix(data)
     projection_devices <- head(devices, nrow(data))
-    fit$scores_test <- pca_cuda_resident_project_cpp(data,
+    projected <- pca_cuda_resident_project_cpp(data,
         projection_devices, fit$center, fit$scale, fit$loadings)
-    colnames(fit$scores_test) <- colnames(fit$loadings)
+    fit$scores_test <- projected$scores
     fit$test_projection_backend <- "cuda"
     fit$test_projection_devices <- projection_devices
+    fit$test_projection_device_rows <- projected$device_rows
     fit
 }
 

@@ -54,6 +54,36 @@ test_that("multi-GPU PCA rejects truncated fit shards", {
     )
 })
 
+test_that("file-backed CUDA PCA reports verified projected rows", {
+    input <- tempfile(fileext = ".f32")
+    output <- tempfile(fileext = ".f32")
+    on.exit(unlink(c(input, output)))
+    writeBin(raw(8L * 4L * 4L), input)
+    task <- list(device = 1L, row_range = c(5, 8), bytes = 32,
+        output = output, status = "pending")
+    args <- list(source = massive_matrix(input, 8L, 4L), rank = 2L,
+        chunk_rows = 2L, memory_limit = 1e8, checkpoint = FALSE,
+        fit = list(loadings = diag(4L)[, 1:2], center = numeric(4L),
+            scale = rep(1, 4L)))
+    bytes <- task$bytes
+    local_mocked_bindings(
+        massive_cuda_worker_identity = function(...) NULL,
+        massive_cuda_select_cpp = function(id) id,
+        massive_pca_resources = function(...) list(gpu_device = 1L,
+            chunk_rows = 2L),
+        massive_pca_project_cuda_cpp = function(view, path, ...) {
+            expect_equal(view$nrow, 4)
+            writeBin(raw(bytes), path)
+        }, .package = "fastEmbedR")
+    worker <- fastEmbedR:::massive_pca_device_worker
+    result <- worker(task, args, "fixture", "fixture")
+    expect_equal(result$projection_rows, 4)
+    expect_gte(result$projection_seconds, 0)
+    bytes <- bytes - 4
+    expect_error(worker(task, args, "fixture", "fixture"),
+        "unexpected byte count")
+})
+
 test_that("multi-GPU PCA rejects swapped equal-sized fit shards", {
     source <- fastEmbedR:::massive_synthetic_matrix(8L, 4L)
     resources <- list(chunk_rows = 2L,

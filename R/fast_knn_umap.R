@@ -103,7 +103,8 @@ fast_knn_umap_core <- function(
         indices, distances, n_components, seed, backend, n_threads,
         n_epochs, graph_mode, devices))
     if (resolve_embedding_backend(backend) == "cuda" &&
-            umap_cuda_wide_needed(indices, distances)) {
+            (umap_cuda_wide_needed(indices, distances) ||
+            resident_umap_build_cuda(indices, n_components, graph_mode))) {
         if (!isTRUE(massive_nccl_available_cpp())) stop(
             "Wide resident CUDA UMAP requires NCCL.",
             call. = FALSE)
@@ -137,6 +138,14 @@ fast_knn_umap_core <- function(
         return(dispatch_gpu_umap_core(indices, distances, settings))
     }
     dispatch_host_umap_core(indices, distances, settings)
+}
+
+resident_umap_build_cuda <- function(indices, dimensions, graph_mode) {
+    isTRUE(getOption("fastEmbedR.cuda_wide_csr_build")) &&
+        dimensions == 2L && match.arg(graph_mode, c("fuzzy", "binary")) ==
+        "fuzzy" && !fastembedr_is_gpu_knn(indices) &&
+        !inherits(indices, c("fastEmbedR_umap_prepared",
+            "fastEmbedR_umap_initialization"))
 }
 
 umap_cuda_wide_needed <- function(indices, distances) {
@@ -187,6 +196,38 @@ resident_umap_prepared <- function(indices, distances, backend,
         .allow_wide = TRUE)
 }
 
+fit_resident_umap <- function(prepared, cfg, n_components, seed, devices) {
+    graph <- prepared$graph
+    retain <- isTRUE(getOption("fastEmbedR.cuda_wide_csr_reuse")) &&
+        n_components == 2L && is.null(prepared$initialization) &&
+        identical(graph$offset_dtype, "uint64") &&
+        is_float32_matrix(graph$weights)
+    args <- list(graph$offsets, graph$neighbors, graph$weights, NULL,
+        as.integer(cfg$n_epochs), as.integer(cfg$negative_sample_rate),
+        cfg$learning_rate, cfg$min_dist, cfg$repulsion_strength,
+        as.integer(seed), devices,
+        device_limit = fastembedr_device_memory_limit(
+            fastembedr_memory_option()))
+    if (retain) {
+        args$diffusion_iterations <- as.integer(cfg$spectral_n_iter)
+        args$diffusion_scale <- cfg$init_scale
+        out <- do.call(umap_cuda_optimize_csr_multigpu_cpp, args)
+        init <- list(reused = FALSE, backend = "cuda_wide_csr_diffusion",
+            resources = out$initialization_resources)
+        return(list(output = out, init = init,
+            initialization_elapsed_sec = out$initialization_elapsed_sec))
+    }
+    started <- proc.time()[["elapsed"]]
+    init <- prepare_reusable_umap_init(prepared, cfg,
+        n_components, seed, devices)
+    seconds <- proc.time()[["elapsed"]] - started
+    initial <- init$value
+    if (is_float32_matrix(initial)) initial <- float::dbl(initial)
+    args[[4L]] <- initial
+    list(output = do.call(umap_cuda_optimize_csr_multigpu_cpp, args),
+        init = init, initialization_elapsed_sec = seconds)
+}
+
 run_resident_umap_multigpu <- function(indices, distances,
         n_components, seed, backend, n_threads, n_epochs,
         graph_mode, devices) {
@@ -199,35 +240,34 @@ run_resident_umap_multigpu <- function(indices, distances,
     if (!n_components %in% c(2L, 3L)) stop(
         "Resident multi-GPU UMAP supports 2D or 3D.",
         call. = FALSE)
+    if (resident_umap_build_cuda(indices, n_components, graph_mode)) {
+        return(fit_cuda_umap_from_neighbors(indices, distances, seed,
+            n_threads, n_epochs, devices))
+    }
     from_gpu <- fastembedr_is_gpu_knn(indices)
     prepared <- resident_umap_prepared(indices, distances,
         backend, n_threads,
         match.arg(graph_mode, c("fuzzy", "binary")))
     devices <- massive_validate_devices(devices, backend,
         nrow(prepared$knn$indices))
-    identity <- massive_cuda_device_uuids(devices)
     cfg <- configure_prepared_umap(prepared, backend,
         n_components, n_threads, n_epochs)
-    init <- prepare_reusable_umap_init(prepared, cfg,
-        n_components, seed)
     graph <- prepared$graph
     cfg$graph_offset_dtype <- cfg$csr_offset_dtype <- graph$offset_dtype
     cfg$graph_nnz <- as.double(graph$nnz)
-    initial <- if (is_float32_matrix(init$value)) {
-        float::dbl(init$value)
-    } else {
-        init$value
-    }
-    out <- umap_cuda_optimize_csr_multigpu_cpp(
-        graph$offsets, graph$neighbors,
-        graph$weights, initial,
-        as.integer(cfg$n_epochs),
-        as.integer(cfg$negative_sample_rate),
-        cfg$learning_rate, cfg$min_dist,
-        cfg$repulsion_strength, as.integer(seed), devices)
+    fit <- fit_resident_umap(prepared, cfg, n_components, seed, devices)
+    out <- fit$output
+    init <- fit$init
+    cfg$initialization_elapsed_sec <- fit$initialization_elapsed_sec
+    cfg <- record_resident_umap_fit(cfg, out, devices, from_gpu)
+    finalize_prepared_umap(out$Y, graph, init, cfg)
+}
+
+record_resident_umap_fit <- function(cfg, out, devices, from_gpu) {
+    cfg$optimization_elapsed_sec <- out$optimization_elapsed_sec
     cfg$optimizer <- out$optimizer
     cfg$gpu_devices <- out$gpu_devices
-    cfg$gpu_identity <- identity
+    cfg$gpu_identity <- massive_cuda_device_uuids(devices)
     cfg$per_device_edge_visits <- out$per_device_edge_visits
     cfg$delta_scale <- out$delta_scale
     cfg$graph_cache <- out[c("graph_cache_mode", "graph_cache_bytes")]
@@ -235,7 +275,7 @@ run_resident_umap_multigpu <- function(indices, distances,
     cfg$knn_materialized_for_gpu <- from_gpu
     cfg$input_storage <- "resident_knn"
     cfg$layout_storage <- "resident"
-    finalize_prepared_umap(out$Y, graph, init, cfg)
+    cfg
 }
 
 validate_gpu_resident_umap <- function(gpu_knn, n_components) {
@@ -491,6 +531,61 @@ build_prepared_umap_graph <- function(knn, cfg, graph_mode,
     list(graph = graph, config = cfg)
 }
 
+prepare_umap_configuration <- function(knn, backend, n.cores, graph_mode) {
+    cfg <- fast_knn_umap_config(
+        n = nrow(knn$indices),
+        k = knn$n_neighbors,
+        backend = backend
+    )
+    policy <- tryCatch(
+        prepared_umap_auto_policy(knn, cfg),
+        error = function(e) list(error = conditionMessage(e))
+    )
+    cfg <- apply_prepared_umap_policy(cfg, policy)
+    cfg <- apply_umap_thread_override(cfg, n.cores)
+    prepared_umap_metadata(cfg, knn, graph_mode)
+}
+
+fit_cuda_umap_from_neighbors <- function(indices, distances, seed,
+        n_threads, n_epochs, devices) {
+    knn <- coerce_knn_input(indices, distances)
+    if (!is_float32_matrix(knn$distances)) stop(
+        "CUDA wide fuzzy graph construction requires float32 KNN.",
+        call. = FALSE)
+    staged_bytes <- 12 * as.double(nrow(knn$indices)) * knn$n_neighbors
+    host_limit <- min(massive_available_ram_bytes(),
+        massive_memory_bytes(fastembedr_memory_option()))
+    if (!is.finite(host_limit) || staged_bytes > 0.9 * host_limit) stop(
+        "Host-staged CUDA fuzzy graph exceeds the RAM budget.",
+        call. = FALSE)
+    devices <- massive_validate_devices(devices, "cuda", nrow(knn$indices))
+    cfg <- prepare_umap_configuration(knn, "cuda", n_threads, "fuzzy")
+    cfg <- configure_prepared_umap(list(config = cfg), "cuda", 2L,
+        n_threads, n_epochs)
+    out <- umap_cuda_optimize_csr_multigpu_cpp(
+        NULL, knn$indices, knn$distances, NULL,
+        as.integer(cfg$n_epochs), as.integer(cfg$negative_sample_rate),
+        cfg$learning_rate, cfg$min_dist, cfg$repulsion_strength,
+        as.integer(seed), devices,
+        diffusion_iterations = as.integer(cfg$spectral_n_iter),
+        diffusion_scale = cfg$init_scale,
+        device_limit = fastembedr_device_memory_limit(
+            fastembedr_memory_option()),
+        knn_col_start = knn$col_start, knn_width = knn$n_neighbors)
+    cfg$graph_build <- out$graph_build
+    cfg$graph_prep_backend <- cfg$graph_storage <- "cuda_fuzzy_csr_host_staged"
+    cfg$graph_nnz <- out$graph_build$edges
+    cfg$graph_max_weight <- out$graph_build$max_weight
+    cfg$graph_offset_dtype <- cfg$csr_offset_dtype <- "uint64"
+    cfg$prepared_reuse_hit <- FALSE
+    cfg$initialization_elapsed_sec <- out$initialization_elapsed_sec
+    cfg <- record_resident_umap_fit(cfg, out, devices, FALSE)
+    init <- list(reused = FALSE, backend = "cuda_wide_csr_diffusion",
+        resources = out$initialization_resources)
+    finalize_prepared_umap(out$Y, list(offset_dtype = "uint64"), init, cfg,
+        return_float32 = TRUE)
+}
+
 #' @rdname prepare_umap_knn
 #' @export
 #' @keywords internal
@@ -503,18 +598,7 @@ prepare_umap_knn <- function(indices,
     backend <- resolve_embedding_backend(backend)
     graph_mode <- match.arg(graph_mode)
     knn <- coerce_knn_input(indices, distances)
-    cfg <- fast_knn_umap_config(
-        n = nrow(knn$indices),
-        k = knn$n_neighbors,
-        backend = backend
-    )
-    policy <- tryCatch(
-        prepared_umap_auto_policy(knn, cfg),
-        error = function(e) list(error = conditionMessage(e))
-    )
-    cfg <- apply_prepared_umap_policy(cfg, policy)
-    cfg <- apply_umap_thread_override(cfg, n.cores)
-    cfg <- prepared_umap_metadata(cfg, knn, graph_mode)
+    cfg <- prepare_umap_configuration(knn, backend, n.cores, graph_mode)
     built <- build_prepared_umap_graph(knn, cfg, graph_mode,
         allow_wide = .allow_wide)
     out <- list(
@@ -612,7 +696,8 @@ compute_prepared_umap_init <- function(prepared, cfg, seed) {
     list(value = init, backend = attr(init, "backend") %||% "cpu")
 }
 
-prepare_reusable_umap_init <- function(prepared, cfg, n_components, seed) {
+prepare_reusable_umap_init <- function(prepared, cfg, n_components, seed,
+        devices = NULL) {
     if (!is.null(prepared$initialization)) {
         init <- validate_reusable_umap_init(
             prepared$initialization,
@@ -623,6 +708,24 @@ prepare_reusable_umap_init <- function(prepared, cfg, n_components, seed) {
             attr(init, "backend") %||%
             "external"
         return(list(value = init, backend = backend, reused = TRUE))
+    }
+    graph <- prepared$graph
+    use_cuda_wide <- isTRUE(getOption("fastEmbedR.cuda_wide_csr_build")) &&
+        !is.null(devices) && n_components == 2L &&
+        identical(graph$offset_dtype, "uint64") &&
+        is_float32_matrix(graph$weights)
+    if (use_cuda_wide) {
+        limit <- fastembedr_device_memory_limit(fastembedr_memory_option())
+        native <- umap_cuda_init_csr_wide_cpp(graph$offsets, graph$neighbors,
+            graph$weights, as.integer(cfg$spectral_n_iter),
+            as.integer(seed), devices, limit)
+        if (is.null(native)) stop(
+            "CUDA wide UMAP initialization exceeds the device budget.",
+            call. = FALSE)
+        return(list(
+            value = scale_embedding_sdev_r(native$layout, cfg$init_scale),
+            backend = "cuda_wide_csr_diffusion", reused = FALSE,
+            resources = native[c("device_rows", "device_edges", "resources")]))
     }
     result <- compute_prepared_umap_init(prepared, cfg, seed)
     result$reused <- FALSE
@@ -791,9 +894,11 @@ run_prepared_umap_optimizer <- function(graph, init, cfg, seed, verbose) {
     optimize_prepared_umap_cpu(graph, init, cfg, seed, verbose)
 }
 
-finalize_prepared_umap <- function(layout, graph, init, cfg) {
+finalize_prepared_umap <- function(layout, graph, init, cfg,
+        return_float32 = is_float32_matrix(graph$weights)) {
     cfg$initialization_reuse_hit <- init$reused
     cfg$init_backend <- init$backend
+    if (!is.null(init$resources)) cfg$init_resources <- init$resources
     wide <- identical(graph$offset_dtype, "uint64")
     tiled <- identical(attr(layout, "metal_optimizer_pipeline"),
         "metal_wide_edge_tiles")
@@ -824,7 +929,7 @@ finalize_prepared_umap <- function(layout, graph, init, cfg) {
     layout <- finalize_embedding_layout(
         layout,
         "UMAP",
-        return_float32 = is_float32_matrix(graph$weights)
+        return_float32 = return_float32
     )
     attr(layout, "fastEmbedR_config") <- public_core_config(cfg)
     layout

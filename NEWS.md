@@ -1,5 +1,14 @@
 # fastEmbedR 0.1
 
+* Accept float32 input directly in coordinated resident CUDA PCA.
+  Report stage timings and completed shard rows for coordinated resident
+  PCA and score projection for file-backed CUDA PCA.
+
+* Add opt-in CUDA fuzzy graph construction and retained wide CSR for
+  coordinated resident 2D UMAP through `fastEmbedR.cuda_wide_csr_build`
+  and `fastEmbedR.cuda_wide_csr_reuse`. Report allocated cache bytes and
+  enforce the configured device budget for optimizer arrays and caching.
+
 * Use faissR's automatic CUDA CAGRA planning in t-SNE, UMAP, and
   `precompute_knn()`, including file-backed `.fbin` references. Report an
   explicit capacity error when the resident index cannot fit.
