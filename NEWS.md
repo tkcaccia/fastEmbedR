@@ -1,5 +1,9 @@
 # fastEmbedR 0.1
 
+- Reference-sharded CUDA CAGRA self-search now prefers 4,096-query batches
+  and overlaps CPU merging with GPU search in memory and for file-backed
+  input when the available memory admits the additional buffers.
+
 * Accept float32 input directly in coordinated resident CUDA PCA.
   Report stage timings and completed shard rows for coordinated resident
   PCA and score projection for file-backed CUDA PCA.

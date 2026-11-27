@@ -10,32 +10,31 @@ precompute_knn_file_cagra <- function(data, k, output, memory_bytes,
     if (is.na(audit_rows) || audit_rows < 0L ||
         audit_rows > min(data$nrow, 10000L)) stop(
         "`audit_rows` must be between zero and 10,000 rows.", call. = FALSE)
-    entry <- if (multi) "cuvs_cagra_wide_file_multi" else
-        if (selection$backend == "metal") "metal_cagra_file" else
-            "cuvs_cagra_wide_file"
+    entry <- if (multi) "cuvs_cagra_wide_file_multi" else if (
+        selection$backend == "metal") "metal_cagra_file" else
+        "cuvs_cagra_wide_file"
     builder <- get0(entry, envir = asNamespace("faissR"), inherits = FALSE)
     if (!is.function(builder)) stop(
         "The installed faissR lacks file-backed CAGRA support.", call. = FALSE)
     profile <- selection$cuda_cagra_profile
-    resources <- list(chunk_rows = profile$batch_rows %||% 1024L,
+    resources <- list(chunk_rows = profile$batch_rows %||%
+        (if (multi) 4096L else 1024L),
         output_bytes = 8 * as.double(data$nrow) * k,
         reference_chunk_rows = min(data$nrow, floor(192e6 / (4 * data$ncol))))
     paths <- massive_knn_paths(output, resources$output_bytes)
     identity <- massive_checkpoint_source_identity(data)
     arguments <- list(data, k, resources$chunk_rows, memory_bytes,
         selection$target_recall, selection$method == "cagra_width4")
-    if (multi) {
-        arguments$devices <- devices
-        if ("merge_workers" %in% names(formals(builder)))
-            arguments$merge_workers <- min(2L, workers)
-    }
+    if (multi) arguments$devices <- devices
+    if (multi && "merge_workers" %in% names(formals(builder)))
+        arguments$merge_workers <- min(2L, workers)
     if (!is.null(profile)) arguments$profile <- profile
     index <- do.call(builder, arguments)
-    live <- TRUE
-    on.exit(if (live) index$release(), add = TRUE)
-    resources$chunk_rows <- index$query_batch_rows %||% resources$chunk_rows
-    resources$memory_limit_bytes <- index$params$memory_limit_bytes %||%
-        memory_bytes
+    on.exit(index$release(), add = TRUE)
+    resources$chunk_rows <- index$output_batch_rows %||%
+        index$query_batch_rows %||% resources$chunk_rows
+    resources$memory_limit_bytes <-
+        index$params$memory_limit_bytes %||% memory_bytes
     massive_full_knn_assert_source(data, identity)
     setup <- list(paths = paths, k = k, workers = 1L, resources = resources,
         target_recall = selection$target_recall, exact = FALSE,
@@ -43,7 +42,7 @@ precompute_knn_file_cagra <- function(data, k, output, memory_bytes,
         search_batch = index$search_batch, checkpoint_every = 1L)
     measurement <- massive_full_knn_stream(data, setup, NULL)
     index$release()
-    live <- FALSE
+    on.exit(NULL)
     graph <- massive_file_cagra_graph(data, output, setup,
         index, selection, measurement, identity)
     massive_full_knn_audit(graph, data, audit_rows, setup)
@@ -82,6 +81,7 @@ massive_file_cagra_graph <- function(data, output, setup,
     graph$resources$device_free_bytes_at_build <-
         index$device_free_bytes_at_build
     graph$cagra_settings <- index$params
+    graph$query_merge_overlap_enabled <- index$query_merge_overlap_enabled
     graph$source_read_and_upload_seconds <- index$source_read_and_upload_seconds
     graph$build_seconds <- index$build_seconds
     graph$build_and_upload_seconds <- index$build_and_upload_seconds
